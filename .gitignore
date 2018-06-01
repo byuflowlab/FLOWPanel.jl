@@ -1,0 +1,12 @@
+# Julia Packaging
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# MyPanel temps
+*.gif
+temps
+temp*
+*.vtk
+*.jld
+
