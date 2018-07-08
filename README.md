@@ -2,7 +2,7 @@
 Three-dimensional panel method for high-Reynolds aerodynamics.
 
 # Dependencies
-  * VTKtools: `https://github.com/byuflowlab/VTKtools.jl`
+  * GeometricTools: `https://github.com/byuflowlab/GeometricTools.jl`
 
 # Installation
 ```julia
