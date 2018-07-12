@@ -10,7 +10,9 @@
 module MyPanel
 
 # ------------ GENERIC MODULES -------------------------------------------------
-
+import Dierckx
+import PyPlot
+plt = PyPlot
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 
