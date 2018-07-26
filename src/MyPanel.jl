@@ -23,7 +23,10 @@ const gt = GeometricTools
 
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module
-const data_path = joinpath(module_path, "../data")  # Path to data files
+                                                # Default path to data files
+const def_data_path = joinpath(module_path, "../data")
+                                            # Default path to airfoil data files
+const def_rfl_path = joinpath(def_data_path, "airfoils")
 
 # Structure of implemented fields
 const FIELDS = Dict(
@@ -35,7 +38,7 @@ const FIELDS = Dict(
 
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["solver", "abstractbody", "utils"]
+for header_name in ["solver", "abstractbody"]
   include("MyPanel_"*header_name*".jl")
 end
 

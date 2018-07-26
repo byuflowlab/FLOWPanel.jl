@@ -90,6 +90,24 @@ function add_field(self::NonLiftingBody, field_name::String, field_data)
 
   nothing
 end
+
+
+"""
+  `generate_loft_nonliftbody(args...; optargs...)`
+Generates a lofted non-lifting body. See documentation of
+`GeometricTools.generate_loft` for a description of the arguments of this
+function.
+"""
+function generate_loft_nonliftbody(args...; dimsplit::Int64=2, optargs...)
+  # Lofts the surface geometry
+  grid = gt.generate_loft(args...; optargs...)
+
+  # Splits the quadrialateral panels into triangles
+  # dimsplit = 2              # Dimension along which to split
+  triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+  return NonLiftingBody(triang_grid)
+end
 ##### INTERNAL FUNCTIONS  ######################################################
 
 

@@ -289,6 +289,7 @@ function generate_wing(bscale::Real, b_low::Real, b_up::Real, NDIVS,
     end
   end
 
+  return triang_grid
 end
 
 function example_wing(; N::Int64=2, save_path=joinpath(module_path,"../temps/"),

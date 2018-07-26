@@ -33,6 +33,15 @@ const BodyTypes = Union{NonLiftingBody}
 
 
 ##### COMMON FUNCTIONS  ########################################################
+"""
+  `save(body::BodyTypes, filename::String; opt_args...)`
+
+Outputs a vtk file of this body. See GeometricTools.save(grid, ...) for a
+descrition of optional arguments `opt_args...`.
+"""
+function save(body::BodyTypes, filename::String; opt_args...)
+  gt.save(body.grid, filename; opt_args...)
+end
 
 
 ##### END OF ABSTRACT BODY #####################################################
