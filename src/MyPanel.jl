@@ -38,7 +38,7 @@ const FIELDS = Dict(
 
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["solver", "abstractbody"]
+for header_name in ["solver", "abstractbody", "utilsDEPRE"]
   include("MyPanel_"*header_name*".jl")
 end
 
