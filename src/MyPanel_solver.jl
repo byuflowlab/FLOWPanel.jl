@@ -10,30 +10,97 @@
 """
 module PanelSolver
 
+# GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
+import GeometricTools
+const gt = GeometricTools
+
+
+const SMOOTH = 1e-2               # Smoothing radius for singularities
+
 
 """
-  Returns the velocity induced by a
+Calculates and returns the source strength of a collection of panels imposing
+the no-flow condition.
+
+**ARGUMENTS**
+  * `nodes::Array{Array{Float64,1},1}`  : All nodes in the collection of
+                                          panels.
+  * `panels::Array{Array{Int64,1},1}`   : Node connectivity data defining each
+                                          panel, where `panels[i][j]` is the
+                                          index in `nodes` of the j-th node in
+                                          the i-th panel.
+  * `CPs::Array{Array{Float64,1},1}`    : Control points where to impose the
+                                          no-flow condition.
+
 """
-function constant_source(nodes::Array{Array{T},1}, strength::Real,
-                         targets::Array{Array{T},1}; out=nothing) where{T<:Real}
-  if out==nothing
-    _out = zeros(Real, 3, size(targets,1))
-  elseif size(out)!=(3, size(targets, 1))
+function solve_constant_source(nodes::Array{Array{T,1},1},
+                                panels::Array{Array{Int64,1},1},
+                                CPs::Array{Array{T,1},1},
+                                Vs::Array{Array{T,1},1}) where {T<:Real}
+end
+
+"""
+Calculates and returns the geometric matrix of a collection of panels on the
+given control points with their associated normals.
+
+**ARGUMENTS**
+  * `nodes::Array{T,2}`                 : All nodes in the collection of
+                                          panels.
+  * `panels::Array{Array{Int64,1},1}`   : Node connectivity data defining each
+                                          panel, where `panels[i][j]` is the
+                                          index in `nodes` of the j-th node in
+                                          the i-th panel.
+  * `CPs::Array{Array{Float64,1},1}`    : Control points.
+  * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
+"""
+function G_constant_source(nodes::Array{T,2},
+                                panels::Array{Array{Int64,1},1},
+                                CPs::Array{Array{T,1},1},
+                                normals::Array{Array{T,1},1}) where{T<:Real}
+  N = size(panels, 1)
+  G = zeros(N, N)
+
+  # Builds geometric matrix
+  for j in 1:N # Iterates over columns (panels)
+      Vconstant_source(
+                        [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
+                        1.0,                               # Unitary strength,
+                        CPs,                               # Targets
+                        view(G, :, j);                     # Velocity of j-th
+                                                           # panel on every CP
+                        dot_with=normals                   # Normal of every CP
+                      )
+  end
+
+  return G
+end
+
+
+"""
+Returns the velocity induced by a panel of vertices `nodes` and constant
+strength source `strength` on the targets `targets`. It adds the velocity at the
+i-th target to out[i].
+"""
+function Vconstant_source(nodes::Array{Array{T,1},1}, strength::Real,
+                          targets::Array{Array{T,1},1},
+                          # out::Array{Array{T,1},1}
+                          out;
+                          dot_with=nothing
+                          ) where{T<:Real}
+  if size(out)!=size(targets)
     error("Invalid `out` argument."*
-          " Expected size (3,$(size(targets,1))), got $(size(out)).")
-  else
-    _out = out
+          " Expected size $(size(targets)), got $(size(out)).")
   end
 
   nn = size(nodes, 1)                      # Number of nodes
 
   # Tangent, oblique, and normal vectors
-  t, o, n = gt.get_unitvectors(nodes)
+  t, o, n = gt._calc_unitvectors(nodes)
 
   # Coordinate system defined by Hess & Smith
-  unitxi, unittheta, unitz = o, t, -n      # Unit vectors
+  unitxi, uniteta, unitz = o, t, -n        # Unit vectors
   O = nodes[1]                             # Origin
-  Oaxis = hcat(unitxi, unittheta, unitz)'  # Transformation matrix
+  Oaxis = hcat(unitxi, uniteta, unitz)'    # Transformation matrix
 
   # Converts nodes to H&S coordinate system
   HSnodes = [Oaxis*(node-O) for node in nodes]
@@ -44,6 +111,8 @@ function constant_source(nodes::Array{Array{T},1}, strength::Real,
     V = zeros(3)
     dtheta = 2*pi
 
+    nR0 = 0
+
     for i in 1:nn
       xi, xj = HSnodes[i], HSnodes[i%nn + 1]
 
@@ -51,33 +120,46 @@ function constant_source(nodes::Array{Array{T},1}, strength::Real,
       ri = norm(HSX-xi)
       rj = norm(HSX-xj)
 
+      #   println("ri,rj,dij=$ri,$rj,$dij")
+
+      Qij = log( (ri+rj+dij)/(ri+rj-dij + SMOOTH) )
+
       Sij = (xj[2]-xi[2])/dij
       Cij = (xj[1]-xi[1])/dij
-      Qij = log( (ri+rj+dij)/(ri+rj-dij) )
 
       siji = (xi[1]-HSX[1])*Cij + (xi[2]-HSX[2])*Sij
       sijj = (xj[1]-HSX[1])*Cij + (xj[2]-HSX[2])*Sij
       Rij = (HSX[1]-xi[1])*Sij - (HSX[2]-xi[2])*Cij
-      Jij = atan2( Rij*abs(HSX[3])*( ri*sijj - rj*sijj ) ,
+
+      Jij = atan2( Rij*abs(HSX[3])*( ri*sijj - rj*siji ) ,
                    ri*rj*Rij^2 + HSX[3]^2*sijj*siji)
+
+      #  println("Rij,ri,rj,siji,sijj,HSX=$Rij,$ri,$rj,$siji,$sijj,$HSX")
+      #  println("Rij,ri,rj,siji,sijj,HSX,Sij,Cij=$Rij,$ri,$rj,$siji,$sijj,$HSX,$Sij,$Cij")
 
       V[1] -= Sij*Qij
       V[2] += Cij*Qij
       V[3] -= Jij
 
       dtheta *= Rij>=0
+      nR0 += Rij==0
     end
 
     V[3] += dtheta
-    V[3] *= sign(HSX[3])
+    V[3] *= sign(HSX[3])   # Isn't this sign already accounted for in atan2?
+    V[3] *= !(nR0>1)       # Singularity fix of any z position aligned with node
 
-    _out[:, ti] += V
+    if dot_with!=nothing
+      out[ti] += dot( strength*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz),
+                                                                  dot_with[ti])
+    else
+      out[ti] += strength*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
+    end
+
   end
 
-  return _out
+  return out
 end
-
-
 
 
 

@@ -12,7 +12,7 @@
 ################################################################################
 # NON-LIFTING BODY TYPE
 ################################################################################
-struct NonLiftingBody <: AbstractBody
+immutable NonLiftingBody <: AbstractBody
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry
@@ -23,14 +23,29 @@ struct NonLiftingBody <: AbstractBody
   fields::Array{String, 1}                  # Available fields (solutions)
 
   # Internal variables
+  _G::Array{T,2} where {T<:Real}            # Geometric solution matrix
 
   NonLiftingBody( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
-                  fields=Array{String,1}()
+                    fields=Array{String,1}(),
+                  _G=_calc_G(grid)
          ) = new( grid,
                   nnodes, ncells,
-                  fields
+                    fields,
+                  _G
          )
+end
+
+
+function solve(self::NonLiftingBody, Vinfs::Array{Array{T,1},1}) where {T<:Real}
+  if size(Vinfs,1) != self.ncells
+    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
+  end
+
+  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
+  sigma = self._G\lambda
+
+  add_field(self, "sigma", sigma)
 end
 
 
@@ -82,7 +97,7 @@ function add_field(self::NonLiftingBody, field_name::String, field_data)
   end
 
   gt.add_field(self.grid, field_name, FIELDS[field_name]["field_type"],
-                field_data, FIELDS[field_name]["field_type"])
+                field_data, FIELDS[field_name]["entry_type"])
 
   if !(field_name in self.fields)
     push!(self.fields, field_name)
@@ -109,6 +124,13 @@ function generate_loft_nonliftbody(args...; dimsplit::Int64=2, optargs...)
   return NonLiftingBody(triang_grid)
 end
 ##### INTERNAL FUNCTIONS  ######################################################
-
+function _calc_G(grid::gt.GridTriangleSurface)
+  return PanelSolver.G_constant_source(
+                  grid.orggrid.nodes,                                  # Nodes
+                  [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
+                  [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
+                  [gt.get_normal(grid, i) for i in 1:grid.ncells],     # Normals
+                )
+end
 
 ##### END OF NON-LIFTING BODY ##################################################

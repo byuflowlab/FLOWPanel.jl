@@ -32,8 +32,9 @@ const def_rfl_path = joinpath(def_data_path, "airfoils")
 const FIELDS = Dict(
   # Declare fields as follow:
   # "MyField" => Dict( "field_type"  => "scalar" or "vector",
-  #                     "entry_type" => "node" or "cell",
-  #                     "field_data" => data)
+  #                     "entry_type" => "node" or "cell")
+  "sigma"     => Dict( "field_type"  => "scalar",
+                        "entry_type" => "cell")
 )
 
 
