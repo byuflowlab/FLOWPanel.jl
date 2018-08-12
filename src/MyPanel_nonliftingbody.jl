@@ -21,6 +21,8 @@ immutable NonLiftingBody <: AbstractBody
   nnodes::Int64                             # Number of nodes
   ncells::Int64                             # Number of cells
   fields::Array{String, 1}                  # Available fields (solutions)
+  Oaxis::Array{T,2} where {T<:Real}         # Coordinate system of original grid
+  O::Array{T,1} where {T<:Real}             # Position of CS of original grid
 
   # Internal variables
   _G::Array{T,2} where {T<:Real}            # Geometric solution matrix
@@ -28,10 +30,12 @@ immutable NonLiftingBody <: AbstractBody
   NonLiftingBody( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
+                    Oaxis=eye(3), O=zeros(3),
                   _G=_calc_G(grid)
          ) = new( grid,
                   nnodes, ncells,
                     fields,
+                    Oaxis, O,
                   _G
          )
 end
@@ -123,6 +127,25 @@ function generate_loft_nonliftbody(args...; dimsplit::Int64=2, optargs...)
 
   return NonLiftingBody(triang_grid)
 end
+
+"""
+  `generate_revolution_nonliftbody(args...; optargs...)`
+Generates a non-lifting body of a body of revolution. See documentation of
+`GeometricTools.surface_revolution` for a description of the arguments of this
+function.
+"""
+function generate_revolution_nonliftbody(args...; dimsplit::Int64=2,
+                                                loop_dim::Int64=2, optargs...)
+  # Revolves the geometry
+  grid = gt.surface_revolution(args...; loop_dim=loop_dim, optargs...)
+
+  # Splits the quadrialateral panels into triangles
+  # dimsplit = 2              # Dimension along which to split
+  triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+  return NonLiftingBody(triang_grid)
+end
+
 ##### INTERNAL FUNCTIONS  ######################################################
 function _calc_G(grid::gt.GridTriangleSurface)
   return PanelSolver.G_constant_source(

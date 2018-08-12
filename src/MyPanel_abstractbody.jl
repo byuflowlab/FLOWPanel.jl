@@ -67,9 +67,34 @@ Returns the normal vector the i-th panel.
 """
 get_normal(body::BodyTypes, args...) = gt.get_normal(body.grid, args...)
 
+"""
+  `rotate(body::BodyTypes, roll::Real, pitch::Real, yaw::Real;
+translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
+) where{T<:Real}`
+
+Rotates and translates the body by the given axial angles.
+
+NOTE: Naming follows aircraft convention, with
+* roll:   rotation about x-axis.
+* pitch:  rotation about y-axis.
+* yaw:    rotation about z-axis.
+"""
+function rotate(body::BodyTypes, roll::Real, pitch::Real, yaw::Real;
+                  translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
+                ) where{T<:Real}
+
+  M = gt.rotation_matrix2(roll, pitch, yaw)
+  gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
+
+  body.Oaxis[:,:] = M*body.Oaxis
+  body.O[:] += translation
+end
+
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
 function _get_controlpoint(grid::gt.GridTriangleSurface, args...)
-  return mean(gt.get_cellnodes(grid, args...))+0.01*gt.get_normal(grid, args...)
+  cellnodes = gt.get_cellnodes(grid, args...)
+  len = maximum([norm(cellnodes[1]-v) for v in cellnodes[2:end]])
+  return mean(cellnodes) + 0.005*len*gt.get_normal(grid, args...)
 end
 
 ##### END OF ABSTRACT BODY #####################################################
