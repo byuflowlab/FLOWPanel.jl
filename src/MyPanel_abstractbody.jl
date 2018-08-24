@@ -14,20 +14,52 @@
 ################################################################################
 """
   Implementations of AbstractBody are expected to have the following fields.
-  * ` `             : .
+  * `grid::gt.GridTriangleSurface `     : Paneled geometry
 
   and the following functions
+
   ```julia
+
+  # Solve for distributions of potential flow
+  function solve(self::BodyTypes, Vinfs::Array{Array{T,1},1}, args...
+                                                              ) where {T<:Real}
+    .
+    .
+    .
+  end
+
+
+  # Returns the requested field.
+  function get_field(self::BodyTypes, field_name::String)
+    .
+    .
+    .
+  end
+
+  # Returns the requested field value.
+  function get_field_val(self::BodyTypes, field_name::String, i::Int64;
+                        _check::Bool=true)
+    .
+    .
+    .
+  end
+
+  # Adds a new field to the body.
+  function add_field(self::BodyTypes, field_name::String, field_data)
+    .
+    .
+    .
+  end
   ```
 """
 abstract type AbstractBody end
 
-
+# Includes all implementations of AbstractGrid
 for header_name in ["nonliftingbody"]
   include("MyPanel_"*header_name*".jl")
 end
 
-# Implementations of AbstractGrid
+# Declares implementations of AbstractGrid
 const BodyTypes = Union{NonLiftingBody}
 
 

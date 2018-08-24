@@ -12,6 +12,20 @@
 ################################################################################
 # NON-LIFTING BODY TYPE
 ################################################################################
+"""
+  `NonLiftingBody(grid::gt.GridTriangleSurface)`
+
+Non-lifting paneled body that is solved using a constant source distribution.
+`grid` is the grid surface (paneled geometry).
+
+  **Properties**
+  * `nnodes::Int64`                     : Number of nodes
+  * `ncells::Int64`                     : Number of cells
+  * `fields::Array{String, 1}`          : Available fields (solutions)
+  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
+  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
+
+"""
 immutable NonLiftingBody <: AbstractBody
 
   # User inputs
