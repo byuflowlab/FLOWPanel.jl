@@ -162,6 +162,50 @@ function Vconstant_source(nodes::Array{Array{T,1},1}, strength::Real,
 end
 
 
+"""
+Returns the velocity induced by a vortex ring panel of vertices `nodes` and
+vortex strength `strength` on the targets `targets`. It adds the velocity at the
+i-th target to out[i].
+"""
+function Vvortexring(nodes::Array{Array{T,1},1}, strength::Real,
+                          targets::Array{Array{T,1},1},
+                          # out::Array{Array{T,1},1}
+                          out;
+                          dot_with=nothing
+                          ) where{T<:Real}
+  if size(out)!=size(targets)
+    error("Invalid `out` argument."*
+          " Expected size $(size(targets)), got $(size(out)).")
+  end
+
+  nn = size(nodes, 1)                      # Number of nodes
+
+  # Iterates over targets
+  for ti in 1:size(targets, 1)
+    V = zeros(3)
+
+    for i in 1:nn
+      p1, p2 = nodes[i], nodes[i%nn + 1]
+      r1 = targets[ti] - p1
+      r2 = targets[ti] - p2
+      crossr1r2 = cross(r1,r2)
+      # This if statement avoids the singularity at the vortex line
+      if dot(crossr1r2,crossr1r2) > SMOOTH^2
+        V += crossr1r2/dot(crossr1r2,crossr1r2) * dot(
+                                              p1-p2, r1/norm(r1) - r2/norm(r2) )
+      end
+    end
+
+    if dot_with!=nothing
+      out[ti] -= dot( strength/(4*pi)*V, dot_with[ti])
+    else
+      out[ti] -= strength/(4*pi)*V
+    end
+
+  end
+
+  return out
+end
 
 
 
