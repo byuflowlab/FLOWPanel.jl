@@ -11,8 +11,8 @@ module MyPanel
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
-import PyPlot
-plt = PyPlot
+import PyPlot; const plt = PyPlot
+# import ForwardDiff
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 
@@ -32,9 +32,23 @@ const def_rfl_path = joinpath(def_data_path, "airfoils")
 const FIELDS = Dict(
   # Declare fields as follow:
   # "MyField" => Dict( "field_type"  => "scalar" or "vector",
-  #                     "entry_type" => "node" or "cell")
-  "sigma"     => Dict( "field_type"  => "scalar",
-                        "entry_type" => "cell")
+  #                     "entry_type" => "node", "cell", or "system")
+
+  # Flag indicating whether the paneled body has been solved
+  "solved"    => Dict(  "field_type"  => "scalar",
+                        "entry_type"  => "system"),
+
+  # Freestream velocity at every control point
+  "Vinf"      => Dict(  "field_type"  => "vector",
+                        "entry_type"  => "cell"),
+
+  # Constant source strength at every panel
+  "sigma"     => Dict(  "field_type"  => "scalar",
+                        "entry_type"  => "cell"),
+
+  # Vortex ring strength at every panel
+  "Gamma"     => Dict(  "field_type"  => "scalar",
+                        "entry_type"  => "cell"),
 )
 
 
