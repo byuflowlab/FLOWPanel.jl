@@ -10,15 +10,24 @@
 """
 module PanelSolver
 
+import ForwardDiff
+
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
 import GeometricTools
 const gt = GeometricTools
 
+const RType = Union{Float64,                    # Concrete real types
+                    Int64,
+                    ForwardDiff.Dual{Void,Float64,3},
+                    ForwardDiff.Dual{Void,Int64,3}
+                    }
+
 
 const SMOOTH = 1e-2               # Smoothing radius of source panel
 const SMOOTH2 = 2e-3              # Smoothing radius for vortex ring
-# const SMOOTH2 = 1e-32              # Smoothing radius for vortex ring
+# const SMOOTH2 = 1e-8              # Smoothing radius for vortex ring
 const SMOOTH3 = SMOOTH2           # Smoothing radius for semi-infinite vortex
+const SMOOTH4 = 1e-5              # Smoothing radius for doublet panel
 
 
 
@@ -36,10 +45,11 @@ panels on the given control points with their associated normals.
   * `CPs::Array{Array{Float64,1},1}`    : Control points.
   * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
 """
-function G_constant_source(nodes::Array{T,2},
+function G_constant_source(nodes::Array{T1,2},
                                 panels::Array{Array{Int64,1},1},
-                                CPs::Array{Array{T,1},1},
-                                normals::Array{Array{T,1},1}) where{T<:Real}
+                                CPs::Array{Array{T2,1},1},
+                                normals::Array{Array{T3,1},1}
+                            ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
   G = zeros(N, N)
 
@@ -64,12 +74,12 @@ Returns the velocity induced by a panel of vertices `nodes` and constant
 strength source `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function Vconstant_source(nodes::Array{Array{T,1},1}, strength::Real,
-                          targets::Array{Array{T,1},1},
+function Vconstant_source(nodes::Array{Array{T1,1},1}, strength::RType,
+                          targets::Array{Array{T2,1},1},
                           # out::Array{Array{T,1},1}
                           out;
                           dot_with=nothing
-                          ) where{T<:Real}
+                          ) where{T1<:RType, T2<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -91,7 +101,7 @@ function Vconstant_source(nodes::Array{Array{T,1},1}, strength::Real,
   # Iterates over targets
   for ti in 1:size(targets, 1)
     HSX = Oaxis*(targets[ti]-O)
-    V = zeros(3)
+    V = zeros(T2, 3)
     dtheta = 2*pi
 
     nR0 = 0
@@ -143,6 +153,107 @@ function Vconstant_source(nodes::Array{Array{T,1},1}, strength::Real,
 end
 
 
+"""
+Calculates and returns the geometric matrix of a collection of constant-doublet
+panels on the given control points with their associated normals.
+
+**ARGUMENTS**
+  * `nodes::Array{T,2}`                 : All nodes in the collection of
+                                          panels.
+  * `panels::Array{Array{Int64,1},1}`   : Node connectivity data defining each
+                                          panel, where `panels[i][j]` is the
+                                          index in `nodes` of the j-th node in
+                                          the i-th panel.
+  * `CPs::Array{Array{Float64,1},1}`    : Control points.
+  * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
+"""
+function G_constant_doublet(nodes::Array{T1,2},
+                                panels::Array{Array{Int64,1},1},
+                                CPs::Array{Array{T2,1},1},
+                                normals::Array{Array{T3,1},1}
+                            ) where{T1<:RType, T2<:RType, T3<:RType}
+  N = size(panels, 1)
+  G = zeros(N, N)
+
+  # Builds geometric matrix
+  for j in 1:N # Iterates over columns (panels)
+      Vconstant_doublet(
+                        [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
+                        1.0,                               # Unitary strength,
+                        CPs,                               # Targets
+                        view(G, :, j);                     # Velocity of j-th
+                                                           # panel on every CP
+                        dot_with=normals                   # Normal of every CP
+                      )
+  end
+
+  return G
+end
+
+
+"""
+Returns the velocity induced by a panel of vertices `nodes` and constant
+strength doublet `strength` on the targets `targets`. It adds the velocity at
+the i-th target to out[i].
+"""
+function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
+                          targets::Array{Array{T2,1},1},
+                          out;
+                          dot_with=nothing, closed_ring::Bool=true
+                          ) where{T1<:RType, T2<:RType}
+  if size(out)!=size(targets)
+    error("Invalid `out` argument."*
+          " Expected size $(size(targets)), got $(size(out)).")
+  end
+
+  nn = size(nodes, 1)                      # Number of nodes
+
+  # Tangent, oblique, and normal vectors
+  t, o, n = gt._calc_unitvectors(nodes)
+
+  # Coordinate system defined by Hess & Smith
+  unitxi, uniteta, unitz = o, t, -n        # Unit vectors
+  O = nodes[1]                             # Origin
+  Oaxis = hcat(unitxi, uniteta, unitz)'    # Transformation matrix
+
+  # Converts nodes to H&S coordinate system
+  HSnodes = [Oaxis*(node-O) for node in nodes]
+
+  # Iterates over targets
+  for ti in 1:size(targets, 1)
+    HSX = Oaxis*(targets[ti]-O)
+    V = zeros(T2, 3)
+
+    for i in 1:nn
+      xi, xj = HSnodes[i], HSnodes[i%nn + 1]
+
+      ri = norm(HSX-xi)
+      rj = norm(HSX-xj)
+
+      if (ri>SMOOTH4 && rj>SMOOTH4 &&
+                        abs( ri*rj - dot(HSX-xi, HSX-xj) )>SMOOTH4*SMOOTH4)
+
+        aux = (ri+rj)/( ri*rj*( ri*rj - dot(HSX-xi, HSX-xj) ) )
+        V[1] -= HSX[3]*(xj[2]-xi[2])*aux
+        V[2] += HSX[3]*(xj[1]-xi[1])*aux
+        V[3] += ( (HSX[1]-xj[1])*(HSX[2]-xi[2]) -
+                                        (HSX[1]-xi[1])*(HSX[2]-xj[2]) )*aux
+      end
+
+    end
+
+    if dot_with!=nothing
+      out[ti] += strength/(4*pi)*dot( V[1]*unitxi + V[2]*uniteta + V[3]*unitz,
+                                                                  dot_with[ti])
+    else
+      out[ti] += strength/(4*pi)*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
+    end
+
+  end
+end
+
+
+
 
 """
 Calculates and returns the geometric matrix of a collection of vortex-ring
@@ -167,10 +278,11 @@ the wake as a rigid steady wake.
   * `CPs::Array{Array{Float64,1},1}`    : Control points.
   * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
 """
-function G_vortexring_rigid(nodes::Array{T,2},
+function G_vortexring_rigid(nodes::Array{T1,2},
                                 panels::Array{Array{Int64,1},1},
-                                CPs::Array{Array{T,1},1},
-                                normals::Array{Array{T,1},1}) where{T<:Real}
+                                CPs::Array{Array{T2,1},1},
+                                normals::Array{Array{T3,1},1}
+                                ) where{T1<:RType, T2<:RType, T3<:RType}
   # N = size(panels, 1)
   # G = zeros(N, N)
   #
@@ -204,10 +316,11 @@ panels on the given control points with their associated normals.
   * `CPs::Array{Array{Float64,1},1}`    : Control points.
   * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
 """
-function G_vortexring(nodes::Array{T,2},
+function G_vortexring(nodes::Array{T1,2},
                                 panels::Array{Array{Int64,1},1},
-                                CPs::Array{Array{T,1},1},
-                                normals::Array{Array{T,1},1}) where{T<:Real}
+                                CPs::Array{Array{T2,1},1},
+                                normals::Array{Array{T3,1},1}
+                        ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
   G = zeros(N, N)
 
@@ -226,16 +339,17 @@ function G_vortexring(nodes::Array{T,2},
   return G
 end
 
+
 """
 Returns the velocity induced by a vortex ring panel of vertices `nodes` and
 vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function Vvortexring(nodes::Array{Array{T,1},1}, strength::Real,
-                          targets::Array{Array{T,1},1},
+function Vvortexring(nodes::Array{Array{T1,1},1}, strength::RType,
+                          targets::Array{Array{T2,1},1},
                           out;
                           dot_with=nothing, closed_ring::Bool=true
-                          ) where{T<:Real}
+                          ) where{T1<:RType, T2<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -253,9 +367,9 @@ function Vvortexring(nodes::Array{Array{T,1},1}, strength::Real,
       r2 = targets[ti] - p2
       crossr1r2 = cross(r1,r2)
       # This if statement avoids the singularity at the vortex line
-      if dot(crossr1r2,crossr1r2) > SMOOTH2^2
+      if dot(crossr1r2,crossr1r2) > SMOOTH2*SMOOTH2
         V += crossr1r2/dot(crossr1r2,crossr1r2) * dot(
-                                              p1-p2, r1/norm(r1) - r2/norm(r2) )
+                                              (p1-p2), r1/norm(r1) - r2/norm(r2) )
       end
     end
 
@@ -274,11 +388,11 @@ Returns the velocity induced by a semi-infinite vortex starting at point `p` in
 the unitary direction `D` and vortex strength `strength` on the targets
 `targets`. It adds the velocity at the i-th target to out[i].
 """
-function Vsemiinfinitevortex(p::Array{T,1}, D::Array{T,1}, strength::Real,
-                              targets::Array{Array{T,1},1},
+function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
+                              targets::Array{Array{T3,1},1},
                               out;
-                              dot_with=nothing, check=true
-                              ) where{T<:Real}
+                              dot_with=nothing, check::Bool=true
+                              ) where{T1<:RType, T2<:RType, T3<:RType}
   # ERROR CASES
   if size(out)!=size(targets)
     error("Invalid `out` argument."*

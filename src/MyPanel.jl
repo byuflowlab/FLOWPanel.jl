@@ -12,7 +12,7 @@ module MyPanel
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import PyPlot; const plt = PyPlot
-# import ForwardDiff
+import ForwardDiff
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 
@@ -27,6 +27,12 @@ const module_path = splitdir(@__FILE__)[1]      # Path to this module
 const def_data_path = joinpath(module_path, "../data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
+
+const RType = Union{Float64,                    # Concrete real types
+                    Int64,
+                    ForwardDiff.Dual{Void,Float64,3},
+                    ForwardDiff.Dual{Void,Int64,3}
+                    }
 
 # Structure of implemented fields
 const FIELDS = Dict(
@@ -46,6 +52,10 @@ const FIELDS = Dict(
   "sigma"     => Dict(  "field_type"  => "scalar",
                         "entry_type"  => "cell"),
 
+  # Constant doublet strength at every panel
+  "mu"        => Dict(  "field_type"  => "scalar",
+                        "entry_type"  => "cell"),
+
   # Vortex ring strength at every panel
   "Gamma"     => Dict(  "field_type"  => "scalar",
                         "entry_type"  => "cell"),
@@ -53,7 +63,7 @@ const FIELDS = Dict(
 
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["solver", "abstractbody", "utilsDEPRE"]
+for header_name in ["solver", "abstractbody"]
   include("MyPanel_"*header_name*".jl")
 end
 

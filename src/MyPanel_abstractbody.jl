@@ -51,7 +51,8 @@ for header_name in ["nonliftingbody"]
 end
 
 # Declares implementations of AbstractGrid
-const BodyTypes = Union{NonLiftingBody, NonLiftingBodyVRing}
+const BodyTypes = Union{NonLiftingBody, NonLiftingBodyDoublet,
+                                                        NonLiftingBodyVRing}
 
 
 
@@ -65,8 +66,9 @@ const BodyTypes = Union{NonLiftingBody, NonLiftingBodyVRing}
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function Vind(self::BodyTypes, targets::Array{Array{T,1},1},
-                  out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
+function Vind(self::BodyTypes, targets::Array{Array{T1,1},1},
+                  out::Array{Array{T2,1},1}, args...; optargs...
+                                                  ) where{T1<:RType, T2<:RType}
 
   # ERROR CASES
   if check_solved(self)==false
@@ -270,9 +272,9 @@ NOTE: Naming follows aircraft convention, with
 * pitch:  rotation about y-axis.
 * yaw:    rotation about z-axis.
 """
-function rotate(body::BodyTypes, roll::Real, pitch::Real, yaw::Real;
+function rotate(body::BodyTypes, roll::RType, pitch::RType, yaw::RType;
                   translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
-                ) where{T<:Real}
+                ) where{T<:RType}
 
   M = gt.rotation_matrix2(roll, pitch, yaw)
   gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)

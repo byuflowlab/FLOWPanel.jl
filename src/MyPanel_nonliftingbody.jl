@@ -35,11 +35,11 @@ immutable NonLiftingBody <: AbstractBody
   nnodes::Int64                             # Number of nodes
   ncells::Int64                             # Number of cells
   fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T,2} where {T<:Real}         # Coordinate system of original grid
-  O::Array{T,1} where {T<:Real}             # Position of CS of original grid
+  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
+  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
 
   # Internal variables
-  _G::Array{T,2} where {T<:Real}            # Geometric solution matrix
+  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
 
   NonLiftingBody( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
@@ -55,7 +55,7 @@ immutable NonLiftingBody <: AbstractBody
 end
 
 
-function solve(self::NonLiftingBody, Vinfs::Array{Array{T,1},1}) where {T<:Real}
+function solve(self::NonLiftingBody, Vinfs::Array{Array{T,1},1}) where {T<:RType}
   if size(Vinfs,1) != self.ncells
     error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
   end
@@ -85,8 +85,8 @@ end
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function _Vind(self::NonLiftingBody, targets::Array{Array{T,1},1},
-                                      out::Array{Array{T,1},1}) where{T<:Real}
+function _Vind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
+                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
@@ -99,6 +99,100 @@ function _Vind(self::NonLiftingBody, targets::Array{Array{T,1},1},
   end
 end
 ##### END OF NON-LIFTING BODY ##################################################
+
+
+################################################################################
+# NON-LIFTING DOUBLET BODY TYPE
+################################################################################
+"""
+  `NonLiftingBodyDoublet(grid::gt.GridTriangleSurface)`
+
+Non-lifting paneled body that is solved using a constant doublet distribution.
+`grid` is the grid surface (paneled geometry).
+
+  **Properties**
+  * `nnodes::Int64`                     : Number of nodes
+  * `ncells::Int64`                     : Number of cells
+  * `fields::Array{String, 1}`          : Available fields (solutions)
+  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
+  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
+
+"""
+immutable NonLiftingBodyDoublet <: AbstractBody
+
+  # User inputs
+  grid::gt.GridTriangleSurface              # Paneled geometry
+
+  # Properties
+  nnodes::Int64                             # Number of nodes
+  ncells::Int64                             # Number of cells
+  fields::Array{String, 1}                  # Available fields (solutions)
+  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
+  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
+
+  # Internal variables
+  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
+
+  NonLiftingBodyDoublet( grid,
+                  nnodes=grid.nnodes, ncells=grid.ncells,
+                    fields=Array{String,1}(),
+                    Oaxis=eye(3), O=zeros(3),
+                  _G=_calc_Gdoublet(grid)
+         ) = new( grid,
+                  nnodes, ncells,
+                    fields,
+                    Oaxis, O,
+                  _G
+         )
+end
+
+
+function solve(self::NonLiftingBodyDoublet, Vinfs::Array{Array{T,1},1}
+                                                              ) where {T<:RType}
+  if size(Vinfs,1) != self.ncells
+    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
+  end
+
+  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
+  mu = self._G\lambda
+
+  add_field(self, "Vinf", Vinfs)
+  add_field(self, "mu", mu)
+  _solvedflag(self, true)
+end
+
+
+
+
+##### INTERNAL FUNCTIONS  ######################################################
+function _calc_Gdoublet(grid::gt.GridTriangleSurface)
+  return PanelSolver.G_constant_doublet(
+                  grid.orggrid.nodes,                                  # Nodes
+                  [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
+                  [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
+                  [gt.get_normal(grid, i) for i in 1:grid.ncells],     # Normals
+                )
+end
+
+"""
+Returns the velocity induced by the body on the targets `targets`. It adds the
+velocity at the i-th target to out[i].
+"""
+function _Vind(self::NonLiftingBodyDoublet, targets::Array{Array{T1,1},1},
+                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
+  # Iterates over panels
+  for i in 1:self.ncells
+    # Velocity of i-th  panel on every target
+    PanelSolver.Vconstant_doublet(
+                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
+                    get_fieldval(self, "mu", i; _check=false),  # Strength
+                    targets,                           # Targets
+                    out;                               # Outputs
+                  )
+  end
+end
+##### END OF NON-LIFTING DOUBLET BODY ##########################################
+
 
 
 
@@ -128,11 +222,11 @@ immutable NonLiftingBodyVRing <: AbstractBody
   nnodes::Int64                             # Number of nodes
   ncells::Int64                             # Number of cells
   fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T,2} where {T<:Real}         # Coordinate system of original grid
-  O::Array{T,1} where {T<:Real}             # Position of CS of original grid
+  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
+  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
 
   # Internal variables
-  _G::Array{T,2} where {T<:Real}            # Geometric solution matrix
+  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
 
   NonLiftingBodyVRing( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
@@ -149,7 +243,7 @@ end
 
 
 function solve(self::NonLiftingBodyVRing, Vinfs::Array{Array{T,1},1}
-                                                              ) where {T<:Real}
+                                                              ) where {T<:RType}
   if size(Vinfs,1) != self.ncells
     error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
   end
@@ -178,8 +272,8 @@ end
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function _Vind(self::NonLiftingBodyVRing, targets::Array{Array{T,1},1},
-                                      out::Array{Array{T,1},1}) where{T<:Real}
+function _Vind(self::NonLiftingBodyVRing, targets::Array{Array{T1,1},1},
+                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
