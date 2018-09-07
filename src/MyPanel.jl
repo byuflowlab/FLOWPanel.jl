@@ -69,9 +69,11 @@ const FIELDS = Dict(
                         "entry_type"  => "system"),
 )
 
+# Discretization parameter type
+const ndivstype = Union{Float64, gt.multidisctype, Void}
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["solver", "abstractbody"]
+for header_name in ["solver", "abstractbody", "utils"]
   include("MyPanel_"*header_name*".jl")
 end
 
