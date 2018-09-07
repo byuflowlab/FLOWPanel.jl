@@ -59,6 +59,14 @@ const FIELDS = Dict(
   # Vortex ring strength at every panel
   "Gamma"     => Dict(  "field_type"  => "scalar",
                         "entry_type"  => "cell"),
+
+  # Freestream direction at every trailing edge point
+  "D"         => Dict(  "field_type"  => "vector",
+                        "entry_type"  => "system"),
+
+  # Strength of wake elements
+  "Gammawake" => Dict(  "field_type"  => "scalar",
+                        "entry_type"  => "system"),
 )
 
 

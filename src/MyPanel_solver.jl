@@ -78,8 +78,8 @@ function Vconstant_source(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           # out::Array{Array{T,1},1}
                           out;
-                          dot_with=nothing
-                          ) where{T1<:RType, T2<:RType}
+                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing
+                          ) where{T1<:RType, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -199,8 +199,8 @@ the i-th target to out[i].
 function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out;
-                          dot_with=nothing, closed_ring::Bool=true
-                          ) where{T1<:RType, T2<:RType}
+                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing
+                          ) where{T1<:RType, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -254,11 +254,10 @@ end
 
 
 
-
 """
 Calculates and returns the geometric matrix of a collection of vortex-ring
-panels on the given control points with their associated normals. It models
-the wake as a rigid steady wake.
+panels of a lifting body on the given control points with their associated
+normals.
 
 **ARGUMENTS**
   * `nodes::Array{T,2}`                 : All nodes in the collection of
@@ -268,37 +267,53 @@ the wake as a rigid steady wake.
                                           index in `nodes` of the j-th node in
                                           the i-th panel.
   * `U::Array{Int64,1}`                 : Indices of all panels along the upper
-                                          side of the trailing edge (from left
-                                          to right).
+                                          side of the trailing edge.
   * `L::Array{Int64,1}`                 : Indices of all panels along the lower
-                                          side of the trailing edge (from left
-                                          to right).
-  * `D::Array{Array{Float64,1},1}`      : Unitary direction of every
-                                          semi-infinite vortex.
+                                          side of the trailing edge.
   * `CPs::Array{Array{Float64,1},1}`    : Control points.
   * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
 """
-function G_vortexring_rigid(nodes::Array{T1,2},
+function G_lifting_vortexring(nodes::Array{T1,2},
                                 panels::Array{Array{Int64,1},1},
+                                U::Array{Int64,1},
+                                L::Array{Int64,1},
                                 CPs::Array{Array{T2,1},1},
                                 normals::Array{Array{T3,1},1}
-                                ) where{T1<:RType, T2<:RType, T3<:RType}
-  # N = size(panels, 1)
-  # G = zeros(N, N)
-  #
-  # # Builds geometric matrix
-  # for j in 1:N # Iterates over columns (panels)
-  #     Vconstant_source(
-  #                       [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
-  #                       1.0,                               # Unitary strength,
-  #                       CPs,                               # Targets
-  #                       view(G, :, j);                     # Velocity of j-th
-  #                                                          # panel on every CP
-  #                       dot_with=normals                   # Normal of every CP
-  #                     )
-  # end
-  #
-  # return G
+                            ) where{T1<:RType, T2<:RType, T3<:RType}
+
+  # Sorts trailing edge indices
+  _U = sort(U)
+  _L = sort(L)
+
+  cur_u = 1                 # Index of current upper trailing edge cell
+  cur_l = 1                 # Index of current lower trailing edge cell
+
+  N = size(panels, 1)
+  G = zeros(N, N)
+
+  # Builds geometric matrix --- Vortex rings
+  for j in 1:N # Iterates over columns (panels)
+
+    Vvortexring(# Nodes in j-th panel: puts first node last to match TE
+                [nodes[:,ind] for ind in vcat(panels[j][2:end], panels[j][1])],
+                # Unitary strength,
+                1.0,
+                # Targets
+                CPs,
+                # Velocity of j-th panel on every CP
+                view(G, :, j);
+                # Normal of every CP
+                dot_with=normals,
+                # Checks for TE
+                closed_ring= !( (cur_u<=size(_U,1) && j==_U[cur_u]) ||
+                                (cur_l<=size(_L,1) && j==_L[cur_l]))
+                )
+
+      if cur_u<=size(_U,1) && j==_U[cur_u]; cur_u+=1; end;
+      if cur_l<=size(_L,1) && j==_L[cur_l]; cur_l+=1; end;
+  end
+
+  return G
 end
 
 
@@ -348,8 +363,9 @@ i-th target to out[i].
 function Vvortexring(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out;
-                          dot_with=nothing, closed_ring::Bool=true
-                          ) where{T1<:RType, T2<:RType}
+                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing,
+                          closed_ring::Bool=true
+                          ) where{T1<:RType, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -374,9 +390,9 @@ function Vvortexring(nodes::Array{Array{T1,1},1}, strength::RType,
     end
 
     if dot_with!=nothing
-      out[ti] += strength/(4*pi)*dot(V, dot_with[ti])
+      out[ti] -= strength/(4*pi)*dot(V, dot_with[ti])
     else
-      out[ti] += strength/(4*pi)*V
+      out[ti] -= strength/(4*pi)*V
     end
 
   end
@@ -391,7 +407,8 @@ the unitary direction `D` and vortex strength `strength` on the targets
 function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
                               targets::Array{Array{T3,1},1},
                               out;
-                              dot_with=nothing, check::Bool=true
+                              dot_with::Union{Array{Array{T3,1},1}, Void}=nothing,
+                              check::Bool=true
                               ) where{T1<:RType, T2<:RType, T3<:RType}
   # ERROR CASES
   if size(out)!=size(targets)
@@ -419,7 +436,7 @@ function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
       end
 
       # Adds bound vortex section
-      Vvortexring([p2, p], strength, targets[ti:ti], view(out, ti:ti);
+      Vvortexring([p, p2], strength, targets[ti:ti], view(out, ti:ti);
                                           dot_with=dot_with, closed_ring=false)
     end
   end

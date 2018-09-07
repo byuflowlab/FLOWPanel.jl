@@ -45,14 +45,14 @@
 """
 abstract type AbstractBody end
 
-# Includes all implementations of AbstractGrid
-for header_name in ["nonliftingbody"]
+# Includes all implementations of AbstractBody
+for header_name in ["nonliftingbody", "abstractliftingbody"]
   include("MyPanel_"*header_name*".jl")
 end
 
 # Declares implementations of AbstractGrid
 const BodyTypes = Union{NonLiftingBody, NonLiftingBodyDoublet,
-                                                        NonLiftingBodyVRing}
+                                                NonLiftingBodyVRing, LBodyTypes}
 
 
 
@@ -82,12 +82,16 @@ end
   `save(body::BodyTypes, filename::String; opt_args...)`
 
 Outputs a vtk file of this body. See GeometricTools.save(grid, ...) for a
-descrition of optional arguments `opt_args...`.
+description of optional arguments `opt_args...`.
 """
 function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
+                                                 out_cellindexdim::Array{Int64,1}=Int64[],
                                                  out_nodeindex::Bool=false,
                                                  out_controlpoints::Bool=false,
-                                                                    opt_args...)
+                                                 out_wake::Bool=true,
+                                                 _len::RType=1.0,
+                                                 _upper::Bool=true,
+                                                 opt_args...)
   # Add special fields
   if out_cellindex
     gt.add_field(body.grid, "cellindex", "scalar",
@@ -97,13 +101,35 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
     gt.add_field(body.grid, "nodeindex", "scalar",
                     [i for i in 1:body.nnodes], "node")
   end
+  for dim in out_cellindexdim
+    ndivs = gt.get_ndivscells(body.grid)[1:2]
+    data = [ ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
+    gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell")
+  end
 
   # Outputs control points
   if out_controlpoints
     save_controlpoints(body, filename; opt_args...)
   end
 
+  # Outputs wake
+  if out_wake
+    # Case that body is not a LiftingBody
+    try
+       body::LBodyTypes
+       _savewake(body, filename; len=_len, upper=_upper, opt_args...)
+     catch e
+       if isa(e, TypeError)
+         nothing
+       else
+         rethrow(e)
+       end
+     end
+  end
+
+  # Saves body
   gt.save(body.grid, filename; opt_args...)
+
 end
 
 """
@@ -287,9 +313,14 @@ end
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
 function _get_controlpoint(grid::gt.GridTriangleSurface, args...)
-  cellnodes = gt.get_cellnodes(grid, args...)
+  return _get_controlpoint(gt.get_cellnodes(grid, args...),
+                                                  gt.get_normal(grid, args...))
+end
+
+function _get_controlpoint(cellnodes::Array{Array{T1,1},1}, normal::Array{T2,1},
+                                                  ) where{T1<:RType, T2<:RType}
   len = maximum([norm(cellnodes[1]-v) for v in cellnodes[2:end]])
-  return mean(cellnodes) + 0.005*len*gt.get_normal(grid, args...)
+  return mean(cellnodes) + 0.005*len*normal
 end
 
 function _solvedflag(self::BodyTypes, val::Bool)
