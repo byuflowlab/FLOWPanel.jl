@@ -49,7 +49,8 @@ function simplewing(b::RType, ar::RType, tr::RType, twist_root::RType,
                       spl_s::Real=0.0000001,
                       rflspl_s::Real=0.00000001,
                       verify_spline::Bool=true,
-                      verify_rflspline::Bool=true
+                      verify_rflspline::Bool=true,
+                      opt_args...
                       )
 
   # ----------------- GEOMETRY DESCRIPTION -------------------------------------
@@ -110,10 +111,12 @@ function simplewing(b::RType, ar::RType, tr::RType, twist_root::RType,
                                         urfl_NDIVS, lrfl_NDIVS,
                                         semispan, b_low, b_up, b_NDIVS,
                                         chords, twists, x_pos, z_pos;
+                                        dimsplit=1,
                                         symmetric=symmetric,
                                         spl_k=spl_k, spl_s=spl_s,
                                         verify_spline=verify_spline,
                                         verify_rflspline=verify_rflspline,
-                                        rflspl_s=rflspl_s
+                                        rflspl_s=rflspl_s,
+                                        opt_args...
                                     )
 end
