@@ -78,8 +78,8 @@ function Vconstant_source(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           # out::Array{Array{T,1},1}
                           out;
-                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing
-                          ) where{T1<:RType, T2<:RType, T3<:RType}
+                          dot_with=nothing
+                          ) where{T1<:RType, T2<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
