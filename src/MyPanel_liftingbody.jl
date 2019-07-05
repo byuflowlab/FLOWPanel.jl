@@ -89,24 +89,24 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
 
     # Upper in-going vortex
     PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j; upper=true),  # Starting point
-                          D[j],                         # Direction
-                          -1.0,                         # Unitary strength
-                          CPs,                          # Targets
-                                      # Velocity of j-th horseshoe on every CP
-                          view(G, :, self.U[j]);
-                          dot_with=normals              # Normal of every CP
+                          get_TE(self, j+1; upper=true),    # Starting point
+                          D[j+1],                           # Direction
+                          -1.0,                             # Unitary strength
+                          CPs,                              # Targets
+                                        # Velocity of j-th horseshoe on every CP
+                          view(G, :, u_j);
+                          dot_with=normals                  # Normal of every CP
                         )
 
     # Upper out-going vortex
     PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j+1; upper=true),# Starting point
-                          D[j+1],                       # Direction
-                          1.0,                          # Unitary strength
-                          CPs,                          # Targets
-                                      # Velocity of j-th horseshoe on every CP
-                          view(G, :, self.U[j]);
-                          dot_with=normals              # Normal of every CP
+                          get_TE(self, j; upper=true),      # Starting point
+                          D[j],                             # Direction
+                          1.0,                              # Unitary strength
+                          CPs,                              # Targets
+                                        # Velocity of j-th horseshoe on every CP
+                          view(G, :, u_j);
+                          dot_with=normals                  # Normal of every CP
                         )
   end
 
@@ -119,7 +119,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                           -1.0,                         # Unitary strength
                           CPs,                          # Targets
                                       # Velocity of j-th horseshoe on every CP
-                          view(G, :, self.L[j]);
+                          view(G, :, l_j);
                           dot_with=normals              # Normal of every CP
                         )
 
@@ -129,8 +129,8 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                           D[j+1],                         # Direction
                           1.0,                          # Unitary strength
                           CPs,                          # Targets
-                                    # Velocity of j-th horseshoe on every CP
-                          view(G, :, self.L[j]);
+                                        # Velocity of j-th horseshoe on every CP
+                          view(G, :, l_j);
                           dot_with=normals              # Normal of every CP
                         )
   end
@@ -138,8 +138,16 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
   Gamma = G\lambda
 
-  Gammawake = vcat(Gamma[1], [Gamma[i]-Gamma[i+1] for i in 2:self.nnodesTE-1],
-                                                                    Gamma[end])
+  # Gammas of upper and lower TE cells
+  Gup = [Gamma[i] for i in self.U]
+  Glo = [Gamma[i] for i in self.L]
+
+  # Gamma at every TE bound vortex
+  GTE = Glo - Gup
+
+  # Gammas of the semi-infinite vortices
+  # NOTE: Here I assume that all TE cells are contiguous
+  Gammawake = vcat(GTE[1], [GTE[i]-GTE[i-1] for i in 2:self.nnodesTE-1], -GTE[end])
 
   add_field(self, "D", D)
   add_field(self, "Vinf", Vinfs)

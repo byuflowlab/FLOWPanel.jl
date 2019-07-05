@@ -70,15 +70,15 @@ function get_TE(self::LBodyTypes, i::Int64; upper::Bool=true)
 
   if upper
     if i==self.nnodesTE
-      return gt.get_node(self.grid, gt.get_cell(self.grid, self.U[i-1])[2])
+      return gt.get_node(self.grid, gt.get_cell(self.grid, self.U[i-1])[end])
     else
-      return gt.get_node(self.grid, gt.get_cell(self.grid, self.U[i])[1])
+      return gt.get_node(self.grid, gt.get_cell(self.grid, self.U[i])[end-1])
     end
   else
     if i==self.nnodesTE
-      return gt.get_node(self.grid, gt.get_cell(self.grid, self.L[i-1])[1])
+      return gt.get_node(self.grid, gt.get_cell(self.grid, self.L[i-1])[end-1])
     else
-      return gt.get_node(self.grid, gt.get_cell(self.grid, self.L[i])[2])
+      return gt.get_node(self.grid, gt.get_cell(self.grid, self.L[i])[end])
     end
   end
 end
@@ -98,9 +98,9 @@ function generate_loft_liftbody(bodytype::Type{LBodyTypes}, args...;
   # dimsplit = 2              # Dimension along which to split
   triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
-  ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
-  U = [ sub2ind(ndivs, 1, i) for i in 1:ndivs[2] ]           # Upper LE cells
-  L = [ sub2ind(ndivs, ndivs[1], i) for i in 1:ndivs[2] ]    # Lower LE cells
+  ndivs = gt.get_ndivscells(triang_grid)              # Cells in each dimension
+  U = [ sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
+  L = [ sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
   return bodytype(triang_grid, U, L)
 end
@@ -122,8 +122,8 @@ function generate_revolution_liftbody(bodytype::Type{LBodyTypes}, args...;
   triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
   ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
-  U = [ sub2ind(ndivs, 1, i) for i in 1:ndivs[2] ]           # Upper LE cells
-  L = [ sub2ind(ndivs, ndivs[1], i) for i in 1:ndivs[2] ]    # Lower LE cells
+  U = [ sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
+  L = [ sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
   return bodytype(triang_grid, U, L)
 end

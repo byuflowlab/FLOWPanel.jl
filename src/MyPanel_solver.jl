@@ -295,7 +295,9 @@ function G_lifting_vortexring(nodes::Array{T1,2},
   for j in 1:N # Iterates over columns (panels)
 
     Vvortexring(# Nodes in j-th panel: puts first node last to match TE
-                [nodes[:,ind] for ind in vcat(panels[j][2:end], panels[j][1])],
+                # [nodes[:,ind] for ind in vcat(panels[j][2:end], panels[j][1])],
+                # Nodes in j-th panel: puts last node first to match TE
+                [nodes[:,ind] for ind in vcat(panels[j][end], panels[j][1:end-1])],
                 # Unitary strength,
                 1.0,
                 # Targets
@@ -437,8 +439,9 @@ function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
 
       # Adds bound vortex section
       Vvortexring([p, p2], strength, targets[ti:ti], view(out, ti:ti);
-                                          dot_with=dot_with, closed_ring=false)
+                                          dot_with=dot_with[ti:ti], closed_ring=false)
     end
+
   end
 end
 
