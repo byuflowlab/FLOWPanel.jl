@@ -12,6 +12,7 @@
 ################################################################################
 # NON-LIFTING BODY TYPE
 ################################################################################
+
 """
   `NonLiftingBody(grid::gt.GridTriangleSurface)`
 
@@ -26,7 +27,7 @@ Non-lifting paneled body that is solved using a constant source distribution.
   * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
 
 """
-immutable NonLiftingBody <: AbstractBody
+struct NonLiftingBody <: AbstractBody 
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry
@@ -44,7 +45,7 @@ immutable NonLiftingBody <: AbstractBody
   NonLiftingBody( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
-                    Oaxis=eye(3), O=zeros(3),
+                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                   _G=_calc_Gsource(grid)
          ) = new( grid,
                   nnodes, ncells,
@@ -118,7 +119,7 @@ Non-lifting paneled body that is solved using a constant doublet distribution.
   * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
 
 """
-immutable NonLiftingBodyDoublet <: AbstractBody
+struct NonLiftingBodyDoublet <: AbstractBody
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry
@@ -213,7 +214,7 @@ Non-lifting paneled body that is solved using vortex ring panels.
   * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
 
 """
-immutable NonLiftingBodyVRing <: AbstractBody
+struct NonLiftingBodyVRing <: AbstractBody
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry

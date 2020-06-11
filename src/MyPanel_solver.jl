@@ -11,6 +11,7 @@
 module PanelSolver
 
 import ForwardDiff
+using LinearAlgebra
 
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
 import GeometricTools
@@ -18,8 +19,8 @@ const gt = GeometricTools
 
 const RType = Union{Float64,                    # Concrete real types
                     Int64,
-                    ForwardDiff.Dual{Void,Float64,3},
-                    ForwardDiff.Dual{Void,Int64,3}
+                    ForwardDiff.Dual{Nothing,Float64,3},
+                    ForwardDiff.Dual{Nothing,Int64,3}
                     }
 
 
@@ -51,7 +52,7 @@ function G_constant_source(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                             ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = zeros(N, N)
+  G = Array{Float64}(undef, N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
@@ -124,7 +125,7 @@ function Vconstant_source(nodes::Array{Array{T1,1},1}, strength::RType,
       sijj = (xj[1]-HSX[1])*Cij + (xj[2]-HSX[2])*Sij
       Rij = (HSX[1]-xi[1])*Sij - (HSX[2]-xi[2])*Cij
 
-      Jij = atan2( Rij*abs(HSX[3])*( ri*sijj - rj*siji ) ,
+      Jij = atan( Rij*abs(HSX[3])*( ri*sijj - rj*siji ) ,
                    ri*rj*Rij^2 + HSX[3]^2*sijj*siji)
 
       #  println("Rij,ri,rj,siji,sijj,HSX=$Rij,$ri,$rj,$siji,$sijj,$HSX")
@@ -173,7 +174,7 @@ function G_constant_doublet(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                             ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = zeros(N, N)
+  G = Array{Float64}(undef, N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
@@ -199,7 +200,7 @@ the i-th target to out[i].
 function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out;
-                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing
+                          dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing
                           ) where{T1<:RType, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
@@ -222,7 +223,7 @@ function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
   # Iterates over targets
   for ti in 1:size(targets, 1)
     HSX = Oaxis*(targets[ti]-O)
-    V = zeros(T2, 3)
+    V = Array{Float64}(undef, T2, 3)
 
     for i in 1:nn
       xi, xj = HSnodes[i], HSnodes[i%nn + 1]
@@ -289,7 +290,7 @@ function G_lifting_vortexring(nodes::Array{T1,2},
   cur_l = 1                 # Index of current lower trailing edge cell
 
   N = size(panels, 1)
-  G = zeros(N, N)
+  G = Array{Float64}(undef, N, N)
 
   # Builds geometric matrix --- Vortex rings
   for j in 1:N # Iterates over columns (panels)
@@ -339,7 +340,7 @@ function G_vortexring(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                         ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = zeros(N, N)
+  G = Array{Float64}(undef, N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
@@ -365,7 +366,7 @@ i-th target to out[i].
 function Vvortexring(nodes::Array{Array{T1,1},1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out;
-                          dot_with::Union{Array{Array{T3,1},1}, Void}=nothing,
+                          dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
                           closed_ring::Bool=true
                           ) where{T1<:RType, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
@@ -409,7 +410,7 @@ the unitary direction `D` and vortex strength `strength` on the targets
 function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
                               targets::Array{Array{T3,1},1},
                               out;
-                              dot_with::Union{Array{Array{T3,1},1}, Void}=nothing,
+                              dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
                               check::Bool=true
                               ) where{T1<:RType, T2<:RType, T3<:RType}
   # ERROR CASES

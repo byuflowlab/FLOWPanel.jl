@@ -13,6 +13,8 @@ module MyPanel
 import Dierckx
 import PyPlot; const plt = PyPlot
 import ForwardDiff
+using Statistics
+using LinearAlgebra
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 
@@ -30,8 +32,8 @@ const def_rfl_path = joinpath(def_data_path, "airfoils")
 
 const RType = Union{Float64,                    # Concrete real types
                     Int64,
-                    ForwardDiff.Dual{Void,Float64,3},
-                    ForwardDiff.Dual{Void,Int64,3}
+                    ForwardDiff.Dual{Nothing,Float64,3},
+                    ForwardDiff.Dual{Nothing,Int64,3}
                     }
 
 # Structure of implemented fields
@@ -70,7 +72,7 @@ const FIELDS = Dict(
 )
 
 # Discretization parameter type
-const ndivstype = Union{Float64, gt.multidisctype, Void}
+const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["solver", "abstractbody", "utils"]
