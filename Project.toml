@@ -1,0 +1,16 @@
+name = "MyPanel"
+uuid = "872f82d1-0bf3-57a3-a154-a701ba1a0160"
+author = ["Eduardo Alvarez <Edo.AlvarezR@gmail.com>"]
+version = "2.0.0"
+
+[deps]
+Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+GeometricTools = "83792f5e-c6a1-11e8-2e0a-93511f02ae5f"
+
+[compat]
+julia = "1"
+GeometricTools = "2.0.0"
