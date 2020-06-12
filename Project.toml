@@ -13,4 +13,3 @@ GeometricTools = "83792f5e-c6a1-11e8-2e0a-93511f02ae5f"
 
 [compat]
 julia = "1"
-GeometricTools = "2.0.0"
