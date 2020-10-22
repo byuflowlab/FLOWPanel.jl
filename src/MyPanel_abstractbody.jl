@@ -117,7 +117,9 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
     # Case that body is not a LiftingBody
     try
        body::LBodyTypes
-       _savewake(body, filename; len=_len, upper=_upper, opt_args...)
+       if body.nnodesTE-1 != 0
+           _savewake(body, filename; len=_len, upper=_upper, opt_args...)
+       end
      catch e
        if isa(e, TypeError)
          nothing

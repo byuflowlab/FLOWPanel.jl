@@ -27,7 +27,7 @@ Non-lifting paneled body that is solved using a constant source distribution.
   * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
 
 """
-struct NonLiftingBody <: AbstractBody 
+struct NonLiftingBody <: AbstractBody
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry

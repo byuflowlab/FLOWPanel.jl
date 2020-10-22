@@ -56,7 +56,7 @@ struct RigidWakeBody <: AbstractLiftingBody
                     U, L,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
-                    Oaxis=eye(3), O=zeros(3),
+                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                     ncellsTE=size(U,1), nnodesTE=size(U,1)+1,
                   _G=_calc_G_lifting_vortexring(grid, U, L)
          ) = _checkTE(U,L) ? new( grid,
@@ -74,7 +74,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   # ERROR CASES
   if size(Vinfs,1) != self.ncells
     error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
-  elseif size(D,1) != self.nnodesTE
+  elseif size(D,1) != self.nnodesTE && self.nnodesTE-1 != 0
     error("Invalid D; expected size $(self.nnodesTE), got $(size(D,1))")
   end
 
@@ -147,7 +147,9 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
 
   # Gammas of the semi-infinite vortices
   # NOTE: Here I assume that all TE cells are contiguous
-  Gammawake = vcat(GTE[1], [GTE[i]-GTE[i-1] for i in 2:self.nnodesTE-1], -GTE[end])
+  Gammawake = self.nnodesTE-1 != 0 ?
+                vcat(GTE[1], [GTE[i]-GTE[i-1] for i in 2:self.nnodesTE-1], -GTE[end]) :
+                []
 
   add_field(self, "D", D)
   add_field(self, "Vinf", Vinfs)
