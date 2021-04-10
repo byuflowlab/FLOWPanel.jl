@@ -92,6 +92,9 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
                                                  _len::RType=1.0,
                                                  _upper::Bool=true,
                                                  opt_args...)
+
+  str = ""
+
   # Add special fields
   if out_cellindex
     gt.add_field(body.grid, "cellindex", "scalar",
@@ -103,13 +106,13 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
   end
   for dim in out_cellindexdim
     ndivs = gt.get_ndivscells(body.grid)[1:2]
-    data = [ ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
+    data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
     gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell")
   end
 
   # Outputs control points
   if out_controlpoints
-    save_controlpoints(body, filename; opt_args...)
+    str *= save_controlpoints(body, filename; opt_args...)
   end
 
   # Outputs wake
@@ -118,7 +121,7 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
     try
        body::LBodyTypes
        if body.nnodesTE-1 != 0
-           _savewake(body, filename; len=_len, upper=_upper, opt_args...)
+           str *= _savewake(body, filename; len=_len, upper=_upper, opt_args...)
        end
      catch e
        if isa(e, TypeError)
@@ -130,7 +133,7 @@ function save(body::BodyTypes, filename::String; out_cellindex::Bool=false,
   end
 
   # Saves body
-  gt.save(body.grid, filename; opt_args...)
+  return str*gt.save(body.grid, filename; opt_args...)
 
 end
 
@@ -166,7 +169,7 @@ function save_controlpoints(body::BodyTypes, filename::String;
     end
 
     # Generates vtk
-    gt.generateVTK(filename*suffix, CPs; point_data=data, opt_args...)
+    return gt.generateVTK(filename*suffix, CPs; point_data=data, opt_args...)
 end
 
 """

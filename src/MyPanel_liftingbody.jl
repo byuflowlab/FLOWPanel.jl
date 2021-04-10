@@ -69,6 +69,13 @@ struct RigidWakeBody <: AbstractLiftingBody
          ) : error("Got invalid trailing edge.")
 end
 
+"""
+    `solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1}, D::Array{Array{T2,1},1})`
+
+Solve the lifting panel body canceling the normal component of Vinfs, where
+`Vinfs[i]` is the velocity at the i-th panel, and `D[j]` is the direction of
+the semi-infinite vortex at the j-th TE edge filament.
+"""
 function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                           D::Array{Array{T2,1},1}) where {T1<:RType, T2<:RType}
   # ERROR CASES
@@ -138,6 +145,10 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
   Gamma = G\lambda
 
+  # println(lambda)
+  println(G)
+  # println(Gamma)
+
   # Gammas of upper and lower TE cells
   Gup = [Gamma[i] for i in self.U]
   Glo = [Gamma[i] for i in self.L]
@@ -167,7 +178,88 @@ velocity at the i-th target to out[i].
 """
 function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-  error("Not implemented yet.")
+
+
+    # Sorts trailing edge indices
+    _U = sort(self.U)
+    _L = sort(self.L)
+
+    cur_u = 1                 # Index of current upper trailing edge cell
+    cur_l = 1                 # Index of current lower trailing edge cell
+
+    allnodes = self.grid.orggrid.nodes
+
+    # Iterate over each panel calculating body-induced velocity
+    for j in 1:self.ncells
+
+        panel = gt.get_cell(self.grid, j)
+        nodes = [view(allnodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]
+        Gamma = get_fieldval(self, "Gamma", j; _check=false)
+
+        PanelSolver.Vvortexring(nodes, Gamma, targets, out;
+                                # Checks for TE
+                                closed_ring= !( (cur_u<=size(_U,1) && j==_U[cur_u]) ||
+                                                (cur_l<=size(_L,1) && j==_L[cur_l]))
+                                )
+
+          if cur_u<=size(_U,1) && j==_U[cur_u]; cur_u+=1; end;
+          if cur_l<=size(_L,1) && j==_L[cur_l]; cur_l+=1; end;
+    end
+
+
+    # Iterates over upper side of TE calculating semi-infinite wake induced velocity
+    for (j, u_j) in enumerate(self.U)
+
+      Gamma = get_fieldval(self, "Gamma", u_j; _check=false)
+      D = get_fieldval(self, "D", j+1; _check=false)
+
+      # Upper in-going vortex
+      PanelSolver.Vsemiinfinitevortex(
+                            get_TE(self, j+1; upper=true),    # Starting point
+                            D,                                # Direction
+                            -Gamma,                           # strength
+                            targets,                          # Targets
+                            out
+                          )
+
+      D = get_fieldval(self, "D", j; _check=false)
+
+      # Upper out-going vortex
+      PanelSolver.Vsemiinfinitevortex(
+                            get_TE(self, j; upper=true),      # Starting point
+                            D,                                # Direction
+                            Gamma,                            # strength
+                            targets,                          # Targets
+                            out
+                          )
+    end
+
+    # Iterates over upper side of TE calculating semi-infinite wake induced velocity
+    for (j, l_j) in enumerate(self.L) # Iterates over lower side of TE
+
+      Gamma = get_fieldval(self, "Gamma", l_j; _check=false)
+      D = get_fieldval(self, "D", j; _check=false)
+
+      # Incoming vortex
+      PanelSolver.Vsemiinfinitevortex(
+                            get_TE(self, j; upper=false),     # Starting point
+                            D,                                # Direction
+                            -Gamma,                           # strength
+                            targets,                          # Targets
+                            out
+                          )
+
+      D = get_fieldval(self, "D", j+1; _check=false)
+
+      # Outgoing vortex
+      PanelSolver.Vsemiinfinitevortex(
+                            get_TE(self, j+1; upper=false),   # Starting point
+                            D,                                # Direction
+                            Gamma,                            # strength
+                            targets,                          # Targets
+                            out
+                          )
+    end
 end
 
 """
@@ -201,7 +293,7 @@ function _savewake(self::RigidWakeBody, filename::String;
   end
 
   # Generate VTK
-  gt.generateVTK(filename*suffix, points; lines=lines, point_data=point_data,
-                                                                    optargs...)
+  return gt.generateVTK(filename*suffix, points; lines=lines,
+                                              point_data=point_data, optargs...)
 end
 ##### END OF RIGID-WAKE BODY ###################################################

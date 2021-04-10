@@ -99,8 +99,8 @@ function generate_loft_liftbody(bodytype::Type{LBodyTypes}, args...;
   triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
   ndivs = gt.get_ndivscells(triang_grid)              # Cells in each dimension
-  U = [ sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
-  L = [ sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
+  U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
+  L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
   return bodytype(triang_grid, U, L)
 end
@@ -122,8 +122,8 @@ function generate_revolution_liftbody(bodytype::Type{LBodyTypes}, args...;
   triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
   ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
-  U = [ sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
-  L = [ sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
+  U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
+  L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
   return bodytype(triang_grid, U, L)
 end

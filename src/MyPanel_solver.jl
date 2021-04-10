@@ -363,12 +363,12 @@ Returns the velocity induced by a vortex ring panel of vertices `nodes` and
 vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function Vvortexring(nodes::Array{Array{T1,1},1}, strength::RType,
+function Vvortexring(nodes::Array{Arr1,1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out;
                           dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
                           closed_ring::Bool=true
-                          ) where{T1<:RType, T2<:RType, T3<:RType}
+                          ) where{Arr1<:AbstractArray, T2<:RType, T3<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -440,7 +440,8 @@ function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
 
       # Adds bound vortex section
       Vvortexring([p, p2], strength, targets[ti:ti], view(out, ti:ti);
-                                          dot_with=dot_with[ti:ti], closed_ring=false)
+                                          dot_with=dot_with!=nothing ? dot_with[ti:ti] : nothing,
+                                          closed_ring=false)
     end
 
   end
