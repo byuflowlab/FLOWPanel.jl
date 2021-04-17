@@ -53,7 +53,7 @@ struct RigidWakeBody <: AbstractLiftingBody
                                             # (it doesn't include the wake)
 
   RigidWakeBody(  grid,
-                    U, L,
+                    sort(U), sort(L),
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
@@ -234,7 +234,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
                           )
     end
 
-    # Iterates over upper side of TE calculating semi-infinite wake induced velocity
+    # Iterates over lower side of TE calculating semi-infinite wake induced velocity
     for (j, l_j) in enumerate(self.L) # Iterates over lower side of TE
 
       Gamma = get_fieldval(self, "Gamma", l_j; _check=false)
@@ -260,6 +260,25 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
                             out
                           )
     end
+end
+
+"""
+Returns the velocity induced by the body's `i`-th panel on the targets
+`targets` assuming unitary strength. It adds the velocity at the j-th target to
+out[j].
+"""
+function _GVind(self::RigidWakeBody, i::Int, targets::Array{Array{T1,1},1},
+                          out::Array{Array{T2,1},1})
+
+    panel = gt.get_cell(self.grid, i)
+    nodes = [view(self.grid.orggrid.nodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]
+    Gamma = 1.0
+
+    # Check whether this is a trailing edge panel
+    TE = Bool(length(searchsorted(self.U, i))) || Bool(length(searchsorted(self.L, i)))
+
+    PanelSolver.Vvortexring(nodes, Gamma, targets, out; closed_ring = !TE)
+    # TODO: Add velocity of semi-infinite wake
 end
 
 """
