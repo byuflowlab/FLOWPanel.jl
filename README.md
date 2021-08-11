@@ -3,7 +3,7 @@
 ![](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
 
 <img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
-<img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
+![](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
 
 <img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Databay showcase gif" title="Databay showcase gif" width="500"/>
 
