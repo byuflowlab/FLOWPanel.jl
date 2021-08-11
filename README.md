@@ -1,5 +1,7 @@
 <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
 
+![](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
+
 # FLOWPanel
 Three-dimensional panel method for high-Reynolds aerodynamics.
 Developed and tested on Julia v1.6. See [documentation](https://nbviewer.jupyter.org/github/byuflowlab/FLOWPanel.jl/blob/master/docs/Documentation.ipynb) under [`docs/Documentation.ipynb`](https://nbviewer.jupyter.org/github/byuflowlab/FLOWPanel.jl/blob/master/docs/Documentation.ipynb) for theory, implementation, examples, and validation of this code.
