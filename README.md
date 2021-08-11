@@ -1,17 +1,4 @@
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
-
-![](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
-
-<img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
-
-![](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
-
-<img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif" alt="Databay showcase gif" title="Databay showcase gif" width="500"/>
-
-![](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif)
-
-
-<img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/sphere01_2.gif?raw=true" alt="Databay showcase gif" title="Databay showcase gif" width="500"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
 
 # FLOWPanel
 Three-dimensional panel method for high-Reynolds aerodynamics.
@@ -40,14 +27,14 @@ Developed and tested on Julia v1.6. See [documentation](https://nbviewer.jupyter
 <table style="width:100%">
   <tr>
     <td>
-      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/box00_2.gif" alt="Vid here" style="width: 500px;"/>
+      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box00_2.gif" alt="Vid here" style="width: 500px;"/>
     </td>
     <td>
-      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/box01_2.gif" alt="Vid here" style="width: 500px;"/>
+      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box01_2.gif" alt="Vid here" style="width: 500px;"/>
     </td>
   </tr>
 </table>
 
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/hub03_2.gif" alt="Vid here" style="width: 500px;"/>
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing05.gif" alt="Vid here" style="width: 500px;"/>
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/prop07.gif" alt="Vid here" style="width: 500px;"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/hub03_2.gif" alt="Vid here" style="width: 500px;"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/wing05.gif" alt="Vid here" style="width: 500px;"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/prop07.gif" alt="Vid here" style="width: 500px;"/>
