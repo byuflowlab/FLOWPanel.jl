@@ -5,7 +5,7 @@
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
   * Created   : Sep 2018
-  * License   : AGPL-3.0
+  * License   : MIT License
 =###############################################################################
 
 ################################################################################
@@ -49,7 +49,7 @@ abstract type AbstractLiftingBody <: AbstractBody end
 
 # Includes all implementations of AbstractLiftingBody
 for header_name in ["liftingbody"]
-  include("MyPanel_"*header_name*".jl")
+  include("FLOWPanel_"*header_name*".jl")
 end
 
 

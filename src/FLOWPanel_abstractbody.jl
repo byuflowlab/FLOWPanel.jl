@@ -5,7 +5,7 @@
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
   * Created   : Jun 2018
-  * License   : AGPL-3.0
+  * License   : MIT License
 =###############################################################################
 
 
@@ -27,7 +27,7 @@
 
   # Solve for distributions of potential flow
   function solve(self::BodyType, Vinfs::Array{Array{T,1},1}, args...
-                                                              ) where {T<:Real}
+) where {T<:Real}
     .
     .
     .
@@ -36,7 +36,7 @@
   # Returns the velocity induced by the body on the targets `targets`. It adds
   # the velocity at the i-th target to out[i].
   function _Vind(self::BodyTypes, targets::Array{Array{T,1},1},
-                    out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
+out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
     .
     .
     .
@@ -47,7 +47,7 @@ abstract type AbstractBody end
 
 # Includes all implementations of AbstractBody
 for header_name in ["nonliftingbody", "abstractliftingbody"]
-  include("MyPanel_"*header_name*".jl")
+  include("FLOWPanel_"*header_name*".jl")
 end
 
 # Declares implementations of AbstractGrid

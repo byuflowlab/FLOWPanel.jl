@@ -4,20 +4,20 @@
   # AUTHORSHIP
     * Author    : Eduardo J. Alvarez
     * Email     : Edo.AlvarezR@gmail.com
-    * Created   : Jun 2018
-    * License   : AGPL-3.0
+    * Created   : Jun 2018 originally as MyPanel.jl
+    * License   : MIT License
 """
-module MyPanel
+module FLOWPanel
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
-import PyPlot; const plt = PyPlot
+import PyPlot
+const plt = PyPlot
 import ForwardDiff
 using Statistics
 using LinearAlgebra
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
-
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
 import GeometricTools
 const gt = GeometricTools
@@ -26,7 +26,7 @@ const gt = GeometricTools
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module
                                                 # Default path to data files
-const def_data_path = joinpath(module_path, "../data")
+const def_data_path = joinpath(module_path, "..", "docs", "data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
 
@@ -76,7 +76,7 @@ const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["solver", "abstractbody", "utils"]
-  include("MyPanel_"*header_name*".jl")
+  include("FLOWPanel_"*header_name*".jl")
 end
 
 

@@ -6,7 +6,7 @@
     * Author    : Eduardo J. Alvarez
     * Email     : Edo.AlvarezR@gmail.com
     * Created   : Jul 2018
-    * License   : AGPL-3.0
+    * License   : MIT License
 """
 module PanelSolver
 
@@ -223,7 +223,7 @@ function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
   # Iterates over targets
   for ti in 1:size(targets, 1)
     HSX = Oaxis*(targets[ti]-O)
-    V = Array{Float64}(undef, T2, 3)
+    V = Array{T2}(undef, 3)
 
     for i in 1:nn
       xi, xj = HSnodes[i], HSnodes[i%nn + 1]

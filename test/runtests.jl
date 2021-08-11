@@ -1,4 +1,4 @@
-using MyPanel
+using FLOWPanel
 using Base.Test
 
 # write your own tests here

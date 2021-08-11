@@ -5,7 +5,7 @@
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
   * Created   : Sep 2018
-  * License   : AGPL-3.0
+  * License   : MIT License
 =###############################################################################
 
 

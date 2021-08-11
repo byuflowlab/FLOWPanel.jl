@@ -3,7 +3,7 @@
 *.jl.*.cov
 *.jl.mem
 
-# MyPanel temps
+# FLOWPanel temps
 *.gif
 temps
 temp*

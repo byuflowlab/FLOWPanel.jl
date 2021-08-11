@@ -6,7 +6,7 @@
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
   * Created   : Sep 2018
-  * License   : AGPL-3.0
+  * License   : MIT License
 =###############################################################################
 
 
@@ -53,14 +53,14 @@ struct RigidWakeBody <: AbstractLiftingBody
                                             # (it doesn't include the wake)
 
   RigidWakeBody(  grid,
-                    sort(U), sort(L),
+                    U, L,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                     ncellsTE=size(U,1), nnodesTE=size(U,1)+1,
                   _G=_calc_G_lifting_vortexring(grid, U, L)
          ) = _checkTE(U,L) ? new( grid,
-                    U, L,
+                    sort(U), sort(L),
                   nnodes, ncells,
                     fields,
                     Oaxis, O,
@@ -146,7 +146,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   Gamma = G\lambda
 
   # println(lambda)
-  println(G)
+  # println(G)
   # println(Gamma)
 
   # Gammas of upper and lower TE cells
@@ -268,7 +268,7 @@ Returns the velocity induced by the body's `i`-th panel on the targets
 out[j].
 """
 function _GVind(self::RigidWakeBody, i::Int, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1})
+                          out::Array{Array{T2,1},1}) where {T1, T2}
 
     panel = gt.get_cell(self.grid, i)
     nodes = [view(self.grid.orggrid.nodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]

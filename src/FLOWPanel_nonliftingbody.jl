@@ -5,7 +5,7 @@
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
   * Created   : Jun 2018
-  * License   : AGPL-3.0
+  * License   : MIT License
 =###############################################################################
 
 
@@ -137,7 +137,7 @@ struct NonLiftingBodyDoublet <: AbstractBody
   NonLiftingBodyDoublet( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
-                    Oaxis=eye(3), O=zeros(3),
+                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                   _G=_calc_Gdoublet(grid)
          ) = new( grid,
                   nnodes, ncells,
@@ -232,7 +232,7 @@ struct NonLiftingBodyVRing <: AbstractBody
   NonLiftingBodyVRing( grid,
                   nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
-                    Oaxis=eye(3), O=zeros(3),
+                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                   _G=_calc_Gvring(grid)
          ) = new( grid,
                   nnodes, ncells,
