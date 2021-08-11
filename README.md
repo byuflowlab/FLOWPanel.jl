@@ -1,4 +1,4 @@
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/sphere01_2.gif" alt="Vid here" style="width: 500px;"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/sphere01_2.gif" alt="Vid here" width="300px"/>
 
 # FLOWPanel
 Three-dimensional panel method for high-Reynolds aerodynamics.
@@ -27,14 +27,14 @@ Developed and tested on Julia v1.6. See [documentation](https://nbviewer.jupyter
 <table style="width:100%">
   <tr>
     <td>
-      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box00_2.gif" alt="Vid here" style="width: 500px;"/>
+      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box00_2.gif" alt="Vid here" width="300px"/>
     </td>
     <td>
-      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box01_2.gif" alt="Vid here" style="width: 500px;"/>
+      <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box01_2.gif" alt="Vid here" width="300px"/>
     </td>
   </tr>
 </table>
 
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/hub03_2.gif" alt="Vid here" style="width: 500px;"/>
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/wing05.gif" alt="Vid here" style="width: 500px;"/>
-<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/prop07.gif" alt="Vid here" style="width: 500px;"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/hub03_2.gif" alt="Vid here" width="300px"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/wing05.gif" alt="Vid here" width="300px"/>
+<img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/prop07.gif" alt="Vid here" width="300px"/>
