@@ -53,7 +53,8 @@ function G_constant_source(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                             ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = Array{Float64}(undef, N, N)
+  # G = Array{Float64}(undef, N, N)
+  G = zeros(N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
@@ -175,7 +176,8 @@ function G_constant_doublet(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                             ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = Array{Float64}(undef, N, N)
+  # G = Array{Float64}(undef, N, N)
+  G = zeros(N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
@@ -291,7 +293,11 @@ function G_lifting_vortexring(nodes::Array{T1,2},
   cur_l = 1                 # Index of current lower trailing edge cell
 
   N = size(panels, 1)
-  G = Array{Float64}(undef, N, N)
+  # G = Array{Float64}(undef, N, N)    # NOTE: This leads to unstable memory
+                                       #  allocation when running this function
+                                       #  multiple times. Prefer zeros(N, N)
+                                       #  instead.
+  G = zeros(N, N)
 
   # Builds geometric matrix --- Vortex rings
   for j in 1:N # Iterates over columns (panels)
@@ -347,7 +353,8 @@ function G_vortexring(nodes::Array{T1,2},
                                 normals::Array{Array{T3,1},1}
                         ) where{T1<:RType, T2<:RType, T3<:RType}
   N = size(panels, 1)
-  G = Array{Float64}(undef, N, N)
+  # G = Array{Float64}(undef, N, N)
+  G = zeros(N, N)
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
