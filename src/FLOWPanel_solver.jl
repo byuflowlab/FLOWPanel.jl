@@ -29,6 +29,7 @@ const SMOOTH2 = 2e-3              # Smoothing radius for vortex ring
 # const SMOOTH2 = 1e-8              # Smoothing radius for vortex ring
 const SMOOTH3 = SMOOTH2           # Smoothing radius for semi-infinite vortex
 const SMOOTH4 = 1e-5              # Smoothing radius for doublet panel
+const SMOOTH5 = 1e-8              # Smoothing radius for vortex ring
 
 
 
@@ -75,12 +76,12 @@ Returns the velocity induced by a panel of vertices `nodes` and constant
 strength source `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function Vconstant_source(nodes::Array{Array{T1,1},1}, strength::RType,
+function Vconstant_source(nodes::Array{Arr1,1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           # out::Array{Array{T,1},1}
                           out;
                           dot_with=nothing
-                          ) where{T1<:RType, T2<:RType}
+                          ) where{Arr1<:AbstractArray, T2<:RType}
   if size(out)!=size(targets)
     error("Invalid `out` argument."*
           " Expected size $(size(targets)), got $(size(out)).")
@@ -312,9 +313,15 @@ function G_lifting_vortexring(nodes::Array{T1,2},
                                 (cur_l<=size(_L,1) && j==_L[cur_l]))
                 )
 
+    # if !prod(isnan.(view(G, :, j)).==false); println("j=$j\t$(findall(x->isnan(x), view(G, :, j)))"); end;
+
       if cur_u<=size(_U,1) && j==_U[cur_u]; cur_u+=1; end;
       if cur_l<=size(_L,1) && j==_L[cur_l]; cur_l+=1; end;
   end
+
+
+  # println(!prod(isnan.(G)).==false)
+  println(length(filter(x-> isnan(x), G)))
 
   return G
 end
@@ -385,11 +392,13 @@ function Vvortexring(nodes::Array{Arr1,1}, strength::RType,
       r1 = targets[ti] - p1
       r2 = targets[ti] - p2
       crossr1r2 = cross(r1,r2)
-      # This if statement avoids the singularity at the vortex line
-      if dot(crossr1r2,crossr1r2) > SMOOTH2*SMOOTH2
-        V += crossr1r2/dot(crossr1r2,crossr1r2) * dot(
-                                              (p1-p2), r1/norm(r1) - r2/norm(r2) )
-      end
+      # # This if statement avoids the singularity at the vortex line
+      # if dot(crossr1r2,crossr1r2) > SMOOTH2*SMOOTH2
+      #   V += crossr1r2/dot(crossr1r2,crossr1r2) * dot(
+      #                                         (p1-p2), r1/norm(r1) - r2/norm(r2) )
+      # end
+        V += crossr1r2/(dot(crossr1r2,crossr1r2)+SMOOTH5) * dot(
+                                              (p1-p2), r1/(norm(r1)+SMOOTH5) - r2/(norm(r2)+SMOOTH5) )
     end
 
     if dot_with!=nothing
