@@ -241,7 +241,17 @@ function get_fieldval(self::BodyTypes, field_name::String, i::Int64;
     end
   end
 
-  return self.grid.field[field_name]["field_data"][i]
+  return gt.get_fieldval(self.grid, field_name, i)
+end
+
+"""
+  `get_fieldval(self::BodyTypes, field_name, coor)`
+
+Returns the value of node of coordinates `coor` (1-indexed) in the field
+'field_name'.
+"""
+function get_fieldval(self::BodyTypes, field_name::String, coor::Array{Int64,1})
+  return gt.get_fieldval(self.grid, field_name, coor)
 end
 
 

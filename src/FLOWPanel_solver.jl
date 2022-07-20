@@ -327,7 +327,7 @@ function G_lifting_vortexring(nodes::Array{T1,2},
 
 
   # println(!prod(isnan.(G)).==false)
-  println(length(filter(x-> isnan(x), G)))
+  # println(length(filter(x-> isnan(x), G)))
 
   return G
 end
