@@ -9,10 +9,6 @@
 """
 module FLOWPanel
 
-#= TODO
-    * [ ] Using the += operator (and not .+=) in the V functions allocates memory!
-=#
-
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import ForwardDiff

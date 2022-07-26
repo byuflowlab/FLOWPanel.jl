@@ -102,7 +102,7 @@ function Vconstant_source(nodes::Array{Arr1,1}, strength::RType,
       out[ti] += dot( strength*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz),
                                                                   dot_with[ti])
     else
-      out[ti] += strength*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
+      out[ti] .+= strength*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
     end
 
   end
@@ -171,7 +171,7 @@ function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
       out[ti] += strength/(4*pi)*dot( V[1]*unitxi + V[2]*uniteta + V[3]*unitz,
                                                                   dot_with[ti])
     else
-      out[ti] += strength/(4*pi)*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
+      out[ti] .+= strength/(4*pi)*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
     end
 
   end
@@ -223,7 +223,7 @@ function Vvortexring(nodes::Array{Arr1,1}, strength::RType,
     if dot_with!=nothing
       out[ti] -= strength/(4*pi)*dot(V, dot_with[ti])
     else
-      out[ti] -= strength/(4*pi)*V
+      out[ti] .-= strength/(4*pi)*V
     end
 
   end
@@ -263,7 +263,7 @@ function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
                    strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h ),
                                                                   dot_with[ti])
       else
-        out[ti] += strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h )
+        out[ti] .+= strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h )
       end
 
       # Adds bound vortex section
