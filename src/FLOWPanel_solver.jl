@@ -28,8 +28,10 @@ const SMOOTH = 1e-2               # Smoothing radius of source panel
 const SMOOTH2 = 2e-3              # Smoothing radius for vortex ring
 # const SMOOTH2 = 1e-8              # Smoothing radius for vortex ring
 const SMOOTH3 = SMOOTH2           # Smoothing radius for semi-infinite vortex
+  # SMOOTH3 = 1e-16
 const SMOOTH4 = 1e-5              # Smoothing radius for doublet panel
 const SMOOTH5 = 1e-8              # Smoothing radius for vortex ring
+# SMOOTH5 = 1e-10
 
 
 

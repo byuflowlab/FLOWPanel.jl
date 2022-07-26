@@ -142,7 +142,25 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                         )
   end
 
-  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
+  # Source strength, σ_i = u_inf⋅n_i
+  sigma = [dot(Vinfs[i], normals[i])/(8*pi) for i in 1:self.ncells]
+
+  # Right-hand side --- Freestream component, λ = -u_inf⋅n
+  lambda = [-dot(Vinfs[i], normals[i]) for i in 1:self.ncells]
+
+  # Right-hand side --- Source component, λ = -u_inf⋅n - u_σ⋅n
+  for i in 1:self.ncells
+    # Velocity of i-th  panel on every control point
+    PanelSolver.Vconstant_source(
+                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
+                    -sigma[i],                         # Strength
+                    CPs,                               # Targets
+                    lambda;                            # Outputs
+                    dot_with=normals                   # Normal of every CP
+                  )
+  end
+
+  # Solve the linear system of equations
   Gamma = G\lambda
 
   # println(lambda)
@@ -164,6 +182,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
 
   add_field(self, "D", D)
   add_field(self, "Vinf", Vinfs)
+  add_field(self, "sigma", sigma)
   add_field(self, "Gamma", Gamma)
   add_field(self, "Gammawake", Gammawake)
   _solvedflag(self, true)
