@@ -64,8 +64,8 @@ function solve(self::NonLiftingBody, Vinfs::Array{Array{T,1},1}) where {T<:RType
   lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
   sigma = self._G\lambda
 
-  add_field(self, "Vinf", Vinfs)
-  add_field(self, "sigma", sigma)
+  add_field(self, "Vinf", "vector", Vinfs, "cell")
+  add_field(self, "sigma", "scalar", sigma, "cell")
   _solvedflag(self, true)
 end
 
@@ -74,7 +74,7 @@ end
 
 ##### INTERNAL FUNCTIONS  ######################################################
 function _calc_Gsource(grid::gt.GridTriangleSurface)
-  return PanelSolver.G_constant_source(
+  return G_constant_source(
                   grid.orggrid.nodes,                                  # Nodes
                   [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
                   [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
@@ -91,7 +91,7 @@ function _Vind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    PanelSolver.Vconstant_source(
+    Vconstant_source(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     get_fieldval(self, "sigma", i; _check=false),  # Strength
                     targets,                           # Targets
@@ -157,8 +157,8 @@ function solve(self::NonLiftingBodyDoublet, Vinfs::Array{Array{T,1},1}
   lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
   mu = self._G\lambda
 
-  add_field(self, "Vinf", Vinfs)
-  add_field(self, "mu", mu)
+  add_field(self, "Vinf", "vector", Vinfs, "cell")
+  add_field(self, "mu", "scalar", mu, "cell")
   _solvedflag(self, true)
 end
 
@@ -167,7 +167,7 @@ end
 
 ##### INTERNAL FUNCTIONS  ######################################################
 function _calc_Gdoublet(grid::gt.GridTriangleSurface)
-  return PanelSolver.G_constant_doublet(
+  return G_constant_doublet(
                   grid.orggrid.nodes,                                  # Nodes
                   [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
                   [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
@@ -184,7 +184,7 @@ function _Vind(self::NonLiftingBodyDoublet, targets::Array{Array{T1,1},1},
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    PanelSolver.Vconstant_doublet(
+    Vconstant_doublet(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     get_fieldval(self, "mu", i; _check=false),  # Strength
                     targets,                           # Targets
@@ -252,8 +252,8 @@ function solve(self::NonLiftingBodyVRing, Vinfs::Array{Array{T,1},1}
   lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
   Gamma = self._G\lambda
 
-  add_field(self, "Vinf", Vinfs)
-  add_field(self, "Gamma", Gamma)
+  add_field(self, "Vinf", "vector", Vinfs, "cell")
+  add_field(self, "Gamma", "scalar", Gamma, "cell")
   _solvedflag(self, true)
 end
 
@@ -261,7 +261,7 @@ end
 
 ##### INTERNAL FUNCTIONS  ######################################################
 function _calc_Gvring(grid::gt.GridTriangleSurface)
-  return PanelSolver.G_vortexring(
+  return G_vortexring(
                   grid.orggrid.nodes,                                  # Nodes
                   [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
                   [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
@@ -278,7 +278,7 @@ function _Vind(self::NonLiftingBodyVRing, targets::Array{Array{T1,1},1},
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    PanelSolver.Vvortexring(
+    Vvortexring(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     get_fieldval(self, "Gamma", i; _check=false),  # Strength
                     targets,                           # Targets

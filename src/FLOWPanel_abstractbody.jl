@@ -256,20 +256,19 @@ end
 
 
 """
-  `add_field(self::BodyTypes, field_name::String, field_data)`
+  `add_field(self::BodyTypes, field_name::String, field_type::String,
+                    field_data, entry_type::String)`
 
 Adds a new field to the body. It overwrites the field if it already existed.
+`field_type` is either `"scalar"` or `"vector"`. `entry_type` is one out of
+`["node", "cell", "system"]`.
 """
-function add_field(self::BodyTypes, field_name::String, field_data)
-
-  # ERROR CASES
-  if !(field_name in keys(FIELDS))
-    error("Invalid field $field_name. Implemented fields are: $(keys(FIELDS))")
-  end
+function add_field(self::BodyTypes, field_name::String, field_type::String,
+                    field_data, entry_type::String; raise_warn=false)
 
   # Adds field to grid
-  gt.add_field(self.grid, field_name, FIELDS[field_name]["field_type"],
-                field_data, FIELDS[field_name]["entry_type"]; raise_warn=false)
+  gt.add_field(self.grid, field_name, field_type,
+                field_data, entry_type; raise_warn=raise_warn)
 
   # Registers the field
   if !(field_name in self.fields)
@@ -332,14 +331,14 @@ function _get_controlpoint(grid::gt.GridTriangleSurface, args...)
                                                   gt.get_normal(grid, args...))
 end
 
-function _get_controlpoint(cellnodes::Array{Array{T1,1},1}, normal::Array{T2,1},
-                                                  ) where{T1<:RType, T2<:RType}
+function _get_controlpoint(cellnodes::Array{Array{T1,1},1}, normal::Array{T2,1};
+                                    off::Real=0.005) where{T1<:RType, T2<:RType}
   len = maximum([norm(cellnodes[1]-v) for v in cellnodes[2:end]])
-  return mean(cellnodes) + 0.005*len*normal
+  return mean(cellnodes) + off*len*normal
 end
 
 function _solvedflag(self::BodyTypes, val::Bool)
-  add_field(self, "solved", [val])
+  add_field(self, "solved", "scalar", [val], "system")
 end
 
 ##### END OF ABSTRACT BODY #####################################################

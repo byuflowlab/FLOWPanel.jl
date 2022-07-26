@@ -140,7 +140,7 @@ NOTE: This matrix doesn't include the wake.
 """
 function _calc_G_lifting_vortexring(grid::gt.GridTriangleSurface,
                                     U::Array{Int64,1}, L::Array{Int64,1})
-  return PanelSolver.G_lifting_vortexring(
+  return G_lifting_vortexring(
                   grid.orggrid.nodes,                                  # Nodes
                   [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
                   U, L,                                                # TE

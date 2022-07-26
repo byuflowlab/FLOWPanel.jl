@@ -95,7 +95,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   for (j, u_j) in enumerate(self.U) # Iterates over upper side of TE
 
     # Upper in-going vortex
-    PanelSolver.Vsemiinfinitevortex(
+    Vsemiinfinitevortex(
                           get_TE(self, j+1; upper=true),    # Starting point
                           D[j+1],                           # Direction
                           -1.0,                             # Unitary strength
@@ -106,7 +106,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                         )
 
     # Upper out-going vortex
-    PanelSolver.Vsemiinfinitevortex(
+    Vsemiinfinitevortex(
                           get_TE(self, j; upper=true),      # Starting point
                           D[j],                             # Direction
                           1.0,                              # Unitary strength
@@ -120,7 +120,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   for (j, l_j) in enumerate(self.L) # Iterates over lower side of TE
 
     # Incoming vortex
-    PanelSolver.Vsemiinfinitevortex(
+    Vsemiinfinitevortex(
                           get_TE(self, j; upper=false), # Starting point
                           D[j],                         # Direction
                           -1.0,                         # Unitary strength
@@ -131,7 +131,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                         )
 
     # Outgoing vortex
-    PanelSolver.Vsemiinfinitevortex(
+    Vsemiinfinitevortex(
                           get_TE(self, j+1; upper=false), # Starting point
                           D[j+1],                         # Direction
                           1.0,                          # Unitary strength
@@ -151,7 +151,7 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
   # Right-hand side --- Source component, λ = -u_inf⋅n - u_σ⋅n
   for i in 1:self.ncells
     # Velocity of i-th  panel on every control point
-    PanelSolver.Vconstant_source(
+    Vconstant_source(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     -sigma[i],                         # Strength
                     CPs,                               # Targets
@@ -180,11 +180,11 @@ function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
                 vcat(GTE[1], [GTE[i]-GTE[i-1] for i in 2:self.nnodesTE-1], -GTE[end]) :
                 []
 
-  add_field(self, "D", D)
-  add_field(self, "Vinf", Vinfs)
-  add_field(self, "sigma", sigma)
-  add_field(self, "Gamma", Gamma)
-  add_field(self, "Gammawake", Gammawake)
+  add_field(self, "D", "vector", D, "system")
+  add_field(self, "Vinf", "vector", Vinfs, "cell")
+  add_field(self, "sigma", "scalar", sigma, "cell")
+  add_field(self, "Gamma", "scalar", Gamma, "cell")
+  add_field(self, "Gammawake", "scalar", Gammawake, "system")
   _solvedflag(self, true)
 end
 
@@ -215,7 +215,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
         nodes = [view(allnodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]
         Gamma = get_fieldval(self, "Gamma", j; _check=false)
 
-        PanelSolver.Vvortexring(nodes, Gamma, targets, out;
+        Vvortexring(nodes, Gamma, targets, out;
                                 # Checks for TE
                                 closed_ring= !( (cur_u<=size(_U,1) && j==_U[cur_u]) ||
                                                 (cur_l<=size(_L,1) && j==_L[cur_l]))
@@ -233,7 +233,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
       D = get_fieldval(self, "D", j+1; _check=false)
 
       # Upper in-going vortex
-      PanelSolver.Vsemiinfinitevortex(
+      Vsemiinfinitevortex(
                             get_TE(self, j+1; upper=true),    # Starting point
                             D,                                # Direction
                             -Gamma,                           # strength
@@ -244,7 +244,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
       D = get_fieldval(self, "D", j; _check=false)
 
       # Upper out-going vortex
-      PanelSolver.Vsemiinfinitevortex(
+      Vsemiinfinitevortex(
                             get_TE(self, j; upper=true),      # Starting point
                             D,                                # Direction
                             Gamma,                            # strength
@@ -260,7 +260,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
       D = get_fieldval(self, "D", j; _check=false)
 
       # Incoming vortex
-      PanelSolver.Vsemiinfinitevortex(
+      Vsemiinfinitevortex(
                             get_TE(self, j; upper=false),     # Starting point
                             D,                                # Direction
                             -Gamma,                           # strength
@@ -271,7 +271,7 @@ function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
       D = get_fieldval(self, "D", j+1; _check=false)
 
       # Outgoing vortex
-      PanelSolver.Vsemiinfinitevortex(
+      Vsemiinfinitevortex(
                             get_TE(self, j+1; upper=false),   # Starting point
                             D,                                # Direction
                             Gamma,                            # strength
@@ -296,7 +296,7 @@ function _GVind(self::RigidWakeBody, i::Int, targets::Array{Array{T1,1},1},
     # Check whether this is a trailing edge panel
     TE = Bool(length(searchsorted(self.U, i))) || Bool(length(searchsorted(self.L, i)))
 
-    PanelSolver.Vvortexring(nodes, Gamma, targets, out; closed_ring = !TE)
+    Vvortexring(nodes, Gamma, targets, out; closed_ring = !TE)
     # TODO: Add velocity of semi-infinite wake
 end
 
