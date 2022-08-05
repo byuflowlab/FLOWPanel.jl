@@ -14,6 +14,7 @@ import Dierckx
 import ForwardDiff
 import PyPlot
 const plt = PyPlot
+import LinearAlgebra: I
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl

@@ -11,14 +11,13 @@
 
 
 
-const SMOOTH = 1e-2               # Smoothing radius of source panel
-const SMOOTH2 = 2e-3              # Smoothing radius for vortex ring
-# const SMOOTH2 = 1e-8              # Smoothing radius for vortex ring
+const SMOOTH = 1e-2               # Smoothing radius of source panel # NOTE: This is way too large
+# const SMOOTH = 1e-8
+const SMOOTH2 = 1e-14             # Cutoff length for vortex ring
 const SMOOTH3 = SMOOTH2           # Smoothing radius for semi-infinite vortex
+const SMOOTH5 = 1e-6              # Smoothing radius for vortex ring
   # SMOOTH3 = 1e-16
 const SMOOTH4 = 1e-5              # Smoothing radius for doublet panel
-const SMOOTH5 = 1e-8              # Smoothing radius for vortex ring
-# SMOOTH5 = 1e-10
 
 
 ################################################################################
@@ -34,7 +33,7 @@ i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
-function Vconstant_source(nodes::Array{Arr1,1}, strength::RType,
+function U_constant_source(nodes::Array{Arr1,1}, strength::RType,
                           targets::Array{Array{T2,1},1},
                           out::Array{Arr3,1};
                           # out;
@@ -224,60 +223,79 @@ Returns the velocity induced by a panel of vertices `nodes` and constant
 strength doublet `strength` on the targets `targets`. It adds the velocity at
 the i-th target to out[i].
 """
-function Vconstant_doublet(nodes::Array{Array{T1,1},1}, strength::RType,
-                          targets::Array{Array{T2,1},1},
-                          out;
-                          dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing
-                          ) where{T1<:RType, T2<:RType, T3<:RType}
-  if size(out)!=size(targets)
-    error("Invalid `out` argument."*
-          " Expected size $(size(targets)), got $(size(out)).")
-  end
+U_constant_doublet(args...; optargs...) = U_vortexring(args...; optargs...)
 
-  nn = size(nodes, 1)                      # Number of nodes
+"""
+Returns the potential induced by a panel of vertices `nodes` and constant
+strength doublet `strength` on the targets `targets`. It adds the potential at
+the i-th target to out[i].
 
-  # Tangent, oblique, and normal vectors
-  t, o, n = gt._calc_unitvectors(nodes)
-
-  # Coordinate system defined by Hess & Smith
-  unitxi, uniteta, unitz = o, t, -n        # Unit vectors
-  O = nodes[1]                             # Origin
-  Oaxis = hcat(unitxi, uniteta, unitz)'    # Transformation matrix
-
-  # Converts nodes to H&S coordinate system
-  HSnodes = [Oaxis*(node-O) for node in nodes]
-
-  # Iterates over targets
-  for ti in 1:size(targets, 1)
-    HSX = Oaxis*(targets[ti]-O)
-    V = Array{T2}(undef, 3)
-
-    for i in 1:nn
-      xi, xj = HSnodes[i], HSnodes[i%nn + 1]
-
-      ri = norm(HSX-xi)
-      rj = norm(HSX-xj)
-
-      if (ri>SMOOTH4 && rj>SMOOTH4 &&
-                        abs( ri*rj - dot(HSX-xi, HSX-xj) )>SMOOTH4*SMOOTH4)
-
-        aux = (ri+rj)/( ri*rj*( ri*rj - dot(HSX-xi, HSX-xj) ) )
-        V[1] -= HSX[3]*(xj[2]-xi[2])*aux
-        V[2] += HSX[3]*(xj[1]-xi[1])*aux
-        V[3] += ( (HSX[1]-xj[1])*(HSX[2]-xi[2]) -
-                                        (HSX[1]-xi[1])*(HSX[2]-xj[2]) )*aux
-      end
-
+Implementation of equations in Katz and Plotkin Sec. 10.4.2.
+"""
+function phi_constant_doublet(nodes::Array{Arr1,1}, strength::RType,
+                              targets::Array{Array{T2,1},1},
+                              # out::Array{Array{T,1},1}
+                              out
+                             ) where{T1, Arr1<:AbstractArray{T1}, T2<:RType}
+    if size(out)!=size(targets)
+        error("Invalid `out` argument."*
+              " Expected size $(size(targets)), got $(size(out)).")
     end
 
-    if dot_with!=nothing
-      out[ti] += strength/(4*pi)*dot( V[1]*unitxi + V[2]*uniteta + V[3]*unitz,
-                                                                  dot_with[ti])
-    else
-      out[ti] .+= strength/(4*pi)*(V[1]*unitxi + V[2]*uniteta + V[3]*unitz)
-    end
+    nn = size(nodes, 1)                      # Number of nodes
 
-  end
+    # Tangent, oblique, and normal vectors
+    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
+    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
+    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
+
+    # Panel local coordinate system
+    # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
+    O = nodes[1]                         # Origin
+    # xhat, yhat, zhat = t, o, n         # Unit vectors
+    # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
+
+    # Converts nodes to panel coordinate system
+    # Pnodes = [Oaxis*(node-O) for node in nodes]
+
+    # Iterates over targets
+    for ti in 1:size(targets, 1)
+
+        phi = 0
+
+        # Target position in panel coordinate system
+        # X = Oaxis*(targets[ti]-O)
+        x = t1*(targets[ti][1]-O[1]) + t2*(targets[ti][2]-O[2]) + t3*(targets[ti][3]-O[3])
+        y = o1*(targets[ti][1]-O[1]) + o2*(targets[ti][2]-O[2]) + o3*(targets[ti][3]-O[3])
+        z = n1*(targets[ti][1]-O[1]) + n2*(targets[ti][2]-O[2]) + n3*(targets[ti][3]-O[3])
+
+
+        for i in 1:nn
+            pi, pj = nodes[i], nodes[i%nn + 1]
+
+            # Converts nodes to panel coordinate system
+            xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
+            yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
+            zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
+            xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
+            yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
+            zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
+
+            mij = (yj - yi)/(xj - xi)
+            ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+            rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+            ei = (x - xi)^2 + (z-zi)^2
+            ej = (x - xj)^2 + (z-zj)^2
+            hi = (x - xi)*(y - yi)
+            hj = (x - xj)*(y - yj)
+
+            phi += atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
+        end
+
+        phi *= strength/(4*pi)
+
+        out[ti] += phi
+    end
 end
 
 
@@ -289,44 +307,74 @@ Returns the velocity induced by a vortex ring panel of vertices `nodes` and
 vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function Vvortexring(nodes::Array{Arr1,1}, strength::RType,
+function U_vortexring(nodes::Array{Arr1,1}, strength::RType,
                           targets::Array{Array{T2,1},1},
-                          out;
-                          dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
-                          closed_ring::Bool=true
-                          ) where{Arr1<:AbstractArray, T2<:RType, T3<:RType}
-  if size(out)!=size(targets)
-    error("Invalid `out` argument."*
-          " Expected size $(size(targets)), got $(size(out)).")
-  end
-
-  nn = size(nodes, 1)                      # Number of nodes
-
-  # Iterates over targets
-  for ti in 1:size(targets, 1)
-    V = zeros(3)
-
-    for i in 1:(nn - 1*!closed_ring)
-      p1, p2 = nodes[i], nodes[i%nn + 1]
-      r1 = targets[ti] - p1
-      r2 = targets[ti] - p2
-      crossr1r2 = cross(r1,r2)
-      # # This if statement avoids the singularity at the vortex line
-      # if dot(crossr1r2,crossr1r2) > SMOOTH2*SMOOTH2
-      #   V += crossr1r2/dot(crossr1r2,crossr1r2) * dot(
-      #                                         (p1-p2), r1/norm(r1) - r2/norm(r2) )
-      # end
-        V += crossr1r2/(dot(crossr1r2,crossr1r2)+SMOOTH5) * dot(
-                                              (p1-p2), r1/(norm(r1)+SMOOTH5) - r2/(norm(r2)+SMOOTH5) )
+                          out::Array{Arr3,1};
+                          dot_with=nothing,
+                          closed_ring::Bool=true,
+                          cutoff=SMOOTH2, offset=SMOOTH5,
+                          ) where{Arr1<:AbstractArray, T2<:RType,
+                                        T3, Arr3<:AbstractArray{T3}}
+    if size(out)!=size(targets)
+        error("Invalid `out` argument."*
+              " Expected size $(size(targets)), got $(size(out)).")
     end
 
-    if dot_with!=nothing
-      out[ti] -= strength/(4*pi)*dot(V, dot_with[ti])
-    else
-      out[ti] .-= strength/(4*pi)*V
-    end
+    nn = size(nodes, 1)                      # Number of nodes
 
-  end
+    # Iterates over targets
+    for ti in 1:size(targets, 1)
+
+        V1, V2, V3 = zero(T3), zero(T3), zero(T3)
+
+        for i in 1:(nn - 1*!closed_ring)
+            pi, pj = nodes[i], nodes[i%nn + 1]
+
+            # ri = x - pi
+            ri1 = targets[ti][1] - pi[1]
+            ri2 = targets[ti][2] - pi[2]
+            ri3 = targets[ti][3] - pi[3]
+
+            # rj = x - pj
+            rj1 = targets[ti][1] - pj[1]
+            rj2 = targets[ti][2] - pj[2]
+            rj3 = targets[ti][3] - pj[3]
+
+            # rji = pj - pi
+            rji1 = pj[1] - pi[1]
+            rji2 = pj[2] - pi[2]
+            rji3 = pj[3] - pi[3]
+
+            # ri × rj
+            rixrj1 = ri2*rj3 - ri3*rj2
+            rixrj2 = ri3*rj1 - ri1*rj3
+            rixrj3 = ri1*rj2 - ri2*rj1
+
+            # ‖ ri × rj ‖^2
+            dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
+
+            # rji ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
+            normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
+            normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+            rjidothat = rji1*(ri1/normri - rj1/normrj) + rji2*(ri2/normri - rj2/normrj) + rji3*(ri3/normri - rj3/normrj)
+
+            if dotrixrj > cutoff^2 # This makes the self induced velocity zero
+                V1 += rixrj1/(dotrixrj + offset) * rjidothat
+                V2 += rixrj2/(dotrixrj + offset) * rjidothat
+                V3 += rixrj3/(dotrixrj + offset) * rjidothat
+            end
+        end
+
+        # NOTE: Negative sign not needed since we defined rji = rj - ri
+        if dot_with!=nothing
+            out[ti] = strength/(4*pi)*(V1*dot_with[ti][1] + V2*dot_with[ti][2] + V3*dot_with[ti][3])
+        else
+            out[ti][1] = strength/(4*pi)*V1
+            out[ti][2] = strength/(4*pi)*V2
+            out[ti][3] = strength/(4*pi)*V3
+        end
+
+    end
 end
 
 

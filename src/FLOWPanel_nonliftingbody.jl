@@ -86,12 +86,12 @@ end
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function _Vind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
+function _Uind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    Vconstant_source(
+    U_constant_source(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     get_fieldval(self, "sigma", i; _check=false),  # Strength
                     targets,                           # Targets
@@ -179,17 +179,17 @@ end
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function _Vind(self::NonLiftingBodyDoublet, targets::Array{Array{T1,1},1},
+function _Uind(self::NonLiftingBodyDoublet, targets::Array{Array{T1,1},1},
                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    Vconstant_doublet(
-                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-                    get_fieldval(self, "mu", i; _check=false),  # Strength
-                    targets,                           # Targets
-                    out;                               # Outputs
-                  )
+    U_constant_doublet(
+                        gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
+                        get_fieldval(self, "mu", i; _check=false),  # Strength
+                        targets,                           # Targets
+                        out;                               # Outputs
+                      )
   end
 end
 ##### END OF NON-LIFTING DOUBLET BODY ##########################################
@@ -273,17 +273,17 @@ end
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function _Vind(self::NonLiftingBodyVRing, targets::Array{Array{T1,1},1},
+function _Uind(self::NonLiftingBodyVRing, targets::Array{Array{T1,1},1},
                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
   # Iterates over panels
   for i in 1:self.ncells
     # Velocity of i-th  panel on every target
-    Vvortexring(
+    U_vortexring(
                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
                     get_fieldval(self, "Gamma", i; _check=false),  # Strength
                     targets,                           # Targets
                     out;                               # Outputs
-                  )
+                )
   end
 end
 ##### END OF NON-LIFTING VORTEX-RING BODY ######################################

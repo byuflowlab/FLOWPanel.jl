@@ -38,14 +38,14 @@ function G_constant_source(nodes::Array{T1,2},
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
-      Vconstant_source(
+      U_constant_source(
                         [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
                         1.0,                               # Unitary strength,
                         CPs,                               # Targets
                         view(G, :, j);                     # Velocity of j-th
                                                            # panel on every CP
                         dot_with=normals                   # Normal of every CP
-                      )
+                       )
   end
 
   return G
@@ -79,14 +79,14 @@ function G_constant_doublet(nodes::Array{T1,2},
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
-      Vconstant_doublet(
+      U_constant_doublet(
                         [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
                         1.0,                               # Unitary strength,
                         CPs,                               # Targets
                         view(G, :, j);                     # Velocity of j-th
                                                            # panel on every CP
                         dot_with=normals                   # Normal of every CP
-                      )
+                        )
   end
 
   return G
@@ -138,7 +138,7 @@ function G_lifting_vortexring(nodes::Array{T1,2},
   # Builds geometric matrix --- Vortex rings
   for j in 1:N # Iterates over columns (panels)
 
-    Vvortexring(# Nodes in j-th panel: puts first node last to match TE
+    U_vortexring(# Nodes in j-th panel: puts first node last to match TE
                 # [nodes[:,ind] for ind in vcat(panels[j][2:end], panels[j][1])],
                 # Nodes in j-th panel: puts last node first to match TE
                 [nodes[:,ind] for ind in vcat(panels[j][end], panels[j][1:end-1])],
@@ -194,7 +194,7 @@ function G_vortexring(nodes::Array{T1,2},
 
   # Builds geometric matrix
   for j in 1:N # Iterates over columns (panels)
-      Vvortexring(
+      U_vortexring(
                         [nodes[:,ind] for ind in panels[j]], # Nodes in j-th panel
                         1.0,                               # Unitary strength,
                         CPs,                               # Targets
