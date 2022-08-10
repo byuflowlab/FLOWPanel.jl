@@ -34,7 +34,9 @@ i-th target to out[i].
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
 function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
-                              targets::Arr2, out::Arr3; dot_with=nothing
+                              targets::Arr2, out::Arr3;
+                              dot_with=nothing,
+                              offset=SMOOTH
                           ) where{T1, Arr1<:AbstractArray{T1},
                                   T2, Arr2<:AbstractArray{T2,2},
                                   T3, Arr3<:AbstractArray{T3}}
@@ -87,7 +89,7 @@ function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
             ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
             rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
 
-            Qij = log( (ri+rj+dij)/(ri+rj-dij + SMOOTH) )
+            Qij = log( (ri+rj+dij)/(ri+rj-dij + offset) )
 
             Sij = (yj-yi)/dij
             Cij = (xj-xi)/dij
@@ -139,7 +141,8 @@ the i-th target to out[i].
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
 function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
-                              targets::Arr2, out::Arr3
+                              targets::Arr2, out::Arr3;
+                              offset=SMOOTH
                             ) where{T1, Arr1<:AbstractArray{T1},
                                     T2, Arr2<:AbstractArray{T2,2},
                                     T3, Arr3<:AbstractArray{T3}}
@@ -167,7 +170,7 @@ function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
     # Iterates over targets
-    for ti in nt
+    for ti in 1:nt
 
         phi = 0
 
@@ -199,7 +202,7 @@ function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
             hj = (x - xj)*(y - yj)
 
             Pij = (x - xi)*(yj - yi) - (y - yi)*(xj - xi)
-            Qij = log( (ri+rj+dij)/(ri+rj-dij + SMOOTH) )
+            Qij = log( (ri+rj+dij)/(ri+rj-dij + offset) )
             Rij = atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
 
             phi += Pij/dij * Qij - abs(z)*Rij
@@ -217,93 +220,6 @@ end
 
 
 ################################################################################
-# DOUBLET ELEMENTS
-################################################################################
-
-"""
-Returns the velocity induced by a panel of vertices `nodes` and constant
-strength doublet `strength` on the targets `targets`. It adds the velocity at
-the i-th target to out[i].
-"""
-U_constant_doublet(args...; optargs...) = U_vortexring(args...; optargs...)
-
-"""
-Returns the potential induced by a panel of vertices `nodes` and constant
-strength doublet `strength` on the targets `targets`. It adds the potential at
-the i-th target to out[i].
-
-Implementation of equations in Katz and Plotkin Sec. 10.4.2.
-"""
-function phi_constant_doublet(nodes::Array{Arr1,1}, strength::Number,
-                              targets::Arr2, out::Arr3
-                             ) where{T1, Arr1<:AbstractArray{T1},
-                                     T2, Arr2<:AbstractArray{T2,2},
-                                     T3, Arr3<:AbstractArray{T3}}
-
-    nt = size(targets, 2)                   # Number of targets
-    no = length(out)                        # Number of outputs
-    nn = length(nodes)                      # Number of nodes
-
-    if no!=nt
-        error("Invalid `out` argument. Expected size $(nt), got $(no).")
-    end
-
-    # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
-    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
-    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
-
-    # Panel local coordinate system
-    # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
-    O = nodes[1]                         # Origin
-    # xhat, yhat, zhat = t, o, n         # Unit vectors
-    # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
-
-    # Converts nodes to panel coordinate system
-    # Pnodes = [Oaxis*(node-O) for node in nodes]
-
-    # Iterates over targets
-    for ti in nt
-
-        phi = 0
-
-        # Target position in panel coordinate system
-        # X = Oaxis*(targets[:, ti]-O)
-        x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
-        y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
-        z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
-
-
-        for i in 1:nn
-            pi, pj = nodes[i], nodes[i%nn + 1]
-
-            # Converts nodes to panel coordinate system
-            xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
-            yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
-            zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
-            xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
-            yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
-            zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
-
-            mij = (yj - yi)/(xj - xi)
-            ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
-            rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
-            ei = (x - xi)^2 + (z-zi)^2
-            ej = (x - xj)^2 + (z-zj)^2
-            hi = (x - xi)*(y - yi)
-            hj = (x - xj)*(y - yj)
-
-            phi += atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
-        end
-
-        phi *= strength/(4*pi)
-
-        out[ti] += phi
-    end
-end
-
-
-################################################################################
 # VORTEX ELEMENTS
 ################################################################################
 """
@@ -312,7 +228,8 @@ vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
 function U_vortexring(nodes::Array{Arr1,1}, strength::Number,
-                              targets::Arr2, out::Arr3; dot_with=nothing,
+                              targets::Arr2, out::Arr3;
+                              dot_with=nothing,
                               closed_ring::Bool=true,
                               cutoff=SMOOTH2, offset=SMOOTH5,
                           ) where{T1, Arr1<:AbstractArray{T1},
@@ -429,3 +346,91 @@ function Vsemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
 
   end
 end
+
+
+
+################################################################################
+# DOUBLET ELEMENTS
+################################################################################
+"""
+Returns the potential induced by a panel of vertices `nodes` and constant
+strength doublet `strength` on the targets `targets`. It adds the potential at
+the i-th target to out[i].
+
+Implementation of equations in Katz and Plotkin Sec. 10.4.2.
+"""
+function phi_constant_doublet(nodes::Array{Arr1,1}, strength::Number,
+                              targets::Arr2, out::Arr3
+                             ) where{T1, Arr1<:AbstractArray{T1},
+                                     T2, Arr2<:AbstractArray{T2,2},
+                                     T3, Arr3<:AbstractArray{T3}}
+
+    nt = size(targets, 2)                   # Number of targets
+    no = length(out)                        # Number of outputs
+    nn = length(nodes)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    end
+
+    # Tangent, oblique, and normal vectors
+    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
+    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
+    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
+
+    # Panel local coordinate system
+    # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
+    O = nodes[1]                         # Origin
+    # xhat, yhat, zhat = t, o, n         # Unit vectors
+    # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
+
+    # Converts nodes to panel coordinate system
+    # Pnodes = [Oaxis*(node-O) for node in nodes]
+
+    # Iterates over targets
+    for ti in 1:nt
+
+        phi = 0
+
+        # Target position in panel coordinate system
+        # X = Oaxis*(targets[:, ti]-O)
+        x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
+        y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
+        z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
+
+
+        for i in 1:nn
+            pi, pj = nodes[i], nodes[i%nn + 1]
+
+            # Converts nodes to panel coordinate system
+            xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
+            yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
+            zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
+            xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
+            yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
+            zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
+
+            mij = (yj - yi)/(xj - xi)
+            ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+            rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+            ei = (x - xi)^2 + (z-zi)^2
+            ej = (x - xj)^2 + (z-zj)^2
+            hi = (x - xi)*(y - yi)
+            hj = (x - xj)*(y - yj)
+
+            phi += atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
+        end
+
+        phi *= strength/(4*pi)
+
+        out[ti] += phi
+    end
+end
+
+"""
+Returns the velocity induced by a panel of vertices `nodes` and constant
+strength doublet `strength` on the targets `targets`. It adds the velocity at
+the i-th target to out[i].
+"""
+const U_constant_doublet = U_vortexring
+# U_constant_doublet(args...; optargs...) = U_vortexring(args...; optargs...) #<--- This produces memory allocation for some reason
