@@ -11,7 +11,6 @@ module FLOWPanel
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
-import ForwardDiff
 import PyPlot
 const plt = PyPlot
 import LinearAlgebra: I
@@ -31,8 +30,8 @@ const def_rfl_path = joinpath(def_data_path, "airfoils")
 
 const RType = Union{Float64,                    # Concrete real types
                     Int64,
-                    ForwardDiff.Dual{Nothing,Float64,3},
-                    ForwardDiff.Dual{Nothing,Int64,3}
+                    # ForwardDiff.Dual{Nothing,Float64,3},
+                    # ForwardDiff.Dual{Nothing,Int64,3}
                     }
 
 # Discretization parameter type

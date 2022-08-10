@@ -5,10 +5,18 @@ version = "0.0.1"
 
 [deps]
 Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
-ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 GeometricTools = "83792f5e-c6a1-11e8-2e0a-93511f02ae5f"
 
 [compat]
 julia = "1"
+
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+
+[targets]
+test = ["Test", "Printf", "ForwardDiff"]

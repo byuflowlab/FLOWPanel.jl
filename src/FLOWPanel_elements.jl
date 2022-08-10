@@ -33,19 +33,19 @@ i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
-function U_constant_source(nodes::Array{Arr1,1}, strength::RType,
-                          targets::Array{Array{T2,1},1},
-                          out::Array{Arr3,1};
-                          # out;
-                          dot_with=nothing
-                          ) where{T1, Arr1<:AbstractArray{T1}, T2<:RType,
-                                    T3, Arr3<:AbstractArray{T3}}
-    if size(out)!=size(targets)
-        error("Invalid `out` argument."*
-                " Expected size $(size(targets)), got $(size(out)).")
-    end
+function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
+                              targets::Arr2, out::Arr3; dot_with=nothing
+                          ) where{T1, Arr1<:AbstractArray{T1},
+                                  T2, Arr2<:AbstractArray{T2,2},
+                                  T3, Arr3<:AbstractArray{T3}}
 
-    nn = size(nodes, 1)                      # Number of nodes
+    nt = size(targets, 2)                   # Number of targets
+    no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    nn = length(nodes)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    end
 
     # Tangent, oblique, and normal vectors
     t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
@@ -59,13 +59,13 @@ function U_constant_source(nodes::Array{Arr1,1}, strength::RType,
     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
 
     # Iterates over targets
-    for ti in 1:size(targets, 1)
+    for ti in 1:nt
 
         # Target position in panel coordinate system
-        # X = Oaxis*(targets[ti]-O)
-        x = t1*(targets[ti][1]-O[1]) + t2*(targets[ti][2]-O[2]) + t3*(targets[ti][3]-O[3])
-        y = o1*(targets[ti][1]-O[1]) + o2*(targets[ti][2]-O[2]) + o3*(targets[ti][3]-O[3])
-        z = n1*(targets[ti][1]-O[1]) + n2*(targets[ti][2]-O[2]) + n3*(targets[ti][3]-O[3])
+        # X = Oaxis*(targets[:, ti]-O)
+        x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
+        y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
+        z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
 
         V1, V2, V3 = zero(T3), zero(T3), zero(T3)
         dtheta = 2*pi
@@ -122,9 +122,9 @@ function U_constant_source(nodes::Array{Arr1,1}, strength::RType,
             out[ti] += strength*(V1*t2 + V2*o2 + V3*n2)*dot_with[ti][2]
             out[ti] += strength*(V1*t3 + V2*o3 + V3*n3)*dot_with[ti][3]
         else
-            out[ti][1] += strength*(V1*t1 + V2*o1 + V3*n1)
-            out[ti][2] += strength*(V1*t2 + V2*o2 + V3*n2)
-            out[ti][3] += strength*(V1*t3 + V2*o3 + V3*n3)
+            out[1, ti] += strength*(V1*t1 + V2*o1 + V3*n1)
+            out[2, ti] += strength*(V1*t2 + V2*o2 + V3*n2)
+            out[3, ti] += strength*(V1*t3 + V2*o3 + V3*n3)
         end
 
     end
@@ -138,17 +138,19 @@ the i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
-function phi_constant_source(nodes::Array{Arr1,1}, strength::RType,
-                              targets::Array{Array{T2,1},1},
-                              # out::Array{Array{T,1},1}
-                              out
-                             ) where{T1, Arr1<:AbstractArray{T1}, T2<:RType}
-    if size(out)!=size(targets)
-        error("Invalid `out` argument."*
-              " Expected size $(size(targets)), got $(size(out)).")
-    end
+function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
+                              targets::Arr2, out::Arr3
+                            ) where{T1, Arr1<:AbstractArray{T1},
+                                    T2, Arr2<:AbstractArray{T2,2},
+                                    T3, Arr3<:AbstractArray{T3}}
 
-    nn = size(nodes, 1)                      # Number of nodes
+    nt = size(targets, 2)                   # Number of targets
+    no = length(out)                        # Number of outputs
+    nn = length(nodes)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    end
 
     # Tangent, oblique, and normal vectors
     t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
@@ -165,15 +167,15 @@ function phi_constant_source(nodes::Array{Arr1,1}, strength::RType,
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
     # Iterates over targets
-    for ti in 1:size(targets, 1)
+    for ti in nt
 
         phi = 0
 
         # Target position in panel coordinate system
-        # X = Oaxis*(targets[ti]-O)
-        x = t1*(targets[ti][1]-O[1]) + t2*(targets[ti][2]-O[2]) + t3*(targets[ti][3]-O[3])
-        y = o1*(targets[ti][1]-O[1]) + o2*(targets[ti][2]-O[2]) + o3*(targets[ti][3]-O[3])
-        z = n1*(targets[ti][1]-O[1]) + n2*(targets[ti][2]-O[2]) + n3*(targets[ti][3]-O[3])
+        # X = Oaxis*(targets[:, ti]-O)
+        x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
+        y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
+        z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
 
 
         for i in 1:nn
@@ -232,17 +234,19 @@ the i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.2.
 """
-function phi_constant_doublet(nodes::Array{Arr1,1}, strength::RType,
-                              targets::Array{Array{T2,1},1},
-                              # out::Array{Array{T,1},1}
-                              out
-                             ) where{T1, Arr1<:AbstractArray{T1}, T2<:RType}
-    if size(out)!=size(targets)
-        error("Invalid `out` argument."*
-              " Expected size $(size(targets)), got $(size(out)).")
-    end
+function phi_constant_doublet(nodes::Array{Arr1,1}, strength::Number,
+                              targets::Arr2, out::Arr3
+                             ) where{T1, Arr1<:AbstractArray{T1},
+                                     T2, Arr2<:AbstractArray{T2,2},
+                                     T3, Arr3<:AbstractArray{T3}}
 
-    nn = size(nodes, 1)                      # Number of nodes
+    nt = size(targets, 2)                   # Number of targets
+    no = length(out)                        # Number of outputs
+    nn = length(nodes)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    end
 
     # Tangent, oblique, and normal vectors
     t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
@@ -259,15 +263,15 @@ function phi_constant_doublet(nodes::Array{Arr1,1}, strength::RType,
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
     # Iterates over targets
-    for ti in 1:size(targets, 1)
+    for ti in nt
 
         phi = 0
 
         # Target position in panel coordinate system
-        # X = Oaxis*(targets[ti]-O)
-        x = t1*(targets[ti][1]-O[1]) + t2*(targets[ti][2]-O[2]) + t3*(targets[ti][3]-O[3])
-        y = o1*(targets[ti][1]-O[1]) + o2*(targets[ti][2]-O[2]) + o3*(targets[ti][3]-O[3])
-        z = n1*(targets[ti][1]-O[1]) + n2*(targets[ti][2]-O[2]) + n3*(targets[ti][3]-O[3])
+        # X = Oaxis*(targets[:, ti]-O)
+        x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
+        y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
+        z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
 
 
         for i in 1:nn
@@ -307,23 +311,26 @@ Returns the velocity induced by a vortex ring panel of vertices `nodes` and
 vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function U_vortexring(nodes::Array{Arr1,1}, strength::RType,
-                          targets::Array{Array{T2,1},1},
-                          out::Array{Arr3,1};
-                          dot_with=nothing,
-                          closed_ring::Bool=true,
-                          cutoff=SMOOTH2, offset=SMOOTH5,
-                          ) where{Arr1<:AbstractArray, T2<:RType,
-                                        T3, Arr3<:AbstractArray{T3}}
-    if size(out)!=size(targets)
-        error("Invalid `out` argument."*
-              " Expected size $(size(targets)), got $(size(out)).")
+function U_vortexring(nodes::Array{Arr1,1}, strength::Number,
+                              targets::Arr2, out::Arr3; dot_with=nothing,
+                              closed_ring::Bool=true,
+                              cutoff=SMOOTH2, offset=SMOOTH5,
+                          ) where{T1, Arr1<:AbstractArray{T1},
+                                  T2, Arr2<:AbstractArray{T2,2},
+                                  T3, Arr3<:AbstractArray{T3}}
+
+
+
+    nt = size(targets, 2)                   # Number of targets
+    no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    nn = length(nodes)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
 
-    nn = size(nodes, 1)                      # Number of nodes
-
     # Iterates over targets
-    for ti in 1:size(targets, 1)
+    for ti in 1:nt
 
         V1, V2, V3 = zero(T3), zero(T3), zero(T3)
 
@@ -331,14 +338,14 @@ function U_vortexring(nodes::Array{Arr1,1}, strength::RType,
             pi, pj = nodes[i], nodes[i%nn + 1]
 
             # ri = x - pi
-            ri1 = targets[ti][1] - pi[1]
-            ri2 = targets[ti][2] - pi[2]
-            ri3 = targets[ti][3] - pi[3]
+            ri1 = targets[1, ti] - pi[1]
+            ri2 = targets[2, ti] - pi[2]
+            ri3 = targets[3, ti] - pi[3]
 
             # rj = x - pj
-            rj1 = targets[ti][1] - pj[1]
-            rj2 = targets[ti][2] - pj[2]
-            rj3 = targets[ti][3] - pj[3]
+            rj1 = targets[1, ti] - pj[1]
+            rj2 = targets[2, ti] - pj[2]
+            rj3 = targets[3, ti] - pj[3]
 
             # rji = pj - pi
             rji1 = pj[1] - pi[1]
@@ -369,9 +376,9 @@ function U_vortexring(nodes::Array{Arr1,1}, strength::RType,
         if dot_with!=nothing
             out[ti] = strength/(4*pi)*(V1*dot_with[ti][1] + V2*dot_with[ti][2] + V3*dot_with[ti][3])
         else
-            out[ti][1] = strength/(4*pi)*V1
-            out[ti][2] = strength/(4*pi)*V2
-            out[ti][3] = strength/(4*pi)*V3
+            out[1, ti] = strength/(4*pi)*V1
+            out[2, ti] = strength/(4*pi)*V2
+            out[3, ti] = strength/(4*pi)*V3
         end
 
     end
