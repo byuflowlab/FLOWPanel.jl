@@ -60,22 +60,23 @@ const BodyTypes = Union{NonLiftingBody, NonLiftingBodyDoublet,
 ##### COMMON FUNCTIONS  ########################################################
 
 """
-  `Vind(self::BodyTypes, targets::Array{Array{T,1},1},
+  `Uind(self::BodyTypes, targets::Array{Array{T,1},1},
                   out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}`
 
 Returns the velocity induced by the body on the targets `targets`. It adds the
 velocity at the i-th target to out[i].
 """
-function Vind(self::BodyTypes, targets::Array{Array{T1,1},1},
-                  out::Array{Array{T2,1},1}, args...; optargs...
-                                                  ) where{T1<:RType, T2<:RType}
+function Uind(self::BodyTypes, targets::Arr1,
+                  out::Arr2, args...; optargs...
+                                                  ) where{T1, Arr1<:AbstractArray{T1,2},
+                                                          T2, Arr2<:AbstractArray{T2}}
 
   # ERROR CASES
   if check_solved(self)==false
     error("Body hasn't been solved yet. Please call `solve()` function first.")
   end
 
-  _Vind(self, targets, out, args...; optargs...)
+  _Uind(self, targets, out, args...; optargs...)
 end
 
 """

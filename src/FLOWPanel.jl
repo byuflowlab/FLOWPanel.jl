@@ -9,6 +9,12 @@
 """
 module FLOWPanel
 
+#=
+    TODO
+    * [ ] Rewrite `Usemiinfinitevortex` to avoid memory allocation.
+
+=#
+
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import PyPlot
