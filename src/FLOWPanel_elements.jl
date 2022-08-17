@@ -11,13 +11,14 @@
 
 const SMOOTH3 = 1e-14               # Smoothing radius for semi-infinite vortex
 
+abstract type AbstractElement end
+struct ConstantSource <: AbstractElement end
+struct ConstantDoublet <: AbstractElement end
+struct VortexRing <: AbstractElement end
 
 ################################################################################
 # SOURCE ELEMENTS
 ################################################################################
-
-
-
 """
 Returns the velocity induced by a panel of vertices `nodes` and constant
 strength source `strength` on the targets `targets`. It adds the velocity at the
@@ -25,30 +26,32 @@ i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
-function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
+function U_constant_source(nodes::Arr1, panel,
+                              strength::Number,
                               targets::Arr2, out::Arr3;
                               dot_with=nothing,
                               offset=1e-8
-                          ) where{T1, Arr1<:AbstractArray{T1},
+                          ) where{T1, Arr1<:AbstractArray{T1,2},
                                   T2, Arr2<:AbstractArray{T2,2},
                                   T3, Arr3<:AbstractArray{T3}}
 
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
-    nn = length(nodes)                      # Number of nodes
+    nn = length(panel)                      # Number of nodes
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
-    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
-    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
+    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
-    @inbounds O = nodes[1]                         # Origin
+    # @inbounds O = nodes[1]                         # Origin
+    @inbounds Oi = panel[1]                         # Index of node that is the origin
     # xhat, yhat, zhat = t, o, n         # Unit vectors
     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
 
@@ -58,9 +61,9 @@ function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
         # Target position in panel coordinate system
         # X = Oaxis*(targets[:, ti]-O)
         @inbounds begin
-            x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
-            y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
-            z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
+            x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+            y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+            z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
         end
 
         V1, V2, V3 = zero(T3), zero(T3), zero(T3)
@@ -71,15 +74,15 @@ function U_constant_source(nodes::Array{Arr1,1}, strength::Number,
         @simd for i in 1:nn
 
             @inbounds begin
-                pi, pj = nodes[i], nodes[i%nn + 1]
+                pi, pj = panel[i], panel[i%nn + 1]
 
-                # Converts nodes to panel coordinate system
-                xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
-                yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
-                zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
-                xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
-                yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
-                zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
+                # Convert nodes to panel coordinate system
+                xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+                yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+                zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+                xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+                yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+                zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
             end
 
             dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
@@ -137,48 +140,49 @@ the i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.1.
 """
-function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
+function phi_constant_source(nodes::Arr1, panel,
+                              strength::Number,
                               targets::Arr2, out::Arr3;
                               offset::Real=1e-8
-                            ) where{T1, Arr1<:AbstractArray{T1},
+                            ) where{T1, Arr1<:AbstractArray{T1,2},
                                     T2, Arr2<:AbstractArray{T2,2},
                                     T3, Arr3<:AbstractArray{T3}}
 
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
-    nn = length(nodes)                      # Number of nodes
+    nn = length(panel)                      # Number of nodes
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
-    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
-    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
+    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
-    @inbounds O = nodes[1]                         # Origin
+    @inbounds Oi = panel[1]                         # Index of node that is the origin
     # xhat, yhat, zhat = t, o, n         # Unit vectors
     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
 
-    # Converts nodes to panel coordinate system
+    # Convert nodes to panel coordinate system
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
     # Iterate over nodes
     for i in 1:nn
 
         @inbounds begin
-            pi, pj = nodes[i], nodes[i%nn + 1]
+            pi, pj = panel[i], panel[i%nn + 1]
 
-            # Converts nodes to panel coordinate system
-            xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
-            yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
-            zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
-            xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
-            yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
-            zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
+            # Convert nodes to panel coordinate system
+            xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+            yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+            zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+            xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+            yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+            zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
         end
 
         # Iterate over targets
@@ -187,9 +191,9 @@ function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
             # Target position in panel coordinate system
             # X = Oaxis*(targets[:, ti]-O)
             @inbounds begin
-                x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
-                y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
-                z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
+                x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+                y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+                z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
             end
 
             dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
@@ -212,6 +216,49 @@ function phi_constant_source(nodes::Array{Arr1,1}, strength::Number,
 end
 
 
+"""
+Calculates and returns the geometric matrix of a collection of constant-source
+panels on the given control points with their associated normals.
+
+**ARGUMENTS**
+  * `nodes::Array{T,2}`                 : All nodes in the collection of
+                                          panels.
+  * `panels::Array{Array{Int64,1},1}`   : Node connectivity data defining each
+                                          panel, where `panels[i][j]` is the
+                                          index in `nodes` of the j-th node in
+                                          the i-th panel.
+  * `CPs::Array{Array{Float64,1},1}`    : Control points.
+  * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
+"""
+function G_U_constant_source!(G::Arr1, nodes::Arr2, panels,
+                                        CPs::Arr3, normals::Arr4;
+                                        optargs...
+                               ) where{ T1, Arr1<:AbstractArray{T1, 2},
+                                        T2, Arr2<:AbstractArray{T2, 2},
+                                        T3, Arr3<:AbstractArray{T3, 2},
+                                        T4, Arr4<:AbstractArray{T4, 2}}
+
+    N = length(panels)
+
+    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
+        error("Matrix G with invalid dimension;"*
+              " got $(size(G)), expected ($N, $N).")
+    end
+
+    # Build geometric matrix
+    for panel in panels
+        U_constant_source(
+                          [view(nodes, :, i) for i in panel], # Nodes in j-th panel
+                          1.0,                               # Unitary strength,
+                          CPs,                               # Targets
+                          view(G, :, j);                     # Velocity of j-th panel on every CP
+                          dot_with=normals,                  # Normal of every CP
+                          optargs...
+                         )
+    end
+end
+
+
 ################################################################################
 # VORTEX ELEMENTS
 ################################################################################
@@ -220,20 +267,19 @@ Returns the velocity induced by a vortex ring panel of vertices `nodes` and
 vortex strength `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 """
-function U_vortexring(nodes::Array{Arr1,1}, strength::Number,
+function U_vortexring(nodes::Arr1, panel,
+                              strength::Number,
                               targets::Arr2, out::Arr3;
                               dot_with=nothing,
                               closed_ring::Bool=true,
                               cutoff=1e-14, offset=1e-8,
-                          ) where{T1, Arr1<:AbstractArray{T1},
+                          ) where{T1, Arr1<:AbstractArray{T1,2},
                                   T2, Arr2<:AbstractArray{T2,2},
                                   T3, Arr3<:AbstractArray{T3}}
 
-
-
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
-    nn = length(nodes)                      # Number of nodes
+    nn = length(panel)                      # Number of nodes
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
@@ -245,12 +291,12 @@ function U_vortexring(nodes::Array{Arr1,1}, strength::Number,
         if closed_ring || i != nn
 
             @inbounds begin
-                pi, pj = nodes[i], nodes[i%nn + 1]
+                pi, pj = panel[i], panel[i%nn + 1]
 
                 # rji = pj - pi
-                rji1 = pj[1] - pi[1]
-                rji2 = pj[2] - pi[2]
-                rji3 = pj[3] - pi[3]
+                rji1 = nodes[1, pj] - nodes[1, pi]
+                rji2 = nodes[2, pj] - nodes[2, pi]
+                rji3 = nodes[3, pj] - nodes[3, pi]
             end
 
             # Iterate over targets
@@ -258,14 +304,14 @@ function U_vortexring(nodes::Array{Arr1,1}, strength::Number,
 
                 @inbounds begin
                     # ri = x - pi
-                    ri1 = targets[1, ti] - pi[1]
-                    ri2 = targets[2, ti] - pi[2]
-                    ri3 = targets[3, ti] - pi[3]
+                    ri1 = targets[1, ti] - nodes[1, pi]
+                    ri2 = targets[2, ti] - nodes[2, pi]
+                    ri3 = targets[3, ti] - nodes[3, pi]
 
                     # rj = x - pj
-                    rj1 = targets[1, ti] - pj[1]
-                    rj2 = targets[2, ti] - pj[2]
-                    rj3 = targets[3, ti] - pj[3]
+                    rj1 = targets[1, ti] - nodes[1, pj]
+                    rj2 = targets[2, ti] - nodes[2, pj]
+                    rj3 = targets[3, ti] - nodes[3, pj]
                 end
 
                 # ri × rj
@@ -332,7 +378,7 @@ function Usemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
 
     if h>SMOOTH3
 
-      # Adds semi-infinite section
+      # Add semi-infinite section
       if dot_with!=nothing
         out[ti] += dot(
                    strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h ),
@@ -341,7 +387,7 @@ function Usemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
         out[ti] .+= strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h )
       end
 
-      # Adds bound vortex section
+      # Add bound vortex section
       U_vortexring([p, p2], strength, targets[ti:ti], view(out, ti:ti);
                                           dot_with=dot_with!=nothing ? dot_with[ti:ti] : nothing,
                                           closed_ring=false)
@@ -362,47 +408,48 @@ the i-th target to out[i].
 
 Implementation of equations in Katz and Plotkin Sec. 10.4.2.
 """
-function phi_constant_doublet(nodes::Array{Arr1,1}, strength::Number,
+function phi_constant_doublet(nodes::Arr1, panel,
+                              strength::Number,
                               targets::Arr2, out::Arr3
-                             ) where{T1, Arr1<:AbstractArray{T1},
+                             ) where{T1, Arr1<:AbstractArray{T1,2},
                                      T2, Arr2<:AbstractArray{T2,2},
                                      T3, Arr3<:AbstractArray{T3}}
 
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
-    nn = length(nodes)                      # Number of nodes
+    nn = length(panel)                      # Number of nodes
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes), gt._calc_t2(nodes), gt._calc_t3(nodes)
-    o1, o2, o3 = gt._calc_o1(nodes), gt._calc_o2(nodes), gt._calc_o3(nodes)
-    n1, n2, n3 = gt._calc_n1(nodes), gt._calc_n2(nodes), gt._calc_n3(nodes)
+    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
-    @inbounds O = nodes[1]                         # Origin
+    @inbounds Oi = panel[1]                         # Index of node that is the origin
     # xhat, yhat, zhat = t, o, n         # Unit vectors
     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
 
-    # Converts nodes to panel coordinate system
+    # Convert nodes to panel coordinate system
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
     # Iterate over nodes
     for i in 1:nn
 
         @inbounds begin
-            pi, pj = nodes[i], nodes[i%nn + 1]
+            pi, pj = panel[i], panel[i%nn + 1]
 
-            # Converts nodes to panel coordinate system
-            xi = t1*(pi[1]-O[1]) + t2*(pi[2]-O[2]) + t3*(pi[3]-O[3])
-            yi = o1*(pi[1]-O[1]) + o2*(pi[2]-O[2]) + o3*(pi[3]-O[3])
-            zi = n1*(pi[1]-O[1]) + n2*(pi[2]-O[2]) + n3*(pi[3]-O[3])
-            xj = t1*(pj[1]-O[1]) + t2*(pj[2]-O[2]) + t3*(pj[3]-O[3])
-            yj = o1*(pj[1]-O[1]) + o2*(pj[2]-O[2]) + o3*(pj[3]-O[3])
-            zj = n1*(pj[1]-O[1]) + n2*(pj[2]-O[2]) + n3*(pj[3]-O[3])
+            # Convert nodes to panel coordinate system
+            xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+            yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+            zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+            xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+            yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+            zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
         end
 
 
@@ -412,9 +459,9 @@ function phi_constant_doublet(nodes::Array{Arr1,1}, strength::Number,
             # Target position in panel coordinate system
             # X = Oaxis*(targets[:, ti]-O)
             @inbounds begin
-                x = t1*(targets[1,ti]-O[1]) + t2*(targets[2,ti]-O[2]) + t3*(targets[3,ti]-O[3])
-                y = o1*(targets[1,ti]-O[1]) + o2*(targets[2,ti]-O[2]) + o3*(targets[3,ti]-O[3])
-                z = n1*(targets[1,ti]-O[1]) + n2*(targets[2,ti]-O[2]) + n3*(targets[3,ti]-O[3])
+                x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+                y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+                z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
             end
 
             mij = (yj - yi)/(xj - xi)

@@ -41,13 +41,20 @@ elements_to_test = (
             Oaxis = pnl.gt.rotation_matrix(30, 10, 40)
             nodes = [Oaxis'*node + O for node in nodes]
 
+            # Store the nodes as a 3xn matrix
+            nodes = hcat(nodes...)
+
+            # Define panel
+            nnodes = size(nodes, 2)
+            panel = 1:nnodes
+
             # Unitary panel's strength
             strength = 1.0
 
             function fwrap(X::Array{R, 1}) where {R}
                 targets = reshape(X, 3, 1)
                 phis = zeros(R, 1)
-                phi(nodes, strength, targets, phis; phioptargs...)
+                phi(nodes, panel, strength, targets, phis; phioptargs...)
                 return phis
             end
 
@@ -64,7 +71,7 @@ elements_to_test = (
 
             # Analytic velocity
             Uana = zeros(3, 1)
-            U(nodes, strength, reshape(X, 3, 1), Uana; Uoptargs...)
+            U(nodes, panel, strength, reshape(X, 3, 1), Uana; Uoptargs...)
 
             if verbose
                 @printf "%s%10.10s [% 6.3f, % 6.3f, % 6.3f] [% 6.3f, % 6.3f, % 6.3f]\t%4.3g ﹪\n" "\t"^(v_lvl+1) lbl Udiff... Uana... maximum(abs.(Uana.-Udiff)./abs.(Uana))*100
@@ -102,6 +109,13 @@ elements_to_test = (
             Oaxis = pnl.gt.rotation_matrix(30, 10, 40)
             nodes = [Oaxis'*node + O for node in nodes]
 
+            # Store the nodes as a 3xn matrix
+            nodes = hcat(nodes...)
+
+            # Define panel
+            nnodes = size(nodes, 2)
+            panel = 1:nnodes
+
             # Unitary panel's strength
             strength = 1.0
 
@@ -111,11 +125,11 @@ elements_to_test = (
             targets = reshape(X, 3, 1)
 
             # Warm-up runs
-            phi(nodes, strength, targets, phis)
-            U(nodes, strength, targets, Us)
+            phi(nodes, panel, strength, targets, phis)
+            U(nodes, panel, strength, targets, Us)
 
-            phi_alloc = @allocated phi(nodes, strength, targets, phis)
-            U_alloc = @allocated U(nodes, strength, targets, Us)
+            phi_alloc = @allocated phi(nodes, panel, strength, targets, phis)
+            U_alloc = @allocated U(nodes, panel, strength, targets, Us)
 
 
             if verbose
@@ -152,13 +166,20 @@ elements_to_test = (
             Oaxis = pnl.gt.rotation_matrix(30, 10, 40)
             nodes = [Oaxis'*node + O for node in nodes]
 
+            # Store the nodes as a 3xn matrix
+            nodes = hcat(nodes...)
+
+            # Define panel
+            nnodes = size(nodes, 2)
+            panel = 1:nnodes
+
             # Unitary panel's strength
             strength = 1.0
 
             function fwrap(X::Arr1) where {R, Arr1<:AbstractArray{R}}
                 targets = reshape(X, 3, 1)
                 Us = zeros(R, 3, 1)
-                U(nodes, strength, targets, Us; Uoptargs...)
+                U(nodes, panel, strength, targets, Us; Uoptargs...)
                 return Us
             end
 
