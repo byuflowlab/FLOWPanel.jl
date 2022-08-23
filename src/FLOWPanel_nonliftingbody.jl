@@ -27,316 +27,144 @@ Non-lifting paneled body that is solved using a constant source distribution.
   * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
 
 """
-struct NonLiftingBody <: AbstractBody
+struct NonLiftingBody{E, N} <: AbstractBody{E, N}
 
-  # User inputs
-  grid::gt.GridTriangleSurface              # Paneled geometry
+    # User inputs
+    grid::gt.GridTriangleSurface              # Paneled geometry
 
-  # Properties
-  nnodes::Int64                             # Number of nodes
-  ncells::Int64                             # Number of cells
-  fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
-  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
+    # Properties
+    nnodes::Int64                             # Number of nodes
+    ncells::Int64                             # Number of cells
+    fields::Array{String, 1}                  # Available fields (solutions)
+    Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
+    O::Array{<:Number,1}                      # Position of CS of original grid
 
-  # Internal variables
-  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
+    # Internal variables
+    strength::Array{<:Number, 2}             # strength[i,j] is the stength of the i-th panel with the j-th element type
+    CPoffset::Float64                        # Control point offset in normal direction
 
-  NonLiftingBody( grid,
-                  nnodes=grid.nnodes, ncells=grid.ncells,
+    NonLiftingBody{E, N}(
+                    grid;
+                    nnodes=grid.nnodes, ncells=grid.ncells,
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                  _G=_calc_Gsource(grid)
-         ) = new( grid,
-                  nnodes, ncells,
+                    strength=zeros(grid.ncells, N),
+                    CPoffset=0.005
+                  ) where {E, N} = new(
+                    grid,
+                    nnodes, ncells,
                     fields,
                     Oaxis, O,
-                  _G
-         )
-end
-
-
-function solve(self::NonLiftingBody, Vinfs::Array{Array{T,1},1}) where {T<:RType}
-  if size(Vinfs,1) != self.ncells
-    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
-  end
-
-  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
-  sigma = self._G\lambda
-
-  add_field(self, "Vinf", "vector", Vinfs, "cell")
-  add_field(self, "sigma", "scalar", sigma, "cell")
-  _solvedflag(self, true)
-end
-
-
-
-
-##### INTERNAL FUNCTIONS  ######################################################
-function _calc_Gsource(grid::gt.GridTriangleSurface)
-  return G_constant_source(
-                  grid.orggrid.nodes,                                  # Nodes
-                  [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
-                  [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
-                  [gt.get_normal(grid, i) for i in 1:grid.ncells],     # Normals
-                )
-end
-
-"""
-Returns the velocity induced by the body on the targets `targets`. It adds the
-velocity at the i-th target to out[i].
-"""
-function _Uind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-  # Iterates over panels
-  for i in 1:self.ncells
-    # Velocity of i-th  panel on every target
-    U_constant_source(
-                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-                    get_fieldval(self, "sigma", i; _check=false),  # Strength
-                    targets,                           # Targets
-                    out;                               # Outputs
+                    strength,
+                    CPoffset
                   )
-  end
-end
-##### END OF NON-LIFTING BODY ##################################################
-
-
-################################################################################
-# NON-LIFTING DOUBLET BODY TYPE
-################################################################################
-"""
-  `NonLiftingBodyDoublet(grid::gt.GridTriangleSurface)`
-
-Non-lifting paneled body that is solved using a constant doublet distribution.
-`grid` is the grid surface (paneled geometry).
-
-  **Properties**
-  * `nnodes::Int64`                     : Number of nodes
-  * `ncells::Int64`                     : Number of cells
-  * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
-  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
-
-"""
-struct NonLiftingBodyDoublet <: AbstractBody
-
-  # User inputs
-  grid::gt.GridTriangleSurface              # Paneled geometry
-
-  # Properties
-  nnodes::Int64                             # Number of nodes
-  ncells::Int64                             # Number of cells
-  fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
-  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
-
-  # Internal variables
-  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
-
-  NonLiftingBodyDoublet( grid,
-                  nnodes=grid.nnodes, ncells=grid.ncells,
-                    fields=Array{String,1}(),
-                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                  _G=_calc_Gdoublet(grid)
-         ) = new( grid,
-                  nnodes, ncells,
-                    fields,
-                    Oaxis, O,
-                  _G
-         )
 end
 
 
-function solve(self::NonLiftingBodyDoublet, Vinfs::Array{Array{T,1},1}
-                                                              ) where {T<:RType}
-  if size(Vinfs,1) != self.ncells
-    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
-  end
-
-  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
-  mu = self._G\lambda
-
-  add_field(self, "Vinf", "vector", Vinfs, "cell")
-  add_field(self, "mu", "scalar", mu, "cell")
-  _solvedflag(self, true)
+function (NonLiftingBody{E})(args...; optargs...) where {E}
+    return NonLiftingBody{E, _count(E)}(args...; optargs...)
 end
 
+function _solve(self::NonLiftingBody{ConstantSource, 1},
+                                            normals, CPs, G, Vinfs)
 
+    if size(Vinfs, 2) != self.ncells
+        error("Invalid Vinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Vinfs))")
+    end
+
+    # Define right-hand side
+    lambda = [-dot(Vinf, normal) for (Vinf, normal) in
+                                        zip(eachcol(Vinfs), eachcol(normals))]
+
+    # Solve the system of equations
+    sigma = G\lambda
+
+    add_field(self, "Vinf", "vector", eachcol(Vinfs), "cell")
+    add_field(self, "sigma", "scalar", sigma, "cell")
+    _solvedflag(self, true)
+end
+
+function solve(self::NonLiftingBody{ConstantSource, 1},
+                Vinfs::Arr1) where {T1, Arr1<:AbstractArray{T1, 2}}
+
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals; off=self.CPoffset)
+
+
+    # G = zeros(self.ncells, self.ncells)
+
+    return _solve(self, normals, CPs, G, Vinfs)
+end
 
 
 ##### INTERNAL FUNCTIONS  ######################################################
-function _calc_Gdoublet(grid::gt.GridTriangleSurface)
-  return G_constant_doublet(
-                  grid.orggrid.nodes,                                  # Nodes
-                  [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
-                  [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
-                  [gt.get_normal(grid, i) for i in 1:grid.ncells],     # Normals
-                )
+# """
+# Returns the velocity induced by the body on the targets `targets`. It adds the
+# velocity at the i-th target to out[i].
+# """
+# function _Uind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
+#                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
+#   # Iterates over panels
+#   for i in 1:self.ncells
+#     # Velocity of i-th  panel on every target
+#     U_constant_source(
+#                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
+#                     get_fieldval(self, "sigma", i; _check=false),  # Strength
+#                     targets,                           # Targets
+#                     out;                               # Outputs
+#                   )
+#   end
+# end
+
+
+"""
+Computes the geometric matrix (left-hand side matrix of the system of equation)
+and stores it under `G`.
+
+**ARGUMENTS**
+  * `G::Array{T,2}`                     : Pre-allocated output memory.
+  * `CPs::Array{T,2}`                   : Control points.
+  * `normals::Array{T,2}`               : Normal associated to every CP.
+"""
+function _G_U!(self::NonLiftingBody{ConstantSource, 1},
+                    G::Arr1, CPs::Arr2, normals::Arr3;
+                    optargs...
+               ) where{ T1, Arr1<:AbstractArray{T1, 2},
+                        T2, Arr2<:AbstractArray{T2, 2},
+                        T3, Arr3<:AbstractArray{T3, 2}}
+
+    N = self.ncells
+
+    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
+        error("Matrix G with invalid dimension;"*
+              " got $(size(G)), expected ($N, $N).")
+    end
+
+    # Pre-allocate memory for panel calculation
+    lin = LinearIndices(self.grid._ndivsnodes)
+    ndivscells = vcat(self.grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
+
+    # Build geometric matrix
+    for (pj, Gslice) in enumerate(eachcol(G))
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pj, lin, ndivscells, cin)
+
+        U_constant_source(
+                          self.grid.orggrid.nodes,          # All nodes
+                          panel,                             # Index of nodes that make this panel
+                          1.0,                               # Unitary strength
+                          CPs,                               # Targets
+                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
+                          Gslice;
+                          dot_with=normals,                  # Normal of every CP
+                          optargs...
+                         )
+    end
 end
-
-"""
-Returns the velocity induced by the body on the targets `targets`. It adds the
-velocity at the i-th target to out[i].
-"""
-function _Uind(self::NonLiftingBodyDoublet, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-  # Iterates over panels
-  for i in 1:self.ncells
-    # Velocity of i-th  panel on every target
-    U_constant_doublet(
-                        gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-                        get_fieldval(self, "mu", i; _check=false),  # Strength
-                        targets,                           # Targets
-                        out;                               # Outputs
-                      )
-  end
-end
-##### END OF NON-LIFTING DOUBLET BODY ##########################################
-
-
-
-
-################################################################################
-# NON-LIFTING VORTEX-RING BODY TYPE
-################################################################################
-"""
-  `NonLiftingBodyVRing(grid::gt.GridTriangleSurface)`
-
-Non-lifting paneled body that is solved using vortex ring panels.
-`grid` is the grid surface (paneled geometry).
-
-  **Properties**
-  * `nnodes::Int64`                     : Number of nodes
-  * `ncells::Int64`                     : Number of cells
-  * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
-  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
-
-"""
-struct NonLiftingBodyVRing <: AbstractBody
-
-  # User inputs
-  grid::gt.GridTriangleSurface              # Paneled geometry
-
-  # Properties
-  nnodes::Int64                             # Number of nodes
-  ncells::Int64                             # Number of cells
-  fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
-  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
-
-  # Internal variables
-  _G::Array{T3,2} where {T3<:RType}         # Geometric solution matrix
-
-  NonLiftingBodyVRing( grid,
-                  nnodes=grid.nnodes, ncells=grid.ncells,
-                    fields=Array{String,1}(),
-                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                  _G=_calc_Gvring(grid)
-         ) = new( grid,
-                  nnodes, ncells,
-                    fields,
-                    Oaxis, O,
-                  _G
-         )
-end
-
-
-function solve(self::NonLiftingBodyVRing, Vinfs::Array{Array{T,1},1}
-                                                              ) where {T<:RType}
-  if size(Vinfs,1) != self.ncells
-    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
-  end
-
-  lambda = [-dot(Vinfs[i], get_normal(self, i)) for i in 1:self.ncells]
-  Gamma = self._G\lambda
-
-  add_field(self, "Vinf", "vector", Vinfs, "cell")
-  add_field(self, "Gamma", "scalar", Gamma, "cell")
-  _solvedflag(self, true)
-end
-
-
-
-##### INTERNAL FUNCTIONS  ######################################################
-function _calc_Gvring(grid::gt.GridTriangleSurface)
-  return G_vortexring(
-                  grid.orggrid.nodes,                                  # Nodes
-                  [gt.get_cell(grid, i) for i in 1:grid.ncells],       # Panels
-                  [_get_controlpoint(grid, i) for i in 1:grid.ncells], # CPs
-                  [gt.get_normal(grid, i) for i in 1:grid.ncells],     # Normals
-                )
-end
-
-"""
-Returns the velocity induced by the body on the targets `targets`. It adds the
-velocity at the i-th target to out[i].
-"""
-function _Uind(self::NonLiftingBodyVRing, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-  # Iterates over panels
-  for i in 1:self.ncells
-    # Velocity of i-th  panel on every target
-    U_vortexring(
-                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-                    get_fieldval(self, "Gamma", i; _check=false),  # Strength
-                    targets,                           # Targets
-                    out;                               # Outputs
-                )
-  end
-end
-##### END OF NON-LIFTING VORTEX-RING BODY ######################################
-
-
-
-
-
-################################################################################
-# COMMON FUNCTIONS
-################################################################################
-"""
-  `generate_loft_nonliftbody(args...; optargs...)`
-Generates a lofted non-lifting body. See documentation of
-`GeometricTools.generate_loft` for a description of the arguments of this
-function.
-"""
-function generate_loft_nonliftbody(args...; vortexring=false, dimsplit::Int64=2,
-                                                                    optargs...)
-  # Lofts the surface geometry
-  grid = gt.generate_loft(args...; optargs...)
-
-  # Splits the quadrialateral panels into triangles
-  # dimsplit = 2              # Dimension along which to split
-  triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-  if vortexring
-    return NonLiftingBodyVRing(triang_grid)
-  else
-    return NonLiftingBody(triang_grid)
-  end
-end
-
-"""
-  `generate_revolution_nonliftbody(args...; optargs...)`
-Generates a non-lifting body of a body of revolution. See documentation of
-`GeometricTools.surface_revolution` for a description of the arguments of this
-function.
-"""
-function generate_revolution_nonliftbody(args...; vortexring=false,
-                                                  dimsplit::Int64=2,
-                                                  loop_dim::Int64=2, optargs...)
-  # Revolves the geometry
-  grid = gt.surface_revolution(args...; loop_dim=loop_dim, optargs...)
-
-  # Splits the quadrialateral panels into triangles
-  # dimsplit = 2              # Dimension along which to split
-  triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-  if vortexring
-    return NonLiftingBodyVRing(triang_grid)
-  else
-    return NonLiftingBody(triang_grid)
-  end
-end
-##### END OF COMMON FUNTIONS ###################################################

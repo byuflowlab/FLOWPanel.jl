@@ -44,7 +44,11 @@ const RType = Union{Float64,                    # Concrete real types
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements", "G", "abstractbody", "utils"]
+for header_name in ["elements", "G",
+                    "abstractbody", "nonliftingbody",
+                    # "abstractliftingbody", "liftingbody",
+                    # "utils"
+                    ]
   include("FLOWPanel_"*header_name*".jl")
 end
 

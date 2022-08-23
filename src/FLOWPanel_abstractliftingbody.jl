@@ -44,26 +44,17 @@
   end
   ```
 """
-abstract type AbstractLiftingBody <: AbstractBody end
+abstract type AbstractLiftingBody{E} <: AbstractBody{E} end
 
-
-# Includes all implementations of AbstractLiftingBody
-for header_name in ["liftingbody"]
-  include("FLOWPanel_"*header_name*".jl")
-end
-
-
-# Declares implementations of AbstractLiftingBody
-const LBodyTypes = Union{RigidWakeBody}
 
 
 ##### COMMON FUNCTIONS  ########################################################
 """
-  `get_TE(self::LBodyTypes, i::Int64; upper::Bool=true)`
+  `get_TE(self::AbstractLiftingBody, i::Int64; upper::Bool=true)`
 
 Returns the i-th trailing edge point.
 """
-function get_TE(self::LBodyTypes, i::Int64; upper::Bool=true)
+function get_TE(self::AbstractLiftingBody, i::Int64; upper::Bool=true)
   if i>self.nnodesTE
     error("Invalid index $i; maximum is $(self.nnodesTE).")
   end
@@ -84,13 +75,14 @@ function get_TE(self::LBodyTypes, i::Int64; upper::Bool=true)
 end
 
 """
-  `generate_loft_liftbody(bodytype::Type{LBodyTypes}, args...; optargs...)`
+  `generate_loft_liftbody(bodytype::Type{<:AbstractLiftingBody}, args...; optargs...)`
 Generates a lofted lifting body of type `bodytype`. See documentation of
 `GeometricTools.generate_loft` for a description of the arguments of this
 function.
 """
-function generate_loft_liftbody(bodytype::Type{LBodyTypes}, args...;
-                                                  dimsplit::Int64=2, optargs...)
+function generate_loft_liftbody(bodytype::Type{B}, args...;
+                                                  dimsplit::Int64=2, optargs...
+                               ) where {B<:AbstractLiftingBody}
   # Lofts the surface geometry
   grid = gt.generate_loft(args...; optargs...)
 
@@ -110,14 +102,15 @@ function generate_loft_liftbody(bodytype::Type{LBodyTypes}, args...;
 end
 
 """
-  `generate_revolution_liftbody(bodytype::Type{LBodyTypes}, args...; optargs...)`
+  `generate_revolution_liftbody(bodytype::Type{<:AbstractLiftingBody}, args...; optargs...)`
 Generates a lifting body type `bodytype` of a body of revolution. See
 documentation of `GeometricTools.surface_revolution` for a description of the
 arguments of this function.
 """
-function generate_revolution_liftbody(bodytype::Type{LBodyTypes}, args...;
+function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   dimsplit::Int64=2,
-                                                  loop_dim::Int64=2, optargs...)
+                                                  loop_dim::Int64=2, optargs...
+                                      ) where {B<:AbstractLiftingBody}
   # Revolves the geometry
   grid = gt.surface_revolution(args...; loop_dim=loop_dim, optargs...)
 

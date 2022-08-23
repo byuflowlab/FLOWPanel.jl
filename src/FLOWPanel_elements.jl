@@ -120,9 +120,9 @@ function U_constant_source(nodes::Arr1, panel,
         V3 *= 1/(4*pi)
 
         if dot_with!=nothing
-            @inbounds out[ti] += strength*(V1*t1 + V2*o1 + V3*n1)*dot_with[ti][1]
-            @inbounds out[ti] += strength*(V1*t2 + V2*o2 + V3*n2)*dot_with[ti][2]
-            @inbounds out[ti] += strength*(V1*t3 + V2*o3 + V3*n3)*dot_with[ti][3]
+            @inbounds out[ti] += strength*(V1*t1 + V2*o1 + V3*n1)*dot_with[1,ti]
+            @inbounds out[ti] += strength*(V1*t2 + V2*o2 + V3*n2)*dot_with[2,ti]
+            @inbounds out[ti] += strength*(V1*t3 + V2*o3 + V3*n3)*dot_with[3,ti]
         else
             @inbounds out[1, ti] += strength*(V1*t1 + V2*o1 + V3*n1)
             @inbounds out[2, ti] += strength*(V1*t2 + V2*o2 + V3*n2)
@@ -216,49 +216,6 @@ function phi_constant_source(nodes::Arr1, panel,
 end
 
 
-"""
-Calculates and returns the geometric matrix of a collection of constant-source
-panels on the given control points with their associated normals.
-
-**ARGUMENTS**
-  * `nodes::Array{T,2}`                 : All nodes in the collection of
-                                          panels.
-  * `panels::Array{Array{Int64,1},1}`   : Node connectivity data defining each
-                                          panel, where `panels[i][j]` is the
-                                          index in `nodes` of the j-th node in
-                                          the i-th panel.
-  * `CPs::Array{Array{Float64,1},1}`    : Control points.
-  * `normals::Array{Array{Float64,1},1}`: Normal associated to every CP.
-"""
-function G_U_constant_source!(G::Arr1, nodes::Arr2, panels,
-                                        CPs::Arr3, normals::Arr4;
-                                        optargs...
-                               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                                        T2, Arr2<:AbstractArray{T2, 2},
-                                        T3, Arr3<:AbstractArray{T3, 2},
-                                        T4, Arr4<:AbstractArray{T4, 2}}
-
-    N = length(panels)
-
-    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
-        error("Matrix G with invalid dimension;"*
-              " got $(size(G)), expected ($N, $N).")
-    end
-
-    # Build geometric matrix
-    for panel in panels
-        U_constant_source(
-                          [view(nodes, :, i) for i in panel], # Nodes in j-th panel
-                          1.0,                               # Unitary strength,
-                          CPs,                               # Targets
-                          view(G, :, j);                     # Velocity of j-th panel on every CP
-                          dot_with=normals,                  # Normal of every CP
-                          optargs...
-                         )
-    end
-end
-
-
 ################################################################################
 # VORTEX ELEMENTS
 ################################################################################
@@ -334,9 +291,9 @@ function U_vortexring(nodes::Arr1, panel,
 
                     # NOTE: Negative sign not needed since we defined rji = rj - ri
                     if dot_with!=nothing
-                        @inbounds out[ti] += strength/(4*π)*( rixrj1/(dotrixrj + offset) * rjidothat * dot_with[ti][1]
-                                                            + rixrj2/(dotrixrj + offset) * rjidothat * dot_with[ti][2]
-                                                            + rixrj3/(dotrixrj + offset) * rjidothat * dot_with[ti][3])
+                        @inbounds out[ti] += strength/(4*π)*( rixrj1/(dotrixrj + offset) * rjidothat * dot_with[1,ti]
+                                                            + rixrj2/(dotrixrj + offset) * rjidothat * dot_with[2,ti]
+                                                            + rixrj3/(dotrixrj + offset) * rjidothat * dot_with[3,ti])
                     else
                         @inbounds out[1, ti] += strength/(4*π)*rixrj1/(dotrixrj + offset) * rjidothat
                         @inbounds out[2, ti] += strength/(4*π)*rixrj2/(dotrixrj + offset) * rjidothat

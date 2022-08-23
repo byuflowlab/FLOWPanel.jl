@@ -30,7 +30,7 @@ rigid wake. `grid` is the grid surface (paneled geometry).
   * `nnodesTE::Int64`                   : Number of nodes along trailing edge
 
 """
-struct RigidWakeBody <: AbstractLiftingBody
+struct RigidWakeBody{E} <: AbstractLiftingBody{E}
 
   # User inputs
   grid::gt.GridTriangleSurface              # Paneled geometry
