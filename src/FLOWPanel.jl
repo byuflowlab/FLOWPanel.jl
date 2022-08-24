@@ -34,17 +34,17 @@ const def_data_path = joinpath(module_path, "..", "docs", "data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
 
-const RType = Union{Float64,                    # Concrete real types
-                    Int64,
-                    # ForwardDiff.Dual{Nothing,Float64,3},
-                    # ForwardDiff.Dual{Nothing,Int64,3}
-                    }
+# const RType = Union{Float64,                    # Concrete real types
+#                     Int64,
+#                     # ForwardDiff.Dual{Nothing,Float64,3},
+#                     # ForwardDiff.Dual{Nothing,Int64,3}
+#                     }
 
 # Discretization parameter type
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements", "G",
+for header_name in ["elements",
                     "abstractbody", "nonliftingbody",
                     # "abstractliftingbody", "liftingbody",
                     # "utils"

@@ -105,7 +105,8 @@ function U_constant_source(nodes::Arr1, panel,
             V3 -= Jij
 
             dtheta *= Rij>=0
-            nR0 += Rij==0
+            # nR0 += Rij==0
+            nR0 += (abs(Rij) < offset)
         end
 
         V3 += dtheta
@@ -313,12 +314,12 @@ Returns the velocity induced by a semi-infinite vortex starting at point `p` in
 the unitary direction `D` and vortex strength `strength` on the targets
 `targets`. It adds the velocity at the i-th target to out[i].
 """
-function Usemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::RType,
+function Usemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::Number,
                               targets::Array{Array{T3,1},1},
                               out;
                               dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
                               check::Bool=true
-                              ) where{T1<:RType, T2<:RType, T3<:RType}
+                              ) where{T1, T2, T3}
   # ERROR CASES
   if size(out)!=size(targets)
     error("Invalid `out` argument."*

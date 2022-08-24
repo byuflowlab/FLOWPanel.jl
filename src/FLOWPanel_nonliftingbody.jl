@@ -42,6 +42,9 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
     # Internal variables
     strength::Array{<:Number, 2}             # strength[i,j] is the stength of the i-th panel with the j-th element type
     CPoffset::Float64                        # Control point offset in normal direction
+    kerneloffset::Float64                    # Kernel offset to avoid singularities
+    kernelcutoff::Float64                    # Kernel cutoff to avoid singularities
+    characteristiclength::Function           # Characteristic length of each panel
 
     NonLiftingBody{E, N}(
                     grid;
@@ -49,74 +52,72 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                     strength=zeros(grid.ncells, N),
-                    CPoffset=0.005
+                    CPoffset=0.05,
+                    kerneloffset=1e-8,
+                    kernelcutoff=1e-14,
+                    characteristiclength=characteristiclength_sqrtarea
                   ) where {E, N} = new(
                     grid,
                     nnodes, ncells,
                     fields,
                     Oaxis, O,
                     strength,
-                    CPoffset
+                    CPoffset,
+                    kerneloffset,
+                    kernelcutoff,
+                    characteristiclength
                   )
 end
-
 
 function (NonLiftingBody{E})(args...; optargs...) where {E}
     return NonLiftingBody{E, _count(E)}(args...; optargs...)
 end
+#### END OF NON-LIFTING BODY  ##################################################
 
-function _solve(self::NonLiftingBody{ConstantSource, 1},
-                                            normals, CPs, G, Vinfs)
 
-    if size(Vinfs, 2) != self.ncells
-        error("Invalid Vinfs;"*
-              " expected size (3, $(self.ncells)), got $(size(Vinfs))")
+
+
+################################################################################
+# CONSTANT-SOURCE SOLVER
+################################################################################
+function solve(self::NonLiftingBody{ConstantSource, 1},
+                                              Uinfs::AbstractArray{<:Number, 2})
+
+    if size(Uinfs, 2) != self.ncells
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
     end
 
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    G = zeros(self.ncells, self.ncells)
+    _G_U!(self, G, CPs, normals)
+
+    # Solve system of equations
+    sigma = _solve(self, normals, G, Uinfs)
+
+    # Save solution
+    self.strength[:, 1] .= sigma
+
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
+    _solvedflag(self, true)
+end
+
+function _solve(::NonLiftingBody{ConstantSource, 1}, normals, G, Uinfs)
+
     # Define right-hand side
-    lambda = [-dot(Vinf, normal) for (Vinf, normal) in
-                                        zip(eachcol(Vinfs), eachcol(normals))]
+    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
+                                        zip(eachcol(Uinfs), eachcol(normals))]
 
     # Solve the system of equations
     sigma = G\lambda
 
-    add_field(self, "Vinf", "vector", eachcol(Vinfs), "cell")
-    add_field(self, "sigma", "scalar", sigma, "cell")
-    _solvedflag(self, true)
+    return sigma
 end
-
-function solve(self::NonLiftingBody{ConstantSource, 1},
-                Vinfs::Arr1) where {T1, Arr1<:AbstractArray{T1, 2}}
-
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals; off=self.CPoffset)
-
-
-    # G = zeros(self.ncells, self.ncells)
-
-    return _solve(self, normals, CPs, G, Vinfs)
-end
-
-
-##### INTERNAL FUNCTIONS  ######################################################
-# """
-# Returns the velocity induced by the body on the targets `targets`. It adds the
-# velocity at the i-th target to out[i].
-# """
-# function _Uind(self::NonLiftingBody, targets::Array{Array{T1,1},1},
-#                           out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-#   # Iterates over panels
-#   for i in 1:self.ncells
-#     # Velocity of i-th  panel on every target
-#     U_constant_source(
-#                     gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-#                     get_fieldval(self, "sigma", i; _check=false),  # Strength
-#                     targets,                           # Targets
-#                     out;                               # Outputs
-#                   )
-#   end
-# end
-
 
 """
 Computes the geometric matrix (left-hand side matrix of the system of equation)
@@ -157,14 +158,47 @@ function _G_U!(self::NonLiftingBody{ConstantSource, 1},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_source(
-                          self.grid.orggrid.nodes,          # All nodes
-                          panel,                             # Index of nodes that make this panel
+                          self.grid.orggrid.nodes,           # All nodes
+                          panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
                           # view(G, :, pj);                  # Velocity of j-th panel on every CP
                           Gslice;
                           dot_with=normals,                  # Normal of every CP
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
                           optargs...
+                         )
+    end
+end
+
+function _Uind!(self::NonLiftingBody{ConstantSource, 1}, targets, out;
+                                                                     optargs...)
+
+
+    # Pre-allocate memory for panel calculation
+    lin = LinearIndices(self.grid._ndivsnodes)
+    ndivscells = vcat(self.grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
+
+    # Iterates over panels
+    for i in 1:self.ncells
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                             self.grid, i, lin, ndivscells, cin)
+
+        # Velocity of i-th panel on every target
+        U_constant_source(
+                            self.grid.orggrid.nodes,           # All nodes
+                            panel,                             # Indices of nodes that make this panel
+                            self.strength[i, 1],               # Unitary strength
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                            optargs...
                          )
     end
 end
