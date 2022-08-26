@@ -24,7 +24,7 @@ Returns the velocity induced by a panel of vertices `nodes` and constant
 strength source `strength` on the targets `targets`. It adds the velocity at the
 i-th target to out[i].
 
-Implementation of equations in Katz and Plotkin Sec. 10.4.1.
+Implementation of equations in Hess & Smith (1967).
 """
 function U_constant_source(nodes::Arr1, panel,
                               strength::Number,
@@ -44,9 +44,16 @@ function U_constant_source(nodes::Arr1, panel,
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
-    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
-    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+    # t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    # o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    # n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+
+    # Here we flip the oblique and tangent vector since both Katz & Plotkin and
+    # Hess & Smith define their panels opposite to the right-hand rule (while
+    # GeometricTools defines the normal following the right-hand rule)
+    t1, t2, t3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    o1, o2, o3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    n1, n2, n3 = -gt._calc_n1(nodes, panel), -gt._calc_n2(nodes, panel), -gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
@@ -105,8 +112,8 @@ function U_constant_source(nodes::Arr1, panel,
             V3 -= Jij
 
             dtheta *= Rij>=0
-            # nR0 += Rij==0
-            nR0 += (abs(Rij) < offset)
+            nR0 += Rij==0
+            # nR0 += (abs(Rij) < offset)
         end
 
         V3 += dtheta
@@ -134,12 +141,13 @@ function U_constant_source(nodes::Arr1, panel,
 end
 
 
+
 """
 Returns the potential induced by a panel of vertices `nodes` and constant
 strength source `strength` on the targets `targets`. It adds the potential at
 the i-th target to out[i].
 
-Implementation of equations in Katz and Plotkin Sec. 10.4.1.
+Implementation of equations in Hess & Smith (1967), p. 53.
 """
 function phi_constant_source(nodes::Arr1, panel,
                               strength::Number,
@@ -158,9 +166,16 @@ function phi_constant_source(nodes::Arr1, panel,
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
-    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
-    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+    # t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    # o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    # n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+
+    # Here we flip the oblique and tangent vector since both Katz & Plotkin and
+    # Hess & Smith define their panels opposite to the right-hand rule (while
+    # GeometricTools defines the normal following the right-hand rule)
+    t1, t2, t3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    o1, o2, o3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    n1, n2, n3 = -gt._calc_n1(nodes, panel), -gt._calc_n2(nodes, panel), -gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
@@ -171,50 +186,151 @@ function phi_constant_source(nodes::Arr1, panel,
     # Convert nodes to panel coordinate system
     # Pnodes = [Oaxis*(node-O) for node in nodes]
 
-    # Iterate over nodes
-    for i in 1:nn
+    # Iterate over targets
+    for ti in 1:nt
 
+
+        # Target position in panel coordinate system
+        # X = Oaxis*(targets[:, ti]-O)
         @inbounds begin
-            pi, pj = panel[i], panel[i%nn + 1]
-
-            # Convert nodes to panel coordinate system
-            xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
-            yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
-            zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
-            xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
-            yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
-            zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
+            x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+            y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+            z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
         end
 
-        # Iterate over targets
-        @simd for ti in 1:nt
+        dtheta = 2*pi
 
-            # Target position in panel coordinate system
-            # X = Oaxis*(targets[:, ti]-O)
+        # Iterate over nodes
+        for i in 1:nn
+
             @inbounds begin
-                x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
-                y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
-                z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
+                pi, pj = panel[i], panel[i%nn + 1]
+
+                # Convert nodes to panel coordinate system
+                xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+                yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+                zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+                xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+                yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+                zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
             end
 
             dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
-            mij = (yj - yi)/(xj - xi)
             ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
             rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
-            ei = (x - xi)^2 + (z-zi)^2
-            ej = (x - xj)^2 + (z-zj)^2
-            hi = (x - xi)*(y - yi)
-            hj = (x - xj)*(y - yj)
 
-            Pij = (x - xi)*(yj - yi) - (y - yi)*(xj - xi)
             Qij = log( (ri+rj+dij)/(ri+rj-dij + offset) )
-            Rij = atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
 
-            @inbounds out[ti] -= strength/(4*π) * (Pij/dij * Qij - abs(z)*Rij)
+            Sij = (yj-yi)/dij
+            Cij = (xj-xi)/dij
+
+            siji = (xi-x)*Cij + (yi-y)*Sij
+            sijj = (xj-x)*Cij + (yj-y)*Sij
+            Rij = (x-xi)*Sij - (y-yi)*Cij
+
+            Jij = atan( Rij*abs(z)*( ri*sijj - rj*siji ) , ri*rj*Rij^2 + z^2*sijj*siji )
+
+            @inbounds out[ti] -= strength/(4*π) * (Rij*Qij + abs(z)*Jij)
+
+            dtheta *= Rij>=0
         end
+
+        @inbounds out[ti] += strength/(4*π) * abs(z)*dtheta
 
     end
 end
+
+# """
+# Returns the potential induced by a panel of vertices `nodes` and constant
+# strength source `strength` on the targets `targets`. It adds the potential at
+# the i-th target to out[i].
+#
+# Implementation of equations in Katz and Plotkin Sec. 10.4.1.
+# NOTE: THOSE EQUATIONS ARE WRONG. THEY GIVE THE CORRECT POTENTIAL ONLY ABOVE
+#       THE PANEL, AND NON-SENSE UNDERNEATH IT.
+# """
+# function phi_constant_source(nodes::Arr1, panel,
+#                               strength::Number,
+#                               targets::Arr2, out::Arr3;
+#                               offset::Real=1e-8
+#                             ) where{T1, Arr1<:AbstractArray{T1,2},
+#                                     T2, Arr2<:AbstractArray{T2,2},
+#                                     T3, Arr3<:AbstractArray{T3}}
+#
+#     nt = size(targets, 2)                   # Number of targets
+#     no = length(out)                        # Number of outputs
+#     nn = length(panel)                      # Number of nodes
+#
+#     if no!=nt
+#         error("Invalid `out` argument. Expected size $(nt), got $(no).")
+#     end
+#
+#     # Tangent, oblique, and normal vectors
+#     # t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+#     # o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+#     # n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+#
+#     # Here we flip the oblique and tangent vector since both Katz & Plotkin and
+#     # Hess & Smith define their panels opposite to the right-hand rule (while
+#     # GeometricTools defines the normal following the right-hand rule)
+#     t1, t2, t3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+#     o1, o2, o3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+#     n1, n2, n3 = -gt._calc_n1(nodes, panel), -gt._calc_n2(nodes, panel), -gt._calc_n3(nodes, panel)
+#
+#     # Panel local coordinate system
+#     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
+#     @inbounds Oi = panel[1]                         # Index of node that is the origin
+#     # xhat, yhat, zhat = t, o, n         # Unit vectors
+#     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
+#
+#     # Convert nodes to panel coordinate system
+#     # Pnodes = [Oaxis*(node-O) for node in nodes]
+#
+#     # Iterate over nodes
+#     for i in 1:nn
+#
+#         @inbounds begin
+#             pi, pj = panel[i], panel[i%nn + 1]
+#
+#             # Convert nodes to panel coordinate system
+#             xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+#             yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+#             zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+#             xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+#             yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+#             zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
+#         end
+#
+#         # Iterate over targets
+#         @simd for ti in 1:nt
+#
+#             # Target position in panel coordinate system
+#             # X = Oaxis*(targets[:, ti]-O)
+#             @inbounds begin
+#                 x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+#                 y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+#                 z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
+#             end
+#
+#             dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
+#             mij = (yj - yi)/(xj - xi)
+#             ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+#             rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+#             ei = (x - xi)^2 + (z-zi)^2
+#             ej = (x - xj)^2 + (z-zj)^2
+#             hi = (x - xi)*(y - yi)
+#             hj = (x - xj)*(y - yj)
+#
+#             Pij = (x - xi)*(yj - yi) - (y - yi)*(xj - xi)
+#             Qij = log( (ri+rj+dij)/(ri+rj-dij + offset) )
+#             # Rij = atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj)
+#             Rij = atan( (mij*ei-hi) / (z*ri) ) - atan( (mij*ej-hj) / (z*rj) )
+#
+#             @inbounds out[ti] -= strength/(4*π) * (Pij/dij * Qij - abs(z)*Rij)
+#         end
+#
+#     end
+# end
 
 
 ################################################################################
@@ -382,9 +498,16 @@ function phi_constant_doublet(nodes::Arr1, panel,
     end
 
     # Tangent, oblique, and normal vectors
-    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
-    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
-    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+    # t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    # o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    # n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+
+    # Here we flip the oblique and tangent vector since both Katz & Plotkin and
+    # Hess & Smith define their panels opposite to the right-hand rule (while
+    # GeometricTools defines the normal following the right-hand rule)
+    t1, t2, t3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    o1, o2, o3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    n1, n2, n3 = -gt._calc_n1(nodes, panel), -gt._calc_n2(nodes, panel), -gt._calc_n3(nodes, panel)
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
