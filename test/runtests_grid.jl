@@ -7,7 +7,11 @@ using Test
 import Printf: @printf
 import FLOWPanel as pnl
 
-verbose = true
+try
+    verbose
+catch
+    global verbose = true
+end
 v_lvl = 0
 
 

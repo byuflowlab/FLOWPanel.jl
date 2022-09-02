@@ -20,9 +20,9 @@ struct VortexRing <: AbstractElement end
 # SOURCE ELEMENTS
 ################################################################################
 """
-Returns the velocity induced by a panel of vertices `nodes` and constant
-strength source `strength` on the targets `targets`. It adds the velocity at the
-i-th target to out[i].
+Computes the velocity induced by a panel of vertices `nodes[:, panel]` and
+constant strength source `strength` on the targets `targets`. It adds the
+velocity at the i-th target to out[i].
 
 Implementation of equations in Hess & Smith (1967).
 """
@@ -143,9 +143,9 @@ end
 
 
 """
-Returns the potential induced by a panel of vertices `nodes` and constant
-strength source `strength` on the targets `targets`. It adds the potential at
-the i-th target to out[i].
+Computes the potential induced by a panel of vertices `nodes[:, panel]` and
+constant strength source `strength` on the targets `targets`. It adds the
+potential at the i-th target to out[i].
 
 Implementation of equations in Hess & Smith (1967), p. 53.
 """
@@ -241,7 +241,7 @@ function phi_constant_source(nodes::Arr1, panel,
 end
 
 # """
-# Returns the potential induced by a panel of vertices `nodes` and constant
+# Returns the potential induced by a panel of vertices `nodes[:, panel]` and constant
 # strength source `strength` on the targets `targets`. It adds the potential at
 # the i-th target to out[i].
 #
@@ -337,27 +337,96 @@ end
 # VORTEX ELEMENTS
 ################################################################################
 """
-Returns the velocity induced by a vortex ring panel of vertices `nodes` and
-vortex strength `strength` on the targets `targets`. It adds the velocity at the
-i-th target to out[i].
+Computes the velocity induced by a bound vortex with beginning and end points
+`[pa1, pa2, pa3]` and `[pb1, pb2, pb3]`, respectively, and vortex strength
+`strength` on the targets `targets`. It adds the velocity at the i-th target to
+out[i].
 """
-function U_vortexring(nodes::Arr1, panel,
-                              strength::Number,
-                              targets::Arr2, out::Arr3;
-                              dot_with=nothing,
-                              closed_ring::Bool=true,
-                              cutoff=1e-14, offset=1e-8,
-                          ) where{T1, Arr1<:AbstractArray{T1,2},
-                                  T2, Arr2<:AbstractArray{T2,2},
+function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
+                        pb1::Number, pb2::Number, pb3::Number,
+                        strength::Number,
+                        targets::Arr2, out::Arr3;
+                        dot_with=nothing,
+                        cutoff=1e-14, offset=1e-8,
+                       ) where{   T2, Arr2<:AbstractArray{T2,2},
                                   T3, Arr3<:AbstractArray{T3}}
 
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
-    nn = length(panel)                      # Number of nodes
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
+
+    # rij = pj - pi
+    rij1 = pb1 - pa1
+    rij2 = pb2 - pa2
+    rij3 = pb3 - pa3
+
+    # Iterate over targets
+    @simd for ti in 1:nt
+
+        @inbounds begin
+            # ri = x - pi
+            ri1 = targets[1, ti] - pa1
+            ri2 = targets[2, ti] - pa2
+            ri3 = targets[3, ti] - pa3
+
+            # rj = x - pj
+            rj1 = targets[1, ti] - pb1
+            rj2 = targets[2, ti] - pb2
+            rj3 = targets[3, ti] - pb3
+        end
+
+        # ri × rj
+        rixrj1 = ri2*rj3 - ri3*rj2
+        rixrj2 = ri3*rj1 - ri1*rj3
+        rixrj3 = ri1*rj2 - ri2*rj1
+
+        # ‖ ri × rj ‖^2
+        dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
+
+        # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
+        normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
+        normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+        rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
+
+        if dotrixrj > cutoff^2 # This makes the self induced velocity zero
+
+            # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+            aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+
+            # NOTE: Negative sign is not needed since we defined rij = rj - ri
+            if dot_with!=nothing
+                @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] )
+            else
+                @inbounds out[1, ti] += aux * rixrj1
+                @inbounds out[2, ti] += aux * rixrj2
+                @inbounds out[3, ti] += aux * rixrj3
+            end
+        end
+    end
+
+end
+
+
+
+"""
+`U_vortexring(nodes::Matrix, panel::Array{Int}, strength::Real,
+                targets::Matrix, out::Matrix; dot_with=nothing,
+                closed_ring=true,
+                cutoff=1e-14, offset=1e-8)`
+
+Computes the velocity induced by a vortex ring panel of vertices
+`nodes[:, panel]` and vortex strength `strength` on the targets `targets`. It
+adds the velocity at the i-th target to out[i].
+"""
+function U_vortexring(nodes::Arr1, panel, strength, targets, out;
+                        closed_ring::Bool=true, dot_with=nothing,
+                        cutoff=1e-14, offset=1e-8
+                     ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    nn = length(panel)                      # Number of nodes
 
     # Iterate over nodes
     for i in 1:nn
@@ -366,128 +435,217 @@ function U_vortexring(nodes::Arr1, panel,
 
             @inbounds begin
                 pi, pj = panel[i], panel[i%nn + 1]
-
-                # rji = pj - pi
-                rji1 = nodes[1, pj] - nodes[1, pi]
-                rji2 = nodes[2, pj] - nodes[2, pi]
-                rji3 = nodes[3, pj] - nodes[3, pi]
+                pa1, pa2, pa3 = nodes[1, pi], nodes[2, pi], nodes[3, pi]
+                pb1, pb2, pb3 = nodes[1, pj], nodes[2, pj], nodes[3, pj]
             end
 
-            # Iterate over targets
-            @simd for ti in 1:nt
-
-                @inbounds begin
-                    # ri = x - pi
-                    ri1 = targets[1, ti] - nodes[1, pi]
-                    ri2 = targets[2, ti] - nodes[2, pi]
-                    ri3 = targets[3, ti] - nodes[3, pi]
-
-                    # rj = x - pj
-                    rj1 = targets[1, ti] - nodes[1, pj]
-                    rj2 = targets[2, ti] - nodes[2, pj]
-                    rj3 = targets[3, ti] - nodes[3, pj]
-                end
-
-                # ri × rj
-                rixrj1 = ri2*rj3 - ri3*rj2
-                rixrj2 = ri3*rj1 - ri1*rj3
-                rixrj3 = ri1*rj2 - ri2*rj1
-
-                # ‖ ri × rj ‖^2
-                dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
-
-                # rji ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
-                normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
-                normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
-                rjidothat = rji1*(ri1/normri - rj1/normrj) + rji2*(ri2/normri - rj2/normrj) + rji3*(ri3/normri - rj3/normrj)
-
-                if dotrixrj > cutoff^2 # This makes the self induced velocity zero
-                    # V1 += rixrj1/(dotrixrj + offset) * rjidothat
-                    # V2 += rixrj2/(dotrixrj + offset) * rjidothat
-                    # V3 += rixrj3/(dotrixrj + offset) * rjidothat
-
-                    # NOTE: Negative sign not needed since we defined rji = rj - ri
-                    if dot_with!=nothing
-                        @inbounds out[ti] += strength/(4*π)*( rixrj1/(dotrixrj + offset) * rjidothat * dot_with[1,ti]
-                                                            + rixrj2/(dotrixrj + offset) * rjidothat * dot_with[2,ti]
-                                                            + rixrj3/(dotrixrj + offset) * rjidothat * dot_with[3,ti])
-                    else
-                        @inbounds out[1, ti] += strength/(4*π)*rixrj1/(dotrixrj + offset) * rjidothat
-                        @inbounds out[2, ti] += strength/(4*π)*rixrj2/(dotrixrj + offset) * rjidothat
-                        @inbounds out[3, ti] += strength/(4*π)*rixrj3/(dotrixrj + offset) * rjidothat
-                    end
-                end
-            end
-
+            U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, targets, out;
+                            dot_with=dot_with, cutoff=cutoff, offset=offset)
         end
 
     end
 end
 
 
+
 """
-Returns the velocity induced by a semi-infinite vortex starting at point `p` in
-the unitary direction `D` and vortex strength `strength` on the targets
-`targets`. It adds the velocity at the i-th target to out[i].
+Computes the velocity induced by a semi-infinite vortex starting at point
+`[p1, p2, p3]` going out in the unitary direction `[d1, d2, d3]` with vortex
+strength `strength` on the targets `targets`. It adds the velocity at the i-th
+target to out[i].
+
+A negative strength makes it such that the vortex comes from infinite and
+ends at the point.
 """
-function Usemiinfinitevortex(p::Array{T1,1}, D::Array{T2,1}, strength::Number,
-                              targets::Array{Array{T3,1},1},
-                              out;
-                              dot_with::Union{Array{Array{T3,1},1}, Nothing}=nothing,
-                              check::Bool=true
-                              ) where{T1, T2, T3}
-  # ERROR CASES
-  if size(out)!=size(targets)
-    error("Invalid `out` argument."*
-          " Expected size $(size(targets)), got $(size(out)).")
-  elseif check && abs(norm(D)-1.0)>1e-8
-    error("Received non-unitary infinite direction D! (norm(D) = $(norm(D)))")
-  end
+function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
+                                d1::Number, d2::Number, d3::Number,
+                                strength::Number,
+                                targets::Arr2, out::Arr3;
+                                dot_with=nothing,
+                                cutoff=1e-14, offset=1e-8,
+                               ) where{   T2, Arr2<:AbstractArray{T2,2},
+                                          T3, Arr3<:AbstractArray{T3}}
 
-  # Iterate over targets
-  for ti in 1:size(targets, 1)
 
-    p2 = p + dot(targets[ti]-p, D)*D
-    h = norm(targets[ti]-p2)
+    nt = size(targets, 2)                               # Number of targets
+    no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
 
-    if h>SMOOTH3
-
-      # Add semi-infinite section
-      if dot_with!=nothing
-        out[ti] += dot(
-                   strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h ),
-                                                                  dot_with[ti])
-      else
-        out[ti] .+= strength / (4*pi*h) * cross(D, (targets[ti]-p2)/h )
-      end
-
-      # Add bound vortex section
-      U_vortexring([p, p2], strength, targets[ti:ti], view(out, ti:ti);
-                                          dot_with=dot_with!=nothing ? dot_with[ti:ti] : nothing,
-                                          closed_ring=false)
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    elseif abs(d1^2 + d2^2 + d3^2 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+                " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
     end
 
-  end
+
+    # Iterate over targets
+    @simd for ti in 1:nt
+
+        # Split vortex into bound and semi-infinite sections
+        # p0 = p + [(x-p)⋅d]d
+        @inbounds xmpdotd = (targets[1, ti] - p1)*d1 + (targets[2, ti] - p2)*d2 + (targets[3, ti] - p3)*d3
+        p01 = p1 + xmpdotd*d1
+        p02 = p2 + xmpdotd*d2
+        p03 = p3 + xmpdotd*d3
+
+        # ----------------- Bound Vortex ---------------------------------------
+        if (p01-p1)^2 + (p02-p2)^2 + (p03-p3)^2 > offset^2 # Check that there is a bound section
+
+            # rij = pj - pi
+            rij1 = p01 - p1
+            rij2 = p02 - p2
+            rij3 = p03 - p3
+
+            @inbounds begin
+                # ri = x - pi
+                ri1 = targets[1, ti] - p1
+                ri2 = targets[2, ti] - p2
+                ri3 = targets[3, ti] - p3
+
+                # rj = x - pj
+                rj1 = targets[1, ti] - p01
+                rj2 = targets[2, ti] - p02
+                rj3 = targets[3, ti] - p03
+            end
+
+            # ri × rj
+            rixrj1 = ri2*rj3 - ri3*rj2
+            rixrj2 = ri3*rj1 - ri1*rj3
+            rixrj3 = ri1*rj2 - ri2*rj1
+
+            # ‖ ri × rj ‖^2
+            dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
+
+            # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
+            normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
+            normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+            rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
+
+            if dotrixrj > cutoff^2 # This makes the self induced velocity zero
+
+                # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+                aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+
+                # NOTE: Negative sign is not needed since we defined rij = rj - ri
+                if dot_with!=nothing
+                    @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] )
+                else
+                    @inbounds out[1, ti] += aux * rixrj1
+                    @inbounds out[2, ti] += aux * rixrj2
+                    @inbounds out[3, ti] += aux * rixrj3
+                end
+            end
+
+        end
+
+        # ----------------- Semi-Infinite Vortex -------------------------------
+        # h = ‖x - p0‖
+        # @inbounds h = sqrt( (targets[1, ti] - p01)^2 + (targets[2, ti] - p02)^2 + (targets[3, ti] - p03)^2 )
+        @inbounds hsqr = (targets[1, ti] - p01)^2 + (targets[2, ti] - p02)^2 + (targets[3, ti] - p03)^2
+
+        # hhat = (x - p0) / ‖x - p0‖
+        # h1 = (targets[1, ti] - p01)/h
+        # h2 = (targets[2, ti] - p02)/h
+        # h3 = (targets[3, ti] - p03)/h
+        h1 = (targets[1, ti] - p01)
+        h2 = (targets[2, ti] - p02)
+        h3 = (targets[3, ti] - p03)
+
+        # nhat = dhat × hhat
+        n1 = d2*h3 - d3*h2
+        n2 = d3*h1 - d1*h3
+        n3 = d1*h2 - d2*h1
+
+        # if h > cutoff # This makes the self induced velocity zero
+        if hsqr > cutoff^2
+
+            # aux = strength / (4*π*(h + offset))
+            # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+            aux = strength / (4*π*(hsqr + offset^2))
+
+            if dot_with!=nothing
+                @inbounds out[ti] += aux * (n1*dot_with[1,ti] + n2*dot_with[2,ti] + n3*dot_with[3,ti])
+            else
+                @inbounds out[1, ti] += aux * n1
+                @inbounds out[2, ti] += aux * n2
+                @inbounds out[3, ti] += aux * n3
+            end
+
+        end
+
+    end
+
 end
 
 
+
+"""
+Computes the velocity induced by a semi-infinite horseshoe of strength
+`strength` on the targets `targets`. The semi-infinite horseshoe comes from ∞
+to `nodes[:, TE[1]]` and goes out to ∞ `nodes[:, TE[2]]`, with a bound vortex
+going from `nodes[:, TE[1]]` to `nodes[:, TE[2]]`. The direction is of the
+semi-infinite sections is given by `[d1, d2, d3]`. It adds the velocity at
+the i-th target to out[i].
+"""
+function U_semiinfinite_horseshoe(nodes::Arr1,
+                                    TE, d1::Number, d2::Number, d3::Number,
+                                    strength::Number,
+                                    targets, out;
+                                    dot_with=nothing,
+                                    cutoff=1e-14, offset=1e-8,
+                                  ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    # Semi-infinite vortex coming in (from ∞ to pi)
+    U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                            d1, d2, d3, -strength,
+                            targets, out;
+                            dot_with=dot_with,
+                            cutoff=cutoff, offset=offset
+                         )
+
+    # Bound vortex (from pi and pj)
+    U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                    nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                    strength,
+                    targets, out;
+                    dot_with=dot_with,
+                    cutoff=cutoff, offset=offset
+                 )
+
+    # Semi-infinite vortex going to (from pj to ∞)
+    U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                            d1, d2, d3, strength,
+                            targets, out;
+                            dot_with=dot_with,
+                            cutoff=cutoff, offset=offset
+                         )
+end
 
 ################################################################################
 # DOUBLET ELEMENTS
 ################################################################################
 """
-Returns the potential induced by a panel of vertices `nodes` and constant
-strength doublet `strength` on the targets `targets`. It adds the potential at
-the i-th target to out[i].
+Computes the velocity induced by a panel of vertices `nodes[:, panel]` and
+constant strength doublet `strength` on the targets `targets`. It adds the
+velocity at the i-th target to out[i].
+"""
+const U_constant_doublet = U_vortexring
+# U_constant_doublet(args...; optargs...) = U_vortexring(args...; optargs...) #<--- This produces memory allocation for some reason
 
-Implementation of equations in Katz and Plotkin Sec. 10.4.2.
+
+"""
+Computes the potential induced by a panel of vertices `nodes[:, panel]` and
+constant strength doublet `strength` on the targets `targets`. It adds the
+potential at the i-th target to out[i].
+
+Implementation of equations in Hess & Smith (1967), using ϕ_µ = −µ*(n⋅∇ϕ_σ/σ).
 """
 function phi_constant_doublet(nodes::Arr1, panel,
                               strength::Number,
                               targets::Arr2, out::Arr3
-                             ) where{T1, Arr1<:AbstractArray{T1,2},
-                                     T2, Arr2<:AbstractArray{T2,2},
-                                     T3, Arr3<:AbstractArray{T3}}
+                          ) where{T1, Arr1<:AbstractArray{T1,2},
+                                  T2, Arr2<:AbstractArray{T2,2},
+                                  T3, Arr3<:AbstractArray{T3}}
 
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
@@ -511,58 +669,316 @@ function phi_constant_doublet(nodes::Arr1, panel,
 
     # Panel local coordinate system
     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
+    # @inbounds O = nodes[1]                         # Origin
     @inbounds Oi = panel[1]                         # Index of node that is the origin
     # xhat, yhat, zhat = t, o, n         # Unit vectors
     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
 
-    # Convert nodes to panel coordinate system
-    # Pnodes = [Oaxis*(node-O) for node in nodes]
+    # Iterate over targets
+    for ti in 1:nt
 
-    # Iterate over nodes
-    for i in 1:nn
-
+        # Target position in panel coordinate system
+        # X = Oaxis*(targets[:, ti]-O)
         @inbounds begin
-            pi, pj = panel[i], panel[i%nn + 1]
-
-            # Convert nodes to panel coordinate system
-            xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
-            yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
-            zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
-            xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
-            yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
-            zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
+            x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+            y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+            z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
         end
 
+        V3 = zero(T3)
+        dtheta = 2*pi
+        nR0::Int = 0
 
-        # Iterate over targets
-        @simd for ti in 1:nt
+        @simd for i in 1:nn
 
-            # Target position in panel coordinate system
-            # X = Oaxis*(targets[:, ti]-O)
             @inbounds begin
-                x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
-                y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
-                z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
+                pi, pj = panel[i], panel[i%nn + 1]
+
+                # Convert nodes to panel coordinate system
+                xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+                yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+                zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+                xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+                yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+                zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
             end
 
-            mij = (yj - yi)/(xj - xi)
+            dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
             ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
             rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
-            ei = (x - xi)^2 + (z-zi)^2
-            ej = (x - xj)^2 + (z-zj)^2
-            hi = (x - xi)*(y - yi)
-            hj = (x - xj)*(y - yj)
 
-            @inbounds out[ti] += strength/(4*π) * (atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj))
+            Sij = (yj-yi)/dij
+            Cij = (xj-xi)/dij
+
+            siji = (xi-x)*Cij + (yi-y)*Sij
+            sijj = (xj-x)*Cij + (yj-y)*Sij
+            Rij = (x-xi)*Sij - (y-yi)*Cij
+
+            Jij = atan( Rij*abs(z)*( ri*sijj - rj*siji ) , ri*rj*Rij^2 + z^2*sijj*siji )
+
+            V3 -= Jij
+
+            dtheta *= Rij>=0
+            nR0 += Rij==0
+            # nR0 += (abs(Rij) < offset)
         end
+
+        V3 += dtheta
+        V3 *= sign(z)        # Isn't this sign already accounted for in atan2?
+        V3 *= !(nR0>1)       # Singularity fix of any z position aligned with node
+
+
+        # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
+        #       this factor
+        V3 *= 1/(4*pi)
+
+        # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
+        out[ti] += strength*V3
 
     end
 end
 
+
+# """
+# Returns the potential induced by a panel of vertices `nodes[:, panel]` and constant
+# strength doublet `strength` on the targets `targets`. It adds the potential at
+# the i-th target to out[i].
+#
+# Implementation of equations in Katz and Plotkin Sec. 10.4.2.
+# # NOTE: THOSE EQUATIONS ARE WRONG. THEY GIVE THE CORRECT POTENTIAL ONLY BELOW
+# #       THE PANEL, AND NON-SENSE ABOVE IT.
+# """
+# function phi_constant_doublet(nodes::Arr1, panel,
+#                               strength::Number,
+#                               targets::Arr2, out::Arr3
+#                              ) where{T1, Arr1<:AbstractArray{T1,2},
+#                                      T2, Arr2<:AbstractArray{T2,2},
+#                                      T3, Arr3<:AbstractArray{T3}}
+#
+#     nt = size(targets, 2)                   # Number of targets
+#     no = length(out)                        # Number of outputs
+#     nn = length(panel)                      # Number of nodes
+#
+#     if no!=nt
+#         error("Invalid `out` argument. Expected size $(nt), got $(no).")
+#     end
+#
+#     # Tangent, oblique, and normal vectors
+#     # t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+#     # o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+#     # n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+#
+#     # Here we flip the oblique and tangent vector since both Katz & Plotkin and
+#     # Hess & Smith define their panels opposite to the right-hand rule (while
+#     # GeometricTools defines the normal following the right-hand rule)
+#     t1, t2, t3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+#     o1, o2, o3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+#     n1, n2, n3 = -gt._calc_n1(nodes, panel), -gt._calc_n2(nodes, panel), -gt._calc_n3(nodes, panel)
+#
+#     # Panel local coordinate system
+#     # NOTE: normal is pointing out of the body, which differs from Katz and Plotkin
+#     @inbounds Oi = panel[1]                         # Index of node that is the origin
+#     # xhat, yhat, zhat = t, o, n         # Unit vectors
+#     # Oaxis = hcat(xhat, yhat, zhat)'    # Transformation matrix
+#
+#     # Convert nodes to panel coordinate system
+#     # Pnodes = [Oaxis*(node-O) for node in nodes]
+#
+#     # Iterate over nodes
+#     for i in 1:nn
+#
+#         @inbounds begin
+#             pi, pj = panel[i], panel[i%nn + 1]
+#
+#             # Convert nodes to panel coordinate system
+#             xi = t1*(nodes[1,pi]-nodes[1,Oi]) + t2*(nodes[2,pi]-nodes[2,Oi]) + t3*(nodes[3,pi]-nodes[3,Oi])
+#             yi = o1*(nodes[1,pi]-nodes[1,Oi]) + o2*(nodes[2,pi]-nodes[2,Oi]) + o3*(nodes[3,pi]-nodes[3,Oi])
+#             zi = n1*(nodes[1,pi]-nodes[1,Oi]) + n2*(nodes[2,pi]-nodes[2,Oi]) + n3*(nodes[3,pi]-nodes[3,Oi])
+#             xj = t1*(nodes[1,pj]-nodes[1,Oi]) + t2*(nodes[2,pj]-nodes[2,Oi]) + t3*(nodes[3,pj]-nodes[3,Oi])
+#             yj = o1*(nodes[1,pj]-nodes[1,Oi]) + o2*(nodes[2,pj]-nodes[2,Oi]) + o3*(nodes[3,pj]-nodes[3,Oi])
+#             zj = n1*(nodes[1,pj]-nodes[1,Oi]) + n2*(nodes[2,pj]-nodes[2,Oi]) + n3*(nodes[3,pj]-nodes[3,Oi])
+#         end
+#
+#
+#         # Iterate over targets
+#         @simd for ti in 1:nt
+#
+#             # Target position in panel coordinate system
+#             # X = Oaxis*(targets[:, ti]-O)
+#             @inbounds begin
+#                 x = t1*(targets[1,ti]-nodes[1,Oi]) + t2*(targets[2,ti]-nodes[2,Oi]) + t3*(targets[3,ti]-nodes[3,Oi])
+#                 y = o1*(targets[1,ti]-nodes[1,Oi]) + o2*(targets[2,ti]-nodes[2,Oi]) + o3*(targets[3,ti]-nodes[3,Oi])
+#                 z = n1*(targets[1,ti]-nodes[1,Oi]) + n2*(targets[2,ti]-nodes[2,Oi]) + n3*(targets[3,ti]-nodes[3,Oi])
+#             end
+#
+#             mij = (yj - yi)/(xj - xi)
+#             ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+#             rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+#             ei = (x - xi)^2 + (z-zi)^2
+#             ej = (x - xj)^2 + (z-zj)^2
+#             hi = (x - xi)*(y - yi)
+#             hj = (x - xj)*(y - yj)
+#
+#             @inbounds out[ti] += strength/(4*π) * (atan(mij*ei-hi, z*ri) - atan(mij*ej-hj, z*rj))
+#         end
+#
+#     end
+# end
+
+
+
+################################################################################
+# SEMI-INFINITE DOUBLET ELEMENTS
+################################################################################
 """
-Returns the velocity induced by a panel of vertices `nodes` and constant
-strength doublet `strength` on the targets `targets`. It adds the velocity at
+Computes the velocity induced by a semi-infinite doublet panel of strength
+`strength` on the targets `targets`. The semi-infinite panel starts at the
+trailing edge between `nodes[:, TE[1]]` and `nodes[:, TE[2]]` and extends
+infinitely in the direction `[d1, d2, d3]`. It adds the potential at
 the i-th target to out[i].
 """
-const U_constant_doublet = U_vortexring
-# U_constant_doublet(args...; optargs...) = U_vortexring(args...; optargs...) #<--- This produces memory allocation for some reason
+const U_semiinfinite_doublet = U_semiinfinite_horseshoe
+
+"""
+Computes the potential induced by a semi-infinite doublet panel of strength
+`strength` on the targets `targets`. The semi-infinite panel starts at the
+trailing edge between `nodes[:, TE[1]]` and `nodes[:, TE[2]]` and extends
+infinitely in the direction `[d1, d2, d3]`. It adds the potential at
+the i-th target to out[i].
+
+Implementation of equations in Moran, J. (1984), Appendix F, p. 445.
+"""
+function phi_semiinfinite_doublet(nodes::Arr1,
+                                    TE, d1::Number, d2::Number, d3::Number,
+                                    strength::Number,
+                                    targets::Arr2, out::Arr3
+                                  ) where{T1, Arr1<:AbstractArray{T1,2},
+                                          T2, Arr2<:AbstractArray{T2,2},
+                                          T3, Arr3<:AbstractArray{T3}}
+
+    nt = size(targets, 2)                   # Number of targets
+    no = length(out)                        # Number of outputs
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    elseif abs(d1^2 + d2^2 + d3^2 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+                " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
+    end
+
+    # Split panel into a bound panel and a semi-infinite panel
+    @inbounds begin
+        p_i1, p_i2, p_i3 = nodes[1,TE[1]], nodes[2,TE[1]], nodes[3,TE[1]]
+        p_j1, p_j2, p_j3 = nodes[1,TE[2]], nodes[2,TE[2]], nodes[3,TE[2]]
+
+        # p_a = p_i + [(p_j-p_i)⋅d]d
+        pijdotd = (p_j1 - p_i1)*d1 + (p_j2 - p_i2)*d2 + (p_j3 - p_i3)*d3
+        pa1 = p_i1 + pijdotd*d1
+        pa2 = p_i2 + pijdotd*d2
+        pa3 = p_i3 + pijdotd*d3
+
+        # Panel local coordinate system
+        x1, x2, x3 = d1, d2, d3
+        nrmpbpa = sqrt( (p_j1-pa1)^2 + (p_j2-pa2)^2 + (p_j3-pa3)^2  )
+        y1, y2, y3 = (p_j1-pa1)/nrmpbpa, (p_j2-pa2)/nrmpbpa, (p_j3-pa3)/nrmpbpa
+        z1, z2, z3 = x2*y3-x3*y2, x3*y1-x1*y3, x1*y2-x2*y1
+
+        O1, O2, O3 = p_i1, p_i2, p_i3                   # Origin
+        # Oaxis = hcat(xhat, yhat, zhat)'               # Transformation matrix
+    end
+
+
+    # Iterate over targets
+    for ti in 1:nt
+
+        # Target position in panel coordinate system
+        # X = Oaxis*(targets[:, ti]-O)
+        @inbounds begin
+            x = x1*(targets[1,ti]-O1) + x2*(targets[2,ti]-O2) + x3*(targets[3,ti]-O3)
+            y = y1*(targets[1,ti]-O1) + y2*(targets[2,ti]-O2) + y3*(targets[3,ti]-O3)
+            z = z1*(targets[1,ti]-O1) + z2*(targets[2,ti]-O2) + z3*(targets[3,ti]-O3)
+        end
+
+        # ------------ Potential of bound panel
+        if abs(pijdotd) > 2*eps()               # <--- Avoids the case that there is no bound panel
+
+            V3 = zero(T3)
+            dtheta = 2*pi
+            nR0::Int = 0
+
+            @simd for i in 1:3 # iterate over p_a, p_i, and p_j
+
+                if i==1         # Case (pi, pj) = (p_a, p_i)
+                    pi1, pi2, pi3 = pa1, pa2, pa3
+                    pj1, pj2, pj3 = p_i1, p_i2, p_i3
+                elseif i==2     # Case (pi, pj) = (p_i, p_j)
+                    pi1, pi2, pi3 = p_i1, p_i2, p_i3
+                    pj1, pj2, pj3 = p_j1, p_j2, p_j3
+                else            # Case (pi, pj) = (p_j, p_a)
+                    pi1, pi2, pi3 = p_j1, p_j2, p_j3
+                    pj1, pj2, pj3 = pa1, pa2, pa3
+                end
+
+                # Convert nodes to panel coordinate system
+                xi = x1*(pi1-O1) + x2*(pi2-O2) + x3*(pi3-O3)
+                yi = y1*(pi1-O1) + y2*(pi2-O2) + y3*(pi3-O3)
+                zi = z1*(pi1-O1) + z2*(pi2-O2) + z3*(pi3-O3)
+                xj = x1*(pj1-O1) + x2*(pj2-O2) + x3*(pj3-O3)
+                yj = y1*(pj1-O1) + y2*(pj2-O2) + y3*(pj3-O3)
+                zj = z1*(pj1-O1) + z2*(pj2-O2) + z3*(pj3-O3)
+
+                dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
+                ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+                rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+
+                Sij = (yj-yi)/dij
+                Cij = (xj-xi)/dij
+
+                siji = (xi-x)*Cij + (yi-y)*Sij
+                sijj = (xj-x)*Cij + (yj-y)*Sij
+                Rij = (x-xi)*Sij - (y-yi)*Cij
+
+                Jij = atan( Rij*abs(z)*( ri*sijj - rj*siji ) , ri*rj*Rij^2 + z^2*sijj*siji )
+
+                V3 -= Jij
+
+                dtheta *= Rij>=0
+                nR0 += Rij==0
+                # nR0 += (abs(Rij) < offset)
+            end
+
+            V3 += dtheta
+            V3 *= sign(z)        # Isn't this sign already accounted for in atan2?
+            V3 *= !(nR0>1)       # Singularity fix of any z position aligned with node
+
+
+            # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
+            #       this factor
+            V3 *= 1/(4*pi)
+
+            # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
+            out[ti] += strength*V3
+        end
+
+
+        # ------------ Potential of semi-infinite panel
+        val = zero(T3)
+
+        # Convert nodes to panel coordinate system
+        xa = x1*(pa1-O1) + x2*(pa2-O2) + x3*(pa3-O3)
+        ya = y1*(pa1-O1) + y2*(pa2-O2) + y3*(pa3-O3)
+        # za = z1*(pa1-O1) + z2*(pa2-O2) + z3*(pa3-O3)
+        xb = x1*(p_j1-O1) + x2*(p_j2-O2) + x3*(p_j3-O3)
+        yb = y1*(p_j1-O1) + y2*(p_j2-O2) + y3*(p_j3-O3)
+        # zb = z1*(p_j1-O1) + z2*(p_j2-O2) + z3*(p_j3-O3)
+
+        # TODO: What is the domain of evaluation of this atan function in the theory?
+        val += atan((yb-y)/z) + atan( (yb-y)*(x-xa) / (z*sqrt((x-xa)^2 + (yb-y)^2 + z^2)) )
+        val -= atan((ya-y)/z) + atan( (ya-y)*(x-xa) / (z*sqrt((x-xa)^2 + (ya-y)^2 + z^2)) )
+        # val += atan(yb-y, z) + atan( (yb-y)*(x-xa), z*sqrt((x-xa)^2 + (yb-y)^2 + z^2) )
+        # val -= atan(ya-y, z) + atan( (ya-y)*(x-xa), z*sqrt((x-xa)^2 + (ya-y)^2 + z^2) )
+
+        # out[ti] -= strength/(4*pi) * val
+        out[ti] += strength/(4*pi) * val # NOTE: For some reason I ended up having to flip this sign to match the potential of the finite doublet panel
+    end
+end

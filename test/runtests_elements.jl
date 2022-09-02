@@ -8,12 +8,17 @@ import ForwardDiff as FD
 import Printf: @printf
 import FLOWPanel as pnl
 
-verbose = true
+try
+    verbose
+catch
+    global verbose = true
+end
 v_lvl = 0
 
 run_gradphiu = true
 run_memoryalloc = true
 run_divcurl = true
+run_properties = true
 
 elements_to_test = (
                         ( "source", (pnl.phi_constant_source, pnl.U_constant_source), ((offset=0,), (offset=0, )) ),
@@ -207,5 +212,102 @@ elements_to_test = (
             # Test result
             abs(div) < 1e-14
         end
+    end
+end
+
+
+
+if run_properties
+    @testset verbose=verbose "Element Properties" begin
+
+        # Nodes of planar panel
+        nodes = [
+                    -1 -1 0;
+                     1 -1 0;
+                     1  1 0;
+                    -1  1 0;
+                ]'
+
+        # Define panel
+        nnodes = size(nodes, 2)
+        panel = 1:nnodes
+
+        # Translate and rotate panel
+        O = zeros(3)
+        Oaxis = pnl.gt.rotation_matrix(0, 0, 0)
+        # O = (rand(3) .- 0.5)*1.99
+        # Oaxis = pnl.gt.rotation_matrix(rand(0:360), rand(0:360), rand(0:360))
+        nodes = Oaxis'*nodes + repeat(O, 1, nnodes)
+
+        # Unitary panel's strength
+        strength = 1.0
+
+
+        # Evaluate potential field at z=0 and z=inf
+        hinf = rand([-1, 1])*1e16
+        h = rand([-1, 1])*1e-8
+        normal = Oaxis'*[0, 0, 1]
+        offset = vcat((rand(2) .- 0.5)*1.99, 0)
+        targets = hcat(0*normal+O+offset, hinf*normal+O+offset, h*normal+O+offset)
+
+
+        # --------------- SOURCE PANEL PROPERTIES ------------------------------
+        # Test dphi/dz(±0) == ±sigma/2
+        if verbose
+            println("\n"*"\t"^(v_lvl)*"Test source properties")
+        end
+
+        phis = zeros(3)
+        pnl.phi_constant_source(nodes, panel, strength, targets, phis; offset=0)
+
+        phiinf = phis[2]
+        dphidz = (phis[3] - phis[1])/h
+
+        phiinfres = abs(phiinf) < 1e-8
+        dphidzres = abs(dphidz - sign(h)*strength/2) < 1e-6
+
+        if verbose
+            hinfsign = sign(h)==1 ? "+" : "-"
+            hsign = sign(h)==1 ? "+" : "-"
+            println("\t"^(v_lvl+1)*"ϕ($(hinfsign)∞):\t\t\t$(phis[2])")
+            println("\t"^(v_lvl+1)*"ϕ($(hinfsign)∞) == 0 ? \t\t$(phiinfres)\n")
+
+            println("\t"^(v_lvl+1)*"dϕ/dz(0, 0, $(hsign)0):\t$(dphidz)")
+            println("\t"^(v_lvl+1)*"σ:\t\t\t$(strength)")
+            println("\t"^(v_lvl+1)*"dϕ/dz($(hsign)0) == $(hsign)σ/2 ? \t$(dphidzres)")
+        end
+
+        @test phiinfres
+        @test dphidzres
+
+        # --------------- DOUBLET PANEL PROPERTIES -----------------------------
+        # Test phi(z=±0) == ∓mu/2
+        if verbose
+            println("\n"*"\t"^(v_lvl)*"Test doublet properties")
+        end
+
+        phis = zeros(3)
+        pnl.phi_constant_doublet(nodes, panel, strength, targets, phis)
+
+        phiinf = phis[2]
+        phidz = phis[3]
+
+        phiinfres = abs(phiinf) < 1e-8
+        phidzres = abs(phidz - sign(-h)*strength/2) < 1e-6
+
+        if verbose
+            hinfsign = sign(h)==1 ? "+" : "-"
+            hsign, musign = sign(h)==1 ? ("+", "-") : ("-", "+")
+            println("\t"^(v_lvl+1)*"ϕ($(hinfsign)∞):\t\t\t$(phis[2])")
+            println("\t"^(v_lvl+1)*"ϕ($(hinfsign)∞) == 0 ? \t\t$(phiinfres)\n")
+
+            println("\t"^(v_lvl+1)*"ϕ(0, 0, $(hsign)0):\t\t$(phidz)")
+            println("\t"^(v_lvl+1)*"μ:\t\t\t$(strength)")
+            println("\t"^(v_lvl+1)*"ϕ(0, 0, $(hsign)0) == $(musign)μ/2 ? \t$(phidzres)")
+        end
+
+        @test phiinfres
+        @test phidzres
+
     end
 end
