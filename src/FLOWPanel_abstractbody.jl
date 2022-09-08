@@ -50,6 +50,15 @@ and the following functions
         .
         .
     end
+
+    # Returns the potential induced by the body on the targets `targets`. It
+    # adds the potential at the i-th target to out[i].
+    function _phi(self::AbstractBody, targets::Array{Array{T,1},1},
+    out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
+        .
+        .
+        .
+    end
 ```
 """
 abstract type AbstractBody{E<:AbstractElement, N} end
@@ -76,6 +85,23 @@ function Uind!(self::AbstractBody, targets, out, args...; optargs...)
 end
 
 """
+  `phi!(self::AbstractBody, targets, out, args...; optargs...)
+
+Returns the potential induced by the body on the targets `targets`. It adds the
+potential at the i-th target to `out[:, i]`.
+"""
+function phi!(self::AbstractBody, targets, out, args...; optargs...)
+
+    # ERROR CASES
+    if check_solved(self)==false
+        error("Body hasn't been solved yet."*
+              " Please call `solve()` function first.")
+    end
+
+    _phi!(self, targets, out, args...; optargs...)
+end
+
+"""
   `save(body::AbstractBody, filename::String; optargs...)`
 
 Outputs a vtk file of this body. See GeometricTools.save(grid, ...) for a
@@ -91,30 +117,30 @@ function save(body::AbstractBody, filename::String; out_cellindex::Bool=false,
                                                  _upper::Bool=true,
                                                  optargs...)
 
-  str = ""
+    str = ""
 
-  # Add special fields
-  if out_cellindex || debug
-    gt.add_field(body.grid, "cellindex", "scalar",
-                    [i for i in 1:body.ncells], "cell")
-  end
+    # Add special fields
+    if out_cellindex || debug
+        gt.add_field(body.grid, "cellindex", "scalar",
+                            [i for i in 1:body.ncells], "cell")
+    end
 
-  if out_nodeindex || debug
-    gt.add_field(body.grid, "nodeindex", "scalar",
-                    [i for i in 1:body.nnodes], "node")
-  end
+    if out_nodeindex || debug
+        gt.add_field(body.grid, "nodeindex", "scalar",
+                            [i for i in 1:body.nnodes], "node")
+    end
 
-  _out_cellindexdim = debug && length(out_cellindexdim)==0 ? [1, 2] : out_cellindexdim
-  for dim in _out_cellindexdim
-    ndivs = gt.get_ndivscells(body.grid)[1:2]
-    data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
-    gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell")
-  end
+    _out_cellindexdim = debug && length(out_cellindexdim)==0 ? [1, 2] : out_cellindexdim
+    for dim in _out_cellindexdim
+        ndivs = gt.get_ndivscells(body.grid)[1:2]
+        data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
+        gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell")
+    end
 
-  # Outputs control points
-  if out_controlpoints || debug
-    str *= save_controlpoints(body, filename; debug=debug, optargs...)
-  end
+    # Outputs control points
+    if out_controlpoints || debug
+        str *= save_controlpoints(body, filename; debug=debug, optargs...)
+    end
 
   # # Outputs wake
   # if out_wake || debug
@@ -133,8 +159,8 @@ function save(body::AbstractBody, filename::String; out_cellindex::Bool=false,
   #    end
   # end
 
-  # Saves body
-  return str*gt.save(body.grid, filename; format="vtk", optargs...)
+    # Saves body
+    return str*gt.save(body.grid, filename; format="vtk", optargs...)
 
 end
 
@@ -182,8 +208,8 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
 
     end
 
-    # Surface velocity
     if check_solved(body) && debug
+        # Surface velocity
         Usurf = hcat(collect(get_fieldval(body, "Uinf", i) for i in 1:body.ncells)...)
         Uind!(body, CPs, Usurf)
 
@@ -197,6 +223,20 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
 
         # Save surface velocity as a field
         add_field(body, "U", "vector", Usurf, "cell")
+
+
+        # Surface potential
+        phis = zeros(body.ncells)
+        phi!(body, CPs, phis)
+
+        push!(data,
+                  Dict( "field_name"  => "phi",
+                        "field_type"  => "scalar",
+                        "field_data"  => phis)
+           )
+
+        # Save surface potential as a field
+        add_field(body, "phi", "scalar", phis, "cell")
     end
 
     CPs = collect(eachcol(CPs))
