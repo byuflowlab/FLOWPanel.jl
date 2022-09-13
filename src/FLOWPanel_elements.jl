@@ -422,7 +422,8 @@ Computes the velocity induced by a vortex ring panel of vertices
 adds the velocity at the i-th target to out[i].
 """
 function U_vortexring(nodes::Arr1, panel, strength, targets, out;
-                        closed_ring::Bool=true, dot_with=nothing,
+                        dot_with=nothing,
+                        # closed_ring::Bool=true,
                         cutoff=1e-14, offset=1e-8
                      ) where{T1, Arr1<:AbstractArray{T1,2}}
 
@@ -431,7 +432,7 @@ function U_vortexring(nodes::Arr1, panel, strength, targets, out;
     # Iterate over nodes
     for i in 1:nn
 
-        if closed_ring || i != nn
+        # if closed_ring || i != nn
 
             @inbounds begin
                 pi, pj = panel[i], panel[i%nn + 1]
@@ -441,7 +442,7 @@ function U_vortexring(nodes::Arr1, panel, strength, targets, out;
 
             U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, targets, out;
                             dot_with=dot_with, cutoff=cutoff, offset=offset)
-        end
+        # end
 
     end
 end
@@ -582,9 +583,9 @@ end
 """
 Computes the velocity induced by a semi-infinite horseshoe of strength
 `strength` on the targets `targets`. The semi-infinite horseshoe comes from ∞
-to `nodes[:, TE[1]]` and goes out to ∞ `nodes[:, TE[2]]`, with a bound vortex
-going from `nodes[:, TE[1]]` to `nodes[:, TE[2]]`. The direction is of the
-semi-infinite sections is given by `[d1, d2, d3]`. It adds the velocity at
+to `nodes[:, TE[1]]` and goes out to ∞ from `nodes[:, TE[2]]`, with a bound
+vortex going from `nodes[:, TE[1]]` to `nodes[:, TE[2]]`. The direction is of
+the semi-infinite sections is given by `[d1, d2, d3]`. It adds the velocity at
 the i-th target to out[i].
 """
 function U_semiinfinite_horseshoe(nodes::Arr1,
@@ -615,6 +616,55 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
     # Semi-infinite vortex going to (from pj to ∞)
     U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                             d1, d2, d3, strength,
+                            targets, out;
+                            dot_with=dot_with,
+                            cutoff=cutoff, offset=offset
+                         )
+end
+
+"""
+Computes the velocity induced by a semi-infinite horseshoe of strength
+`strength` on the targets `targets`. The semi-infinite horseshoe comes from ∞
+to pa and goes out to ∞ from pb, with a bound vortex going from pa to pb. The
+semi-infinite directions of pa and pb are da and db, respectively. It adds the
+velocity at the i-th target to out[i].
+
+DEFINITIONS
+* pa = `nodes[:, TE[1]]`
+* pb = `nodes[:, TE[2]]`
+* da = `[da1, da2, da3]`
+* db = `[db1, db2, db3]`
+"""
+function U_semiinfinite_horseshoe(nodes::Arr1,
+                                    TE,
+                                    da1::Number, da2::Number, da3::Number,
+                                    db1::Number, db2::Number, db3::Number,
+                                    strength::Number,
+                                    targets, out;
+                                    dot_with=nothing,
+                                    cutoff=1e-14, offset=1e-8,
+                                  ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    # Semi-infinite vortex coming in (from ∞ to pi)
+    U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                            da1, da2, da3, -strength,
+                            targets, out;
+                            dot_with=dot_with,
+                            cutoff=cutoff, offset=offset
+                         )
+
+    # Bound vortex (from pi and pj)
+    U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                    nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                    strength,
+                    targets, out;
+                    dot_with=dot_with,
+                    cutoff=cutoff, offset=offset
+                 )
+
+    # Semi-infinite vortex going to (from pj to ∞)
+    U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                            db1, db2, db3, strength,
                             targets, out;
                             dot_with=dot_with,
                             cutoff=cutoff, offset=offset
@@ -980,5 +1030,156 @@ function phi_semiinfinite_doublet(nodes::Arr1,
 
         # out[ti] -= strength/(4*pi) * val
         out[ti] += strength/(4*pi) * val # NOTE: For some reason I ended up having to flip this sign to match the potential of the finite doublet panel
+    end
+end
+
+"""
+Computes the potential induced by a semi-infinite horseshoe of strength
+`strength` on the targets `targets`. The semi-infinite horseshoe comes from ∞
+to pa and goes out to ∞ from pb, with a bound vortex going from pa to pb. The
+semi-infinite directions of pa and pb are da and db, respectively. It adds the
+velocity at the i-th target to out[i].
+
+DEFINITIONS
+* pa = `nodes[:, TE[1]]`
+* pb = `nodes[:, TE[2]]`
+* da = `[da1, da2, da3]`
+* db = `[db1, db2, db3]`
+
+Implementation of equations in Moran, J. (1984), Appendix F, p. 445, splitting
+the non-planar semi-infinite panel into two planar sections.
+"""
+function phi_semiinfinite_doublet(nodes::Arr1,
+                                    TE,
+                                    da1::Number, da2::Number, da3::Number,
+                                    db1::Number, db2::Number, db3::Number,
+                                    strength::Number,
+                                    targets::Arr2, out::Arr3
+                                  ) where{T1, Arr1<:AbstractArray{T1,2},
+                                          T2, Arr2<:AbstractArray{T2,2},
+                                          T3, Arr3<:AbstractArray{T3}}
+
+    nt = size(targets, 2)                   # Number of targets
+    no = length(out)                        # Number of outputs
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    elseif abs(da1^2 + da2^2 + da3^2 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+              " norm([da1, da2, da3]) = norm($([da1,da2,da3])) = $(norm((da1,da2,da3)))")
+    elseif abs(db1^2 + db2^2 + db3^2 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+              " norm([db1, db2, db3]) = norm($([db1,db2,db3])) = $(norm((db1,db2,db3)))")
+    elseif da1*db1 + da2*db2 + da3*db3 <= 0
+        error("Invalid semi-infinite directions:"*
+              " da=$([da1,da2,da3]) is opposite or orthogonal to db=$([db1,db2,db3])")
+    end
+
+    # Calculate potential as if panel was planar using da
+    phi_semiinfinite_doublet(nodes, TE, da1, da2, da3, strength, targets, out)
+
+    # Calculate triangular semi-infinite section between da and db going from pb
+    if abs(da1-db1) > 2*eps() || abs(da2-db2) > 2*eps() || abs(da3-db3) > 2*eps()
+
+        # Numerical approximation of semi-infinite panel with a large panel
+        @inbounds begin
+            pb1, pb2, pb3 = nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]]
+        end
+        pda1, pda2, pda3 = pb1+1e12*da1, pb2+1e12*da2, pb3+1e12*da3
+        pdb1, pdb2, pdb3 = pb1+1e12*db1, pb2+1e12*db2, pb3+1e12*db3
+
+        # Panel local coordinate system
+        x1, x2, x3 = da1, da2, da3
+        z1, z2, z3 = da2*db3-da3*db2, da3*db1-da1*db3, da1*db2-da2*db1
+        nrmz = sqrt(z1^2 + z2^2 + z3^2)
+        z1 /= nrmz
+        z2 /= nrmz
+        z3 /= nrmz
+        y1, y2, y3 = z2*x3-z3*x2, z3*x1-z1*x3, z1*x2-z2*x1
+
+        O1, O2, O3 = pb1, pb2, pb3                      # Origin
+        # Oaxis = hcat(xhat, yhat, zhat)'               # Transformation matrix
+
+        # Iterate over targets
+        for ti in 1:nt
+
+            # Target position in panel coordinate system
+            # X = Oaxis*(targets[:, ti]-O)
+            @inbounds begin
+                x = x1*(targets[1,ti]-O1) + x2*(targets[2,ti]-O2) + x3*(targets[3,ti]-O3)
+                y = y1*(targets[1,ti]-O1) + y2*(targets[2,ti]-O2) + y3*(targets[3,ti]-O3)
+                z = z1*(targets[1,ti]-O1) + z2*(targets[2,ti]-O2) + z3*(targets[3,ti]-O3)
+            end
+
+            V3 = zero(T3)
+            dtheta = 2*pi
+            nR0::Int = 0
+
+            @simd for i in 1:3 # iterate over pda, pdb, and pb
+
+                # if i==1         # Case (pi, pj) = (pda, pdb)
+                #     pi1, pi2, pi3 = pda1, pda2, pda3
+                #     pj1, pj2, pj3 = pdb1, pdb2, pdb3
+                # elseif i==2     # Case (pi, pj) = (pdb, pb)
+                #     pi1, pi2, pi3 = pdb1, pdb2, pdb3
+                #     pj1, pj2, pj3 = pb1, pb2, pb3
+                # else            # Case (pi, pj) = (pb, pda)
+                #     pi1, pi2, pi3 = pb1, pb2, pb3
+                #     pj1, pj2, pj3 = pda1, pda2, pda3
+                # end
+
+                if i==1         # Case (pi, pj) = (pda, pb)
+                    pi1, pi2, pi3 = pda1, pda2, pda3
+                    pj1, pj2, pj3 = pb1, pb2, pb3
+                elseif i==2     # Case (pi, pj) = (pb, pdb)
+                    pi1, pi2, pi3 = pb1, pb2, pb3
+                    pj1, pj2, pj3 = pdb1, pdb2, pdb3
+                else            # Case (pi, pj) = (pdb, pda)
+                    pi1, pi2, pi3 = pdb1, pdb2, pdb3
+                    pj1, pj2, pj3 = pda1, pda2, pda3
+                end
+
+                # Convert nodes to panel coordinate system
+                xi = x1*(pi1-O1) + x2*(pi2-O2) + x3*(pi3-O3)
+                yi = y1*(pi1-O1) + y2*(pi2-O2) + y3*(pi3-O3)
+                zi = z1*(pi1-O1) + z2*(pi2-O2) + z3*(pi3-O3)
+                xj = x1*(pj1-O1) + x2*(pj2-O2) + x3*(pj3-O3)
+                yj = y1*(pj1-O1) + y2*(pj2-O2) + y3*(pj3-O3)
+                zj = z1*(pj1-O1) + z2*(pj2-O2) + z3*(pj3-O3)
+
+                dij = sqrt((xj-xi)^2 + (yj-yi)^2 + (zj-zi)^2)
+                ri = sqrt((x-xi)^2 + (y-yi)^2 + (z-zi)^2)
+                rj = sqrt((x-xj)^2 + (y-yj)^2 + (z-zj)^2)
+
+                Sij = (yj-yi)/dij
+                Cij = (xj-xi)/dij
+
+                siji = (xi-x)*Cij + (yi-y)*Sij
+                sijj = (xj-x)*Cij + (yj-y)*Sij
+                Rij = (x-xi)*Sij - (y-yi)*Cij
+
+                Jij = atan( Rij*abs(z)*( ri*sijj - rj*siji ) , ri*rj*Rij^2 + z^2*sijj*siji )
+
+                V3 -= Jij
+
+                dtheta *= Rij>=0
+                nR0 += Rij==0
+                # nR0 += (abs(Rij) < offset)
+            end
+
+            V3 += dtheta
+            V3 *= sign(z)        # Isn't this sign already accounted for in atan2?
+            V3 *= !(nR0>1)       # Singularity fix of any z position aligned with node
+
+
+            # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
+            #       this factor
+            V3 *= 1/(4*pi)
+
+            # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
+            out[ti] += strength*V3
+
+        end
+
     end
 end
