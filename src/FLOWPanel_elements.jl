@@ -1054,7 +1054,8 @@ function phi_semiinfinite_doublet(nodes::Arr1,
                                     da1::Number, da2::Number, da3::Number,
                                     db1::Number, db2::Number, db3::Number,
                                     strength::Number,
-                                    targets::Arr2, out::Arr3
+                                    targets::Arr2, out::Arr3;
+                                    infinitelength::Real=1e12
                                   ) where{T1, Arr1<:AbstractArray{T1,2},
                                           T2, Arr2<:AbstractArray{T2,2},
                                           T3, Arr3<:AbstractArray{T3}}
@@ -1085,8 +1086,8 @@ function phi_semiinfinite_doublet(nodes::Arr1,
         @inbounds begin
             pb1, pb2, pb3 = nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]]
         end
-        pda1, pda2, pda3 = pb1+1e12*da1, pb2+1e12*da2, pb3+1e12*da3
-        pdb1, pdb2, pdb3 = pb1+1e12*db1, pb2+1e12*db2, pb3+1e12*db3
+        pda1, pda2, pda3 = pb1+infinitelength*da1, pb2+infinitelength*da2, pb3+infinitelength*da3
+        pdb1, pdb2, pdb3 = pb1+infinitelength*db1, pb2+infinitelength*db2, pb3+infinitelength*db3
 
         # Panel local coordinate system
         x1, x2, x3 = da1, da2, da3

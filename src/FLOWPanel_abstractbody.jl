@@ -34,18 +34,24 @@ and the following functions
 
 ```julia
 
-    # Solve for distributions of potential flow
-    function solve(self::AbstractBody, Vinfs::Array{Array{T,1},1}, args...
-    ) where {T<:Real}
+    # Impose boundary conditions to solve for element strengths.
+    function solve(self::AbstractBody, Uinfs::Array{<:Real, 2}, args...)
+        .
+        .
+        .
+    end
+
+    # Output the body as a vtk file
+    function save(self::AbstractBody, args...; optargs...)
         .
         .
         .
     end
 
     # Returns the velocity induced by the body on the targets `targets`. It adds
-    # the velocity at the i-th target to out[i].
-    function _Vind(self::AbstractBody, targets::Array{Array{T,1},1},
-    out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
+    # the velocity at the i-th target to out[:, i].
+    function _Vind(self::AbstractBody, targets::Array{<:Real, 2},
+                    out::Array{<:Real, 2}, args...; optargs...)
         .
         .
         .
@@ -53,8 +59,8 @@ and the following functions
 
     # Returns the potential induced by the body on the targets `targets`. It
     # adds the potential at the i-th target to out[i].
-    function _phi(self::AbstractBody, targets::Array{Array{T,1},1},
-    out::Array{Array{T,1},1}, args...; optargs...) where{T<:Real}
+    function _phi(self::AbstractBody, targets::Array{<:Real, 2},
+                    out::Array{<:Real, 1}, args...; optargs...)
         .
         .
         .
@@ -63,7 +69,15 @@ and the following functions
 """
 abstract type AbstractBody{E<:AbstractElement, N} end
 
+"""
+    `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
 
+Impose boundary conditions to solve for element strengths. `Uinds[:, i]` is the
+velocity at the i-th control point used in the boundary condition.
+"""
+function solve(self::AbstractBody, Uinfs::AbstractArray{<:Number, 2})
+    error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
+end
 
 ##### COMMON FUNCTIONS  ########################################################
 
@@ -107,14 +121,11 @@ end
 Outputs a vtk file of this body. See GeometricTools.save(grid, ...) for a
 description of optional arguments `optargs...`.
 """
-function save(body::AbstractBody, filename::String; out_cellindex::Bool=false,
+function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=false,
                                                  out_cellindexdim::Array{Int64,1}=Int64[],
                                                  out_nodeindex::Bool=false,
                                                  out_controlpoints::Bool=false,
-                                                 out_wake::Bool=true,
                                                  debug::Bool=false,
-                                                 _len::Number=1.0,
-                                                 _upper::Bool=true,
                                                  optargs...)
 
     str = ""
@@ -141,23 +152,6 @@ function save(body::AbstractBody, filename::String; out_cellindex::Bool=false,
     if out_controlpoints || debug
         str *= save_controlpoints(body, filename; debug=debug, optargs...)
     end
-
-  # # Outputs wake
-  # if out_wake || debug
-  #   # Case that body is not a LiftingBody
-  #   try
-  #      body::LBodyTypes
-  #      if body.nnodesTE-1 != 0
-  #          str *= _savewake(body, filename; len=_len, upper=_upper, optargs...)
-  #      end
-  #    catch e
-  #      if isa(e, TypeError)
-  #        nothing
-  #      else
-  #        rethrow(e)
-  #      end
-  #    end
-  # end
 
     # Saves body
     return str*gt.save(body.grid, filename; format="vtk", optargs...)
@@ -394,6 +388,10 @@ function rotate(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
 
   nothing
 end
+
+
+
+
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
 # function _get_controlpoint(grid::gt.GridTriangleSurface, args...)

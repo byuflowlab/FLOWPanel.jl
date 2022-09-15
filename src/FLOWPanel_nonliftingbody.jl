@@ -1,6 +1,8 @@
 #=##############################################################################
 # DESCRIPTION
-    Non-lifting paneled body types definition.
+    Definition of non-lifting paneled body types (implementations of
+    AbstractBody).
+
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
@@ -14,9 +16,9 @@
 ################################################################################
 
 """
-  `NonLiftingBody(grid::gt.GridTriangleSurface)`
+  `NonLiftingBody{E::AbstractElement, N}(grid::gt.GridTriangleSurface)`
 
-Non-lifting paneled body that is solved using a constant source distribution.
+Non-lifting body that is solved using a combination of N panel elements.
 `grid` is the grid surface (paneled geometry).
 
   **Properties**
@@ -40,11 +42,11 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
     O::Array{<:Number,1}                      # Position of CS of original grid
 
     # Internal variables
-    strength::Array{<:Number, 2}             # strength[i,j] is the stength of the i-th panel with the j-th element type
-    CPoffset::Float64                        # Control point offset in normal direction
-    kerneloffset::Float64                    # Kernel offset to avoid singularities
-    kernelcutoff::Float64                    # Kernel cutoff to avoid singularities
-    characteristiclength::Function           # Characteristic length of each panel
+    strength::Array{<:Number, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
+    CPoffset::Float64                         # Control point offset in normal direction
+    kerneloffset::Float64                     # Kernel offset to avoid singularities
+    kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
+    characteristiclength::Function            # Characteristic length of each panel
 
     NonLiftingBody{E, N}(
                     grid;
@@ -71,6 +73,10 @@ end
 
 function (NonLiftingBody{E})(args...; optargs...) where {E}
     return NonLiftingBody{E, _count(E)}(args...; optargs...)
+end
+
+function save(body::NonLiftingBody, args...; optargs...)
+    return save_base(body, args...; optargs...)
 end
 #### END OF NON-LIFTING BODY  ##################################################
 
@@ -421,14 +427,13 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
     CPs = _calc_controlpoints(self, normals)
 
     # --------- Compute strength of sources
-    #=
     # We use U_z(x_cp) ≈ −σ/2 to set up σ = 2 U∞⋅n
     # sigma = [2*dot(n, Uinf) for (n, Uinf) in zip(eachcol(normals), eachcol(Uinfs))]
     # sigma = [-2*dot(n, Uinf) for (n, Uinf) in zip(eachcol(normals), eachcol(Uinfs))]
 
-    # sigma = [-dot(n, Uinf) for (n, Uinf) in zip(eachcol(normals), eachcol(Uinfs))]
+    sigma = [-dot(n, Uinf) for (n, Uinf) in zip(eachcol(normals), eachcol(Uinfs))]
 
-
+    #=
     # Compute geometric matrix of source terms (left-hand-side influence matrix)
     Gsrc = zeros(N, N)
     _G_U!(self, Gsrc, CPs, normals)
@@ -440,6 +445,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
 
     # Solve the system of equations
     sigma = Gsrc\lambda
+    =#
 
 
     # --------- Compute strength of doublets
@@ -464,8 +470,8 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
         phi_constant_source(
                           self.grid.orggrid.nodes,           # All nodes
                           panel,                             # Indices of nodes that make this panel
-                          # -sgm,                              # Source strength (flipped to move the potential to the RHS)
-                          sgm,
+                          -sgm,                              # Source strength (flipped to move the potential to the RHS)
+                          # sgm,
                           CPs,                               # Targets
                           nphis;                             # Potential of j-th panel on every CP
                           offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -482,9 +488,9 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
     =#
 
     mu = nphis
-    =#
 
 
+    #=
     # --------- Compute coupled strengths
     G = zeros(2*N, 2*N)
 
@@ -570,6 +576,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
     sigmamu = G\lambda
     sigma = sigmamu[1:N]
     mu = sigmamu[N+1:end]
+    =#
 
     # --------- Store results
     # Save solution
@@ -775,3 +782,60 @@ function _phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                          )
     end
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+################################################################################
+# COMMON FUNCTIONS
+################################################################################
+"""
+  `generate_loft(bodytype::Type{B}, args...; bodyoptargs=(), optargs...)  where
+{B<:NonLiftingBody}`
+
+Generates a lofted non-lifting body. See documentation of
+`GeometricTools.generate_loft` for a description of the arguments of this
+function.
+"""
+function generate_loft(bodytype::Type{B}, args...; bodyoptargs=(),
+                        dimsplit::Int64=2, optargs...) where {B<:NonLiftingBody}
+    # Loft the surface geometry
+    grid = gt.generate_loft(args...; optargs...)
+
+    # Split the quadrialateral panels into triangles
+    # dimsplit = 2              # Dimension along which to split
+    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+    return bodytype(triang_grid; bodyoptargs...)
+end
+
+"""
+  `generate_revolution_(bodytype::Type{B}, args...; bodyoptargs=(), optargs...)
+where {B<:NonLiftingBody}`
+
+Generates a non-lifting body of a body of revolution. See documentation of
+`GeometricTools.surface_revolution` for a description of the arguments of this
+function.
+"""
+function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
+                             dimsplit::Int64=2, loop_dim::Int64=2,
+                             optargs...)  where {B<:NonLiftingBody}
+    # Revolve the geometry
+    grid = gt.surface_revolution(args...; loop_dim=loop_dim, optargs...)
+
+    # Split the quadrialateral panels into triangles
+    # dimsplit = 2              # Dimension along which to split
+    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+    return bodytype(triang_grid; bodyoptargs...)
+end
+##### END OF COMMON FUNTIONS ###################################################
