@@ -1,5 +1,5 @@
-using FLOWPanel
-using Base.Test
+verbose = true
 
-# write your own tests here
-@test 1 == 2
+include("runtests_elements.jl")
+include("runtests_semiinfiniteelements.jl")
+include("runtests_grid.jl")

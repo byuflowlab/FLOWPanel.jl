@@ -9,17 +9,17 @@
 """
 module FLOWPanel
 
-#= TODO
-    * [ ] Using the += operator (and not .+=) in the V functions allocates memory!
+#=
+    TODO
+    * [ ] Rewrite `Usemiinfinitevortex` to avoid memory allocation.
+
 =#
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import PyPlot
 const plt = PyPlot
-import ForwardDiff
-using Statistics
-using LinearAlgebra
+import LinearAlgebra: I
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -34,54 +34,35 @@ const def_data_path = joinpath(module_path, "..", "docs", "data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
 
-const RType = Union{Float64,                    # Concrete real types
-                    Int64,
-                    ForwardDiff.Dual{Nothing,Float64,3},
-                    ForwardDiff.Dual{Nothing,Int64,3}
-                    }
-
-# Structure of implemented fields
-const FIELDS = Dict(
-  # Declare fields as follow:
-  # "MyField" => Dict( "field_type"  => "scalar" or "vector",
-  #                     "entry_type" => "node", "cell", or "system")
-
-  # Flag indicating whether the paneled body has been solved
-  "solved"    => Dict(  "field_type"  => "scalar",
-                        "entry_type"  => "system"),
-
-  # Freestream velocity at every control point
-  "Vinf"      => Dict(  "field_type"  => "vector",
-                        "entry_type"  => "cell"),
-
-  # Constant source strength at every panel
-  "sigma"     => Dict(  "field_type"  => "scalar",
-                        "entry_type"  => "cell"),
-
-  # Constant doublet strength at every panel
-  "mu"        => Dict(  "field_type"  => "scalar",
-                        "entry_type"  => "cell"),
-
-  # Vortex ring strength at every panel
-  "Gamma"     => Dict(  "field_type"  => "scalar",
-                        "entry_type"  => "cell"),
-
-  # Freestream direction at every trailing edge point
-  "D"         => Dict(  "field_type"  => "vector",
-                        "entry_type"  => "system"),
-
-  # Strength of wake elements
-  "Gammawake" => Dict(  "field_type"  => "scalar",
-                        "entry_type"  => "system"),
-)
+# const RType = Union{Float64,                    # Concrete real types
+#                     Int64,
+#                     # ForwardDiff.Dual{Nothing,Float64,3},
+#                     # ForwardDiff.Dual{Nothing,Int64,3}
+#                     }
 
 # Discretization parameter type
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["solver", "abstractbody", "utils"]
+for header_name in ["elements",
+                    "abstractbody", "nonliftingbody",
+                    "abstractliftingbody", "liftingbody",
+                    "utils"
+                    ]
   include("FLOWPanel_"*header_name*".jl")
 end
 
+
+
+# ------------ USEFUL FUNCTIONS ------------------------------------------------
+dot(A, B) = sum(a*b for (a,b) in zip(A, B))
+norm(A) = sqrt(mapreduce(x->x^2, +, A))
+function cross!(out, A, B)
+    out[1] = A[2]*B[3] - A[3]*B[2]
+    out[2] = A[3]*B[1] - A[1]*B[3]
+    out[3] = A[1]*B[2] - A[2]*B[1]
+end
+cross(A,B) = (out = zeros(3); cross!(out, A, B); return out)
+mean(xs) = sum(xs)/length(xs)
 
 end # END OF MODULE

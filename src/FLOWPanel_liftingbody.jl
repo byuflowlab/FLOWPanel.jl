@@ -1,7 +1,8 @@
 #=##############################################################################
 # DESCRIPTION
-    Lifting paneled body types definition. Implementations of
-    AbstractLiftingBody.
+    Definition of non-lifting paneled body types (implementations of
+    AbstractLiftingBody).
+
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
@@ -10,328 +11,553 @@
 =###############################################################################
 
 
-
 ################################################################################
 # RIGID-WAKE BODY TYPE
 ################################################################################
 """
-  `RigidWakeBody(grid::gt.GridTriangleSurface)`
+  `RigidWakeBody{E::AbstractElement, N}(grid::gt.GridTriangleSurface,
+shedding::Matrix{Int})`
 
-Lifting paneled body that is solved using a vortex-ring panels, and a steady,
+Lifting body that is solver using a combination of N panel elements and a steady
 rigid wake. `grid` is the grid surface (paneled geometry).
+
+`shedding[:, i]` contains the information of the i-th edge along which to shed
+the wake, where `shedding[1, i]` is the linear index of the panel shedding the
+ wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that
+ make the edge. Since the wake is typically shed at the edge between two panels,
+`shedding[3, i]` is the index of the partner partner (use -1 if none) and
+`shedding[4:5, i]` are the node indices in that panel that make the edge.
+The user must ensure that both edges are coincident, and the strength of the
+wake is equal to the difference between the strengths of both panels.
 
   **Properties**
   * `nnodes::Int64`                     : Number of nodes
   * `ncells::Int64`                     : Number of cells
   * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
-  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
+  * `Oaxis::Array{T<:Real, 2}           : Coordinate system of original grid
+  * `O::Array{T<:Real,1}                : Position of CS of original grid
   * `ncellsTE::Int64`                   : Number of cells along trailing edge
   * `nnodesTE::Int64`                   : Number of nodes along trailing edge
 
 """
-struct RigidWakeBody <: AbstractLiftingBody
+struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
 
-  # User inputs
-  grid::gt.GridTriangleSurface              # Paneled geometry
-  U::Array{Int64,1}                         # Indices of all panels along the
-                                            # upper side of the trailing edge
-  L::Array{Int64,1}                         # Indices of all panels along the
-                                            # lower side of the trailing edge
+    # User inputs
+    grid::gt.GridTriangleSurface              # Paneled geometry
+    shedding::Array{Int, 2}                   # Indicates edges along which to
+                                              # shed the wake
+    # Properties
+    nnodes::Int64                             # Number of nodes
+    ncells::Int64                             # Number of cells
+    nsheddings::Int64                         # Number of shedding edges
+    fields::Array{String, 1}                  # Available fields (solutions)
+    Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
+    O::Array{<:Number,1}                      # Position of CS of original grid
 
-  # Properties
-  nnodes::Int64                             # Number of nodes
-  ncells::Int64                             # Number of cells
-  fields::Array{String, 1}                  # Available fields (solutions)
-  Oaxis::Array{T1,2} where {T1<:RType}      # Coordinate system of original grid
-  O::Array{T2,1} where {T2<:RType}          # Position of CS of original grid
-  ncellsTE::Int64                           # Number of cells along TE
-  nnodesTE::Int64                           # Number of nodes along TE
+    # Internal variables
+    strength::Array{<:Number, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
+    CPoffset::Float64                         # Control point offset in normal direction
+    kerneloffset::Float64                     # Kernel offset to avoid singularities
+    kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
+    characteristiclength::Function            # Characteristic length of each panel
 
-  # Internal variables
-  _G::Array{T3,2} where {T3<:RType}         # Body Geometry solution matrix
-                                            # (it doesn't include the wake)
-
-  RigidWakeBody(  grid,
-                    U, L,
-                  nnodes=grid.nnodes, ncells=grid.ncells,
+    RigidWakeBody{E, N}(
+                    grid, shedding;
+                    nnodes=grid.nnodes, ncells=grid.ncells,
+                    nsheddings=size(shedding,2),
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                    ncellsTE=size(U,1), nnodesTE=size(U,1)+1,
-                  _G=_calc_G_lifting_vortexring(grid, U, L)
-         ) = _checkTE(U,L) ? new( grid,
-                    sort(U), sort(L),
-                  nnodes, ncells,
+                    strength=zeros(grid.ncells, N),
+                    CPoffset=0.05,
+                    kerneloffset=1e-8,
+                    kernelcutoff=1e-14,
+                    characteristiclength=characteristiclength_sqrtarea
+                  ) where {E, N} = _checkTE(grid, shedding) ? new(
+                    grid, shedding,
+                    nnodes, ncells,
+                    nsheddings,
                     fields,
                     Oaxis, O,
-                    ncellsTE, nnodesTE,
-                  _G
-         ) : error("Got invalid trailing edge.")
+                    strength,
+                    CPoffset,
+                    kerneloffset,
+                    kernelcutoff,
+                    characteristiclength
+                  ) : error("Got invalid trailing edge.")
+
+end
+
+function (RigidWakeBody{E})(args...; optargs...) where {E}
+    return RigidWakeBody{E, _count(E)}(args...; optargs...)
+end
+
+
+
+function save(body::RigidWakeBody, args...;
+                out_wake::Bool=true, debug::Bool=false,
+                wake_len::Number=1.0,
+                wake_panel::Bool=true, optargs...)
+
+
+    str = ""
+    str *= save_base(body, args...; debug=debug, optargs...)
+
+    # Output the wake
+    if out_wake || debug
+        str *= _savewake(body, args...; len=wake_len, panel=wake_panel, optargs...)
+    end
+
+    return str
+end
+
+
+
+
+################################################################################
+# VORTEX RING SOLVER
+################################################################################
+function solve(self::RigidWakeBody{VortexRing, 1},
+                Uinfs::AbstractArray{<:Number, 2},
+                Das::AbstractArray{<:Number, 2},
+                Dbs::AbstractArray{<:Number, 2})
+
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, self.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, self.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    G = zeros(self.ncells, self.ncells)
+    _G_U!(self, G, CPs, normals, Das, Dbs)
+
+    # Solve system of equations
+    Gamma = _solve(self, normals, G, Uinfs)
+
+    # Save solution
+    self.strength[:, 1] .= Gamma
+
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
+    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
+    add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
+    _solvedflag(self, true)
+end
+
+function _solve(::RigidWakeBody{VortexRing, 1}, normals, G, Uinfs)
+
+    # Define right-hand side
+    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
+                                        zip(eachcol(Uinfs), eachcol(normals))]
+
+    # Solve the system of equations
+    Gamma = G\lambda
+
+    return Gamma
 end
 
 """
-    `solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1}, D::Array{Array{T2,1},1})`
+Computes the geometric matrix (left-hand side matrix of the system of equation)
+and stores it under `G`.
 
-Solve the lifting panel body canceling the normal component of Vinfs, where
-`Vinfs[i]` is the velocity at the i-th panel, and `D[j]` is the direction of
-the semi-infinite vortex at the j-th TE edge filament.
+**ARGUMENTS**
+  * `G::Array{T,2}`                     : Pre-allocated output memory.
+  * `CPs::Array{T,2}`                   : Control points.
+  * `normals::Array{T,2}`               : Normal associated to every CP.
 """
-function solve(self::RigidWakeBody, Vinfs::Array{Array{T1,1},1},
-                          D::Array{Array{T2,1},1}) where {T1<:RType, T2<:RType}
-  # ERROR CASES
-  if size(Vinfs,1) != self.ncells
-    error("Invalid Vinfs; expected size $(self.ncells), got $(size(Vinfs,1))")
-  elseif size(D,1) != self.nnodesTE && self.nnodesTE-1 != 0
-    error("Invalid D; expected size $(self.nnodesTE), got $(size(D,1))")
-  end
+function _G_U!(self::RigidWakeBody{VortexRing, 1},
+                    G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;
+                    optargs...
+               ) where{ T1, Arr1<:AbstractArray{T1, 2},
+                        T2, Arr2<:AbstractArray{T2, 2},
+                        T3, Arr3<:AbstractArray{T3, 2}}
 
-  CPs = [get_controlpoint(self, i) for i in 1:self.ncells] # Control points
-  normals = [get_normal(self, i) for i in 1:self.ncells]
+    N = self.ncells
 
-  # Geometric matrix --- Body contribution
-  G = deepcopy(self._G)
+    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
+        error("Matrix G with invalid dimension;"*
+              " got $(size(G)), expected ($N, $N).")
+    end
 
-  # Geometric matrix --- Rigid wake contribution
-  for (j, u_j) in enumerate(self.U) # Iterates over upper side of TE
+    # Pre-allocate memory for panel calculation
+    lin = LinearIndices(self.grid._ndivsnodes)
+    ndivscells = vcat(self.grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
 
-    # Upper in-going vortex
-    PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j+1; upper=true),    # Starting point
-                          D[j+1],                           # Direction
-                          -1.0,                             # Unitary strength
-                          CPs,                              # Targets
-                                        # Velocity of j-th horseshoe on every CP
-                          view(G, :, u_j);
-                          dot_with=normals                  # Normal of every CP
-                        )
+    # Build geometric matrix: Panels
+    for (pj, Gslice) in enumerate(eachcol(G))
 
-    # Upper out-going vortex
-    PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j; upper=true),      # Starting point
-                          D[j],                             # Direction
-                          1.0,                              # Unitary strength
-                          CPs,                              # Targets
-                                        # Velocity of j-th horseshoe on every CP
-                          view(G, :, u_j);
-                          dot_with=normals                  # Normal of every CP
-                        )
-  end
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pj, lin, ndivscells, cin)
 
-  for (j, l_j) in enumerate(self.L) # Iterates over lower side of TE
+        U_vortexring(
+                          self.grid.orggrid.nodes,           # All nodes
+                          panel,                             # Indices of nodes that make this panel
+                          1.0,                               # Unitary strength
+                          CPs,                               # Targets
+                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
+                          Gslice;
+                          dot_with=normals,                  # Normal of every CP
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                          optargs...
+                         )
+    end
 
-    # Incoming vortex
-    PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j; upper=false), # Starting point
-                          D[j],                         # Direction
-                          -1.0,                         # Unitary strength
-                          CPs,                          # Targets
-                                      # Velocity of j-th horseshoe on every CP
-                          view(G, :, l_j);
-                          dot_with=normals              # Normal of every CP
-                        )
+    # Add wake contributions
+    TE = zeros(Int, 2)
+    for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
 
-    # Outgoing vortex
-    PanelSolver.Vsemiinfinitevortex(
-                          get_TE(self, j+1; upper=false), # Starting point
-                          D[j+1],                         # Direction
-                          1.0,                          # Unitary strength
-                          CPs,                          # Targets
-                                        # Velocity of j-th horseshoe on every CP
-                          view(G, :, l_j);
-                          dot_with=normals              # Normal of every CP
-                        )
-  end
+        # Fetch nodes of upper wake panel
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pi, lin, ndivscells, cin)
 
-  # Source strength, σ_i = u_inf⋅n_i
-  sigma = [dot(Vinfs[i], normals[i])/(8*pi) for i in 1:self.ncells]
+        # Indicate nodes in the upper shedding edge
+        TE[1] = panel[nia]
+        TE[2] = panel[nib]
+        da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
+        db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
 
-  # Right-hand side --- Freestream component, λ = -u_inf⋅n
-  lambda = [-dot(Vinfs[i], normals[i]) for i in 1:self.ncells]
+        U_semiinfinite_horseshoe(
+                          self.grid.orggrid.nodes,           # All nodes
+                          TE,                                # Indices of nodes that make the shedding edge
+                          da1, da2, da3,                     # Semi-infinite direction da
+                          db1, db2, db3,                     # Semi-infinite direction db
+                          1.0,                               # Unitary strength
+                          CPs,                               # Targets
+                          view(G, :, pi);                    # Velocity of upper wake panel on every CP
+                          dot_with=normals,                  # Normal of every CP
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                          optargs...
+                         )
 
-  # Right-hand side --- Source component, λ = -u_inf⋅n - u_σ⋅n
-  for i in 1:self.ncells
-    # Velocity of i-th  panel on every control point
-    PanelSolver.Vconstant_source(
-                    gt.get_cellnodes(self.grid, i),    # Nodes in i-th panel
-                    -sigma[i],                         # Strength
-                    CPs,                               # Targets
-                    lambda;                            # Outputs
-                    dot_with=normals                   # Normal of every CP
-                  )
-  end
+         if pj != -1
+             # Fetch nodes of lower wake panel
+             panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                 self.grid, pj, lin, ndivscells, cin)
 
-  # Solve the linear system of equations
-  Gamma = G\lambda
+             # Indicate nodes in the lower shedding edge
+             TE[1] = panel[nja]
+             TE[2] = panel[njb]
 
-  # println(lambda)
-  # println(G)
-  # println(Gamma)
-
-  # Gammas of upper and lower TE cells
-  Gup = [Gamma[i] for i in self.U]
-  Glo = [Gamma[i] for i in self.L]
-
-  # Gamma at every TE bound vortex
-  GTE = Glo - Gup
-
-  # Gammas of the semi-infinite vortices
-  # NOTE: Here I assume that all TE cells are contiguous
-  Gammawake = self.nnodesTE-1 != 0 ?
-                vcat(GTE[1], [GTE[i]-GTE[i-1] for i in 2:self.nnodesTE-1], -GTE[end]) :
-                []
-
-  add_field(self, "D", D)
-  add_field(self, "Vinf", Vinfs)
-  add_field(self, "sigma", sigma)
-  add_field(self, "Gamma", Gamma)
-  add_field(self, "Gammawake", Gammawake)
-  _solvedflag(self, true)
+             U_semiinfinite_horseshoe(
+                               self.grid.orggrid.nodes,           # All nodes
+                               TE,                                # Indices of nodes that make the shedding edge
+                               db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
+                               da1, da2, da3,                     # Semi-infinite direction db
+                               1.0,                               # Unitary strength
+                               CPs,                               # Targets
+                               view(G, :, pj);                    # Velocity of lower wake panel on every CP
+                               dot_with=normals,                  # Normal of every CP
+                               offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                               optargs...
+                              )
+         end
+    end
 end
 
+function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
+
+
+    # Pre-allocate memory for panel calculation
+    lin = LinearIndices(self.grid._ndivsnodes)
+    ndivscells = vcat(self.grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
+
+    Das, Dbs = get_field(self, "Da")["field_data"], get_field(self, "Db")["field_data"]
+
+    # Iterates over body panels
+    for i in 1:self.ncells
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                             self.grid, i, lin, ndivscells, cin)
+
+        # Velocity of i-th panel on every target
+        U_vortexring(
+                            self.grid.orggrid.nodes,           # All nodes
+                            panel,                             # Indices of nodes that make this panel
+                            self.strength[i, 1],               # Unitary strength
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                            optargs...
+                         )
+    end
+
+    # Add wake contribution
+    TE = zeros(Int, 2)
+    for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
+
+        strengthi, strengthj = _get_wakestrength_mu(self, ei)
+
+        # Fetch nodes of upper wake panel
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pi, lin, ndivscells, cin)
+
+        # Indicate nodes in the upper shedding edge
+        TE[1] = panel[nia]
+        TE[2] = panel[nib]
+        da1, da2, da3 = Das[ei]
+        db1, db2, db3 = Dbs[ei]
+
+        U_semiinfinite_horseshoe(
+                          self.grid.orggrid.nodes,           # All nodes
+                          TE,                                # Indices of nodes that make the shedding edge
+                          da1, da2, da3,                     # Semi-infinite direction da
+                          db1, db2, db3,                     # Semi-infinite direction db
+                          strengthi,                         # Strength
+                          targets,                           # Targets
+                          out;                               # Outputs
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                          optargs...
+                         )
+
+         if pj != -1
+             # Fetch nodes of lower wake panel
+             panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                 self.grid, pj, lin, ndivscells, cin)
+
+             # Indicate nodes in the lower shedding edge
+             TE[1] = panel[nja]
+             TE[2] = panel[njb]
+
+             U_semiinfinite_horseshoe(
+                               self.grid.orggrid.nodes,           # All nodes
+                               TE,                                # Indices of nodes that make the shedding edge
+                               db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
+                               da1, da2, da3,                     # Semi-infinite direction db
+                               strengthj,                         # Unitary strength
+                               targets,                           # Targets
+                               out;                               # Outputs
+                               offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                               optargs...
+                              )
+         end
+    end
+end
+
+
+function _phi!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
+
+    # Pre-allocate memory for panel calculation
+    lin = LinearIndices(self.grid._ndivsnodes)
+    ndivscells = vcat(self.grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
+
+    Das, Dbs = get_field(self, "Da")["field_data"], get_field(self, "Db")["field_data"]
+
+    # Iterates over body panels
+    for i in 1:self.ncells
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                             self.grid, i, lin, ndivscells, cin)
+
+        # Potential of i-th panel on every target
+        phi_constant_doublet(
+                            self.grid.orggrid.nodes,           # All nodes
+                            panel,                             # Indices of nodes that make this panel
+                            self.strength[i, 1],               # Unitary strength
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            optargs...
+                         )
+    end
+
+    # Add wake contribution
+    TE = zeros(Int, 2)
+    for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
+
+        strengthi, strengthj = _get_wakestrength_mu(self, ei)
+
+        # Fetch nodes of upper wake panel
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pi, lin, ndivscells, cin)
+
+        # Indicate nodes in the upper shedding edge
+        TE[1] = panel[nia]
+        TE[2] = panel[nib]
+        da1, da2, da3 = Das[ei]
+        db1, db2, db3 = Dbs[ei]
+
+        phi_semiinfinite_doublet(
+                          self.grid.orggrid.nodes,           # All nodes
+                          TE,                                # Indices of nodes that make the shedding edge
+                          da1, da2, da3,                     # Semi-infinite direction da
+                          db1, db2, db3,                     # Semi-infinite direction db
+                          strengthi,                         # Strength
+                          targets,                           # Targets
+                          out;                               # Outputs
+                          optargs...
+                         )
+
+         if pj != -1
+             # Fetch nodes of lower wake panel
+             panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                 self.grid, pj, lin, ndivscells, cin)
+
+             # Indicate nodes in the lower shedding edge
+             TE[1] = panel[nja]
+             TE[2] = panel[njb]
+
+             phi_semiinfinite_doublet(
+                               self.grid.orggrid.nodes,           # All nodes
+                               TE,                                # Indices of nodes that make the shedding edge
+                               db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
+                               da1, da2, da3,                     # Semi-infinite direction db
+                               strengthj,                         # Unitary strength
+                               targets,                           # Targets
+                               out;                               # Outputs
+                               optargs...
+                              )
+         end
+    end
+end
 
 
 ##### INTERNAL FUNCTIONS  ######################################################
-"""
-Returns the velocity induced by the body on the targets `targets`. It adds the
-velocity at the i-th target to out[i].
-"""
-function _Vind(self::RigidWakeBody, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1}) where{T1<:RType, T2<:RType}
-
-
-    # Sorts trailing edge indices
-    _U = sort(self.U)
-    _L = sort(self.L)
-
-    cur_u = 1                 # Index of current upper trailing edge cell
-    cur_l = 1                 # Index of current lower trailing edge cell
-
-    allnodes = self.grid.orggrid.nodes
-
-    # Iterate over each panel calculating body-induced velocity
-    for j in 1:self.ncells
-
-        panel = gt.get_cell(self.grid, j)
-        nodes = [view(allnodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]
-        Gamma = get_fieldval(self, "Gamma", j; _check=false)
-
-        PanelSolver.Vvortexring(nodes, Gamma, targets, out;
-                                # Checks for TE
-                                closed_ring= !( (cur_u<=size(_U,1) && j==_U[cur_u]) ||
-                                                (cur_l<=size(_L,1) && j==_L[cur_l]))
-                                )
-
-          if cur_u<=size(_U,1) && j==_U[cur_u]; cur_u+=1; end;
-          if cur_l<=size(_L,1) && j==_L[cur_l]; cur_l+=1; end;
-    end
-
-
-    # Iterates over upper side of TE calculating semi-infinite wake induced velocity
-    for (j, u_j) in enumerate(self.U)
-
-      Gamma = get_fieldval(self, "Gamma", u_j; _check=false)
-      D = get_fieldval(self, "D", j+1; _check=false)
-
-      # Upper in-going vortex
-      PanelSolver.Vsemiinfinitevortex(
-                            get_TE(self, j+1; upper=true),    # Starting point
-                            D,                                # Direction
-                            -Gamma,                           # strength
-                            targets,                          # Targets
-                            out
-                          )
-
-      D = get_fieldval(self, "D", j; _check=false)
-
-      # Upper out-going vortex
-      PanelSolver.Vsemiinfinitevortex(
-                            get_TE(self, j; upper=true),      # Starting point
-                            D,                                # Direction
-                            Gamma,                            # strength
-                            targets,                          # Targets
-                            out
-                          )
-    end
-
-    # Iterates over lower side of TE calculating semi-infinite wake induced velocity
-    for (j, l_j) in enumerate(self.L) # Iterates over lower side of TE
-
-      Gamma = get_fieldval(self, "Gamma", l_j; _check=false)
-      D = get_fieldval(self, "D", j; _check=false)
-
-      # Incoming vortex
-      PanelSolver.Vsemiinfinitevortex(
-                            get_TE(self, j; upper=false),     # Starting point
-                            D,                                # Direction
-                            -Gamma,                           # strength
-                            targets,                          # Targets
-                            out
-                          )
-
-      D = get_fieldval(self, "D", j+1; _check=false)
-
-      # Outgoing vortex
-      PanelSolver.Vsemiinfinitevortex(
-                            get_TE(self, j+1; upper=false),   # Starting point
-                            D,                                # Direction
-                            Gamma,                            # strength
-                            targets,                          # Targets
-                            out
-                          )
-    end
+function _get_wakestrength_mu(self::RigidWakeBody, i)
+    strength1 = self.strength[self.shedding[1, i], 1]
+    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], 1] : 0
+    return strength1, strength2
 end
-
-"""
-Returns the velocity induced by the body's `i`-th panel on the targets
-`targets` assuming unitary strength. It adds the velocity at the j-th target to
-out[j].
-"""
-function _GVind(self::RigidWakeBody, i::Int, targets::Array{Array{T1,1},1},
-                          out::Array{Array{T2,1},1}) where {T1, T2}
-
-    panel = gt.get_cell(self.grid, i)
-    nodes = [view(self.grid.orggrid.nodes, :, ind) for ind in vcat(panel[end], panel[1:end-1])]
-    Gamma = 1.0
-
-    # Check whether this is a trailing edge panel
-    TE = Bool(length(searchsorted(self.U, i))) || Bool(length(searchsorted(self.L, i)))
-
-    PanelSolver.Vvortexring(nodes, Gamma, targets, out; closed_ring = !TE)
-    # TODO: Add velocity of semi-infinite wake
+function _get_wakestrength_Gamma(self::RigidWakeBody, i)
+    strength1 = self.strength[self.shedding[1, i], 1]
+    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], 1] : 0
+    return strength1 - strength2
 end
 
 """
 Outputs a vtk file with the wake.
 """
 function _savewake(self::RigidWakeBody, filename::String;
-                    len::RType=1.0, upper::Bool=true, suffix="_wake",optargs...)
+                    len::Number=1.0, panel::Bool=true, suffix="_wake",optargs...)
 
-  if check_field(self, "D")==false
-    error("Requested to save wake, but D field wasn't found.")
-  end
+    if check_field(self, "Da")==false
+        error("Requested to save wake, but Da field was not found."*
+              " Run solve(...) first")
+    elseif check_field(self, "Db")==false
+        error("Requested to save wake, but Db field was not found."*
+              " Run solve(...) first")
+    end
 
-  # Points along trailing edge
-  TE = [get_TE(self, i; upper=upper) for i in 1:self.nnodesTE]
 
-  # End point of wake
-  wake = TE + len*get_field(self, "D")["field_data"]
+    nodes = self.grid.orggrid.nodes
+    nedges = size(self.shedding, 2)
+    points = zeros(3, 4*nedges)
 
-  # Points and lines
-  points = vcat(TE, wake)
-  lines = [[i, i+self.nnodesTE] for i in 0:self.nnodesTE-1]
+    # Collect points along shedding edge
+    tricoor, quadcoor, lin, ndivscells, cin = gt.generate_getcellt_args(self.grid)
 
-  # Point data
-  point_data = []
-  if check_solved(self)
-    push!(point_data, Dict( "field_name"=> "Gamma",
-                            "field_type"=> "scalar",
-                            "field_data"=> vcat(
-                                  get_field(self, "Gammawake")["field_data"],
-                                  get_field(self, "Gammawake")["field_data"])))
-  end
+    for (si, (pi, nia, nib, pj)) in enumerate(eachcol(self.shedding))
 
-  # Generate VTK
-  return gt.generateVTK(filename*suffix, points; lines=lines,
-                                              point_data=point_data, optargs...)
+        # Convert node indices from panel-local to global
+        pia = gt.get_cell_t(tricoor, quadcoor, self.grid, pi, nia, lin, ndivscells, cin)
+        pib = gt.get_cell_t(tricoor, quadcoor, self.grid, pi, nib, lin, ndivscells, cin)
+
+        Da = get_fieldval(self, "Da", si)
+        Db = get_fieldval(self, "Db", si)
+
+        for i in 1:3
+            # Shedding edge
+            points[i, si + 0*nedges] = nodes[i, pia]
+            points[i, si + 1*nedges] = nodes[i, pib]
+
+            # End points of semi-infinite wake
+            points[i, si + 2*nedges] = points[i, si + 0*nedges] + len*Da[i]
+            points[i, si + 3*nedges] = points[i, si + 1*nedges] + len*Db[i]
+        end
+
+    end
+
+    if panel    # Case that wake is saved as doublet panels
+
+        arrpoints = collect(eachcol(points))
+        str = ""
+
+        for si in 1:2   # si==1, upper side; si==2, lower side
+            cells = Array{Int64,1}[]
+            cell_data = []
+
+            # Wake panels
+            for i in 0:nedges-1
+                cell = [i+2*nedges, i+0*nedges, i+1*nedges, i+3*nedges]
+                push!(cells, si==1 ? cell : reverse(cell))
+            end
+
+            # Strength of wake along shedding edge
+            strengths = [_get_wakestrength_mu(self, i)[si] for i in 1:nedges]
+
+            push!(cell_data, Dict( "field_name"=> "mu",
+                                    "field_type"=> "scalar",
+                                    "field_data"=> strengths))
+
+            for cell in cells; cell .+= 1; end
+            normals = [[gt._calc_n1(points, cell), gt._calc_n2(points, cell), gt._calc_n3(points, cell)] for cell in cells]
+            for cell in cells; cell .-= 1; end
+
+            push!(cell_data, Dict( "field_name"=> "normal",
+                                    "field_type"=> "vector",
+                                    "field_data"=> normals))
+
+            # Generate VTK
+            str *= gt.generateVTK(filename*suffix*(si==1 ? "_up" : "_lo"),
+                                    arrpoints; cells=cells,
+                                    cell_data=cell_data, optargs...)
+        end
+
+        return str
+
+    else        # Case that wake is saved as horseshoes
+
+        cells = Array{Int64,1}[]
+        cell_data = []
+
+        # Lines that make the wake
+        for i in 0:nedges-1
+            line = [i+2*nedges, i+0*nedges, i+1*nedges, i+3*nedges]
+            push!(cells, line)
+        end
+
+        # Strength of wake along shedding edge
+        strengths = [_get_wakestrength_Gamma(self, i) for i in 1:nedges]
+
+        push!(cell_data, Dict( "field_name"=> "Gamma",
+                                "field_type"=> "scalar",
+                                "field_data"=> strengths))
+
+        points = collect(eachcol(points))
+
+        # Generate VTK
+        return gt.generateVTK(filename*suffix, points; cells=cells,
+                                cell_data=cell_data,
+                                override_cell_type=4, optargs...)
+
+    end
 end
-##### END OF RIGID-WAKE BODY ###################################################
+#### END OF LIFTING BODY  ######################################################
