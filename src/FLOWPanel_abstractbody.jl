@@ -596,6 +596,30 @@ end
 _calc_obliques(self::AbstractBody) = _calc_obliques(self.grid)
 
 
+function _calc_areas!(grid::gt.GridTriangleSurface, areas)
+
+    lin = LinearIndices(grid._ndivsnodes)
+    ndivscells = vcat(grid._ndivscells...)
+    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
+    tri_out = zeros(Int, 3)
+    tricoor = zeros(Int, 3)
+    quadcoor = zeros(Int, 3)
+    quad_out = zeros(Int, 4)
+
+    for pi in 1:grid.ncells
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                grid, pi, lin, ndivscells, cin)
+        areas[pi] = gt._get_area(grid.orggrid.nodes, panel)
+    end
+end
+function _calc_areas(grid::gt.GridTriangleSurface)
+    areas = zeros(grid.ncells)
+    _calc_areas!(grid, areas)
+    return areas
+end
+_calc_areas(self::AbstractBody) = _calc_areas(self.grid)
+
+
 function _solvedflag(self::AbstractBody, val::Bool)
   add_field(self, "solved", "scalar", [val], "system")
 end
