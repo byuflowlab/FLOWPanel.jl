@@ -182,10 +182,14 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
                         T3, Arr3<:AbstractArray{T3, 2}}
 
     N = self.ncells
+    M = size(CPs, 2)
 
-    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
-        error("Matrix G with invalid dimension;"*
-              " got $(size(G)), expected ($N, $N).")
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
+    elseif size(normals, 2)!=M
+        error("normals matrix with invalid dimensions;"*
+              " got $(size(normals)), expected (3, $M).")
     end
 
     # Pre-allocate memory for panel calculation
@@ -560,4 +564,6 @@ function _savewake(self::RigidWakeBody, filename::String;
 
     end
 end
+
+_get_Gdims(self::RigidWakeBody{VortexRing, 1}) = (self.ncells, self.ncells)
 #### END OF LIFTING BODY  ######################################################

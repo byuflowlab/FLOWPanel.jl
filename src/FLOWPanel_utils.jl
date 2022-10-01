@@ -50,6 +50,7 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                       rflspl_s::Real=0.00000001,
                       verify_spline::Bool=true,
                       verify_rflspline::Bool=true,
+                      b_low=-1.0, b_up=1.0,
                       opt_args...
                       )
 
@@ -98,8 +99,8 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
 
 
     # ----------------- LOFTING PARAMETERS -------------------------------------
-    b_low = -1.0                        # Lower bound of span lofting
-    b_up = 1.0                          # Upper bound of span lofting
+    # b_low = -1.0                        # Lower bound of span lofting
+    # b_up = 1.0                          # Upper bound of span lofting
     symmetric = true                    # Lofting symmetric about b=0
     spl_k = 1                           # Spline order of distributions along span
     # spl_s = 0.0000001                 # Spline smoothing of distribution along span

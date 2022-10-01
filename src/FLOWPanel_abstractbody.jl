@@ -154,7 +154,10 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
     end
 
     # Saves body
-    return str*gt.save(body.grid, filename; format="vtk", optargs...)
+    str *= gt.save(body.grid, filename; format="vtk", optargs...)
+
+    # Return path to files
+    return str
 
 end
 
@@ -283,11 +286,11 @@ get_normal(body::AbstractBody, args...) = gt.get_normal(body.grid, args...)
 Returns the requested field.
 """
 function get_field(self::AbstractBody, field_name::String)
-  if !(field_name in self.fields)
-    error("Field $field_name not found! Available fields: $(self.fields)")
-  end
+    if !(field_name in self.fields)
+        error("Field $field_name not found! Available fields: $(self.fields)")
+    end
 
-  return self.grid.field[field_name]
+    return self.grid.field[field_name]
 end
 
 """
@@ -298,13 +301,13 @@ for faster operation.
 """
 function get_fieldval(self::AbstractBody, field_name::String, i::Int64;
                       _check::Bool=true)
-  if _check
-    if i<1
-      error("Invalid index $i.")
+    if _check
+        if i<1
+            error("Invalid index $i.")
+        end
     end
-  end
 
-  return gt.get_fieldval(self.grid, field_name, i)
+    return gt.get_fieldval(self.grid, field_name, i)
 end
 
 """
@@ -314,7 +317,7 @@ Returns the value of node of coordinates `coor` (1-indexed) in the field
 'field_name'.
 """
 function get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int64,1})
-  return gt.get_fieldval(self.grid, field_name, coor)
+    return gt.get_fieldval(self.grid, field_name, coor)
 end
 
 
@@ -329,16 +332,16 @@ Adds a new field to the body. It overwrites the field if it already existed.
 function add_field(self::AbstractBody, field_name::String, field_type::String,
                     field_data, entry_type::String; raise_warn=false)
 
-  # Adds field to grid
-  gt.add_field(self.grid, field_name, field_type,
-                field_data, entry_type; raise_warn=raise_warn)
+    # Add field to grid
+    gt.add_field(self.grid, field_name, field_type,
+                    field_data, entry_type; raise_warn=raise_warn)
 
-  # Registers the field
-  if !(field_name in self.fields)
-    push!(self.fields, field_name)
-  end
+    # Register the field
+    if !(field_name in self.fields)
+        push!(self.fields, field_name)
+    end
 
-  nothing
+    nothing
 end
 
 """
@@ -355,11 +358,11 @@ check_field(self::AbstractBody, field_name::String) = field_name in self.fields
 Returns `true` of the body has been solved. Returns false otherwise.
 """
 function check_solved(self::AbstractBody)
-  if check_field(self, "solved")
-    return get_fieldval(self, "solved", 1)
-  else
-    return false
-  end
+    if check_field(self, "solved")
+        return get_fieldval(self, "solved", 1)
+    else
+        return false
+    end
 end
 
 
@@ -380,13 +383,13 @@ function rotate(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
                   reset_fields::Bool=true
                 )
 
-  M = gt.rotation_matrix2(roll, pitch, yaw)
-  gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
+    M = gt.rotation_matrix2(roll, pitch, yaw)
+    gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
 
-  body.Oaxis[:,:] = M*body.Oaxis
-  body.O[:] += translation
+    body.Oaxis[:,:] = M*body.Oaxis
+    body.O[:] += translation
 
-  nothing
+    nothing
 end
 
 
@@ -512,8 +515,15 @@ function _calc_controlpoints(grid::gt.GridTriangleSurface, args...; optargs...)
     _calc_controlpoints!(grid, controlpoints, args...; optargs...)
     return controlpoints
 end
+function _calc_controlpoints!(self::AbstractBody, args...; optargs...)
+    return _calc_controlpoints!(self.grid, args...;
+                                off=self.CPoffset,
+                                characteristiclength=self.characteristiclength,
+                                optargs...)
+end
 function _calc_controlpoints(self::AbstractBody, args...; optargs...)
-    return _calc_controlpoints(self.grid, args...; off=self.CPoffset,
+    return _calc_controlpoints(self.grid, args...;
+                                off=self.CPoffset,
                                 characteristiclength=self.characteristiclength,
                                 optargs...)
 end
@@ -541,6 +551,7 @@ function _calc_normals(grid::gt.GridTriangleSurface)
     _calc_normals!(grid, normals)
     return normals
 end
+_calc_normals!(self::AbstractBody, normals) = _calc_normals!(self.grid, normals)
 _calc_normals(self::AbstractBody) = _calc_normals(self.grid)
 
 
@@ -567,6 +578,7 @@ function _calc_tangents(grid::gt.GridTriangleSurface)
     _calc_tangents!(grid, tangents)
     return tangents
 end
+_calc_tangents!(self::AbstractBody, tangents) = _calc_tangents!(self.grid, tangents)
 _calc_tangents(self::AbstractBody) = _calc_tangents(self.grid)
 
 
@@ -593,6 +605,7 @@ function _calc_obliques(grid::gt.GridTriangleSurface)
     _calc_obliques!(grid, obliques)
     return obliques
 end
+_calc_obliques!(self::AbstractBody, obliques) = _calc_obliques!(self.grid, obliques)
 _calc_obliques(self::AbstractBody) = _calc_obliques(self.grid)
 
 
@@ -617,11 +630,12 @@ function _calc_areas(grid::gt.GridTriangleSurface)
     _calc_areas!(grid, areas)
     return areas
 end
+_calc_areas!(self::AbstractBody, areas) = _calc_areas!(self.grid, areas)
 _calc_areas(self::AbstractBody) = _calc_areas(self.grid)
 
 
 function _solvedflag(self::AbstractBody, val::Bool)
-  add_field(self, "solved", "scalar", [val], "system")
+    add_field(self, "solved", "scalar", [val], "system")
 end
 
 "Count the number of types in an Union type"

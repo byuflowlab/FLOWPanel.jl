@@ -47,6 +47,7 @@ const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 for header_name in ["elements",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
+                    "multibody",
                     "utils"
                     ]
   include("FLOWPanel_"*header_name*".jl")

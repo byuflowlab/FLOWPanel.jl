@@ -9,8 +9,6 @@
   * License   : MIT License
 =###############################################################################
 
-const SMOOTH3 = 1e-14               # Smoothing radius for semi-infinite vortex
-
 abstract type AbstractElement end
 struct ConstantSource <: AbstractElement end
 struct ConstantDoublet <: AbstractElement end
