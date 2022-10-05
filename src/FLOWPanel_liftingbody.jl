@@ -34,8 +34,8 @@ wake is equal to the difference between the strengths of both panels.
   * `nnodes::Int64`                     : Number of nodes
   * `ncells::Int64`                     : Number of cells
   * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T<:Real, 2}           : Coordinate system of original grid
-  * `O::Array{T<:Real,1}                : Position of CS of original grid
+  * `Oaxis::Array{T<:Real, 2} `         : Coordinate system of original grid
+  * `O::Array{T<:Real,1} `              : Position of CS of original grid
   * `ncellsTE::Int64`                   : Number of cells along trailing edge
   * `nnodesTE::Int64`                   : Number of nodes along trailing edge
 

@@ -14,35 +14,46 @@
 ################################################################################
 """
 Abstract type `AbstractBody{N, E<:AbstractElement}` where `N` is the number of
-element types of this body and `E` is an Union of containing the `N` element
+element types in this body and `E` is an Union containing the `N` element
 types.
 
-Implementations of AbstractBody are expected to have the following fields.
-* `grid::gt.GridTriangleSurface `     : Paneled geometry
-* `nnodes::Int64`                     : Number of nodes
-* `ncells::Int64`                     : Number of cells
+Implementations of AbstractBody are expected to have the following fields
+* `grid::GeometricTools.GridTriangleSurface `     : Paneled geometry
+* `nnodes::Int`                       : Number of nodes
+* `ncells::Int`                       : Number of cells
 * `fields::Array{String, 1}`          : Available fields (solutions)
-* `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
-* `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
-* `strength::Array{<:Real,2}`         : Strength of each element of each type
+* `Oaxis::Matrix`                     : Coordinate system of original grid (3x3 matrix)
+* `O::Vector`                         : Position of CS of original grid (3-dim vector)
+* `strength::Matrix`                  : Strength of each element of each type (ncells x N matrix)
 * `CPoffset::Real`                    : Control point offset in normal direction
 * `characteristiclength::Function`    : Function for computing the characteristic
                                         length of each panel used to offset each
                                         control point
+* `kerneloffset::Real`                : Kernel offset to avoid singularities
+* `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
 
 and the following functions
 
 ```julia
 
-    # Impose boundary conditions to solve for element strengths.
+    # Imposes boundary conditions to solve for element strengths.
     function solve(self::AbstractBody, Uinfs::Array{<:Real, 2}, args...)
         .
         .
         .
     end
 
-    # Output the body as a vtk file
+    # Outputs the body as a vtk file
     function save(self::AbstractBody, args...; optargs...)
+        .
+        .
+        .
+    end
+
+    # Returns the dimensions of the system of equations solved by `solve(...)`
+    # as a tuple `(m, n)`, where `m` is the number of equations and `n` is the
+    # number of unknowns (usually `m==n`).
+    function _get_Gdims(self::AbstractBody)
         .
         .
         .
@@ -50,7 +61,7 @@ and the following functions
 
     # Returns the velocity induced by the body on the targets `targets`. It adds
     # the velocity at the i-th target to out[:, i].
-    function _Vind(self::AbstractBody, targets::Array{<:Real, 2},
+    function _Uind(self::AbstractBody, targets::Array{<:Real, 2},
                     out::Array{<:Real, 2}, args...; optargs...)
         .
         .
@@ -82,7 +93,7 @@ end
 ##### COMMON FUNCTIONS  ########################################################
 
 """
-  `Uind!(self::AbstractBody, targets, out, args...; optargs...)
+    Uind!(self::AbstractBody, targets, out, args...; optargs...)
 
 Returns the velocity induced by the body on the targets `targets`, which is a
 3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
@@ -99,7 +110,7 @@ function Uind!(self::AbstractBody, targets, out, args...; optargs...)
 end
 
 """
-  `phi!(self::AbstractBody, targets, out, args...; optargs...)
+    phi!(self::AbstractBody, targets, out, args...; optargs...)
 
 Returns the potential induced by the body on the targets `targets`. It adds the
 potential at the i-th target to `out[:, i]`.
@@ -116,10 +127,11 @@ function phi!(self::AbstractBody, targets, out, args...; optargs...)
 end
 
 """
-  `save(body::AbstractBody, filename::String; optargs...)`
+    save_base(body::AbstractBody, filename::String; optargs...)
 
-Outputs a vtk file of this body. See GeometricTools.save(grid, ...) for a
-description of optional arguments `optargs...`.
+Outputs a vtk file of this body. See
+`GeometricTools.save(::GridExtentions, ::String)` for a description of optional
+arguments `optargs...`.
 """
 function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=false,
                                                  out_cellindexdim::Array{Int64,1}=Int64[],
@@ -162,8 +174,8 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
 end
 
 """
-  `save_controlpoints(body::AbstractBody, filename::String;
-suffix::String="_cp", optargs...)`
+    save_controlpoints(body::AbstractBody, filename::String;
+                                suffix::String="_cp", optargs...)
 
 Outputs a vtk file with the control points of the body along with associated
 normals and surface velocities.
@@ -252,36 +264,84 @@ end
 # end
 
 """
-  `get_ndivscells(body::AbstractBody)`
+    get_ndivscells(body::AbstractBody)
 
 Returns a tuple with the number of cells in each parametric dimension
 """
-get_ndivscells(body::AbstractBody) = body.grid._ndivscells
+get_ndivscells(body::AbstractBody) = deepcopy(body.grid._ndivscells)
 
 """
-  `get_ndivsnodes(body::AbstractBody)`
+    get_ndivsnodes(body::AbstractBody)
 
 Returns a tuple with the number of nodes in each parametric dimension
 """
-get_ndivsnodes(body::AbstractBody) = body.grid._ndivsnodes
+get_ndivsnodes(body::AbstractBody) = deepcopy(body.grid._ndivsnodes)
+
 
 """
-  `get_unitvectors(body::AbstractBody, i::Int64 or coor::Array{Int64,1})`
+    get_cart2lin_cells(self::AbstractBody)
 
-Returns the unit vectors t,n,o of the i-th panel, with t the tanget vector,
-n normal, and o oblique.
+Returns a `LinearIndices` that converts the coordinates (or "Cartesian index")
+of a cell to its linear index.
+
+!!! tip "Example"
+```julia
+    coordinates = (i, j)                # (i, j) coordinates of an arbitrary cell
+
+    cart2lin = get_cart2lin_cells(body)
+
+    index = cart2lin(coordinates...)    # Linear index of the cell
+```
+"""
+function get_cart2lin_cells(self::AbstractBody)
+    # Remove any quasi-dimensions
+    ndivscells = [i for i in get_ndivscells(self) if i!=0]
+
+    # Return linear indexing
+    return LinearIndices(Tuple(ndivscells))
+end
+
+"""
+    get_cart2lin_nodes(self::AbstractBody)
+
+Returns a `LinearIndices` that converts the coordinates (or "Cartesian index")
+of a node to its linear index.
+
+!!! tip "Example"
+```julia
+    coordinates = (i, j)                # (i, j) coordinates of an arbitrary node
+
+    cart2lin = get_cart2lin_nodes(body)
+
+    index = cart2lin(coordinates...)    # Linear index of the node
+```
+"""
+function get_cart2lin_nodes(self::AbstractBody)
+    # Remove any quasi-dimensions
+    ndivsnodes = [i for i in get_ndivsnodes(self) if i!=0]
+
+    # Return linear indexing
+    return LinearIndices(Tuple(ndivsnodes))
+end
+
+
+"""
+    get_unitvectors(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
+
+Returns the unit vectors `t`,`n`,`o` of the i-th panel, with `t` the tanget
+vector, `n` normal, and `o` oblique.
 """
 get_unitvectors(body::AbstractBody, args...) = gt.get_unitvectors(body.grid, args...)
 
 """
-  `get_normal(body::AbstractBody, i::Int64 or coor::Array{Int64,1})`
+    get_normal(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
 
 Returns the normal vector the i-th panel.
 """
 get_normal(body::AbstractBody, args...) = gt.get_normal(body.grid, args...)
 
 """
-  `get_field(self::AbstractBody, field_name::String)`
+    get_field(self::AbstractBody, field_name::String)
 
 Returns the requested field.
 """
@@ -294,12 +354,12 @@ function get_field(self::AbstractBody, field_name::String)
 end
 
 """
-  `get_field(self::AbstractBody, field_name::String, i::Int64)`
+    get_field(self::AbstractBody, field_name::String, i::Int)
 
-Returns the requested field value. Give it `_check=false` to skip checking logic
-for faster operation.
+Returns the requested field value of the i-th cell or node (depending of the
+field type). Give it `_check=false` to skip checking logic for faster processing.
 """
-function get_fieldval(self::AbstractBody, field_name::String, i::Int64;
+function get_fieldval(self::AbstractBody, field_name::String, i::Int;
                       _check::Bool=true)
     if _check
         if i<1
@@ -311,23 +371,36 @@ function get_fieldval(self::AbstractBody, field_name::String, i::Int64;
 end
 
 """
-  `get_fieldval(self::AbstractBody, field_name, coor)`
+    get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int,1})
 
-Returns the value of node of coordinates `coor` (1-indexed) in the field
-'field_name'.
+Returns the requested field value of the cell or node (depending of the field
+type) of coordinates `coor` (1-indexed).
 """
-function get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int64,1})
+function get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int,1})
     return gt.get_fieldval(self.grid, field_name, coor)
 end
 
 
 """
-  `add_field(self::AbstractBody, field_name::String, field_type::String,
-                    field_data, entry_type::String)`
+    add_field(self::AbstractBody, field_name::String, field_type::String,
+                                                field_data, entry_type::String)
 
-Adds a new field to the body. It overwrites the field if it already existed.
-`field_type` is either `"scalar"` or `"vector"`. `entry_type` is one out of
-`["node", "cell", "system"]`.
+Adds a new field `field_name` to the body (overwriting the field if it already
+existed).
+
+**Expected arguments**
+
+* `field_type=="scalar"`, then `field_data` is a vector of length `n`.
+* `field_type=="vector"`, then `field_data` is an array of 3-dim vectors of
+    length `n`.
+
+* `entry_type=="node"`, then `n=length(field_data)` is the number of nodes in
+    the body and `field_data[i]` is the field value at the i-th node.
+* `entry_type=="cell"`, then `n=length(field_data)` is the number of cells in
+    the body and `field_data[i]` is the field value at the i-th cell.
+* `entry_type=="system"`, then `n=length(field_data)` is any arbritrary number,
+    and `field_data` is a field for the whole body as a system without any
+    data structure.
 """
 function add_field(self::AbstractBody, field_name::String, field_type::String,
                     field_data, entry_type::String; raise_warn=false)
@@ -345,7 +418,7 @@ function add_field(self::AbstractBody, field_name::String, field_type::String,
 end
 
 """
-  `check_field(self::AbstractBody, field_name::String)`
+    check_field(self::AbstractBody, field_name::String)
 
 Returns `true` of the body has the field `field_name`. Returns false otherwise.
 """
@@ -353,7 +426,7 @@ check_field(self::AbstractBody, field_name::String) = field_name in self.fields
 
 
 """
-  `check_solved(self::AbstractBody)`
+    check_solved(self::AbstractBody)
 
 Returns `true` of the body has been solved. Returns false otherwise.
 """
@@ -366,48 +439,40 @@ function check_solved(self::AbstractBody)
 end
 
 
-"""
-  `rotate(body::AbstractBody, roll::Real, pitch::Real, yaw::Real;
-translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
-) where{T<:Real}`
-
-Rotates and translates the body by the given axial angles.
-
-NOTE: Naming follows aircraft convention, with
-* roll:   rotation about x-axis.
-* pitch:  rotation about y-axis.
-* yaw:    rotation about z-axis.
-"""
-function rotate(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
-                  translation::Array{<:Number, 1}=zeros(3),
-                  reset_fields::Bool=true
-                )
-
-    M = gt.rotation_matrix2(roll, pitch, yaw)
-    gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
-
-    body.Oaxis[:,:] = M*body.Oaxis
-    body.O[:] += translation
-
-    nothing
-end
-
-
-
+# """
+#     rotate(body::AbstractBody, roll::Real, pitch::Real, yaw::Real;
+#             translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
+#             ) where{T<:Real}
+#
+# Rotates and translates the body by the given axial angles.
+#
+# NOTE: Naming follows aircraft convention, with
+# * roll:   rotation about x-axis.
+# * pitch:  rotation about y-axis.
+# * yaw:    rotation about z-axis.
+# """
+# function rotate(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
+#                   translation::Array{<:Number, 1}=zeros(3),
+#                   reset_fields::Bool=true
+#                 )
+#
+#     M = gt.rotation_matrix2(roll, pitch, yaw)
+#     gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
+#
+#     body.Oaxis[:,:] = M*body.Oaxis
+#     body.O[:] += translation
+#
+#     nothing
+# end
 
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
-# function _get_controlpoint(grid::gt.GridTriangleSurface, args...)
-#   return _get_controlpoint(gt.get_cellnodes(grid, args...),
-#                                                   gt.get_normal(grid, args...))
-# end
-#
-# function _get_controlpoint(cellnodes::Array{Array{T1,1},1}, normal::Array{T2,1};
-#                                     off::Real=0.005) where{T1<:RType, T2<:RType}
-#   len = maximum([norm(cellnodes[1]-v) for v in cellnodes[2:end]])
-#   return mean(cellnodes) + off*len*normal
-# end
+"""
+    characteristiclength_bbox(nodes::Matrix, panel::Vector{Int})
 
+Returns the characteristic length of a panel calculated as the diagonal of
+the minimum bounding box.
+"""
 function characteristiclength_bbox(nodes, panel)
     # Characteristic length: Diagonal of bounding box
     min1 = nodes[1, first(panel)]
@@ -429,6 +494,12 @@ function characteristiclength_bbox(nodes, panel)
     return l
 end
 
+"""
+    characteristiclength_maxdist(nodes::Matrix, panel::Vector{Int})
+
+Returns the characteristic length of a panel calculated as the maximum distance
+between nodes.
+"""
 function characteristiclength_maxdist(nodes, panel)
 
     # Characteristic length: Maximum node distance
@@ -448,6 +519,12 @@ function characteristiclength_maxdist(nodes, panel)
     return l
 end
 
+"""
+    characteristiclength_sqrtarea(nodes::Matrix, panel::Vector{Int})
+
+Returns the characteristic length of a panel calculated as the square-root of
+its area.
+"""
 characteristiclength_sqrtarea(nodes, panel) = sqrt(gt._get_area(nodes, panel))
 
 function _calc_controlpoints!(grid::gt.GridTriangleSurface,
@@ -528,6 +605,31 @@ function _calc_controlpoints(self::AbstractBody, args...; optargs...)
                                 optargs...)
 end
 
+"""
+    calc_controlpoints!(body::AbstractBody, controlpoints::Matrix, normals::Matrix)
+
+Calculates the control point of every cell in `body` and stores them in the 3xN
+matrix `controlpoints`. It uses `body.CPoffset`, `body.charateristiclength`, and
+`normals` to offset the control points off the surface in the normal direction.
+
+**Output:** `controlpoints[:, i]` is the control point of the i-th cell (linearly
+indexed).
+
+!!! tip
+    Use `normals = calc_normals(body)` to calculate the normals.
+"""
+const calc_controlpoints! = _calc_controlpoints!
+
+"""
+    calc_controlpoints(body::AbstractBody)
+
+Calculates the control point of every cell in `body` returning a 3xN matrix.
+
+See `calc_controlpoints!` documentation for more details.
+"""
+const calc_controlpoints = _calc_controlpoints
+
+
 function _calc_normals!(grid::gt.GridTriangleSurface, normals)
 
     lin = LinearIndices(grid._ndivsnodes)
@@ -553,6 +655,38 @@ function _calc_normals(grid::gt.GridTriangleSurface)
 end
 _calc_normals!(self::AbstractBody, normals) = _calc_normals!(self.grid, normals)
 _calc_normals(self::AbstractBody) = _calc_normals(self.grid)
+
+"""
+    calc_normals!(body::AbstractBody, normals::Matrix)
+
+Calculates the normal vector of every cell in `body` and stores them in the 3xN
+matrix `normals`.
+
+**Output:** `normals[:, i]` is the normal vector of the i-th cell (linearly
+indexed).
+
+!!! tip "Tip: Cartesian to linear indices"
+
+    Normals can be accessed through their (i, j) coordinates (or "Cartesian
+    indices") as follows:
+
+    ```julia
+        coordinates = (i, j)
+
+        ndivscells = get_ndivscells(body)
+        lin = LinearIndices(Tuple(ndivscells))
+    ```
+"""
+const calc_normals! = _calc_normals!
+
+"""
+    calc_normals(self::AbstractBody)
+
+Calculates the normal vector of every cell in `grid` returning a 3xN matrix.
+
+See `calc_normals!` documentation for more details.
+"""
+const calc_normals = _calc_normals
 
 
 function _calc_tangents!(grid::gt.GridTriangleSurface, tangents)
@@ -581,6 +715,26 @@ end
 _calc_tangents!(self::AbstractBody, tangents) = _calc_tangents!(self.grid, tangents)
 _calc_tangents(self::AbstractBody) = _calc_tangents(self.grid)
 
+"""
+    calc_tangents!(body::AbstractBody, tangents::Matrix)
+
+Calculates the tangent vector of every cell in `body` and stores them in the 3xN
+matrix `tangents`.
+
+**Output:** `tangents[:, i]` is the tangent vector of the i-th cell (linearly
+indexed).
+"""
+const calc_tangents! = _calc_tangents!
+
+"""
+    calc_tangents(self::AbstractBody)
+
+Calculates the tangent vector of every cell in `grid` returning a 3xN matrix.
+
+See `calc_tangents!` documentation for more details.
+"""
+const calc_tangents = _calc_tangents
+
 
 function _calc_obliques!(grid::gt.GridTriangleSurface, obliques)
 
@@ -608,6 +762,26 @@ end
 _calc_obliques!(self::AbstractBody, obliques) = _calc_obliques!(self.grid, obliques)
 _calc_obliques(self::AbstractBody) = _calc_obliques(self.grid)
 
+"""
+    calc_obliques!(body::AbstractBody, obliques::Matrix)
+
+Calculates the oblique vector of every cell in `body` and stores them in the 3xN
+matrix `obliques`.
+
+**Output:** `obliques[:, i]` is the oblique vector of the i-th cell (linearly
+indexed).
+"""
+const calc_obliques! = _calc_obliques!
+
+"""
+    calc_obliques(self::AbstractBody)
+
+Calculates the oblique vector of every cell in `grid` returning a 3xN matrix.
+
+See `calc_obliques!` documentation for more details.
+"""
+const calc_obliques = _calc_obliques
+
 
 function _calc_areas!(grid::gt.GridTriangleSurface, areas)
 
@@ -632,6 +806,24 @@ function _calc_areas(grid::gt.GridTriangleSurface)
 end
 _calc_areas!(self::AbstractBody, areas) = _calc_areas!(self.grid, areas)
 _calc_areas(self::AbstractBody) = _calc_areas(self.grid)
+
+"""
+    calc_areas!(body::AbstractBody, areas::Matrix)
+
+Calculates the area of every cell in `body` and stores them in the array `areas`.
+
+**Output:** `areas[i]` is the area of the i-th cell (linearly indexed).
+"""
+const calc_areas! = _calc_areas!
+
+"""
+    calc_areas(self::AbstractBody)
+
+Calculates the area of every cell in `grid`, returning an array with all areas.
+
+See `calc_areas!` documentation for more details.
+"""
+const calc_areas = _calc_areas
 
 
 function _solvedflag(self::AbstractBody, val::Bool)

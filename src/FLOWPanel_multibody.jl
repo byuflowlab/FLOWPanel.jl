@@ -124,6 +124,10 @@ end
 # """
 # get_ndivsnodes(self::MultiBody) = Tuple(sum(collect(get_ndivsnodes(body)) for body in self.bodies))
 
+get_ndivscells(self::MultiBody) = error("`get_ndivscells(...)` not implemented yet.")
+get_ndivnodes(self::MultiBody) = error("`get_ndivnodes(...)` not implemented yet.")
+get_cart2lin_cells(self::MultiBody) = error("`get_cart2lin_cells(...)` not implemented yet.")
+get_cart2lin_nodes(self::MultiBody) = error("`get_cart2lin_nodes(...)` not implemented yet.")
 
 function add_field(self::MultiBody{E, N, B}, field_name::String,
                     field_type::String, field_data, entry_type::String;
@@ -315,18 +319,6 @@ function _G_U!(self::MultiBody,
 
     end
 
-end
-
-function _Uind!(self::MultiBody, args...; optargs...)
-    for body in self.bodies
-        _Uind!(body, args...; optargs...)
-    end
-end
-
-function _phi!(self::MultiBody, args...; optargs...)
-    for body in self.bodies
-        _phi!(body, args...; optargs...)
-    end
 end
 
 
