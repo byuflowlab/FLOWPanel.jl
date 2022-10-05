@@ -34,8 +34,8 @@ wake is equal to the difference between the strengths of both panels.
   * `nnodes::Int64`                     : Number of nodes
   * `ncells::Int64`                     : Number of cells
   * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T<:Real, 2}           : Coordinate system of original grid
-  * `O::Array{T<:Real,1}                : Position of CS of original grid
+  * `Oaxis::Array{T<:Real, 2} `         : Coordinate system of original grid
+  * `O::Array{T<:Real,1} `              : Position of CS of original grid
   * `ncellsTE::Int64`                   : Number of cells along trailing edge
   * `nnodesTE::Int64`                   : Number of nodes along trailing edge
 
@@ -182,10 +182,14 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
                         T3, Arr3<:AbstractArray{T3, 2}}
 
     N = self.ncells
+    M = size(CPs, 2)
 
-    if size(G, 1)!=size(G, 2) || size(G, 1)!=N
-        error("Matrix G with invalid dimension;"*
-              " got $(size(G)), expected ($N, $N).")
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
+    elseif size(normals, 2)!=M
+        error("normals matrix with invalid dimensions;"*
+              " got $(size(normals)), expected (3, $M).")
     end
 
     # Pre-allocate memory for panel calculation
@@ -560,4 +564,6 @@ function _savewake(self::RigidWakeBody, filename::String;
 
     end
 end
+
+_get_Gdims(self::RigidWakeBody{VortexRing, 1}) = (self.ncells, self.ncells)
 #### END OF LIFTING BODY  ######################################################
