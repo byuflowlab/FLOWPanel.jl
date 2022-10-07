@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="300mm"
+   height="50mm"
+   viewBox="0 0 300 50"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.2 (0a00cf5339, 2022-02-04)"
+   sodipodi:docname="sponsors00.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="1.0633188"
+     inkscape:cx="418.97126"
+     inkscape:cy="287.77824"
+     inkscape:window-width="1920"
+     inkscape:window-height="1053"
+     inkscape:window-x="0"
+     inkscape:window-y="27"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1"
+     width="300mm" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <image
+       width="42.333332"
+       height="42.333332"
+       preserveAspectRatio="none"
+       xlink:href="../../src/assets/images/sponsor-byu.png"
+       id="image864"
+       x="188.93159"
+       y="1.695134" />
+    <g
+       id="g989"
+       transform="translate(21.551836,-53.412254)">
+      <image
+         width="42.771015"
+         height="7.9357605"
+         preserveAspectRatio="none"
+         xlink:href="../../src/assets/images/sponsor-whisper.png"
+         id="image852"
+         x="51.052357"
+         y="89.825417" />
+      <image
+         width="45.646797"
+         height="34.088795"
+         preserveAspectRatio="none"
+         xlink:href="../../src/assets/images/sponsor-whisper2.png"
+         id="image983"
+         x="49.784332"
+         y="55.820526" />
+    </g>
+    <image
+       width="54.433292"
+       height="41.369297"
+       preserveAspectRatio="none"
+       xlink:href="../../src/assets/images/sponsor-afwerx.png"
+       id="image999"
+       x="126.0436"
+       y="2.0228698" />
+  </g>
+</svg>

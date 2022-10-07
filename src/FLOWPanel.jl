@@ -40,7 +40,7 @@ const gt = GeometricTools
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module
                                                 # Default path to data files
-const def_data_path = joinpath(module_path, "..", "docs", "data")
+const def_data_path = joinpath(module_path, "..", "docs", "resources", "data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
 
