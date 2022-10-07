@@ -18,7 +18,7 @@ jobs:
       - name: Install dependencies
         env:
           PYTHON: ""
-        run: julia --project=docs/ -e 'using Pkg; Pkg.add("https://github.com/byuflowlab/GeometricTools.jl"); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+        run: julia --project=docs/ -e 'using Pkg; Pkg.add(url="https://github.com/byuflowlab/GeometricTools.jl"); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # For authentication with GitHub Actions token
