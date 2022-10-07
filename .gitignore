@@ -2,6 +2,7 @@
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
+build
 
 # FLOWPanel temps
 *.gif

@@ -3,7 +3,11 @@ using FLOWPanel
 const pnl = FLOWPanel
 
 makedocs(
-    sitename="FLOWPanel",
+    sitename = "FLOWPanel.jl",
+    format = Documenter.HTML(;
+                                sidebar_sitename = false,
+                                assets = ["assets/favicon.ico"],
+                            ),
     pages = [
                 "Home"              => "index.md",
                 "Potential Flow"    => "potentialflow.md",
@@ -19,4 +23,17 @@ makedocs(
                 #                         "api-abstractbody.md"
                 #                        ]
             ]
+)
+
+
+
+# # Documenter can also automatically deploy documentation to gh-pages.
+# # See "Hosting Documentation" and deploydocs() in the Documenter manual
+# # for more information.
+deploydocs(
+    repo = "github.com/byuflowlab/FLOWPanel.jl.git",
+    target = "build",
+    deps = nothing,
+    make = nothing,
+    # devbranch = "main"
 )
