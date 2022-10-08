@@ -23,7 +23,7 @@ Dependencies
 
 ### Sponsors
 
-![sponsors](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sponsors00.png)
+![sponsors](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sponsors01.png)
 
 ### To-Do's
 * Finish documentation

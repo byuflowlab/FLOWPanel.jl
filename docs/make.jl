@@ -17,7 +17,23 @@ makedocs(
                                         "Constant Doublet" => "elements/constantdoublet.md",
                                         "Semi-Infinite Doublet" => "elements/semiinfdoublet.md",
                                         "Non-Planar Semi-Infinite Doublet" => "elements/semiinfnonplanardoublet.md",
-                                       ]
+                                       ],
+                "Geometry Engine"   => [
+                                        "Grid Generation" => [
+                                                                "geometry/gridgeneration.md",
+                                                                "geometry/gridgeneration-loft.md",
+                                                                "geometry/gridgeneration-rev.md",
+                                                                "geometry/gridgeneration-transf.md",
+                                                                "geometry/gridgeneration-triang.md",
+                                                            ]
+                                        "Advanced" => [
+                                                                "geometry/basics.md",
+                                                                "geometry/basics-grid.md",
+                                                                "geometry/basics-transformations.md",
+                                                                "geometry/basics-loopedgrid.md",
+                                                                "geometry/basics-surfacegrid.md",
+                                                            ]
+                                      ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",
                 #                         "api-abstractbody.md"
