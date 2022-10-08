@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Surface of Revolution Method · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><span class="tocitem">Elements</span><ul><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li></ul></li><li><span class="tocitem">Geometry Engine</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox" checked/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gridgeneration/">Methods</a></li><li><a class="tocitem" href="../gridgeneration-loft/">Lofting Method</a></li><li class="is-active"><a class="tocitem" href>Surface of Revolution Method</a><ul class="internal"><li><a class="tocitem" href="#Example-—-Rotor-hub"><span>Example — Rotor hub</span></a></li><li><a class="tocitem" href="#Example-—-Tilted-revolution"><span>Example — Tilted revolution</span></a></li><li><a class="tocitem" href="#Example-—-Incomplete-revolution"><span>Example — Incomplete revolution</span></a></li></ul></li><li><a class="tocitem" href="../gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../basics-surfacegrid/">Surface Grid</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Geometry Engine</a></li><li><a class="is-disabled">Grid Generation</a></li><li class="is-active"><a href>Surface of Revolution Method</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Surface of Revolution Method</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/geometry/gridgeneration-rev.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Surface-of-Revolution-Method"><a class="docs-heading-anchor" href="#Surface-of-Revolution-Method">Surface of Revolution Method</a><a id="Surface-of-Revolution-Method-1"></a><a class="docs-heading-anchor-permalink" href="#Surface-of-Revolution-Method" title="Permalink"></a></h1><p>Following the concept of bodies of revolution where a contour is revolved around an axis, this method generates the surface of such revolution.</p><article class="docstring"><header><a class="docstring-binding" id="GeometricTools.surface_revolution" href="#GeometricTools.surface_revolution"><code>GeometricTools.surface_revolution</code></a> — <span class="docstring-category">Function</span></header><section><div><p><code>surface_revolution(profile, thetaNDIVS; loop_dim=0, axis_angle=0, low_a=0, up_a=360, save_path=nothing, paraview=true, file_name=&quot;myrev&quot;)</code></p><p>Receives a contour to revolve around an axis generating a surface of revolution.</p><p><strong>ARGUMENTS</strong></p><ul><li><code>profile::Array{Float64,2}</code>   : Contour to revolve. These are two-                                 dimensional points in the YZ-plane that will                                 get revolve around the Z-axis.</li><li><code>thetaNDIVS::Int64</code>           : Number of angle-sections (cells) in the                                 revolution.</li></ul><p><strong>OPTIONAL ARGUMENTS</strong></p><ul><li><code>loop_dim::Int64=0</code>           : Whether to loop any dimension of the                                 parametric grid.</li><li><code>axis_angle::Float64=0</code>       : Tilting angle (deg) about the Z-axis to                                 revolve the contour.</li><li><code>low_a::Float64=0</code>            : Lower bound of angle (deg) of revolution.</li><li><code>up_a::Float64=0</code>             : Upper bound of angle (deg) of revolution.</li></ul></div></section></article><blockquote><p><strong>OBSERVATION:</strong> The following examples show how to use the revolution method directly from the GeometricTools package. In order to use this grid in the definition of a body, the quadrilateral panels must by transformed into triangular panels through <code>GeometricTools.GridTriangleSurface(orggrid, dimsplit)</code>.</p></blockquote><h2 id="Example-—-Rotor-hub"><a class="docs-heading-anchor" href="#Example-—-Rotor-hub">Example — Rotor hub</a><a id="Example-—-Rotor-hub-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Rotor-hub" title="Permalink"></a></h2><p>First, we need a profile to revolve consisting of a collection of points. This can be predefined and read as a csv file (for example), or defined programmatically. Here we show how to define the contour programmatically:</p><pre><code class="language-julia hljs">import PyPlot as plt
+
+Rhub = 0.375 * 0.02542        # (m) radius of hub
+Rinn = Rhub / 2               # (m) inner hole radius
+Rsec1 = Rinn                # (m) radius of first hole
+Rsec2 = 3 / 1000              # (m) radius of second hole
+Thub = Rhub                 # (m) thickness of hub
+dsec1 = 3 / 1000              # (m) depth of first hole
+
+Rfillet = 2 / 1000            # (m) Fillet radius
+Nfillet = 30                # Points along fillet
+Cfillet = [Rhub, Thub] .- Rfillet      # Center of fillet
+
+points_fillet = [Cfillet .+ Rfillet * [sin(a), cos(a)]
+                        for a in range(0, stop=pi/2, length=Nfillet)]
+
+points = hcat(
+              [Rsec2, Thub-dsec1],
+              [Rsec1, Thub-dsec1],
+              [Rsec1, Thub],
+              points_fillet...,
+              [Rhub, 0],
+              [Rsec1, 0],
+              [Rsec1, dsec1],
+              [Rsec2, dsec1],
+              [Rsec2, Thub-dsec1]
+             )&#39;
+
+x = [points[i,1] for i in 1:size(points,1)]
+y = [points[i,2] for i in 1:size(points,1)]
+
+plt.figure(figsize=[5,5]*2/3)
+plt.plot(x,y, &quot;--ok&quot;)
+plt.plot([Cfillet[1]], [Cfillet[2]], &quot;xr&quot;)
+plt.xlim([0, Rhub*1.25])
+plt.ylim([-Rhub*0.125, Rhub*1.125]);
+
+plt.savefig(joinpath(img_path, &quot;geometry-hubcontour00.png&quot;), transparent=true, dpi=300)</code></pre><img src="../../assets/images/geometry-hubcontour00.png" alt="Vid here" style="width: 300px;"/><pre><code class="language-julia hljs">import FLOWPanel as pnl
+
+save_path = &quot;./&quot;
+file_name = &quot;hub00&quot;
+
+thetaNDIVS = 180          # Number of angular sections
+loop_dim = 1             # Loops the parametric grid
+
+# Creates body of revolution
+grid = pnl.gt.surface_revolution(points, thetaNDIVS; loop_dim=loop_dim)
+
+# Save vtk and call paraview
+pnl.gt.save(grid, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/hub00.gif" alt="Vid here" style="width: 800px;"/><h2 id="Example-—-Tilted-revolution"><a class="docs-heading-anchor" href="#Example-—-Tilted-revolution">Example — Tilted revolution</a><a id="Example-—-Tilted-revolution-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Tilted-revolution" title="Permalink"></a></h2><p>By using the optional argument <code>axis_angle</code> we can tilt the angle about which to do the revolution. To exemplify this, using the previous contour we will tilting the axis by <span>$90^\circ$</span> about the <span>$z$</span>-axis, resulting in a revolution about the <span>$y$</span>-axis:</p><pre><code class="language-julia hljs">axis_angle = 90          # Axis tilting
+
+grid = pnl.gt.surface_revolution(points, thetaNDIVS;
+                                    loop_dim=loop_dim,
+                                    axis_angle=axis_angle)
+
+# Save vtk and call paraview
+pnl.gt.save(grid, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/hub02.gif" alt="Vid here" style="width: 800px;"/><p>And here is what we get by tilting the axis by <span>$45^\circ$</span> about the <span>$z$</span>-axis:</p><pre><code class="language-julia hljs">axis_angle = 45          # Axis tilting
+
+grid = pnl.gt.surface_revolution(points, thetaNDIVS;
+                                    loop_dim=loop_dim,
+                                    axis_angle=axis_angle)
+
+# Save vtk and call paraview
+pnl.gt.save(grid, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/hub03.gif" alt="Vid here" style="width: 800px;"/><h2 id="Example-—-Incomplete-revolution"><a class="docs-heading-anchor" href="#Example-—-Incomplete-revolution">Example — Incomplete revolution</a><a id="Example-—-Incomplete-revolution-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Incomplete-revolution" title="Permalink"></a></h2><p>Using the arguments <code>low_a</code> and <code>up_a</code> we can set the lower and upper bound angles of the revolution to create an incomplete body of revolution:</p><pre><code class="language-julia hljs">thetaNDIVS = 45          # Number of angular sections
+loop_dim = 1             # Loops the parametric grid
+low_a = -45              # Lower bound of revolution angle
+up_a = 45                # Upper bound of revolution angle
+
+grid = pnl.gt.surface_revolution(points, thetaNDIVS;
+                                    loop_dim=loop_dim,
+                                    low_a=low_a, up_a=up_a)
+
+# Save vtk and call paraview
+pnl.gt.save(grid, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/hub04.gif" alt="Vid here" style="width: 800px;"/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../gridgeneration-loft/">« Lofting Method</a><a class="docs-footer-nextpage" href="../gridgeneration-transf/">Space Transformation Method »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.23 on <span class="colophon-date" title="Saturday 8 October 2022 01:00">Saturday 8 October 2022</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
