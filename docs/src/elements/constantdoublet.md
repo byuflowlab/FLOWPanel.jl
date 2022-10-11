@@ -134,6 +134,6 @@ The potential and velocity field of a doublet panel of unitary strength ($\mu=1$
 ```@raw html
 <center>
   <br>$\nabla \phi$ = $\mathbf{u}$ verification
-  <img src="../../assets/images/panel-doublet-divphivsu00.png" alt="Pic here" style="width: 900px;"/>
+  <img src="../../assets/images/panel-doublet-divphivsu00.png" alt="Pic here" style="width: 700px;"/>
 </center>
 ```

@@ -1,6 +1,6 @@
 ![FLOWPanel logo](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/julianlogo-flowpanel06.png)
 
-Three-dimensional panel method for high-Reynolds aerodynamics.
+Three-dimensional panel method for high-Reynolds aerodynamics
 
 [![](https://img.shields.io/badge/code-open%20source-brightgreen.svg)](https://github.com/byuflowlab/FLOWPanel.jl)
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](http://flow.byu.edu/FLOWPanel.jl)
@@ -35,11 +35,11 @@ Dependencies
 * Currently, all solvers use a direct explicit-matrix inversion which works well for problems with less than 1000 panels. In order the scale the solver, it is recommended that an indirect matrix inversion method (e.g., GMRES) is implemented in future work along with an implicit matrix evaluation through FMM.
 
 ### About
-FLOWPanel is an open source project jointly led by the [FLOW Lab](http://flow.byu.edu/) at Brigham Young University and [Whisper Aero](http://whisper.aero/).
+FLOWPanel is an open-source project jointly led by the [FLOW Lab](http://flow.byu.edu/) at Brigham Young University and [Whisper Aero](http://whisper.aero/).
 All contributions are welcome.
 
-  * Main Developer  : Eduardo J. Alvarez
-  * Email           : Edo.AlvarezR@gmail.com
+  * Main Developer  : [Eduardo J. Alvarez](https://edoalvarez.com/)
+  * Email           : edo.alvarezr@gmail.com
   * Created         : August 2021
   * License         : MIT License
 

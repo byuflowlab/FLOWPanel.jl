@@ -30,6 +30,6 @@ The potential and velocity field of a non-planar semi-infinte doublet panel (or 
 ```@raw html
 <center>
   <br>$\nabla \phi$ = $\mathbf{u}$ verification
-  <img src="../../assets/images/panel-semiinfinitenonplanardoublet-divphivsu00.png" alt="Pic here" style="width: 900px;"/>
+  <img src="../../assets/images/panel-semiinfinitenonplanardoublet-divphivsu00.png" alt="Pic here" style="width: 700px;"/>
 </center>
 ```

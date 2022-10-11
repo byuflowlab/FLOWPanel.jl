@@ -125,6 +125,6 @@ The potential and velocity field of a source panel of unitary strength ($\sigma=
 ```@raw html
 <center>
   <br>$\nabla \phi$ = $\mathbf{u}$ verification
-  <img src="../../assets/images/panel-source-divphivsu00.png" alt="Pic here" style="width: 900px;"/>
+  <img src="../../assets/images/panel-source-divphivsu00.png" alt="Pic here" style="width: 700px;"/>
 </center>
 ```
