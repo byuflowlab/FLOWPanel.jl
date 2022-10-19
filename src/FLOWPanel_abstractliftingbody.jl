@@ -2,10 +2,10 @@
 # DESCRIPTION
     Lifting paneled body types definition.
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Sep 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Sep 2018
+  * License     : MIT License
 =###############################################################################
 
 ################################################################################

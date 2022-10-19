@@ -4,10 +4,10 @@
     element types.
 
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Sep 2022
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Sep 2022
+  * License     : MIT License
 =###############################################################################
 
 
@@ -147,7 +147,7 @@ function add_field(self::MultiBody{E, N, B}, field_name::String,
         if entry_type=="system"
             data_slice = field_data
         else
-            data_slice = view(field_data, (1:offset) .+ counter)
+            data_slice = view(collect(field_data), (1:offset) .+ counter)
         end
 
         add_field(body, field_name, field_type, data_slice, entry_type;
@@ -157,6 +157,36 @@ function add_field(self::MultiBody{E, N, B}, field_name::String,
 
 end
 
+function remove_field(self::MultiBody, field_name)
+    if check_field(self, field_name)
+
+        i = findfirst(name->name==field_name, self.fields)
+
+        splice!(self.fields, i)
+
+        for body in self.bodies
+            remove_field(body, field_name)
+        end
+    end
+end
+
+
+function get_field(self::MultiBody, field_name::String)
+
+    # Collect all fields
+    fields = [get_field(body, field_name) for body in self.bodies]
+
+    # Concatenate field data
+    field_data = vcat([field["field_data"] for field in fields]...)
+
+    # Create a new field
+    field = Dict( "field_name" => field_name,
+                  "field_type" => fields[1]["field_type"],
+                  "entry_type" => fields[1]["entry_type"],
+                  "field_data" => field_data)
+
+    return field
+end
 
 function get_fieldval(self::MultiBody, field_name::String, i::Int,
                         entry_type::String; _check::Bool=true)
@@ -249,11 +279,11 @@ function solve(self::MultiBody{VortexRing},
     # Save solution
     _set_strength(self, Gamma)
 
+    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
     add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", Gamma, "cell")
-    _solvedflag(self, true)
 end
 
 function _solve(::MultiBody{VortexRing}, normals, G, Uinfs)
@@ -438,6 +468,12 @@ end
 
 function _solvedflag(self::MultiBody, val::Bool)
 
+    # Remove all existing fields
+    for field in Iterators.reverse(self.fields)
+        remove_field(self, field)
+    end
+
+    # Add solved flag
     add_field(self, "solved", "scalar", [val], "system")
 
     for body in self.bodies

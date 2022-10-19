@@ -2,10 +2,10 @@
 # DESCRIPTION
     Abstract body type definition.
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Jun 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Jun 2018
+  * License     : MIT License
 =###############################################################################
 
 
@@ -231,7 +231,9 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
              )
 
         # Save surface velocity as a field
-        add_field(body, "U", "vector", Usurf, "cell")
+        if check_field(body, "U")==false
+            add_field(body, "U", "vector", Usurf, "cell")
+        end
 
 
         # Surface potential
@@ -245,7 +247,9 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
            )
 
         # Save surface potential as a field
-        add_field(body, "phi", "scalar", phis, "cell")
+        if check_field(body, "phi")==false
+            add_field(body, "phi", "scalar", phis, "cell")
+        end
     end
 
     CPs = collect(eachcol(CPs))
@@ -407,7 +411,7 @@ function add_field(self::AbstractBody, field_name::String, field_type::String,
 
     # Add field to grid
     gt.add_field(self.grid, field_name, field_type,
-                    field_data, entry_type; raise_warn=raise_warn)
+                    collect(field_data), entry_type; raise_warn=raise_warn)
 
     # Register the field
     if !(field_name in self.fields)
@@ -415,6 +419,22 @@ function add_field(self::AbstractBody, field_name::String, field_type::String,
     end
 
     nothing
+end
+
+"""
+    remove_field(self::AbstractBody, field_name)
+
+Removes field from body.
+"""
+function remove_field(self::AbstractBody, field_name)
+    if check_field(self, field_name)
+
+        i = findfirst(name->name==field_name, self.fields)
+
+        splice!(self.fields, i)
+
+        gt.remove_field(self.grid, field_name)
+    end
 end
 
 """
@@ -827,6 +847,12 @@ const calc_areas = _calc_areas
 
 
 function _solvedflag(self::AbstractBody, val::Bool)
+    # Remove all existing fields
+    for field in Iterators.reverse(self.fields)
+        remove_field(self, field)
+    end
+
+    # Add solved flag
     add_field(self, "solved", "scalar", [val], "system")
 end
 

@@ -4,10 +4,10 @@
     AbstractBody).
 
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Jun 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Jun 2018
+  * License     : MIT License
 =###############################################################################
 
 
@@ -112,9 +112,9 @@ function solve(self::NonLiftingBody{ConstantSource, 1},
     # Save solution
     self.strength[:, 1] .= sigma
 
+    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-    _solvedflag(self, true)
 end
 
 function _solve(::NonLiftingBody{ConstantSource, 1}, normals, G, Uinfs)
@@ -277,9 +277,9 @@ function solve(self::NonLiftingBody{ConstantDoublet, 1},
     # Save solution
     self.strength[:, 1] .= mu
 
+    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "mu", "scalar", view(self.strength, :, 1), "cell")
-    _solvedflag(self, true)
 end
 
 function _solve(::NonLiftingBody{ConstantDoublet, 1}, normals, G, Uinfs)
@@ -593,10 +593,10 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
     self.strength[:, 1] .= sigma
     self.strength[:, 2] .= mu
 
+    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
     add_field(self, "mu", "scalar", view(self.strength, :, 2), "cell")
-    _solvedflag(self, true)
 end
 
 function _solve(::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}, G, nphis)

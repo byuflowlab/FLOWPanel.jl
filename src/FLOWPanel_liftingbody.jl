@@ -4,10 +4,10 @@
     AbstractLiftingBody).
 
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Sep 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Sep 2018
+  * License     : MIT License
 =###############################################################################
 
 
@@ -145,12 +145,12 @@ function solve(self::RigidWakeBody{VortexRing, 1},
 
     # Save solution
     self.strength[:, 1] .= Gamma
-
+    
+    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
     add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
-    _solvedflag(self, true)
 end
 
 function _solve(::RigidWakeBody{VortexRing, 1}, normals, G, Uinfs)

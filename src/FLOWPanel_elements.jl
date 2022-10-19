@@ -3,10 +3,10 @@
     Definition of panel elements
 
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Jul 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Jul 2018
+  * License     : MIT License
 =###############################################################################
 
 abstract type AbstractElement end

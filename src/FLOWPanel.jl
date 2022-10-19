@@ -2,18 +2,12 @@
   Three-dimensional panel method for high-Reynolds aerodynamics.
 
   # AUTHORSHIP
-    * Author    : Eduardo J. Alvarez
-    * Email     : Edo.AlvarezR@gmail.com
-    * Created   : Jun 2018 originally as MyPanel.jl
-    * License   : MIT License
+    * Created by    : Eduardo J. Alvarez
+    * Email         : Edo.AlvarezR@gmail.com
+    * Date          : Jun 2018 originally as MyPanel.jl
+    * License       : MIT License
 """
 module FLOWPanel
-
-#=
-    TODO
-    * [ ] Rewrite `Usemiinfinitevortex` to avoid memory allocation.
-
-=#
 
 export  solve, save, Uind!, phi!,
         get_ndivscells, get_ndivsnodes,
@@ -58,7 +52,7 @@ for header_name in ["elements",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "utils"
+                    "utils", "postprocess"
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end

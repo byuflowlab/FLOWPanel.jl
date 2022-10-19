@@ -2,10 +2,10 @@
 # DESCRIPTION
     Utilities.
 # AUTHORSHIP
-  * Author    : Eduardo J. Alvarez
-  * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Sep 2018
-  * License   : MIT License
+  * Created by  : Eduardo J. Alvarez
+  * Email       : Edo.AlvarezR@gmail.com
+  * Date        : Sep 2018
+  * License     : MIT License
 =###############################################################################
 
 
@@ -120,4 +120,68 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                                         rflspl_s=rflspl_s,
                                         opt_args...
                                     )
+end
+
+
+"""
+    `find_i(body, xtarget::Number, gdim::Int, xdim::Int; xdir=nothing)`
+
+Find the row or column of cells in structured grid `body` that is the
+closest to `xtarget` in the `xdim` spatial dimension. Use `gdim=1` to obtain
+a row, and `gdim=2` to obtain a column.
+
+Alternatively, use an arbitrary direction `xdir` in place of `xdim`, if given.
+
+Returns `(itarget, pos, errmin, lin)` where `itarget` is the index of the best
+candidate row/column, `pos` is the position of this row/column projected to
+`xdim` or `xdir`, and `errmin` is the error between `pos` and `xtarget`. `lin`
+is the `LinearIndices` for the user to iterate over the row/column as
+`lin[itarget, j]` if `gdim==1`, or `lin[j, itarget]` if `gdim==2`.
+
+> **NOTE:** `body` cannot be a MultiBody.
+"""
+function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
+                xtarget::Number, gdim::Int, xdim::Int; xdir=nothing
+               )
+
+    # Define direction on which point will be projected to
+    _xdir = xdir!=nothing ? xdir : (i==xdim for i in 1:3)
+    _xdir ./= norm(_xdir)
+
+    # Define dimension on which cells will be iterated
+    gdimite =   gdim==1 ? 2 :
+                gdim==2 ? 1 :
+                error("Invalid dimension $gdim; expected 1 or 2.")
+
+    gdims = get_ndivscells(body)            # Grid dimensions
+    ndivscells = Tuple(n + 1*(n==0) for n in gdims) # n=0 -> n=1 for quasi-dimensions
+    lin = LinearIndices(ndivscells)         # Linear indexing
+
+    pos = Inf                               # Position of closest candidate
+    errmin = Inf                            # Error of closest candidate
+    itarget = -1                            # index of closest candidate
+    Xmean = zeros(3)                        # Average position along row/column
+
+    for i in 1:gdims[gdim]                  # Iterate over row/column
+
+        # Calculate the average control point over this row/column
+        Xmean .= 0
+        for j in 1:gdims[gdimite] # Iterate over panels in this row/column
+            indices = gdim==1 ? (i, j, 1) : (j, i, 1)
+            Xmean .+= view(controlpoints, :, lin[indices...])
+        end
+        Xmean ./= gdims[gdimite]
+
+        # Determine proximity of average control point to target position
+        err = abs(dot(Xmean, _xdir) - xtarget)
+
+        # Compare this candidate
+        if err <= errmin
+            pos = dot(Xmean, _xdir)
+            errmin = err
+            itarget = i
+        end
+    end
+
+    return itarget, pos, errmin, lin
 end
