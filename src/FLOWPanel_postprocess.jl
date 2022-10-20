@@ -382,7 +382,7 @@ function calcfield_sectionalforce!(outFs::Arr0, outpos::Arr1,
     # Error cases
     @assert check_field(body, F_fieldname) ""*
         "Field $(F_fieldname) not found;"*
-        " Please run `calcfield_U(args...; fieldname=$(F_fieldname), optargs...)`"
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
 
     Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
 
@@ -416,3 +416,150 @@ function calcfield_sectionalforce(body::Union{NonLiftingBody, AbstractLiftingBod
     return calcfield_sectionalforce!(outFs, outpos, body, args...;
                                                     dimspan=dimspan, optargs...)
 end
+
+"""
+    calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
+                            Fs::AbstractMatrix; fieldname="Ftot")
+
+Calculate the integrated force of this body, which is a three-dimensional vector.
+This is calculated from the force of each element given in `Fs` and saved as a
+field named `fieldname`.
+
+The field is calculated in place and added to `out`.
+"""
+function calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
+                            Fs::AbstractMatrix; fieldname="Ftot", addfield=true)
+
+    # Error case
+    @assert length(out)==3 ""*
+        "Invalid `out` vector. Expected length $(3); got $(length(out))."
+
+    for i in 1:3
+        out[i] += sum(view(Fs, i, :))
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", out, "system")
+    end
+
+    return out
+end
+
+"""
+    calcfield_Ftot!(out::AbstractVector, body::AbstractBody;
+                                    F_fieldname="F", optargs...)
+
+Calculate the integrated force of this body, which is a three-dimensional vector.
+This is calculated from the force field `F_fieldname` and saved as a field named
+`fieldname`.
+
+The field is calculated in place and added to `out`.
+"""
+function calcfield_Ftot!(out, body; F_fieldname="F", optargs...)
+    # Error case
+    @assert check_field(body, F_fieldname) ""*
+        "Field $(F_fieldname) not found;"*
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+
+    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+
+    return calcfield_Ftot!(out, body, Fs; optargs...)
+end
+
+"""
+    calcfield_Ftot(body, args...; optargs...) = calcfield_Ftot!(zeros(3), body, args...; optargs...)
+
+Similar to [`calcfield_Ftot!`](@ref) but without in-place calculation (`out` is
+not needed).
+"""
+calcfield_Ftot(body, args...; optargs...) = calcfield_Ftot!(zeros(3), body, args...; optargs...)
+
+"""
+    calcfield_LDS!(out::Matrix, body::AbstractBody, Fs::Matrix,
+                    Lhat::Vector, Dhat::Vector, Shat::Vector)
+
+Calculate the integrated force decomposed as lift, drag, and sideslip according
+to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
+This is calculated from the force of each element given in `Fs`.
+`out[:, 1]` is the lift vector and is saved as the field "L".
+`out[:, 2]` is the drag vector and is saved as the field "D".
+`out[:, 3]` is the sideslip vector and is saved as the field "S".
+
+The field is calculated in place on `out`.
+"""
+function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
+                        Fs::AbstractMatrix,
+                        Lhat::AbstractVector, Dhat::AbstractVector,
+                        Shat::AbstractVector;
+                        addfield=true)
+    # Error case
+    @assert size(out, 1)==3 || size(out, 2)==3 ""*
+        "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
+    @assert abs(norm(Lhat) - 1) <= 2*eps() ""*
+        "Lhat=$(Lhat) is not a unitary vector"
+    @assert abs(norm(Dhat) - 1) <= 2*eps() ""*
+        "Dhat=$(Dhat) is not a unitary vector"
+    @assert abs(norm(Shat) - 1) <= 2*eps() ""*
+        "Shat=$(Shat) is not a unitary vector"
+
+    # Calculate Ftot (integrated force)
+    for i in 1:3
+        out[i, 3] += sum(view(Fs, i, :))
+    end
+
+    # Project Ftot in each direction
+    out[:, 1] = Lhat
+    out[:, 1] *= dot(view(out, :, 3), Lhat)
+    out[:, 2] = Dhat
+    out[:, 2] *= dot(view(out, :, 3), Dhat)
+    aux = dot(view(out, :, 3), Shat)
+    out[:, 3] = Shat
+    out[:, 3] *= aux
+
+    # Save field in body
+    if addfield
+        add_field(body, "L", "vector", view(out, :, 1), "system")
+        add_field(body, "D", "vector", view(out, :, 2), "system")
+        add_field(body, "S", "vector", view(out, :, 3), "system")
+    end
+
+    return out
+end
+
+"""
+    calcfield_LDS!(out::Matrix, body::AbstractBody,
+                    Lhat::Vector, Dhat::Vector, Shat::Vector; F_fieldname="F")
+
+Calculate the integrated force decomposed as lift, drag, and sideslip according
+to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
+This is calculated from the force field `F_fieldname`.
+"""
+function calcfield_LDS!(out, body, Lhat, Dhat, Shat; F_fieldname="F", optargs...)
+    # Error case
+    @assert check_field(body, F_fieldname) ""*
+        "Field $(F_fieldname) not found;"*
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+
+    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+
+    return calcfield_LDS!(out, body, Fs, Lhat, Dhat, Shat; optargs...)
+end
+
+"""
+    calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
+
+`Shat` is calculated automatically from `Lhat` and `Dhat`,
+"""
+function calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
+    return calcfield_LDS!(out, body, Lhat, Dhat, cross(Lhat, Dhat); optargs...)
+end
+
+
+"""
+    calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
+
+Similar to [`calcfield_LDS!`](@ref) but without in-place calculation (`out` is
+not needed).
+"""
+calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
