@@ -414,15 +414,16 @@ function _calc_controlpoints!(self::MultiBody, controlpoints, normals; optargs..
     end
 end
 
-function _calc_normals(self::MultiBody)
+function _calc_normals(self::MultiBody; optargs...)
     normals = zeros(3, self.ncells)
-    _calc_normals!(self, normals)
+    _calc_normals!(self, normals; optargs...)
     return normals
 end
-function _calc_normals!(self::MultiBody, normals)
+function _calc_normals!(self::MultiBody, normals; optargs...)
     ncells = 0
     for body in self.bodies
-        _calc_normals!(body, view(normals, :, (1:body.ncells) .+ ncells))
+        _calc_normals!(body, view(normals, :, (1:body.ncells) .+ ncells);
+                                                                    optargs...)
         ncells += body.ncells
     end
 end

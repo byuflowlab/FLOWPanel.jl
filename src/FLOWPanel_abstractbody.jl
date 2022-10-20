@@ -673,8 +673,22 @@ function _calc_normals(grid::gt.GridTriangleSurface)
     _calc_normals!(grid, normals)
     return normals
 end
-_calc_normals!(self::AbstractBody, normals) = _calc_normals!(self.grid, normals)
-_calc_normals(self::AbstractBody) = _calc_normals(self.grid)
+function _calc_normals!(self::AbstractBody, normals; flipbyCPoffset=false)
+    _calc_normals!(self.grid, normals)
+    if flipbyCPoffset
+        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
+    end
+
+    return normals
+end
+function _calc_normals(self::AbstractBody; flipbyCPoffset=false)
+    normals = _calc_normals(self.grid)
+    if flipbyCPoffset
+        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
+    end
+
+    return normals
+end
 
 """
     calc_normals!(body::AbstractBody, normals::Matrix)

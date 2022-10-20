@@ -8,6 +8,19 @@
   * License     : MIT License
 =###############################################################################
 
+dot(A, B) = sum(a*b for (a,b) in zip(A, B))
+norm(A) = sqrt(mapreduce(x->x^2, +, A))
+function cross!(out, A, B)
+    out[1] = A[2]*B[3] - A[3]*B[2]
+    out[2] = A[3]*B[1] - A[1]*B[3]
+    out[3] = A[1]*B[2] - A[2]*B[1]
+    return out
+end
+function cross(A::AbstractVector{T1}, B::AbstractVector{T2}) where {T1, T2}
+    out = zeros(promote_type(T1, T2), 3)
+    return cross!(out, A, B)
+end
+mean(xs) = sum(xs)/length(xs)
 
 """
 `simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
@@ -154,8 +167,7 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
                 error("Invalid dimension $gdim; expected 1 or 2.")
 
     gdims = get_ndivscells(body)            # Grid dimensions
-    ndivscells = Tuple(n + 1*(n==0) for n in gdims) # n=0 -> n=1 for quasi-dimensions
-    lin = LinearIndices(ndivscells)         # Linear indexing
+    lin = get_linearindex(body, gdims)      # Linear indexing
 
     pos = Inf                               # Position of closest candidate
     errmin = Inf                            # Error of closest candidate
@@ -184,4 +196,125 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
     end
 
     return itarget, pos, errmin, lin
+end
+
+"""
+    get_linearindex(body::Union{NonLiftingBody, AbstractLiftingBody})
+
+Return the LinearIndex of the grid of `body`.
+"""
+function get_linearindex(body::Union{NonLiftingBody, AbstractLiftingBody})
+    gdims = get_ndivscells(body)            # Grid dimensions
+    return get_linearindex(body, gdims), gdims
+end
+
+function get_linearindex(body::Union{NonLiftingBody, AbstractLiftingBody}, gdims)
+    ndivscells = Tuple(n + 1*(n==0) for n in gdims) # n=0 -> n=1 for quasi-dimensions
+    lin = LinearIndices(ndivscells)         # Linear indexing
+    return lin
+end
+
+"""
+    decompose!(out::Matrix, V::Matrix, ihat::Vector, jhat::Vector, khat::Vector)
+
+Project each column of `V` onto the orthonormal bases `ihat`, `jhat`, `khat`.
+The projection is calculated
+"""
+function decompose!(out::AbstractMatrix, V::AbstractMatrix,
+                    ihat::AbstractVector, jhat::AbstractVector,
+                    khat::AbstractVector)
+
+    # Error cases
+    @assert size(out, 1)==size(V, 1) && size(out, 2)==size(V, 2) ""*
+        "Invalid `out` matrix. Expected size $(size(V)); got $(size(out))."
+    @assert abs(norm(ihat) - 1) <= 2*eps() ""*
+        "ihat=$(ihat) is not a unitary vector"
+    @assert abs(norm(jhat) - 1) <= 2*eps() ""*
+        "jhat=$(jhat) is not a unitary vector"
+    @assert abs(norm(khat) - 1) <= 2*eps() ""*
+        "khat=$(khat) is not a unitary vector"
+
+    # Project each column into the ihat, jhat, khat bases
+    for (o, v) in zip(eachcol(out), eachcol(V))
+        o[1] = dot(v, ihat)
+        o[2] = dot(v, jhat)
+        o[3] = dot(v, khat)
+    end
+
+    return out
+end
+
+"""
+    decompose!(out, V, ihat, jhat)
+
+Similar to `decompose!(out, V, ihat, jhat, khat)`, but automatically calculates
+`khat` from `ihat` and `jhat`.
+"""
+decompose!(out, V, ihat, jhat) = decompose!(out, V, ihat, jhat, cross(ihat, jhat))
+
+"""
+    decompose(V, ihat, jhat)
+
+Similar to `decompose!(out, V, ihat, jhat)` but without calculating the
+projection in-place.
+"""
+function decompose(V::AbstractMatrix{T1},
+                    ihat::AbstractVector{T2}, jhat::AbstractVector{T3}
+                    ) where {T1, T2, T3}
+    return decompose!(similar(V, promote_type(T1, T2, T3)), V, ihat, jhat)
+end
+
+
+"""
+    slicefield(body::AbstractBody, fieldname::String,
+                position::Number, direction::Vector, row::Bool)
+
+Return a slice of the field `fieldname` in `body` corresponding to the row or
+column ("row" is the first dimension of the grid, "column" is the second
+dimension) that is the closest to `position` calculated as the projection
+of the average cell position in the direction `direction`.
+
+> **Example:** For a wing with its span aligned along the y-axis, the pressure
+along a slice of the wing at the spanwise position y=0.5 is obtained as
+`slicefield(wing, "Cp", 0.5, [0, 1, 0], false)`.
+"""
+slicefield(body::AbstractBody, args...; optargs...) = slicefield(body, calc_controlpoints(body), args...; optargs...)
+
+"""
+    slicefield(body::AbstractBody, controlpoints::Matrix,
+                    fieldname::String,
+                    position::Number, direction::Vector, row::Bool)
+
+Same thing, but with the option of providing the control points as to save
+wastefull memory allocation.
+"""
+function slicefield(body::AbstractBody, controlpoints::Arr,
+                    fieldname::String,
+                    position::Number, direction::Vector, row::Bool;
+                    reduce=true
+                    ) where {Arr<:AbstractArray{<:Number,2}}
+
+    # Fetch field
+    field = get_field(body, fieldname)["field_data"]
+
+    # Find index of row or column slicing the field
+    gdim = row ? 1 : 2                          # Dimension to slice
+    islice, pos, errmin, lin = find_i(body, controlpoints,
+                                            position, gdim, -1; xdir=direction)
+    # Slice field
+    ncell = get_ndivscells(body)[row ? 2 : 1]   # Number of cells in the slice
+    indices = collect(row==1 ? lin[islice, j] : lin[j, islice] for j in 1:ncell)
+
+    slice = field[indices]
+
+    # Points along the slice
+    slicepoints = controlpoints[:, indices]
+
+    # Reduce the implicit double-column of the triangular grid into one column
+    if reduce
+        slice = [ (slice[2*(i-1) + 1]+slice[2*(i-1) + 2])/2 for i in 1:Int(length(slice)/2)]
+        slicepoints = [ (slicepoints[i, 2*(j-1) + 1]+slicepoints[i, 2*(j-1) + 2])/2 for i in 1:size(slicepoints,1), j in 1:Int(size(slicepoints, 2)/2)]
+    end
+
+    return slicepoints, slice
 end
