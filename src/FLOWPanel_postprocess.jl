@@ -9,6 +9,10 @@
   * License     : MIT License
 =###############################################################################
 
+
+################################################################################
+# VELOCITY FIELDS
+################################################################################
 """
     calcfield_U!(out::Matrix,
                  sourcebody::AbstractBody, targetbody::AbstractBody,
@@ -112,6 +116,17 @@ See documentation of `calcfield_U!(...)`.
 calcfield_Uoff!(args...; optargs...) = calcfield_U!(args...; optargs..., fieldname="Uoff")
 calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname="Uoff")
 
+
+
+
+
+
+
+
+
+################################################################################
+# PRESSURE FIELDS
+################################################################################
 """
     calcfield_Cp!(out::Vector, body::AbstractBody, Us, Uref;
                             U_fieldname="U", fieldname="Cp")
@@ -174,6 +189,16 @@ not needed).
 calcfield_Cp(body::AbstractBody, args...; optargs...) = calcfield_Cp!(zeros(body.ncells), body, args...; optargs...)
 
 
+
+
+
+
+
+
+
+################################################################################
+# FORCE FIELDS
+################################################################################
 """
     calcfield_F!(out::Vector, body::AbstractBody,
                          areas::Vector, normals::Matrix, Us::Matrix,
@@ -199,16 +224,16 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
                                      Arr3<:AbstractArray{<:Number,2}}
 
     # Error cases
-    @assert size(out, 1)==3 || size(out, 2)==body.ncells ""*
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
         "Invalid `out` matrix."*
         " Expected size $((3, body.ncells)); got $(size(out))."
     @assert length(areas)==body.ncells ""*
         "Invalid `areas` vector."*
         " Expected length $(body.ncells); got $(length(areas))."
-    @assert size(normals, 1)==3 || size(normals, 2)==body.ncells ""*
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
         "Invalid `normals` matrix."*
         " Expected size $((3, body.ncells)); got $(size(normals))."
-    @assert size(Us, 1)==3 || size(Us, 2)==body.ncells ""*
+    @assert size(Us, 1)==3 && size(Us, 2)==body.ncells ""*
         "Invalid `Us` matrix."*
         " Expected size $((3, body.ncells)); got $(size(Us))."
 
@@ -300,16 +325,16 @@ function calcfield_sectionalforce!(outf::Arr0, outpos::Arr1,
     lin, gdims = get_linearindex(body)      # LinearIndex and grid dimensions
 
     # Error cases
-    @assert size(outf, 1)==3 || size(outf, 2)==gdims[dimspan] ""*
+    @assert size(outf, 1)==3 && size(outf, 2)==gdims[dimspan] ""*
         "Invalid `outf` matrix."*
         " Expected size $((3, gdims[dimspan])); got $(size(outf))."
     @assert length(outpos)==gdims[dimspan] ""*
         "Invalid `outpos` matrix."*
         " Expected length $(gdims[dimspan]); got $(length(outpos))."
-    @assert size(controlpoints, 1)==3 || size(controlpoints, 2)==body.ncells ""*
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
         "Invalid `controlpoints` matrix."*
         " Expected size $((3, body.ncells)); got $(size(controlpoints))."
-    @assert size(Fs, 1)==3 || size(Fs, 2)==body.ncells ""*
+    @assert size(Fs, 1)==3 && size(Fs, 2)==body.ncells ""*
         "Invalid `Fs` matrix."*
         " Expected size $((3, body.ncells)); got $(size(Fs))."
 
@@ -494,7 +519,7 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
                         Shat::AbstractVector;
                         addfield=true)
     # Error case
-    @assert size(out, 1)==3 || size(out, 2)==3 ""*
+    @assert size(out, 1)==3 && size(out, 2)==3 ""*
         "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
     @assert abs(norm(Lhat) - 1) <= 2*eps() ""*
         "Lhat=$(Lhat) is not a unitary vector"
@@ -563,3 +588,218 @@ Similar to [`calcfield_LDS!`](@ref) but without in-place calculation (`out` is
 not needed).
 """
 calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
+
+
+
+
+
+
+
+
+
+################################################################################
+# MOMENT FIELDS
+################################################################################
+"""
+    calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
+                                Xac::AbstractVector, controlpoints::AbstractMatrix,
+                                Fs::AbstractMatrix;
+                                fieldname="Ftot", addfield=true)
+
+Calculate the integrated moment of this body (which is a three-dimensional
+vector) with respect to the aerodynamic center `Xac`.
+This is calculated from the force and position of each element given in `Fs`
+and `controlpoints`, respectively, and saved as a field named `fieldname`.
+
+The field is calculated in place and added to `out`.
+"""
+function calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
+                            Xac::AbstractVector, controlpoints::AbstractMatrix,
+                            Fs::AbstractMatrix;
+                            fieldname="Mtot", addfield=true)
+    # Error case
+    @assert length(out)==3 ""*
+        "Invalid `out` vector. Expected length 3; got $(length(out))."
+    @assert length(Xac)==3 ""*
+        "Invalid `Xac` vector. Expected length 3; got $(length(Xac))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+    @assert size(Fs, 1)==3 && size(Fs, 2)==body.ncells ""*
+        "Invalid `Fs` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(Fs))."
+
+    # Calculate Mtot (integrated moment)
+    for (X, F) in zip(eachcol(controlpoints), eachcol(Fs))
+        out[1] += (X[2] - Xac[2])*F[3] - (X[3] - Xac[3])*F[2]
+        out[2] += (X[3] - Xac[3])*F[1] - (X[1] - Xac[1])*F[3]
+        out[3] += (X[1] - Xac[1])*F[2] - (X[2] - Xac[2])*F[1]
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", out, "system")
+    end
+
+    return out
+end
+
+"""
+    calcfield_Mtot!(out, body, Xac; F_fieldname="F",
+                    offset=nothing, characteristiclength=nothing, optargs...)
+
+Calculate the integrated moment of this body (which is a three-dimensional
+vector) with respect to the aerodynamic center `Xac`.
+This is calculated from the force field `F_fieldname` and saved as a field named
+`fieldname`.
+
+The field is calculated in place and added to `out`.
+"""
+function calcfield_Mtot!(out, body, Xac; F_fieldname="F",
+                            offset=nothing, characteristiclength=nothing,
+                            optargs...)
+    # Error case
+    @assert check_field(body, F_fieldname) ""*
+        "Field $(F_fieldname) not found;"*
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+
+    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+
+    # Optional arguments for calc_controlpoints
+    cp_optargs = (off=offset, characteristiclength=characteristiclength)
+    cp_optargs = ((key, val) for (key, val) in pairs(cp_optargs) if val!=nothing)
+
+    # Calculate control points
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals; cp_optargs...)
+
+    return calcfield_Mtot!(out, body, Xac, controlpoints, Fs; optargs...)
+end
+
+"""
+    calcfield_Mtot(body, args...; optargs...) = calcfield_Mtot!(zeros(3), body, args...; optargs...)
+
+Similar to [`calcfield_Mtot!`](@ref) but without in-place calculation (`out` is
+not needed).
+"""
+calcfield_Mtot(body, args...; optargs...) = calcfield_Mtot!(zeros(3), body, args...; optargs...)
+
+
+
+"""
+    calcfield_lmn!(out::Matrix, body::AbstractBody,
+                    Xac::AbstractVector, controlpoints::AbstractMatrix,
+                    Fs::Matrix, lhat::Vector, mhat::Vector, nhat::Vector)
+
+Calculate the integrated moment of this body with respect to the aerodynamic
+center `Xac` and decompose it as rolling, pitching, and yawing moments according
+to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
+This is calculated from the force and position of each element given in `Fs`
+and `controlpoints`, respectively.
+`out[:, 1]` is the rolling moment vector and is saved as the field "Mroll".
+`out[:, 2]` is the pitching moment vector and is saved as the field "Mpitch".
+`out[:, 3]` is the yawing moment vector and is saved as the field "Myaw".
+
+The field is calculated in place on `out`.
+"""
+function calcfield_lmn!(out::AbstractMatrix, body::AbstractBody,
+                        Xac::AbstractVector, controlpoints::AbstractMatrix,
+                        Fs::AbstractMatrix,
+                        lhat::AbstractVector, mhat::AbstractVector,
+                        nhat::AbstractVector;
+                        addfield=true)
+    # Error case
+    @assert size(out, 1)==3 && size(out, 2)==3 ""*
+        "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
+    @assert length(Xac)==3 ""*
+        "Invalid `Xac` vector. Expected length 3; got $(length(Xac))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+    @assert size(Fs, 1)==3 && size(Fs, 2)==body.ncells ""*
+        "Invalid `Fs` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(Fs))."
+    @assert abs(norm(lhat) - 1) <= 2*eps() ""*
+        "lhat=$(lhat) is not a unitary vector"
+    @assert abs(norm(mhat) - 1) <= 2*eps() ""*
+        "mhat=$(mhat) is not a unitary vector"
+    @assert abs(norm(nhat) - 1) <= 2*eps() ""*
+        "nhat=$(nhat) is not a unitary vector"
+
+    # Calculate Mtot (integrated moment)
+    for (X, F) in zip(eachcol(controlpoints), eachcol(Fs))
+        out[1, 3] += (X[2] - Xac[2])*F[3] - (X[3] - Xac[3])*F[2]
+        out[2, 3] += (X[3] - Xac[3])*F[1] - (X[1] - Xac[1])*F[3]
+        out[3, 3] += (X[1] - Xac[1])*F[2] - (X[2] - Xac[2])*F[1]
+    end
+
+    # Project Mtot in each direction
+    out[:, 1] = lhat
+    out[:, 1] *= dot(view(out, :, 3), lhat)
+    out[:, 2] = mhat
+    out[:, 2] *= dot(view(out, :, 3), mhat)
+    aux = dot(view(out, :, 3), nhat)
+    out[:, 3] = nhat
+    out[:, 3] *= aux
+
+    # Save field in body
+    if addfield
+        add_field(body, "Mroll", "vector", view(out, :, 1), "system")
+        add_field(body, "Mpitch", "vector", view(out, :, 2), "system")
+        add_field(body, "Myaw", "vector", view(out, :, 3), "system")
+    end
+
+    return out
+end
+
+
+"""
+    calcfield_lmn!(out, body, Xac, lhat, mhat, nhat; F_fieldname="F",
+                    offset=nothing, characteristiclength=nothing, optargs...)
+
+Calculate the integrated moment of this body with respect to the aerodynamic
+center `Xac` and decompose it as rolling, pitching, and yawing moments according
+to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
+This is calculated from the force field `F_fieldname`.
+
+The field is calculated in place on `out`.
+"""
+function calcfield_lmn!(out, body, Xac, lhat, mhat, nhat; F_fieldname="F",
+                            offset=nothing, characteristiclength=nothing,
+                            optargs...)
+    # Error case
+    @assert check_field(body, F_fieldname) ""*
+        "Field $(F_fieldname) not found;"*
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+
+    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+
+    # Optional arguments for calc_controlpoints
+    cp_optargs = (off=offset, characteristiclength=characteristiclength)
+    cp_optargs = ((key, val) for (key, val) in pairs(cp_optargs) if val!=nothing)
+
+    # Calculate control points
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals; cp_optargs...)
+
+    return calcfield_lmn!(out, body, Xac, controlpoints, Fs, lhat, mhat, nhat;
+                                                                     optargs...)
+end
+
+"""
+    calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
+
+`nhat` is calculated automatically from `lhat` and `mhat`,
+"""
+function calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
+    return calcfield_lmn!(out, body, Xac, lhat, mhat, cross(lhat, mhat); optargs...)
+end
+
+
+"""
+    calcfield_lmn(body, args...; optargs...) = calcfield_lmn!(zeros(3, 3), body, args...; optargs...)
+
+Similar to [`calcfield_lmn!`](@ref) but without in-place calculation (`out` is
+not needed).
+"""
+calcfield_lmn(body, args...; optargs...) = calcfield_lmn!(zeros(3, 3), body, args...; optargs...)
