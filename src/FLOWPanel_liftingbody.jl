@@ -117,9 +117,9 @@ end
 # VORTEX RING SOLVER
 ################################################################################
 function solve(self::RigidWakeBody{VortexRing, 1},
-                Uinfs::AbstractArray{<:Number, 2},
-                Das::AbstractArray{<:Number, 2},
-                Dbs::AbstractArray{<:Number, 2})
+                Uinfs::AbstractMatrix{T1},
+                Das::AbstractMatrix{T2},
+                Dbs::AbstractMatrix{T3}) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -137,7 +137,7 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     CPs = _calc_controlpoints(self, normals)
 
     # Compute geometric matrix (left-hand-side influence matrix)
-    G = zeros(self.ncells, self.ncells)
+    G = zeros(promote_type(T1, T2, T3), self.ncells, self.ncells)
     _G_U!(self, G, CPs, normals, Das, Dbs)
 
     # Solve system of equations
@@ -145,7 +145,7 @@ function solve(self::RigidWakeBody{VortexRing, 1},
 
     # Save solution
     self.strength[:, 1] .= Gamma
-    
+
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")

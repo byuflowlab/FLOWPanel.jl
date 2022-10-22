@@ -249,9 +249,24 @@ end
 # PURE VORTEX RING SOLVER
 ################################################################################
 function solve(self::MultiBody{VortexRing},
-                Uinfs::AbstractArray{<:Number, 2},
-                Das::AbstractArray{<:Number, 2},
-                Dbs::AbstractArray{<:Number, 2})
+                Uinfs::AbstractMatrix{T1},
+                Das::AbstractMatrix{T2},
+                Dbs::AbstractMatrix{T3}) where {T1, T2, T3}
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    Gdims = _get_Gdims(self)
+    G = zeros(promote_type(T1, T2, T3), Gdims)
+
+    solve!(self, G, normals, CPs, Uinfs, Das, Dbs)
+end
+
+function solve!(self::MultiBody{VortexRing},
+                G::AbstractMatrix, normals::AbstractMatrix, CPs::AbstractMatrix,
+                Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix)
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -264,13 +279,7 @@ function solve(self::MultiBody{VortexRing},
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
-    # Compute normals and control points
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
-
     # Compute geometric matrix (left-hand-side influence matrix)
-    Gdims = _get_Gdims(self)
-    G = zeros(Gdims)
     _G_U!(self, G, CPs, normals, Das, Dbs)
 
     # Solve system of equations
