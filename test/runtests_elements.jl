@@ -277,8 +277,8 @@ if run_properties
             println("\t"^(v_lvl+1)*"dϕ/dz($(hsign)0) == $(hsign)σ/2 ? \t$(dphidzres)")
         end
 
-        @test phiinfres
-        @test dphidzres
+        @test phiinfres==true
+        @test dphidzres==true
 
         # --------------- DOUBLET PANEL PROPERTIES -----------------------------
         # Test phi(z=±0) == ∓mu/2
