@@ -173,6 +173,12 @@ and stores it under `G`.
   * `G::Array{T,2}`                     : Pre-allocated output memory.
   * `CPs::Array{T,2}`                   : Control points.
   * `normals::Array{T,2}`               : Normal associated to every CP.
+  * `Das::Array{T,2}`                   : Unitary direction of semi-infinite
+                                            vortex at point `a` of each
+                                            trailing edge panel.
+  * `Dbs::Array{T,2}`                   : Unitary direction of semi-infinite
+                                            vortex at point b of each
+                                            trailing edge panel.
 """
 function _G_U!(self::RigidWakeBody{VortexRing, 1},
                     G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;

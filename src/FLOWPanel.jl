@@ -37,6 +37,8 @@ const module_path = splitdir(@__FILE__)[1]      # Path to this module
 const def_data_path = joinpath(module_path, "..", "docs", "resources", "data")
                                             # Default path to airfoil data files
 const def_rfl_path = joinpath(def_data_path, "airfoils")
+                                                # Path to examples
+const examples_path = joinpath(module_path, "..", "examples")
 
 # const RType = Union{Float64,                    # Concrete real types
 #                     Int64,

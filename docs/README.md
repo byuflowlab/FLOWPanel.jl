@@ -1,5 +1,7 @@
 Build docs:
     * Install Documenter in Julia: `] add Documenter.jl`
+    * Re-generate examples: `julia src/generate_examples.jl` (this will convert
+                            Julia files under `FLOWPanel/examples` to markdown)
     * Compile source files: `julia make.jl`(this will generate html files in `build/`)
 
 Launching docs page (`build/`) locally:
