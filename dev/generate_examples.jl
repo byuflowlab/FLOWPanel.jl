@@ -59,4 +59,14 @@ open(joinpath(output_path, output_name), "w") do fout
     </center>
     ```
     """)
+
+    open(joinpath(module_path, "..", "resources", "data", "sweptwing000-CLCD.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
 end
