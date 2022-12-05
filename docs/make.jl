@@ -46,13 +46,13 @@ makedocs(
 
 
 
-# # # Documenter can also automatically deploy documentation to gh-pages.
-# # # See "Hosting Documentation" and deploydocs() in the Documenter manual
-# # # for more information.
-# deploydocs(
-#     repo = "github.com/byuflowlab/FLOWPanel.jl.git",
-#     target = "build",
-#     deps = nothing,
-#     make = nothing,
-#     # devbranch = "main"
-# )
+# Documenter can also automatically deploy documentation to gh-pages.
+# See "Hosting Documentation" and deploydocs() in the Documenter manual
+# for more information.
+deploydocs(
+    repo = "github.com/byuflowlab/FLOWPanel.jl.git",
+    target = "build",
+    deps = nothing,
+    make = nothing,
+    # devbranch = "main"
+)
