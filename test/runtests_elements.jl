@@ -247,7 +247,7 @@ if run_properties
         hinf = rand([-1, 1])*1e16
         h = rand([-1, 1])*1e-8
         normal = Oaxis'*[0, 0, 1]
-        offset = vcat((rand(2) .- 0.5)*1.99, 0)
+        offset = vcat((round.(rand(2), digits=12) .- 0.5)*1.99, 0)
         targets = hcat(0*normal+O+offset, hinf*normal+O+offset, h*normal+O+offset)
 
 
