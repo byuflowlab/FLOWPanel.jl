@@ -181,23 +181,22 @@ end
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 include(joinpath(examples_path, "sweptwing_postprocessing.jl"))
 
+save_outputs = !true                        # Whether to save outputs or not
+
 # Where to save figures (default to re-generating the figures that are used
 # in the docs)
 fig_path = joinpath(examples_path, "..", "docs", "resources", "images")
+outdata_path = joinpath(examples_path, "..", "docs", "resources", "data")
 
 # --------- Chordwise pressure distribution
 side = [-1, 1][2]               # Side of wing to plot, -1==left, 1==right
 wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
 spanposs = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
 
-fig, axs = plot_Cps(wingside, spanposs, b;
+fig1, axs = plot_Cps(wingside, spanposs, b;
                             xscaling=ar/b, AOA=AOA,
                             xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-")
-
-fig.tight_layout()
-
-fig.savefig(joinpath(fig_path, "$(run_name)-chordpressure.png"),
-                                            dpi=300, transparent=true)
+fig1.tight_layout()
 
 
 # --------- Chordwise pressure difference
@@ -205,14 +204,10 @@ side = [-1, 1][2]
 wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
 spanposs = side*[0, 0.04, 0.08, 0.16, 0.24, 0.51, 0.65, 0.9, 0.95]
 
-fig, axs = plot_deltaCps(wingside, spanposs, b;
+fig2, axs = plot_deltaCps(wingside, spanposs, b;
                             xscaling=ar/b, AOA=AOA,
                             xlims=[-0.1, 1.1], ylims=[0, -1.0], stl="-")
-
-fig.tight_layout()
-
-fig.savefig(joinpath(fig_path, "$(run_name)-deltapressure.png"),
-                                            dpi=300, transparent=true)
+fig2.tight_layout()
 
 
 # --------- Spanwise loading
@@ -222,7 +217,7 @@ Lhat = cross(Dhat, Shat)      # Lift direction
 
 nondim = 0.5*rho*magVinf^2*b/ar   # Normalization factor
 
-fig, axs = plot_loading(body, Lhat, Dhat, b;
+fig3, axs = plot_loading(body, Lhat, Dhat, b;
                         spandirection=Shat, AOA=AOA,
                         to_plot=[1, 2], yscalings=(1/nondim)*ones(3),
                         plots_optargs=[ (label="FLOWPanel", color="steelblue",),
@@ -235,10 +230,17 @@ for ax in axs
     ax.set_xticks(-1:0.5:1)
 end
 
-fig.tight_layout()
+fig3.tight_layout()
 
-fig.savefig(joinpath(fig_path, "$(run_name)-loading.png"),
-                                            dpi=300, transparent=true)
+# --------- Save figures
+if save_outputs
+    fig1.savefig(joinpath(fig_path, "$(run_name)-chordpressure.png"),
+                                                dpi=300, transparent=true)
+    fig2.savefig(joinpath(fig_path, "$(run_name)-deltapressure.png"),
+                                                dpi=300, transparent=true)
+    fig3.savefig(joinpath(fig_path, "$(run_name)-loading.png"),
+                                                dpi=300, transparent=true)
+end
 
 # --------- Integrated forces: lift and induced drag
 
@@ -268,3 +270,16 @@ CDexp = CDs_web[2]
 
 println("CL error:\t$(round(abs(CL-CLexp)/CLexp*100, digits=2))%")
 println("CD error:\t$(round(abs(CD-CDexp)/CDexp*100, digits=2))%")
+
+if save_outputs
+    str = """
+    |           | Experimental  | FLOWPanel                 | Error |
+    | --------: | :-----------: | :-----------------------: | :---- |
+    | \$C_L\$   | 0.238         | $(round(CL, digits=5))    | $(round(abs(CL-CLexp)/CLexp*100, digits=3))% |
+    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=3))% |
+    """
+
+    open(joinpath(outdata_path, run_name*"-CLCD.md"), "w") do f
+        println(f, str)
+    end
+end

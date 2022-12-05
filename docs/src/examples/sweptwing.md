@@ -206,3 +206,8 @@ distribution and spanwise loading that is ploted here below)
 </center>
 ```
 
+|           | Experimental  | FLOWPanel                 | Error |
+| --------: | :-----------: | :-----------------------: | :---- |
+| $C_L$   | 0.238         | 0.22442    | 5.704% |
+| $C_D$   | 0.005         | 0.01208    | 141.695% |
+
