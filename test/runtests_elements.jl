@@ -255,6 +255,7 @@ if run_properties
         # Test dphi/dz(±0) == ±sigma/2
         if verbose
             println("\n"*"\t"^(v_lvl)*"Test source properties")
+            println("\t"^(v_lvl+1)*"xinf:\t\t\t$(targets[:, 2])\n")
         end
 
         phis = zeros(3)
@@ -284,6 +285,7 @@ if run_properties
         # Test phi(z=±0) == ∓mu/2
         if verbose
             println("\n"*"\t"^(v_lvl)*"Test doublet properties")
+            println("\t"^(v_lvl+1)*"xinf:\t\t\t$(targets[:, 2])\n")
         end
 
         phis = zeros(3)
