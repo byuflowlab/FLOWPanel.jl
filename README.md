@@ -3,7 +3,7 @@
 *Three-dimensional panel method for high-Reynolds aerodynamics*
 
 [![](https://img.shields.io/badge/code-open%20source-brightgreen.svg)](https://github.com/byuflowlab/FLOWPanel.jl)
-[![](https://img.shields.io/badge/docs-stable-blue.svg)](http://flow.byu.edu/FLOWPanel.jl)
+[![](https://img.shields.io/badge/docs-stable-blue.svg)](http://flow.byu.edu/FLOWPanel.jl/dev/)
 
 
 ### Features

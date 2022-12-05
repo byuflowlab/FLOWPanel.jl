@@ -283,3 +283,12 @@ if save_outputs
         println(f, str)
     end
 end
+
+
+
+# ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
+sweep_aoa = false                       # Whether to run AOA sweep
+
+if sweep_aoa
+    include("sweptwing_aoasweep.jl")
+end
