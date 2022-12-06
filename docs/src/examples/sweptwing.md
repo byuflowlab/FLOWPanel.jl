@@ -327,6 +327,7 @@ to see how to postprocess the solution as plotted here below)
     <br><br><b>Lift and induced drag</b>
     <img src="../../assets/images/sweptwing000-sweep-CLCD.png" alt="Pic here" style="width: 100%;"/>
 
+    <br><br><b>Pitching moment</b><br>
     <img src="../../assets/images/sweptwing000-sweep-Cm.png" alt="Pic here" style="width: 50%;"/>
 </center>
 ```
