@@ -119,7 +119,9 @@ end
 function solve(self::RigidWakeBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3}) where {T1, T2, T3}
+                Dbs::AbstractMatrix{T3};
+                solver=solve_ludiv!, solver_optargs=()
+                ) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -132,16 +134,22 @@ function solve(self::RigidWakeBody{VortexRing, 1},
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
+    T = promote_type(T1, T2, T3)
+
     # Compute normals and control points
     normals = _calc_normals(self)
     CPs = _calc_controlpoints(self, normals)
 
     # Compute geometric matrix (left-hand-side influence matrix)
-    G = zeros(promote_type(T1, T2, T3), self.ncells, self.ncells)
+    G = zeros(T, self.ncells, self.ncells)
     _G_U!(self, G, CPs, normals, Das, Dbs)
 
+    # Calculate boundary conditions (right-hand side of system of equations)
+    RHS = calc_bc_noflowthrough(Uinfs, normals)
+
     # Solve system of equations
-    Gamma = _solve(self, normals, G, Uinfs)
+    Gamma = zeros(T, self.ncells)
+    solver(Gamma, G, RHS; solver_optargs...)
 
     # Save solution
     self.strength[:, 1] .= Gamma
@@ -151,18 +159,6 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
     add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
-end
-
-function _solve(::RigidWakeBody{VortexRing, 1}, normals, G, Uinfs)
-
-    # Define right-hand side
-    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
-                                        zip(eachcol(Uinfs), eachcol(normals))]
-
-    # Solve the system of equations
-    Gamma = G\lambda
-
-    return Gamma
 end
 
 """

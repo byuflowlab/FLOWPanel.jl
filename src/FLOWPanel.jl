@@ -23,12 +23,16 @@ export  solve, save, Uind!, phi!,
 import Dierckx
 import PyPlot
 const plt = PyPlot
+import LinearAlgebra as LA
 import LinearAlgebra: I
+import Krylov
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
 import GeometricTools
 const gt = GeometricTools
+import ImplicitAD as IAD
+import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
 
 
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
@@ -50,7 +54,7 @@ const examples_path = joinpath(module_path, "..", "examples")
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements",
+for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",

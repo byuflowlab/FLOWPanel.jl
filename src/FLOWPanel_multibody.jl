@@ -251,7 +251,7 @@ end
 function solve(self::MultiBody{VortexRing},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3}) where {T1, T2, T3}
+                Dbs::AbstractMatrix{T3}; optargs...) where {T1, T2, T3}
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -261,12 +261,14 @@ function solve(self::MultiBody{VortexRing},
     Gdims = _get_Gdims(self)
     G = zeros(promote_type(T1, T2, T3), Gdims)
 
-    solve!(self, G, normals, CPs, Uinfs, Das, Dbs)
+    solve!(self, G, normals, CPs, Uinfs, Das, Dbs; optargs...)
 end
 
 function solve!(self::MultiBody{VortexRing},
-                G::AbstractMatrix, normals::AbstractMatrix, CPs::AbstractMatrix,
-                Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix)
+                G::AbstractMatrix{T1},
+                normals::AbstractMatrix{T2}, CPs::AbstractMatrix,
+                Uinfs::AbstractMatrix{T3}, Das::AbstractMatrix, Dbs::AbstractMatrix;
+                solver=solve_ludiv!, solver_optargs=()) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -282,8 +284,12 @@ function solve!(self::MultiBody{VortexRing},
     # Compute geometric matrix (left-hand-side influence matrix)
     _G_U!(self, G, CPs, normals, Das, Dbs)
 
+    # Calculate boundary conditions (right-hand side of system of equations)
+    RHS = calc_bc_noflowthrough(Uinfs, normals)
+
     # Solve system of equations
-    Gamma = _solve(self, normals, G, Uinfs)
+    Gamma = zeros(promote_type(T1, T2, T3), size(G, 1))
+    solver(Gamma, G, RHS; solver_optargs...)
 
     # Save solution
     _set_strength(self, Gamma)
