@@ -244,7 +244,7 @@ if run_properties
 
 
         # Evaluate potential field at z=0 and z=inf
-        hinf = rand([-1, 1])*1e16
+        hinf = rand([-1, 1])*1e10
         h = rand([-1, 1])*1e-8
         normal = Oaxis'*[0, 0, 1]
         offset = vcat((round.(rand(2), digits=3) .- 0.5)*1.99, 0)
