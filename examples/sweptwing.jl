@@ -60,7 +60,7 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 #       middle panel is 10 times larger than the peripheral panels.
 
 # ----- Spanwise discretization
-n_span          = 20                            # Number of spanwise panels on each side of the wing
+n_span          = 15                            # Number of spanwise panels on each side of the wing
 # n_span        = 60                            # <-- uncomment this for finer discretization
 NDIVS_span_l    = [(1.0, n_span, 10.0, false)]  # Discretization of left side
 NDIVS_span_r    = [(1.0, n_span, 10.0, false)]  # Discretization of right side
@@ -290,5 +290,15 @@ end
 sweep_aoa = false                       # Whether to run AOA sweep
 
 if sweep_aoa
+    println("Running AOA sweep...")
     include("sweptwing_aoasweep.jl")
+end
+
+# ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
+solver_benchmark = !true                # Whether to run solver benchmark
+save_outputs2 = !true
+
+if solver_benchmark
+    println("Running solver benchmark...")
+    include("sweptwing_solverbenchmark.jl")
 end

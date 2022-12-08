@@ -6,6 +6,7 @@ output_path = joinpath(module_path, "examples") # Path where to store  examples 
 # ------------- SWEPT WING EXAMPLE ---------------------------------------------
 
 output_name = "sweptwing.md"
+data_path = joinpath(module_path, "..", "resources", "data")
 
 header = """
 # Swept Wing
@@ -64,7 +65,7 @@ open(joinpath(output_path, output_name), "w") do fout
     ```
     """)
 
-    open(joinpath(module_path, "..", "resources", "data", "sweptwing000-CLCD.md"), "r") do fin
+    open(joinpath(data_path, "sweptwing000-CLCD.md"), "r") do fin
         for l in eachline(fin)
             if contains(l, break_flag)
                 break
@@ -88,12 +89,14 @@ open(joinpath(output_path, output_name), "w") do fout
     break_flag = "COMPARISON TO EXPERIMENTAL DATA"
 
     open(joinpath(pnl.examples_path, input_name), "r") do fin
-        for l in eachline(fin)
+        for (li, l) in enumerate(eachline(fin))
             if contains(l, break_flag)
                 break
             end
 
-            println(fout, l)
+            if li>=13
+                println(fout, l)
+            end
         end
     end
 
@@ -117,4 +120,200 @@ open(joinpath(output_path, output_name), "w") do fout
     </center>
     ```
     """)
+
+    # -------- Linear solver benchmark --------------------------
+    println(fout, "## Solver Benchmark")
+
+    println(fout, """
+    \nThe problem of solving the panel strengths that satisfy the
+    no-flow-through condition poses a linear system of equation of the form
+
+    ```math
+    \\begin{align*}
+            A y = b
+    ,\\end{align*}
+    ```
+
+    where \$A\$ is the matrix containing the geometry of the panels and wake,
+    \$y\$ is the vector of panel strengths, and \$b\$ is the vector of boundary
+    conditions.
+    This is trivially solved as
+
+    ```math
+    \\begin{align*}
+            y = A^{-1}b
+    ,\\end{align*}
+    ```
+
+    however, depending on the size of \$A\$ (which depends on the number of
+    panels) it can become inefficient or even unfeasible to explicitely
+    calculate the inverse of \$A\$.
+    Multiple linear solvers are available in FLOWPanel that avoid
+    explicitely inverting \$A\$, which are described and benchmarked as
+    follows.
+
+    > The complete code is available at """*"""
+    [examples/sweptwing_solverbenchmark.jl](https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/sweptwing_solverbenchmark.jl) """*"""
+    but you should also be able to copy and paste these lines after running the """*"""
+    first section of this example.
+
+    """)
+
+
+
+    println(fout, """
+    ### Backslash operator `\\`
+
+    Most programming languages implement an operator `\\` that directly
+    calculates the matrix-vector product \$A^{-1}b\$.
+    This is more efficient than directly inverting \$A\$ and then multiplying
+    by \$b\$, without loosing any accuracy.
+    This linear solver is available under this function:
+    ```@docs
+    FLOWPanel.solve_backslash!
+    ```
+    and is used as follows:
+    """)
+
+
+    println(fout, "```julia")
+    open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
+        for (li, l) in enumerate(eachline(fin))
+            if 12 <= li <= 65
+                println(fout, l)
+            end
+        end
+    end
+    println(fout, "```")
+
+    println(fout, "\n")
+    open(joinpath(data_path, "sweptwing000-backslash.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
+
+
+
+    println(fout, """
+    ### LU decomposition
+
+    Pre-calculating and re-using the
+    [LU decomposition](https://en.wikipedia.org/wiki/LU_decomposition) of \$A\$
+    is advantageous when the linear system needs to be solved for multiple
+    boundary conditions.
+
+    ```@docs
+    FLOWPanel.solve_ludiv!
+    ```
+
+    Running the solver:
+    """)
+
+
+    println(fout, "```julia")
+    open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
+        for (li, l) in enumerate(eachline(fin))
+            if 77 <= li <= 79
+                println(fout, l)
+            end
+        end
+    end
+    println(fout, "```")
+
+    open(joinpath(data_path, "sweptwing000-ludiv.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
+
+
+
+    println(fout, """
+    ### Iterative Krylov Solver
+
+    Iterative Krylov subspace solvers converge to the right solution
+    rather than directly solving the system of equations.
+    This allows the user to trade off accuracy for computational speed by
+    tuning the tolerance of the solver.
+
+    The [generalized minimal residual](https://en.wikipedia.org/wiki/Generalized_minimal_residual_method)
+    (GMRES) method provided by
+    [Krylov.jl](https://juliasmoothoptimizers.github.io/Krylov.jl/stable/solvers/unsymmetric/#GMRES)
+    is available in FLOWPanel.
+
+    ```@docs
+    FLOWPanel.solve_gmres!
+    ```
+    """)
+
+
+    println(fout, "Running the solver with tolerance \$10^{-8}\$:")
+    println(fout, "```julia")
+    open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
+        for (li, l) in enumerate(eachline(fin))
+            if 91 <= li <= 97
+                println(fout, l)
+            end
+        end
+    end
+    println(fout, "```")
+    open(joinpath(data_path, "sweptwing000-gmres8.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
+
+    println(fout, "Running the solver with tolerance \$10^{-2}\$:")
+    println(fout, "```julia")
+    open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
+        for (li, l) in enumerate(eachline(fin))
+            if 110 <= li <= 116
+                println(fout, l)
+            end
+        end
+    end
+    println(fout, "```")
+    open(joinpath(data_path, "sweptwing000-gmres2.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
+
+    println(fout, "Running the solver with tolerance \$10^{-1}\$:")
+    println(fout, "```julia")
+    open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
+        for (li, l) in enumerate(eachline(fin))
+            if 130 <= li <= 136
+                println(fout, l)
+            end
+        end
+    end
+    println(fout, "```")
+    open(joinpath(data_path, "sweptwing000-gmres1.md"), "r") do fin
+        for l in eachline(fin)
+            if contains(l, break_flag)
+                break
+            end
+
+            println(fout, l)
+        end
+    end
+
 end

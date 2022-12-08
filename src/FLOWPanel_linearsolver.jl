@@ -16,7 +16,9 @@
 """
     solve_backslash!(y::AbstractVector, A::AbstractMatrix, b::AbstractVector)
 
-Solves a linear system of equations of the form Ay = b using the \\ operator.
+Solves a linear system of equations of the form \$Ay = b\$ using the `\\`
+operator.
+
 The solution is stored under `y`.
 """
 function solve_backslash!(y::AbstractVector,
@@ -31,15 +33,16 @@ end
     solve_ludiv!(y::AbstractVector,
                     A::AbstractMatrix, b::AbstractVector; Alu=nothing)
 
-Solves a linear system of equations of the form Ay = b using the LU
+Solves a linear system of equations of the form \$Ay = b\$ using the LU
 decomposition of `A` provided under `Alu` and `LinearAlgebra.ldiv!`. If `Alu`
 is not provided, it will be automatically calculated using `LinearAlgebra.lu`.
 
 This method is useful when the system needs to be solved multiple times for
 different `b` vectors since `Alu` can be precomputed and re-used. We
-recommend you use `calc_Alu` to compute `Alu` since it has overloaded to also
-handle Dual and TrackedReal numbers. `solve_ludiv!` has also been overloaded
-with ImplicitAD to efficiently differentiate the linear solver as needed.
+recommend you use `FLOWPanel.calc_Alu` to compute `Alu` since this function has
+been overloaded for Dual and TrackedReal numbers. `solve_ludiv!` has also
+been overloaded with [ImplicitAD](http://flow.byu.edu/ImplicitAD.jl) to
+efficiently differentiate the linear solver as needed.
 
 The solution is stored under `y`.
 
@@ -48,7 +51,7 @@ The solution is stored under `y`.
 import FLOWPanel as pnl
 
 Alu = pnl.calc_lu(A)
-solve_ludiv!(y, A, b; Alu=Alu)
+pnl.solve_ludiv!(y, A, b; Alu=Alu)
 ```
 """
 function solve_ludiv!(y::AbstractVector,
@@ -82,9 +85,9 @@ end
                     A::AbstractMatrix, b::AbstractVector; Avalue=nothing,
                     atol=1e-8, rtol=1e-8, optargs...)
 
-Solves a linear system of equations of the form Ay = b through the generalized
-minimal residual (GMRES) method, which is an iterative method in the Krylov
-subspace.
+Solves a linear system of equations of the form \$Ay = b\$ through the
+generalized minimal residual (GMRES) method, which is an iterative method in the
+Krylov subspace.
 
 This iterative method is more efficient than a direct method (`solve_backslack!`
 or `solve_ludiv!`) when `A` is larger than 3000x3000 or so. Also, iterative
@@ -101,7 +104,7 @@ The solution is stored under `y`.
 import FLOWPanel as pnl
 
 Avalue = pnl.calc_Avalue(A)
-solve_gmres!(y, A, b; Avalue=Avalue)
+pnl.solve_gmres!(y, A, b; Avalue=Avalue)
 ```
 """
 function solve_gmres!(y::AbstractVector,

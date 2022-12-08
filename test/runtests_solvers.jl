@@ -26,7 +26,7 @@ solvers_to_test = (
 
     # --------------- SWEPT WING TESTS -----------------------------------------
     if verbose
-        println("\t"^(v_lvl)*"Swept-wing solver tests")
+        println("\n"*"\t"^(v_lvl)*"Swept-wing solver tests")
     end
 
     CLexp = 0.238

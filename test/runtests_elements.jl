@@ -30,8 +30,8 @@ elements_to_test = (
 
     # --------------- ∇ϕ = u TESTS ---------------------------------------------
     if verbose
-        println("\t"^(v_lvl)*"∇ϕ = u element tests")
-        @printf "%s%10.10s %-24s %-26s\t%-10s\n" "\t"^(v_lvl+1) "Element" "∇ϕ (automatic diff)" "u (analytic)" "max((∇ϕ .- u)./u)"
+        println("\n"*"\t"^(v_lvl)*"∇ϕ = u element tests")
+        @printf "%s%10.10s %-24s %-26s%-10s\n" "\t"^(v_lvl+1) "Element" "∇ϕ (automatic diff)" "u (analytic)" "max((∇ϕ .- u)./u)"
     end
 
     for (lbl, (phi, U), (phioptargs, Uoptargs)) in elements_to_test[1:(run_gradphiu ? end : -1)]
@@ -98,7 +98,7 @@ elements_to_test = (
 
     # --------------- MEMORY-ALLOCATION TESTS ----------------------------------
     if verbose
-        println("\t"^(v_lvl)*"Memory-allocation element tests")
+        println("\n"*"\t"^(v_lvl)*"Memory-allocation element tests")
         @printf "%s%10.10s %10s %16s\n" "\t"^(v_lvl+1) "Element" "ϕ" "u"
     end
 
@@ -155,7 +155,7 @@ elements_to_test = (
 
     # --------------- SOLENOIDAL AND IRROTATIONAL TESTS ------------------------
     if verbose
-        println("\t"^(v_lvl)*"Solenoidal and irrotational tests")
+        println("\n"*"\t"^(v_lvl)*"Solenoidal and irrotational tests")
         @printf "%s%10.10s %-10s %16s\n" "\t"^(v_lvl+1) "Element" "    ∇ ⋅u" "∇ × u"
     end
 
@@ -247,7 +247,7 @@ if run_properties
         hinf = rand([-1, 1])*1e16
         h = rand([-1, 1])*1e-8
         normal = Oaxis'*[0, 0, 1]
-        offset = vcat((round.(rand(2), digits=4) .- 0.5)*1.99, 0)
+        offset = vcat((round.(rand(2), digits=3) .- 0.5)*1.99, 0)
         targets = hcat(0*normal+O+offset, hinf*normal+O+offset, h*normal+O+offset)
 
 
