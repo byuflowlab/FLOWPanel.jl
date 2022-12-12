@@ -1,19 +1,13 @@
 # ------------- SWEPT WING EXAMPLE ---------------------------------------------
 
-output_name = "sweptwing.md"
+output_name = "sweptwing"
 data_path = joinpath(module_path, "..", "resources", "data")
 
-header = """
-# Swept Wing
-"""
 
 
-open(joinpath(output_path, output_name), "w") do fout
 
-    println(fout, header)
-
-    # -------- 4.2deg AOA --------------------------
-    println(fout, "## \$4.2^\\circ\$ Angle of Attack")
+# -------- 4.2deg AOA ----------------------------------------------------------
+open(joinpath(output_path, output_name*"-4p2aoa.md"), "w") do fout
 
     println(fout, """
     ```@raw html
@@ -21,7 +15,12 @@ open(joinpath(output_path, output_name), "w") do fout
       <img src="../../assets/images/sweptwing-viz00.png" alt="Pic here" style="width: 100%;"/>
     </center>
     ```
+
+    In this example we solve the flow around a \$45^\\circ\$ swept-back wing at an
+    angle of attack of \$4.2^\\circ\$ using a rigid wake model.
     """)
+
+    println(fout, "# \$4.2^\\circ\$ Angle of Attack")
 
     println(fout, "```julia")
 
@@ -70,8 +69,15 @@ open(joinpath(output_path, output_name), "w") do fout
         end
     end
 
-    # -------- AOA Sweep --------------------------
-    println(fout, "## AOA Sweep")
+end
+
+
+
+
+# -------- AOA Sweep -----------------------------------------------------------
+open(joinpath(output_path, output_name*"-aoasweep.md"), "w") do fout
+
+    println(fout, "# AOA Sweep")
 
     println(fout, """
         \nUsing the wing defined in the previous section, we now sweep the angle
@@ -115,9 +121,15 @@ open(joinpath(output_path, output_name), "w") do fout
     </center>
     ```
     """)
+end
 
-    # -------- Linear solver benchmark --------------------------
-    println(fout, "## Solver Benchmark")
+
+
+
+# -------- Linear solver benchmark ---------------------------------------------
+open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
+
+    println(fout, "# Solver Benchmark")
 
     println(fout, """
     \nThe problem of solving the panel strengths that satisfy the
@@ -157,7 +169,7 @@ open(joinpath(output_path, output_name), "w") do fout
 
 
     println(fout, """
-    ### Backslash operator `\\`
+    ## Backslash operator `\\`
 
     Most programming languages implement an operator `\\` that directly
     calculates the matrix-vector product \$A^{-1}b\$.
@@ -184,10 +196,6 @@ open(joinpath(output_path, output_name), "w") do fout
     println(fout, "\n")
     open(joinpath(data_path, "sweptwing000-backslash.md"), "r") do fin
         for l in eachline(fin)
-            if contains(l, break_flag)
-                break
-            end
-
             println(fout, l)
         end
     end
@@ -195,7 +203,7 @@ open(joinpath(output_path, output_name), "w") do fout
 
 
     println(fout, """
-    ### LU decomposition
+    ## LU decomposition
 
     Pre-calculating and re-using the
     [LU decomposition](https://en.wikipedia.org/wiki/LU_decomposition) of \$A\$
@@ -222,10 +230,6 @@ open(joinpath(output_path, output_name), "w") do fout
 
     open(joinpath(data_path, "sweptwing000-ludiv.md"), "r") do fin
         for l in eachline(fin)
-            if contains(l, break_flag)
-                break
-            end
-
             println(fout, l)
         end
     end
@@ -233,7 +237,7 @@ open(joinpath(output_path, output_name), "w") do fout
 
 
     println(fout, """
-    ### Iterative Krylov Solver
+    ## Iterative Krylov Solver
 
     Iterative Krylov subspace solvers converge to the right solution
     rather than directly solving the system of equations.
@@ -263,10 +267,6 @@ open(joinpath(output_path, output_name), "w") do fout
     println(fout, "```")
     open(joinpath(data_path, "sweptwing000-gmres8.md"), "r") do fin
         for l in eachline(fin)
-            if contains(l, break_flag)
-                break
-            end
-
             println(fout, l)
         end
     end
@@ -283,10 +283,6 @@ open(joinpath(output_path, output_name), "w") do fout
     println(fout, "```")
     open(joinpath(data_path, "sweptwing000-gmres2.md"), "r") do fin
         for l in eachline(fin)
-            if contains(l, break_flag)
-                break
-            end
-
             println(fout, l)
         end
     end
@@ -303,10 +299,6 @@ open(joinpath(output_path, output_name), "w") do fout
     println(fout, "```")
     open(joinpath(data_path, "sweptwing000-gmres1.md"), "r") do fin
         for l in eachline(fin)
-            if contains(l, break_flag)
-                break
-            end
-
             println(fout, l)
         end
     end

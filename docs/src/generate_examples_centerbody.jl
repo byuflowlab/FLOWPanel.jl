@@ -1,16 +1,12 @@
 # ------------- CENTERBODY EXAMPLE ---------------------------------------------
 
-output_name = "centerbody.md"
+output_name = "centerbody"
 data_path = joinpath(module_path, "..", "resources", "data")
 
-header = """
-# Centerbody
-"""
 
 
-open(joinpath(output_path, output_name), "w") do fout
-
-    println(fout, header)
+# -------- Source Solver -------------------------------------------------------
+open(joinpath(output_path, output_name*"-source.md"), "w") do fout
 
     println(fout, """
     ```@raw html
@@ -22,9 +18,7 @@ open(joinpath(output_path, output_name), "w") do fout
     In this example we solve the flow around a body of revolution resembling
     the centerbody (hub) of a ducted fan.
     """)
-
-    # -------- Source Solver --------------------------
-    println(fout, "## Source Elements")
+    println(fout, "# Source Elements")
 
     println(fout, """
     First we run this example with source elements, which are especially
@@ -51,12 +45,15 @@ open(joinpath(output_path, output_name), "w") do fout
     [examples/centerbody.jl](https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/centerbody.jl)
     )
     """)
+end
 
 
-    # -------- Comparison to Experimental --------------------------
+
+# -------- Comparison to Experimental ------------------------------------------
+open(joinpath(output_path, output_name*"-slice.md"), "w") do fout
 
     println(fout, """
-    ## Slice
+    # Slice
 
     FLOWPanel provides the following function to obtain the solution field
     along a slice along a body:
@@ -94,11 +91,17 @@ open(joinpath(output_path, output_name), "w") do fout
     ```
     """)
 
-    # -------- Vortex Ring Solver --------------------------
+end
+
+
+
+
+# -------- Vortex Ring Solver --------------------------------------------------
+open(joinpath(output_path, output_name*"-vortexring.md"), "w") do fout
 
     println(fout, """
 
-    ## Vortex Ring Elements
+    # Vortex Ring Elements
 
     While source elements are physically adequate to model a non-lifting body,
     in some circumstances it may be benefitial to use all vortex ring elements.
