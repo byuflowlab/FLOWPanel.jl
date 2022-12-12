@@ -2,6 +2,8 @@ using Documenter
 using FLOWPanel
 const pnl = FLOWPanel
 
+include("src/generate_examples.jl")
+
 makedocs(
     sitename = "FLOWPanel.jl",
     format = Documenter.HTML(;
@@ -36,6 +38,7 @@ makedocs(
                                       ],
                 "Examples"          => [
                                         "examples/sweptwing.md",
+                                        "examples/centerbody.md",
                                        ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",
@@ -46,13 +49,13 @@ makedocs(
 
 
 
-# Documenter can also automatically deploy documentation to gh-pages.
-# See "Hosting Documentation" and deploydocs() in the Documenter manual
-# for more information.
-deploydocs(
-    repo = "github.com/byuflowlab/FLOWPanel.jl.git",
-    target = "build",
-    deps = nothing,
-    make = nothing,
-    # devbranch = "main"
-)
+# # Documenter can also automatically deploy documentation to gh-pages.
+# # See "Hosting Documentation" and deploydocs() in the Documenter manual
+# # for more information.
+# deploydocs(
+#     repo = "github.com/byuflowlab/FLOWPanel.jl.git",
+#     target = "build",
+#     deps = nothing,
+#     make = nothing,
+#     # devbranch = "main"
+# )
