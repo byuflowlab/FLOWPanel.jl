@@ -488,6 +488,11 @@ end
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
 """
+    characteristiclength_unitary(args...) -> 1
+"""
+characteristiclength_unitary(args...) = 1
+
+"""
     characteristiclength_bbox(nodes::Matrix, panel::Vector{Int})
 
 Returns the characteristic length of a panel calculated as the diagonal of

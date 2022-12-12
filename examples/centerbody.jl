@@ -112,7 +112,7 @@ end
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 include(joinpath(pnl.examples_path, "centerbody_postprocessing.jl"))
 
-save_outputs = true                        # Whether to save outputs or not
+save_outputs = !true                        # Whether to save outputs or not
 
 # Where to save figures (default to re-generating the figures that are used
 # in the docs)

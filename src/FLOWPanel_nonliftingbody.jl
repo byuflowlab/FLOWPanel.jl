@@ -54,10 +54,10 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
                     fields=Array{String,1}(),
                     Oaxis=Array(1.0I, 3, 3), O=zeros(3),
                     strength=zeros(grid.ncells, N),
-                    CPoffset=0.05,
+                    CPoffset=1e-14,
                     kerneloffset=1e-8,
                     kernelcutoff=1e-14,
-                    characteristiclength=characteristiclength_sqrtarea
+                    characteristiclength=characteristiclength_unitary
                   ) where {E, N} = new(
                     grid,
                     nnodes, ncells,

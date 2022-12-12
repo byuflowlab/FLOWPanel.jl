@@ -1,11 +1,6 @@
 bodytype = pnl.RigidWakeBody{pnl.VortexRing}    # Elements and wake model
 
-body = bodytype(trigrid;            # Body to be solved
-                CPoffset=1e-14,     # Offset control points slightly in the positive normal direction
-                characteristiclength=(args...)->R,   # Characheristic length for control point offset
-                kerneloffset=1e-8,  # Offset of kernel to avoid singularities
-                kernelcutoff=1e-14  # Cutoff of kernel to avoid singularities
-                )
+body = bodytype(trigrid)                        # Body to be solved
 
 
 # ----------------- CALL SOLVER ------------------------------------------------
