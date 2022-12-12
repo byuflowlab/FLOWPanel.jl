@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Solver Benchmark · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><span class="tocitem">Elements</span><ul><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li></ul></li><li><span class="tocitem">Geometry Engine</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/gridgeneration/">Methods</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../../geometry/basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../../geometry/basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../../geometry/basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../../geometry/basics-surfacegrid/">Surface Grid</a></li></ul></li></ul></li><li><span class="tocitem">Examples</span><ul><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox" checked/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../sweptwing-aoasweep/">AOA Sweep</a></li><li class="is-active"><a class="tocitem" href>Solver Benchmark</a><ul class="internal"><li><a class="tocitem" href="#Backslash-operator-\\"><span>Backslash operator <code>\</code></span></a></li><li><a class="tocitem" href="#LU-decomposition"><span>LU decomposition</span></a></li><li><a class="tocitem" href="#Iterative-Krylov-Solver"><span>Iterative Krylov Solver</span></a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li><a class="is-disabled">Swept Wing</a></li><li class="is-active"><a href>Solver Benchmark</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Solver Benchmark</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/examples/sweptwing-solver.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Solver-Benchmark"><a class="docs-heading-anchor" href="#Solver-Benchmark">Solver Benchmark</a><a id="Solver-Benchmark-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Benchmark" title="Permalink"></a></h1><p>The problem of solving the panel strengths that satisfy the no-flow-through condition poses a linear system of equation of the form</p><p class="math-container">\[\begin{align*}
+        A y = b
+,\end{align*}\]</p><p>where <span>$A$</span> is the matrix containing the geometry of the panels and wake, <span>$y$</span> is the vector of panel strengths, and <span>$b$</span> is the vector of boundary conditions. This is trivially solved as</p><p class="math-container">\[\begin{align*}
+        y = A^{-1}b
+,\end{align*}\]</p><p>however, depending on the size of <span>$A$</span> (which depends on the number of panels) it can become inefficient or even unfeasible to explicitely calculate the inverse of <span>$A$</span>. Multiple linear solvers are available in FLOWPanel that avoid explicitely inverting <span>$A$</span>, which are described and benchmarked as follows.</p><blockquote><p>The complete code is available at <a href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/sweptwing_solverbenchmark.jl">examples/sweptwing_solverbenchmark.jl</a> but you should also be able to copy and paste these lines after running the first section of this example.</p></blockquote><h2 id="Backslash-operator-\\"><a class="docs-heading-anchor" href="#Backslash-operator-\\">Backslash operator <code>\</code></a><a id="Backslash-operator-\\-1"></a><a class="docs-heading-anchor-permalink" href="#Backslash-operator-\\" title="Permalink"></a></h2><p>Most programming languages implement an operator <code>\</code> that directly calculates the matrix-vector product <span>$A^{-1}b$</span>. This is more efficient than directly inverting <span>$A$</span> and then multiplying by <span>$b$</span>, without loosing any accuracy. This linear solver is available under this function:</p><article class="docstring"><header><a class="docstring-binding" id="FLOWPanel.solve_backslash!" href="#FLOWPanel.solve_backslash!"><code>FLOWPanel.solve_backslash!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia hljs">solve_backslash!(y::AbstractVector, A::AbstractMatrix, b::AbstractVector)</code></pre><p>Solves a linear system of equations of the form <span>$Ay = b$</span> using the <code>\</code> operator.</p><p>The solution is stored under <code>y</code>.</p></div><a class="docs-sourcelink" target="_blank" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/00ffcd75d1dc2ac35d3e597fc0fe37fe90daa540/src/FLOWPanel_linearsolver.jl#L16-L23">source</a></section></article><p>and is used as follows:</p><pre><code class="language-julia hljs">import Printf: @sprintf
+
+function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl=&quot;&quot;)
+
+    CLexp = 0.238
+    CDexp = 0.005
+
+    str = &quot;&quot;
+
+    if verbose
+        str *= @sprintf &quot;| %15.15s | %-7s | %-7s |\n&quot; &quot;Solver&quot; &quot;CL&quot; &quot;CD&quot;
+        str *= &quot;| --------------: | :-----: | :-----: |\n&quot;
+    end
+
+    # Calculate velocity away from the body
+    Us = pnl.calcfield_U(body, body; fieldname=&quot;Uoff&quot;,
+                            offset=0.02, characteristiclength=(args...)-&gt;b/ar)
+
+    # Calculate pressure coeffiecient
+    Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname=&quot;Uoff&quot;)
+
+    # Calculate the force of each panel
+    Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname=&quot;Uoff&quot;)
+    # Calculate total force of the vehicle decomposed as lfit, drag, and sideslip
+    Dhat = Vinf/pnl.norm(Vinf)        # Drag direction
+    Shat = [0, 1, 0]              # Span direction
+    Lhat = pnl.cross(Dhat, Shat)      # Lift direction
+
+    LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
+
+    L = LDS[:, 1]
+    D = LDS[:, 2]
+
+    # Force coefficients
+    nondim = 0.5*rho*magVinf^2*b^2/ar   # Normalization factor
+    CL = sign(pnl.dot(L, Lhat)) * pnl.norm(L) / nondim
+    CD = sign(pnl.dot(D, Dhat)) * pnl.norm(D) / nondim
+    err = abs(CL-CLexp)/CLexp
+
+    if verbose
+        str *= @sprintf &quot;| %15.15s | %-7.4f | %-7.4f |\n&quot; lbl CL CD
+        str *= @sprintf &quot;| %15.15s | %-7s | %-7s |\n&quot; &quot;Experimental&quot; CLexp CDexp
+        str *= @sprintf &quot;\n\tCL Error:\t%4.3g﹪\n&quot; err*100
+    end
+
+    return CL, CD, str
+
+end
+
+
+# ----- Linear solver test: backslash \ operator
+t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_backslash!)
+
+CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl=&quot;Backslash&quot;)</code></pre><table><tr><th style="text-align: right">Solver</th><th style="text-align: center">CL</th><th style="text-align: center">CD</th></tr><tr><td style="text-align: right">Backslash</td><td style="text-align: center">0.2247</td><td style="text-align: center">0.0130</td></tr><tr><td style="text-align: right">Experimental</td><td style="text-align: center">0.238</td><td style="text-align: center">0.005</td></tr></table><pre><code class="nohighlight hljs">CL Error:	5.57﹪
+Run time:	0.44 seconds</code></pre><h2 id="LU-decomposition"><a class="docs-heading-anchor" href="#LU-decomposition">LU decomposition</a><a id="LU-decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#LU-decomposition" title="Permalink"></a></h2><p>Pre-calculating and re-using the <a href="https://en.wikipedia.org/wiki/LU_decomposition">LU decomposition</a> of <span>$A$</span> is advantageous when the linear system needs to be solved for multiple boundary conditions.</p><article class="docstring"><header><a class="docstring-binding" id="FLOWPanel.solve_ludiv!" href="#FLOWPanel.solve_ludiv!"><code>FLOWPanel.solve_ludiv!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia hljs">solve_ludiv!(y::AbstractVector,
+                A::AbstractMatrix, b::AbstractVector; Alu=nothing)</code></pre><p>Solves a linear system of equations of the form <span>$Ay = b$</span> using the LU decomposition of <code>A</code> provided under <code>Alu</code> and <code>LinearAlgebra.ldiv!</code>. If <code>Alu</code> is not provided, it will be automatically calculated using <code>LinearAlgebra.lu</code>.</p><p>This method is useful when the system needs to be solved multiple times for different <code>b</code> vectors since <code>Alu</code> can be precomputed and re-used. We recommend you use <code>FLOWPanel.calc_Alu</code> to compute <code>Alu</code> since this function has been overloaded for Dual and TrackedReal numbers. <code>solve_ludiv!</code> has also been overloaded with <a href="http://flow.byu.edu/ImplicitAD.jl">ImplicitAD</a> to efficiently differentiate the linear solver as needed.</p><p>The solution is stored under <code>y</code>.</p><pre><code class="language- hljs">import FLOWPanel as pnl
+
+Alu = pnl.calc_lu(A)
+pnl.solve_ludiv!(y, A, b; Alu=Alu)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/00ffcd75d1dc2ac35d3e597fc0fe37fe90daa540/src/FLOWPanel_linearsolver.jl#L32-L56">source</a></section></article><p>Running the solver:</p><pre><code class="language-julia hljs">t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_ludiv!)
+
+CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl=&quot;LUdiv&quot;)</code></pre><table><tr><th style="text-align: right">Solver</th><th style="text-align: center">CL</th><th style="text-align: center">CD</th></tr><tr><td style="text-align: right">LUdiv</td><td style="text-align: center">0.2247</td><td style="text-align: center">0.0130</td></tr><tr><td style="text-align: right">Experimental</td><td style="text-align: center">0.238</td><td style="text-align: center">0.005</td></tr></table><pre><code class="nohighlight hljs">CL Error:	5.57﹪
+Run time:	0.48 seconds</code></pre><h2 id="Iterative-Krylov-Solver"><a class="docs-heading-anchor" href="#Iterative-Krylov-Solver">Iterative Krylov Solver</a><a id="Iterative-Krylov-Solver-1"></a><a class="docs-heading-anchor-permalink" href="#Iterative-Krylov-Solver" title="Permalink"></a></h2><p>Iterative Krylov subspace solvers converge to the right solution rather than directly solving the system of equations. This allows the user to trade off accuracy for computational speed by tuning the tolerance of the solver.</p><p>The <a href="https://en.wikipedia.org/wiki/Generalized_minimal_residual_method">generalized minimal residual</a> (GMRES) method provided by <a href="https://juliasmoothoptimizers.github.io/Krylov.jl/stable/solvers/unsymmetric/#GMRES">Krylov.jl</a> is available in FLOWPanel.</p><article class="docstring"><header><a class="docstring-binding" id="FLOWPanel.solve_gmres!" href="#FLOWPanel.solve_gmres!"><code>FLOWPanel.solve_gmres!</code></a> — <span class="docstring-category">Function</span></header><section><div><pre><code class="language-julia hljs">solve_gmres!(y::AbstractVector,
+                A::AbstractMatrix, b::AbstractVector; Avalue=nothing,
+                atol=1e-8, rtol=1e-8, optargs...)</code></pre><p>Solves a linear system of equations of the form <span>$Ay = b$</span> through the generalized minimal residual (GMRES) method, which is an iterative method in the Krylov subspace.</p><p>This iterative method is more efficient than a direct method (<code>solve_backslack!</code> or <code>solve_ludiv!</code>) when <code>A</code> is larger than 3000x3000 or so. Also, iterative methods can trade off accuracy for speed by lowering the tolerance (<code>atol</code> and <code>rtol</code>). Optional arguments <code>optargs...</code> will be passed to <code>Krylov.gmres</code>.</p><p>Differentiating through the solver will require extracting the primal values of <code>A</code>, which can be provided through the argument <code>Avalue</code> (this is calculated automatically if not already provided).</p><p>The solution is stored under <code>y</code>.</p><pre><code class="language- hljs">import FLOWPanel as pnl
+
+Avalue = pnl.calc_Avalue(A)
+pnl.solve_gmres!(y, A, b; Avalue=Avalue)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/00ffcd75d1dc2ac35d3e597fc0fe37fe90daa540/src/FLOWPanel_linearsolver.jl#L83-L109">source</a></section></article><p>Running the solver with tolerance <span>$10^{-8}$</span>:</p><pre><code class="language-julia hljs">stats = []                      # Stats of GMRES get stored here
+
+t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+                        solver = pnl.solve_gmres!,
+                        solver_optargs = (atol=1e-8, rtol=1e-8, out=stats))
+
+CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl=&quot;GMRES tol=1e-8&quot;)</code></pre><table><tr><th style="text-align: right">Solver</th><th style="text-align: center">CL</th><th style="text-align: center">CD</th></tr><tr><td style="text-align: right">GMRES tol=1e-8</td><td style="text-align: center">0.2247</td><td style="text-align: center">0.0130</td></tr><tr><td style="text-align: right">Experimental</td><td style="text-align: center">0.238</td><td style="text-align: center">0.005</td></tr></table><pre><code class="nohighlight hljs">CL Error:	5.57﹪
+
+Simple stats
+ niter: 286
+ solved: true
+ inconsistent: false
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ status: solution good enough given atol and rtol
+
+Run time:	0.70 seconds</code></pre><p>Running the solver with tolerance <span>$10^{-2}$</span>:</p><pre><code class="language-julia hljs">stats = []                      # Stats of GMRES get stored here
+
+t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+                        solver = pnl.solve_gmres!,
+                        solver_optargs = (atol=1e-2, rtol=1e-2, out=stats))
+
+CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl=&quot;GMRES tol=1e-2&quot;)</code></pre><table><tr><th style="text-align: right">Solver</th><th style="text-align: center">CL</th><th style="text-align: center">CD</th></tr><tr><td style="text-align: right">GMRES tol=1e-2</td><td style="text-align: center">0.2239</td><td style="text-align: center">0.0123</td></tr><tr><td style="text-align: right">Experimental</td><td style="text-align: center">0.238</td><td style="text-align: center">0.005</td></tr></table><pre><code class="nohighlight hljs">CL Error:	5.93﹪
+
+Simple stats
+ niter: 88
+ solved: true
+ inconsistent: false
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ status: solution good enough given atol and rtol
+
+Run time:	0.39 seconds</code></pre><p>Running the solver with tolerance <span>$10^{-1}$</span>:</p><pre><code class="language-julia hljs">stats = []                      # Stats of GMRES get stored here
+
+t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+                        solver = pnl.solve_gmres!,
+                        solver_optargs = (atol=1e-1, rtol=1e-1, out=stats))
+
+CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl=&quot;GMRES tol=1e-1&quot;)</code></pre><table><tr><th style="text-align: right">Solver</th><th style="text-align: center">CL</th><th style="text-align: center">CD</th></tr><tr><td style="text-align: right">GMRES tol=1e-1</td><td style="text-align: center">0.2520</td><td style="text-align: center">0.0126</td></tr><tr><td style="text-align: right">Experimental</td><td style="text-align: center">0.238</td><td style="text-align: center">0.005</td></tr></table><pre><code class="nohighlight hljs">CL Error:	 5.9﹪
+
+Simple stats
+ niter: 25
+ solved: true
+ inconsistent: false
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ status: solution good enough given atol and rtol
+
+Run time:	0.30 seconds</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../sweptwing-aoasweep/">« AOA Sweep</a><a class="docs-footer-nextpage" href="../centerbody-source/">Source Elements »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.23 on <span class="colophon-date" title="Monday 12 December 2022 18:23">Monday 12 December 2022</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
