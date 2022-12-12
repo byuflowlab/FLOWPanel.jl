@@ -274,11 +274,17 @@ column ("row" is the first dimension of the grid, "column" is the second
 dimension) that is the closest to `position` calculated as the projection
 of the average cell position in the direction `direction`.
 
-> **Example:** For a wing with its span aligned along the y-axis, the pressure
+**Example:** For a wing with its span aligned along the y-axis, the pressure
 along a slice of the wing at the spanwise position y=0.5 is obtained as
 `slicefield(wing, "Cp", 0.5, [0, 1, 0], false)`.
 """
-slicefield(body::AbstractBody, args...; optargs...) = slicefield(body, calc_controlpoints(body), args...; optargs...)
+function slicefield(body::AbstractBody, fieldname::String, args...; optargs...)
+
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+
+    return slicefield(body, controlpoints, fieldname, args...; optargs...)
+end
 
 """
     slicefield(body::AbstractBody, controlpoints::Matrix,
@@ -286,7 +292,7 @@ slicefield(body::AbstractBody, args...; optargs...) = slicefield(body, calc_cont
                     position::Number, direction::Vector, row::Bool)
 
 Same thing, but with the option of providing the control points as to save
-wastefull memory allocation.
+avoid memory allocation.
 """
 function slicefield(body::AbstractBody, controlpoints::Arr,
                     fieldname::String,

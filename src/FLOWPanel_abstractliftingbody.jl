@@ -58,8 +58,8 @@ semi-infinite wake is shed from the first node of the i-th shedding edge, while
 `Dbs[:, i]` is for the second node.
 NOTE: These directions are expected to point from the node out to infinite.
 """
-function solve(self::AbstractLiftingBody, Uinfs::AbstractArray{<:Number, 2},
-               Das::AbstractArray{<:Number, 2}, Dbs::AbstractArray{<:Number, 2})
+function solve(self::AbstractLiftingBody, Uinfs::AbstractMatrix,
+               Das::AbstractMatrix, Dbs::AbstractMatrix)
     error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
 end
 

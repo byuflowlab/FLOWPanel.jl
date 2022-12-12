@@ -87,8 +87,12 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
 
 end
 
-function (RigidWakeBody{E})(args...; optargs...) where {E}
-    return RigidWakeBody{E, _count(E)}(args...; optargs...)
+function (RigidWakeBody{E})(grid, shedding; optargs...) where {E}
+    return RigidWakeBody{E, _count(E)}(grid, shedding; optargs...)
+end
+
+function (RigidWakeBody{E})(grid; optargs...) where {E}
+    return RigidWakeBody{E}(grid, zeros(Int, 6, 0); optargs...)
 end
 
 
