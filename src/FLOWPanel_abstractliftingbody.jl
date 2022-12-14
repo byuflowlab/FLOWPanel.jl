@@ -107,15 +107,32 @@ arguments of this function.
 """
 function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   bodyoptargs=(),
-                                                  dimsplit::Int=2,
-                                                  loop_dim::Int=2, optargs...
+                                                  gridprocessing=nothing,
+                                                  dimsplit::Int=1,
+                                                  loop_dim::Int=1,
+                                                  axis_angle=270,
+                                                  optargs...
                                       ) where {B<:AbstractLiftingBody}
     # Revolves the geometry
-    grid = gt.surface_revolution(args...; loop_dim=loop_dim, optargs...)
+    grid = gt.surface_revolution(args...; loop_dim=loop_dim,
+                                            axis_angle=axis_angle, optargs...)
+
+    # Intermediate processing of grid: rotate to align centerline with x-axis
+    if gridprocessing==nothing
+        Oaxis = pnl.gt.rotation_matrix2(0, 0, 90)
+        O = zeros(3)
+        pnl.gt.lintransform!(grid, Oaxis, O)
+
+    # User-defined intermediate processing of grid
+    else
+        gridprocessing(grid)
+    end
 
     # Splits the quadrialateral panels into triangles
     # dimsplit = 2              # Dimension along which to split
     triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+    return triang_grid
 
     ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
     U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
@@ -164,10 +181,10 @@ function _checkTE(grid, shedding::Array{Int, 2}; tol=1e1*eps())
 
             for i in 1:3
                 if abs(nodes[i, pia] - nodes[i, pjb]) > tol
-                    println("rabbit2")
+                    println("rabbit2\t$(abs(nodes[i, pia] - nodes[i, pjb]))")
                     return false
                 elseif abs(nodes[i, pib] - nodes[i, pja]) > tol
-                    println("rabbit3")
+                    println("rabbit3\t$(abs(nodes[i, pib] - nodes[i, pja]))")
                     return false
                 end
             end

@@ -154,7 +154,8 @@ is the `LinearIndices` for the user to iterate over the row/column as
 > **NOTE:** `body` cannot be a MultiBody.
 """
 function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
-                xtarget::Number, gdim::Int, xdim::Int; xdir=nothing
+                xtarget::Number, gdim::Int, xdim::Int; xdir=nothing,
+                filter=(args...)->true
                )
 
     # Define direction on which point will be projected to
@@ -178,11 +179,17 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
 
         # Calculate the average control point over this row/column
         Xmean .= 0
+        nmean = 0
         for j in 1:gdims[gdimite] # Iterate over panels in this row/column
             indices = gdim==1 ? (i, j, 1) : (j, i, 1)
-            Xmean .+= view(controlpoints, :, lin[indices...])
+            linind = lin[indices...]
+            point = view(controlpoints, :, linind)
+            if filter(point, linind)
+                Xmean .+= point
+                nmean += 1
+            end
         end
-        Xmean ./= gdims[gdimite]
+        Xmean ./= nmean != 0 ? nmean : 1
 
         # Determine proximity of average control point to target position
         err = abs(dot(Xmean, _xdir) - xtarget)
@@ -297,7 +304,7 @@ avoid memory allocation.
 function slicefield(body::AbstractBody, controlpoints::Arr,
                     fieldname::String,
                     position::Number, direction::Vector, row::Bool;
-                    reduce=true
+                    reduce=true, filter=(args...)->true
                     ) where {Arr<:AbstractArray{<:Number,2}}
 
     # Fetch field
@@ -305,8 +312,8 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
 
     # Find index of row or column slicing the field
     gdim = row ? 1 : 2                          # Dimension to slice
-    islice, pos, errmin, lin = find_i(body, controlpoints,
-                                            position, gdim, -1; xdir=direction)
+    islice, pos, errmin, lin = find_i(body, controlpoints, position, gdim, -1;
+                                                xdir=direction, filter=filter)
     # Slice field
     ncell = get_ndivscells(body)[row ? 2 : 1]   # Number of cells in the slice
     indices = collect(row==1 ? lin[islice, j] : lin[j, islice] for j in 1:ncell)
