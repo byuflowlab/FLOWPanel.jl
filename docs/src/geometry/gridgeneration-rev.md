@@ -6,6 +6,92 @@ Following the concept of bodies of revolution where a contour is revolved around
 FLOWPanel.GeometricTools.surface_revolution
 ```
 
+
+## Node and Cell Indexing
+
+**Standard input:**
+
+* Contour drawn in the $+y$ quadrants following the Selig airfoil format (starting at the trailing edge, progressing to the leading edge along the upper surface, and returning to the trailing edge along the lower surface).
+* The contour can be a closed curve describing the a toroidal cross section (as in the case of the duct), or an open contour along the $y=0$ axis describing the half surface of a cylindrical body of revolution (as in the case of the centerbody).
+
+Following these guidelines, `GeometricTools.surface_revolution` returns a revolved **quadrilateral** surface with the following node and cell indexing pattern:
+
+```@raw html
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>First Coordinate</center>
+          </th>
+          <th>
+              <center>Second Coordinate</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/bodyrev-cellindexdim1-00transp.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/bodyrev-cellindexdim2-00transp.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/bodyrev-nodeindex-000transp.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/bodyrev-cellindex-000transp.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Cell (1, 1)</center>
+          </th>
+          <th>
+              <center>Cell (40, 1)</center>
+          </th>
+          <th>
+              <center>Cell (39, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/bodyrev-cell1c1-000transp.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/bodyrev-cell40c1-000transp.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/bodyrev-cell39c2-000transp.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+```
+
 > **OBSERVATION:** The following examples show how to use the revolution method directly from the GeometricTools package. In order to use this grid in the definition of a body, the quadrilateral panels must by transformed into triangular panels through `GeometricTools.GridTriangleSurface(orggrid, dimsplit)`.
 
 ## Example — Rotor hub

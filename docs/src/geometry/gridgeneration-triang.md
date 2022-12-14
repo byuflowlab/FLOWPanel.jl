@@ -6,6 +6,14 @@ Since some element types require planar panels, the quadrilateral grids generate
 FLOWPanel.GeometricTools.GridTriangleSurface
 ```
 
+
+
+
+
+
+
+## Triangulated Lofted Surface
+
 The indexing pattern of a triangulated lofted surface is shown below
 
 ```@raw html
@@ -126,6 +134,142 @@ It is possible to define a normal vector on a planar panel, which is then used t
           </th>
           <th>
               <img src="../../assets/images/loft-triang-vectors03.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+```
+
+
+
+
+
+
+
+
+
+## Triangulated Surface of Revolution
+
+The indexing pattern of a triangulated surface of revolution is shown below
+
+```@raw html
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-nodeindex-000transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindex-000transp.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>First Coordinate</center>
+          </th>
+          <th>
+              <center>Second Coordinate</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindexdim1-002transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindexdim2-000transp.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Cell (1, 1)</center>
+          </th>
+          <th>
+              <center>Cell (79, 1)</center>
+          </th>
+          <th>
+              <center>Cell (78, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0000.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0002.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0004.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <center>Cell (2, 1)</center>
+          </th>
+          <th>
+              <center>Cell (80, 1)</center>
+          </th>
+          <th>
+              <center>Cell (1, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0001.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0003.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0005.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+```
+
+It is possible to define a normal vector on a planar panel, which is then used to define the panel coordinate system as explained in [Panel Definition](@ref). The normal vector of each panel is shown here below in the left, while the orthonormal bases $\left( \hat{\mathbf{t}},\, \hat{\mathbf{o}},\, \hat{\mathbf{n}} \right)$ are shown in the right ($\hat{\mathbf{t}} = \mathrm{red}$, $\hat{\mathbf{o}} = \mathrm{yellow}$, $\hat{\mathbf{n}} = \mathrm{green}$).
+
+```@raw html
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Normals</center>
+          </th>
+          <th>
+              <center>Panel Coordinate System</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-normals-002transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-coordinatesystem-000transp.png" alt="Pic here" width="450px">
           </th>
       </tr>
   </table>

@@ -202,9 +202,7 @@ By construction, the wing we have defined has non-planar quadrilateral panel. Si
 
 This is implemented in the `GridTriangleSurface` type:
 
-```@docs
-FLOWPanel.GeometricTools.GridTriangleSurface
-```
+[`FLOWPanel.GeometricTools.GridTriangleSurface`](@ref)
 
 ```julia
 file_name = "paneledwing01"

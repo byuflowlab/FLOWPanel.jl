@@ -13,28 +13,6 @@ It is recommended that wings follow conventional aerodynamic coordinates, buildi
 Following these guidelines, `GeometricTools.generate_loft` returns a lofted **quadrilateral** surface with the following node and cell indexing pattern:
 
 ```@raw html
-<center>
-  <table>
-      <tr>
-          <th>
-              <center>Node Index</center>
-          </th>
-          <th>
-              <center>Cell Index</center>
-          </th>
-      </tr>
-      <tr>
-          <td>
-              <img src="../../assets/images/loft-quad-nodeindex00.png" alt="Pic here" width="450px">
-          </td>
-          <td>
-              <img src="../../assets/images/loft-quad-cellindex01.png" alt="Pic here" width="450px">
-          </td>
-      </tr>
-  </table>
-</center>
-
-<br><br>
 
 <center>
   <table>
@@ -52,6 +30,29 @@ Following these guidelines, `GeometricTools.generate_loft` returns a lofted **qu
           </td>
           <td>
               <img src="../../assets/images/loft-quad-cellcoordinate02.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/loft-quad-nodeindex00.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/loft-quad-cellindex01.png" alt="Pic here" width="450px">
           </td>
       </tr>
   </table>

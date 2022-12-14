@@ -2,9 +2,7 @@
 
 Complex geometries can be defined manually by applying a predefined or user-defined space transformation on a `Grid` object.
 
-```@docs
-FLOWPanel.GeometricTools.transform!
-```
+[`FLOWPanel.GeometricTools.transform!`](@ref)
 
 The following predefined nonlinear [orthogonal space transformations](https://en.wikipedia.org/wiki/Orthogonal_coordinates) are implemented in `GeometricTools`:
 * `cylindrical3D(X)`
