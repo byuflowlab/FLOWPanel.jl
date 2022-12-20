@@ -132,8 +132,6 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
     # dimsplit = 2              # Dimension along which to split
     triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
-    return triang_grid
-
     ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
     U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
     L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
@@ -176,8 +174,8 @@ function _checkTE(grid, shedding::Array{Int, 2}; tol=1e1*eps())
             # Convert node indices from panel-local to global
             pia = gt.get_cell_t(tricoor, quadcoor, grid, pi, nia, lin, ndivscells, cin)
             pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
-            pja = gt.get_cell_t(tricoor, quadcoor, grid, pj, nia, lin, ndivscells, cin)
-            pjb = gt.get_cell_t(tricoor, quadcoor, grid, pj, nib, lin, ndivscells, cin)
+            pja = gt.get_cell_t(tricoor, quadcoor, grid, pj, nja, lin, ndivscells, cin)
+            pjb = gt.get_cell_t(tricoor, quadcoor, grid, pj, njb, lin, ndivscells, cin)
 
             for i in 1:3
                 if abs(nodes[i, pia] - nodes[i, pjb]) > tol

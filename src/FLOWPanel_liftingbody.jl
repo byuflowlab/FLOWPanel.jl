@@ -25,7 +25,7 @@ rigid wake. `grid` is the grid surface (paneled geometry).
 the wake, where `shedding[1, i]` is the linear index of the panel shedding the
  wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that
  make the edge. Since the wake is typically shed at the edge between two panels,
-`shedding[3, i]` is the index of the partner partner (use -1 if none) and
+`shedding[3, i]` is the index of the partner panel (use -1 if none) and
 `shedding[4:5, i]` are the node indices in that panel that make the edge.
 The user must ensure that both edges are coincident, and the strength of the
 wake is equal to the difference between the strengths of both panels.
@@ -227,6 +227,7 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
                          )
     end
 
+
     # Add wake contributions
     TE = zeros(Int, 2)
     for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
@@ -278,6 +279,34 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
                                optargs...
                               )
          end
+    end
+
+
+
+    # Back-diagonal correction to avoid matrix singularity in closed geometries.
+    # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
+    # Dynamic Analysis of Engineering Systems"
+
+    println("PROTOTYPE BACK DIAGONAL CORRECTION")
+    # TODO: Remove memory allocation associated with areas
+    areas = calc_areas(self)
+
+    for m in 1:size(G, 2)
+
+        rowi = size(G, 1) + 1 - m
+
+        val = 0
+        for n in 1:size(G, 1)
+            if n != rowi
+
+                val += G[n, m] * areas[n]
+
+            end
+        end
+
+        # G[rowi, m] -= val/areas[rowi]
+        G[rowi, m] = -val/areas[rowi]
+
     end
 end
 
