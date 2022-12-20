@@ -281,8 +281,7 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
          end
     end
 
-
-
+    #=
     # Back-diagonal correction to avoid matrix singularity in closed geometries.
     # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
     # Dynamic Analysis of Engineering Systems"
@@ -308,6 +307,7 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
         G[rowi, m] = -val/areas[rowi]
 
     end
+    =#
 end
 
 function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)

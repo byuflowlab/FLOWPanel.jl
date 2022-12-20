@@ -47,7 +47,7 @@ bodytype        = pnl.NonLiftingBody{pnl.ConstantSource}    # Elements and wake 
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Generate grid of body of revolution
-# holeradius      = 0.10*R                    # Whole in centerbody
+# holeradius      = 0.10*R                    # Hole in centerbody
                                             # Points of contour to revolve
 points = Matrix(contour_lewis[2:end-1, :])
 # points[1, 2] += holeradius
