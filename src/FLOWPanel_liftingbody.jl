@@ -227,6 +227,33 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
                          )
     end
 
+    #=
+    # Back-diagonal correction to avoid matrix singularity in closed geometries.
+    # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
+    # Dynamic Analysis of Engineering Systems"
+
+    println("PROTOTYPE BACK DIAGONAL CORRECTION")
+    # TODO: Remove memory allocation associated with areas
+    areas = calc_areas(self)
+
+    for m in 1:size(G, 2)
+
+        rowi = size(G, 1) + 1 - m
+
+        val = 0
+        for n in 1:size(G, 1)
+            if n != rowi
+
+                val += G[n, m] * areas[n]
+
+            end
+        end
+
+        # G[rowi, m] -= val/areas[rowi]
+        G[rowi, m] = -val/areas[rowi]
+
+    end
+    =#
 
     # Add wake contributions
     TE = zeros(Int, 2)
@@ -281,33 +308,6 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
          end
     end
 
-    #=
-    # Back-diagonal correction to avoid matrix singularity in closed geometries.
-    # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
-    # Dynamic Analysis of Engineering Systems"
-
-    println("PROTOTYPE BACK DIAGONAL CORRECTION")
-    # TODO: Remove memory allocation associated with areas
-    areas = calc_areas(self)
-
-    for m in 1:size(G, 2)
-
-        rowi = size(G, 1) + 1 - m
-
-        val = 0
-        for n in 1:size(G, 1)
-            if n != rowi
-
-                val += G[n, m] * areas[n]
-
-            end
-        end
-
-        # G[rowi, m] -= val/areas[rowi]
-        G[rowi, m] = -val/areas[rowi]
-
-    end
-    =#
 end
 
 function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
