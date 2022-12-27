@@ -119,9 +119,9 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
 
     # Intermediate processing of grid: rotate to align centerline with x-axis
     if gridprocessing==nothing
-        Oaxis = pnl.gt.rotation_matrix2(0, 0, 90)
+        Oaxis = gt.rotation_matrix2(0, 0, 90)
         O = zeros(3)
-        pnl.gt.lintransform!(grid, Oaxis, O)
+        gt.lintransform!(grid, Oaxis, O)
 
     # User-defined intermediate processing of grid
     else
