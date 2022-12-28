@@ -332,7 +332,7 @@ end
 
 
 ################################################################################
-# VORTEX ELEMENTS
+# VORTEX FILAMENT ELEMENTS
 ################################################################################
 """
 Computes the velocity induced by a bound vortex with beginning and end points
@@ -1181,4 +1181,162 @@ function phi_semiinfinite_doublet(nodes::Arr1,
         end
 
     end
+end
+
+
+
+
+
+################################################################################
+# VORTEX SHEET ELEMENTS
+################################################################################
+"""
+Computes the velocity induced by a panel of vertices `nodes[:, panel]` and
+constant vortex sheet (with strength components `gammat` and `gammao`) on the
+targets `targets`. It adds the velocity at the i-th target to out[i].
+
+Implementation of equations in Pate's 2017 doctoral dissertation,
+*A Surface Vorticity Method for Wake-Body Interactions*, Appendix A.
+"""
+function U_constant_vortexsheet(nodes::Arr1, panel,
+                                gammat::Number, gammao::Number,
+                                targets::Arr2, out::Arr3;
+                                dot_with=nothing,
+                                offset=1e-8
+                              ) where{T1, Arr1<:AbstractArray{T1,2},
+                                      T2, Arr2<:AbstractArray{T2,2},
+                                      T3, Arr3<:AbstractArray{T3}}
+
+    nt = size(targets, 2)                   # Number of targets
+    no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    nn = length(panel)                      # Number of nodes
+
+    if no!=nt
+        error("Invalid `out` argument. Expected size $(nt), got $(no).")
+    end
+
+    #=
+        TODO
+        * [ ] Implement efficient H00, H10, and H01 formulas
+    =#
+
+    # Tangent, oblique, and normal vectors
+    t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel)
+    o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel)
+    n1, n2, n3 = gt._calc_n1(nodes, panel), gt._calc_n2(nodes, panel), gt._calc_n3(nodes, panel)
+
+    @inbounds p1i = panel[1]                    # Index of first vertex
+
+    # V1, V2, V3 = zero(T3), zero(T3), zero(T3)
+
+    # Iterate over targets
+    for ti in 1:nt
+
+        # V1 *= 0
+        # V2 *= 0
+        # V3 *= 0
+
+        V1, V2, V3 = zero(T3), zero(T3), zero(T3)
+
+        # Projection of target onto plane of the panel
+        @inbounds begin
+            z = n1*(targets[1,ti]-nodes[1,p1i]) + n2*(targets[2,ti]-nodes[2,p1i]) + n3*(targets[3,ti]-nodes[3,p1i])
+            px1 = targets[1,ti] - z*n1
+            px2 = targets[2,ti] - z*n2
+            px3 = targets[3,ti] - z*n3
+        end
+
+        # Iterate over triangles of integration
+        # @simd
+        for Si in 1:nn
+
+
+            @inbounds begin
+                # Indices of first and second vertices of this triangle
+                pi = panel[Si]
+                pip1 = Si == nn ? panel[1] : panel[Si+1]
+
+                # Vertices in the coordinate system of integration
+                q11 = nodes[1, pi] - px1
+                q12 = nodes[2, pi] - px2
+                q13 = nodes[3, pi] - px3
+                q21 = nodes[1, pip1] - px1
+                q22 = nodes[2, pip1] - px2
+                q23 = nodes[3, pip1] - px3
+            end
+
+            sqrtq2mq1 = sqrt((q21 - q11)^2 + (q22 - q12)^2 + (q23 - q13)^2)
+
+            # Axes of coordinate system for integration
+            c21 = (q21 - q11) / sqrtq2mq1
+            c22 = (q22 - q12) / sqrtq2mq1
+            c23 = (q23 - q13) / sqrtq2mq1
+            c11 = c22*n3 - c23*n2
+            c12 = c23*n1 - c21*n3
+            c13 = c21*n2 - c22*n1
+
+            # Decompose strength with coordinate system of integration
+            a00 = gammat*(t1*c11 + t2*c12 + t3*c13) + gammao*(o1*c11 + o2*c12 + o3*c13)
+            b00 = gammat*(t1*c21 + t2*c22 + t3*c23) + gammao*(o1*c21 + o2*c22 + o3*c23)
+
+            # Limits of integration
+            a = q11*c11 + q12*c12 + q13*c13
+            l1 = q11*c21 + q12*c22 + q13*c23
+            l2 = q21*c21 + q22*c22 + q23*c23
+
+            # Regularized height
+            h = sqrt(z^2 + offset^2)
+
+            sqrtl1a = sqrt(l1^2 + a^2)
+            sqrtl2a = sqrt(l2^2 + a^2)
+            sqrtl1ah = sqrt(l1^2 + a^2 + h^2)
+            sqrtl2ah = sqrt(l2^2 + a^2 + h^2)
+            logh = log(h)
+
+            # Integral terms
+            # NOTE: What is the codomain of atan? Should this be atan or atan2?
+            H00 =  1/h * atan(a*l2, a^2 + h^2 + h*sqrtl2ah)
+            H00 -= 1/h * atan(a*l1, a^2 + h^2 + h*sqrtl1ah)
+            H10 =  l2/sqrtl2a * log(sqrtl2ah + sqrtl2a) - log(l2 + sqrtl2ah) - l2*logh/sqrtl2a
+            H10 -= l1/sqrtl1a * log(sqrtl1ah + sqrtl1a) - log(l1 + sqrtl1ah) - l1*logh/sqrtl1a
+            H01 =  a/sqrtl2a * (logh - log(sqrtl2ah + sqrtl2a))
+            H01 -= a/sqrtl1a * (logh - log(sqrtl1ah + sqrtl1a))
+
+            # Avoid zero divided by zero when the projection lays on a vertex
+            if (l2==0 && sqrtl2a==0) || (l1==0 && sqrtl1a==0)
+                nothing
+            else
+                V1 += z*b00*H00*c11 - z*a00*H00*c21 + (b00*H10 - a00*H01)*n1
+                V2 += z*b00*H00*c12 - z*a00*H00*c22 + (b00*H10 - a00*H01)*n2
+                V3 += z*b00*H00*c13 - z*a00*H00*c23 + (b00*H10 - a00*H01)*n3
+            end
+
+            if isnan(prod([V1, V2, V3]))
+                println([V1, V2, V3])
+                println(ti)
+                println(sqrtl1a)
+                println(l1)
+                println(a)
+                # break
+            end
+        end
+
+        # if isnan(prod([V1, V2, V3]))
+        #     break
+        # end
+
+        V1 /= 4*pi
+        V2 /= 4*pi
+        V3 /= 4*pi
+
+        if dot_with!=nothing
+            @inbounds out[ti] += V1*dot_with[1,ti] + V2*dot_with[2,ti] + V3*dot_with[3,ti]
+        else
+            @inbounds out[1, ti] += V1
+            @inbounds out[2, ti] += V2
+            @inbounds out[3, ti] += V3
+        end
+
+    end
+
 end
