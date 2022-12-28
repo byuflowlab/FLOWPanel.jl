@@ -180,12 +180,14 @@ and stores it under `G`.
                                             vortex at point b of each
                                             trailing edge panel.
 """
-function _G_U!(self::RigidWakeBody{VortexRing, 1},
-                    G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2},
-                        T3, Arr3<:AbstractArray{T3, 2}}
+_G_U!(self::RigidWakeBody{VortexRing, 1}, args...; optargs...) = _G_Uvortexring!(self, args..., optargs...)
+
+function _G_Uvortexring!(self::RigidWakeBody,
+                            G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;
+                            optargs...
+                       ) where{ T1, Arr1<:AbstractArray{T1, 2},
+                                T2, Arr2<:AbstractArray{T2, 2},
+                                T3, Arr3<:AbstractArray{T3, 2}}
 
     N = self.ncells
     M = size(CPs, 2)
@@ -310,7 +312,9 @@ function _G_U!(self::RigidWakeBody{VortexRing, 1},
 
 end
 
-function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
+_Uind!(self::RigidWakeBody{VortexRing, 1}, args...; optargs...) = _Uvortexring!(self, args...; stri=1, optargs...)
+
+function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
 
 
     # Pre-allocate memory for panel calculation
@@ -334,7 +338,7 @@ function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
         U_vortexring(
                             self.grid.orggrid.nodes,           # All nodes
                             panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
+                            self.strength[i, stri],            # Unitary strength
                             targets,                           # Targets
                             out;                               # Outputs
                             offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -347,7 +351,7 @@ function _Uind!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
     TE = zeros(Int, 2)
     for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
 
-        strengthi, strengthj = _get_wakestrength_mu(self, ei)
+        strengthi, strengthj = _get_wakestrength_mu(self, ei; stri=stri)
 
         # Fetch nodes of upper wake panel
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
@@ -478,16 +482,193 @@ function _phi!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
     end
 end
 
+_get_Gdims(self::RigidWakeBody{VortexRing, 1}) = (self.ncells, self.ncells)
+
+
+################################################################################
+# VORTEX RING + UNIFORM VORTEX SHEET SOLVER
+################################################################################
+
+function (RigidWakeBody{Union{VortexRing, UniformVortexSheet}})(grid, args...; optargs...)
+    return RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}(grid, args...;
+                                                    strength=zeros(grid.ncells, 3), optargs...)
+end
+
+function solve(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2},
+                Uinfs::AbstractMatrix{T1},
+                Das::AbstractMatrix{T2},
+                Dbs::AbstractMatrix{T3};
+                solver=solve_ludiv!, solver_optargs=(),
+                elprescribe_index::Int=1, elprescribe_value=0,
+                weight_gammat=0, weight_gammao=1
+                ) where {T1, T2, T3}
+
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, self.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, self.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
+
+    T = promote_type(T1, T2, T3)
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    # and boundary conditions (right-hand side of system of equations)
+    G = zeros(T, self.ncells, self.ncells)
+    RHS = zeros(T, self.ncells)
+
+    _G_U_RHS!(self, G, RHS, Uinfs, CPs, normals, Das, Dbs,
+                elprescribe_index, elprescribe_value,
+                weight_gammat, weight_gammao)
+
+    # Solve system of equations
+    Gamma = zeros(T, self.ncells)
+    solver(Gamma, G, RHS; solver_optargs...)
+
+    # Save vortex ring circulations
+    self.strength[:, 1] .= Gamma
+    self.strength[elprescribe_index, 1] = elprescribe_value
+
+    # Save vortex sheet strength
+    gamma = Gamma[elprescribe_index]
+    self.strength[:, 2] .= gamma*weight_gammat
+    self.strength[1:2:end, 2] .*= -1
+    self.strength[:, 3] .= gamma*weight_gammao
+    self.strength[1:2:end, 3] .*= -1
+
+    _solvedflag(self, true)
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
+    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
+    add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
+
+    tangents = _calc_tangents(self)
+    obliques = _calc_obliques(self)
+    aux = zip(eachcol(tangents), eachcol(obliques),
+                view(self.strength, :, 2), view(self.strength, :, 3))
+    gammas = [gammat*t + gammao*o for (t, o, gammat, gammao) in aux]
+    add_field(self, "gamma", "vector", gammas, "cell")
+end
+
+function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2},
+                    G, RHS, Uinfs, CPs, normals, Das, Dbs,
+                    elprescribe_index::Int, elprescribe_value::Number,
+                    weight_gammat::Number, weight_gammao::Number;
+                    optargs...
+                    )
+
+    # Calculate normal velocity of freestream for boundary condition
+    calc_bc_noflowthrough!(RHS, Uinfs, normals)
+
+    # -------------- Influence of vortex rings -------------------------
+
+    # Calculate influence of all vortex rings
+    _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
+
+    # Move influence of prescribed vortex ring element to right-hand side
+    for i in 1:length(RHS)
+        RHS[i] -= elprescribe_value*G[i, elprescribe_index]
+        G[i, elprescribe_index] = 0
+    end
+
+    # -------------- Influence of vortex sheet ------------------------
+
+    # Pre-allocate memory for panel calculation
+    (tri_out, tricoor, quadcoor, quad_out,
+                lin, ndivscells, cin) = gt.generate_getcellt_args!(self.grid)
+
+    # Influence of vortex sheet on each CP gets stored here
+    Gslice = view(G, :, elprescribe_index)
+
+    # Calculate influence of each panel on each CP
+    for pj in 1:self.ncells         # Iterate over panels
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            self.grid, pj, lin, ndivscells, cin)
+
+        s = pj%2==1 ? -1 : 1        # Alternate + and - strengths to get them all aligned
+
+        U_constant_vortexsheet(
+                          self.grid.orggrid.nodes,           # All nodes
+                          panel,                             # Indices of nodes that make this panel
+                          s*weight_gammat,                   # Tangential strength
+                          s*weight_gammao,                   # Oblique strength
+                          CPs,                               # Targets
+                          # view(G, :, pj);                  # Agglomerate velocity of j-th panel on every CP
+                          Gslice;
+                          dot_with=normals,                  # Normal of every CP
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                          optargs...
+                         )
+    end
+
+    return G, RHS
+end
+
+function _Uind!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2},
+                                            targets, out; optargs...)
+
+    # Velocity induced by vortex rings
+    _Uvortexring!(self, targets, out; stri=1, optargs...)
+
+    # Velocity induced by vortex sheets
+    _Uconstantvortexsheet!(self, targets, out; strti=2, stroi=3, optargs...)
+end
+
+
+function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
+                                                strti=2, stroi=3, optargs...)
+
+    # Pre-allocate memory for panel calculation
+    (tri_out, tricoor, quadcoor, quad_out,
+                lin, ndivscells, cin) = gt.generate_getcellt_args!(self.grid)
+
+    # Iterates over body panels
+    for i in 1:self.ncells
+
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                             self.grid, i, lin, ndivscells, cin)
+
+        # Velocity of i-th panel on every target
+        U_constant_vortexsheet(
+                            self.grid.orggrid.nodes,           # All nodes
+                            panel,                             # Indices of nodes that make this panel
+                            self.strength[i, strti],           # Tangential strength
+                            self.strength[i, stroi],           # Oblique strength
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                            optargs...
+                         )
+    end
+
+end
+
+
+function _phi!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}, args...; optargs...)
+    nothing
+end
+
 
 ##### INTERNAL FUNCTIONS  ######################################################
-function _get_wakestrength_mu(self::RigidWakeBody, i)
-    strength1 = self.strength[self.shedding[1, i], 1]
-    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], 1] : 0
+function _get_wakestrength_mu(self::RigidWakeBody, i; stri=1)
+    strength1 = self.strength[self.shedding[1, i], stri]
+    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0
     return strength1, strength2
 end
-function _get_wakestrength_Gamma(self::RigidWakeBody, i)
-    strength1 = self.strength[self.shedding[1, i], 1]
-    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], 1] : 0
+function _get_wakestrength_Gamma(self::RigidWakeBody, i; stri=1)
+    strength1 = self.strength[self.shedding[1, i], stri]
+    strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0
     return strength1 - strength2
 end
 
@@ -599,6 +780,4 @@ function _savewake(self::RigidWakeBody, filename::String;
 
     end
 end
-
-_get_Gdims(self::RigidWakeBody{VortexRing, 1}) = (self.ncells, self.ncells)
 #### END OF LIFTING BODY  ######################################################

@@ -13,6 +13,8 @@ abstract type AbstractElement end
 struct ConstantSource <: AbstractElement end
 struct ConstantDoublet <: AbstractElement end
 struct VortexRing <: AbstractElement end
+struct ConstantVortexSheet <: AbstractElement end
+struct UniformVortexSheet <: AbstractElement end
 
 ################################################################################
 # SOURCE ELEMENTS
@@ -1202,7 +1204,7 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
                                 gammat::Number, gammao::Number,
                                 targets::Arr2, out::Arr3;
                                 dot_with=nothing,
-                                offset=1e-8
+                                cutoff=1e-14, offset=1e-8
                               ) where{T1, Arr1<:AbstractArray{T1,2},
                                       T2, Arr2<:AbstractArray{T2,2},
                                       T3, Arr3<:AbstractArray{T3}}
@@ -1214,6 +1216,8 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
+
+    # @warn("Sheet thickness has been hardcoded!")
 
     #=
         TODO
@@ -1285,7 +1289,8 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
             l2 = q21*c21 + q22*c22 + q23*c23
 
             # Regularized height
-            h = sqrt(z^2 + offset^2)
+            # h = sqrt(z^2 + offset^2)
+            h = sqrt(z^2 + (1.0*1e-2)^2)
 
             sqrtl1a = sqrt(l1^2 + a^2)
             sqrtl2a = sqrt(l2^2 + a^2)
@@ -1303,27 +1308,14 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
             H01 -= a/sqrtl1a * (logh - log(sqrtl1ah + sqrtl1a))
 
             # Avoid zero divided by zero when the projection lays on a vertex
-            if (l2==0 && sqrtl2a==0) || (l1==0 && sqrtl1a==0)
+            if abs(a)<=cutoff && (abs(l2)<=cutoff || abs(l1)<=cutoff)
                 nothing
             else
                 V1 += z*b00*H00*c11 - z*a00*H00*c21 + (b00*H10 - a00*H01)*n1
                 V2 += z*b00*H00*c12 - z*a00*H00*c22 + (b00*H10 - a00*H01)*n2
                 V3 += z*b00*H00*c13 - z*a00*H00*c23 + (b00*H10 - a00*H01)*n3
             end
-
-            if isnan(prod([V1, V2, V3]))
-                println([V1, V2, V3])
-                println(ti)
-                println(sqrtl1a)
-                println(l1)
-                println(a)
-                # break
-            end
         end
-
-        # if isnan(prod([V1, V2, V3]))
-        #     break
-        # end
 
         V1 /= 4*pi
         V2 /= 4*pi
