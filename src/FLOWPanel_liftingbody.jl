@@ -182,6 +182,100 @@ and stores it under `G`.
 """
 _G_U!(self::RigidWakeBody{VortexRing, 1}, args...; optargs...) = _G_Uvortexring!(self, args..., optargs...)
 
+
+
+
+
+
+
+function solve(self::RigidWakeBody{VortexRing, 2},
+                Uinfs::AbstractMatrix{T1},
+                Das::AbstractMatrix{T2},
+                Dbs::AbstractMatrix{T3};
+                solver=solve_ludiv!, solver_optargs=(),
+                elprescribe_index::Int=1, elprescribe_value=0,
+                ) where {T1, T2, T3}
+
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, self.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, self.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
+
+    T = promote_type(T1, T2, T3)
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix) and boundary
+    # conditions (right-hand-side) converted into a least-square problem
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs,
+                            elprescribe_index, elprescribe_value)
+
+    # Solve system of equations
+    Gamma = zeros(T, self.ncells-1)
+    solver(Gamma, G, RHS; solver_optargs...)
+
+    # Save vortex ring circulations
+    self.strength[1:elprescribe_index-1, 1] .= view(Gamma, 1:elprescribe_index-1)
+    self.strength[elprescribe_index, 1] = elprescribe_value
+    self.strength[elprescribe_index+1:end, 1] .= view(Gamma, elprescribe_index:length(Gamma))
+
+    _solvedflag(self, true)
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
+    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
+    add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
+end
+
+
+function _G_U_RHS(self::RigidWakeBody{VortexRing, 2},
+                    Uinfs::AbstractMatrix{T1}, CPs, normals,
+                    Das::AbstractMatrix{T2},
+                    Dbs::AbstractMatrix{T3},
+                    elprescribe_index::Int, elprescribe_value::Number;
+                    optargs...
+                    ) where {T1, T2, T3}
+
+    T = promote_type(T1, T2, T3)
+
+    # Calculate normal velocity of freestream for boundary condition
+    RHS = calc_bc_noflowthrough(Uinfs, normals)
+
+    # -------------- Influence of vortex rings -------------------------
+    G = zeros(T, self.ncells, self.ncells)
+
+    # Calculate influence of all vortex rings
+    _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
+
+    # Move influence of prescribed vortex ring element to right-hand side
+    for i in 1:length(RHS)
+        RHS[i] -= elprescribe_value*G[i, elprescribe_index]
+        G[i, elprescribe_index] = 0
+    end
+
+    # -------------- Least-square problem -----------------------------
+    Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
+    RHSls = Gred'*RHS
+
+    Gls = Gred'*Gred
+
+
+    return Gls, RHSls
+end
+
+
+
+
+
+
+
 function _G_Uvortexring!(self::RigidWakeBody,
                             G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;
                             optargs...
@@ -312,7 +406,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
 
 end
 
-_Uind!(self::RigidWakeBody{VortexRing, 1}, args...; optargs...) = _Uvortexring!(self, args...; stri=1, optargs...)
+_Uind!(self::RigidWakeBody{VortexRing, N}, args...; optargs...) where {N} = _Uvortexring!(self, args...; stri=1, optargs...)
 
 function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
 
@@ -402,7 +496,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
 end
 
 
-function _phi!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
+function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) where {N}
 
     # Pre-allocate memory for panel calculation
     lin = LinearIndices(self.grid._ndivsnodes)
@@ -482,7 +576,7 @@ function _phi!(self::RigidWakeBody{VortexRing, 1}, targets, out; optargs...)
     end
 end
 
-_get_Gdims(self::RigidWakeBody{VortexRing, 1}) = (self.ncells, self.ncells)
+_get_Gdims(self::RigidWakeBody{VortexRing, N}) where {N} = (self.ncells, self.ncells)
 
 
 ################################################################################

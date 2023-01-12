@@ -104,6 +104,14 @@ end
 Generates a lifting body type `bodytype` of a body of revolution. See
 documentation of `GeometricTools.surface_revolution` for a description of the
 arguments of this function.
+
+> **NOTE:** For a complete revolution generating a water-tight grid, the system
+of equations solved in the body type `RigidWakeBody{VortexRing}` becomes
+singular (this is because in the absence of an open edge, the solution
+depends only in the difference between adjacent panels rather than the strengths
+themselves), leading to vortex ring strengths that are astronomically large. To
+avoid this situation, use `RigidWakeBody{VortexRing, 2}`, which indicates the
+solver to center the solution around 0.
 """
 function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   bodyoptargs=(),
