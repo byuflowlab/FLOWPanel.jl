@@ -856,6 +856,35 @@ Calculates the area of every cell in `body` and stores them in the array `areas`
 const calc_areas! = _calc_areas!
 
 """
+    neighbor(body, ni::Int, ci::Int) -> ncoor
+    neighbor(body, ni::Int, ccoor) -> ncoor
+
+Returns the Cartesian coordinates `ncoor` of the `ni`-th neighbor of the cell
+of linear indexing `ci` or coordinates `ccoor`.
+
+```@example
+# Calculate all normals
+normals = pnl.calc_normals(body)
+
+# Identify the second neighbor of the 10th cell
+ncoor = pnl.neighbor(body, 2, 10)
+
+# Convert Cartesian coordinates to linear indexing
+ndivscells = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
+lin = LinearIndices(ndivscells)
+ni = lin[ncoor...]
+
+# Fetch the normal of such neighbor
+normal = normals[:, ni]
+```
+"""
+function neighbor(body::AbstractBody, args...; optargs...)
+    gt.neighbor(body.grid, args...; optargs...)
+end
+
+
+
+"""
     calc_areas(self::AbstractBody)
 
 Calculates the area of every cell in `grid`, returning an array with all areas.
@@ -863,7 +892,6 @@ Calculates the area of every cell in `grid`, returning an array with all areas.
 See `calc_areas!` documentation for more details.
 """
 const calc_areas = _calc_areas
-
 
 function _solvedflag(self::AbstractBody, val::Bool)
     # Remove all existing fields
