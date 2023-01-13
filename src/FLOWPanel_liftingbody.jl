@@ -216,7 +216,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-square problem
     G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs,
-                            elprescribe_index, elprescribe_value)
+                                        elprescribe_index, elprescribe_value)
 
     # Solve system of equations
     Gamma = zeros(T, self.ncells-1)
@@ -234,23 +234,30 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 end
 
-
-function _G_U_RHS(self::RigidWakeBody{VortexRing, 2},
-                    Uinfs::AbstractMatrix{T1}, CPs, normals,
-                    Das::AbstractMatrix{T2},
-                    Dbs::AbstractMatrix{T3},
+function _G_U_RHS!(self::RigidWakeBody{VortexRing, 2},
+                    G, Gred, Gls, RHS, RHSls,
+                    Uinfs, CPs, normals,
+                    Das, Dbs,
                     elprescribe_index::Int, elprescribe_value::Number;
                     optargs...
-                    ) where {T1, T2, T3}
+                    )
 
-    T = promote_type(T1, T2, T3)
+    n = self.ncells
+
+    @assert size(G, 1)==n && size(G, 2)==n ""*
+        "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
+    @assert size(Gred, 1)==n && size(Gred, 2)==n-1 ""*
+        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-1)"
+    @assert size(Gls, 1)==n-1 && size(Gls, 2)==n-1 ""*
+        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-1)x$(n-1)"
+
+    @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
+    @assert length(RHSls)==n-1 "Invalid RHSls length $(length(RHSls)); expected $(n-1)"
 
     # Calculate normal velocity of freestream for boundary condition
-    RHS = calc_bc_noflowthrough(Uinfs, normals)
+    calc_bc_noflowthrough!(RHS, Uinfs, normals)
 
     # -------------- Influence of vortex rings -------------------------
-    G = zeros(T, self.ncells, self.ncells)
-
     # Calculate influence of all vortex rings
     _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
 
@@ -261,11 +268,43 @@ function _G_U_RHS(self::RigidWakeBody{VortexRing, 2},
     end
 
     # -------------- Least-square problem -----------------------------
-    Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
-    RHSls = Gred'*RHS
+    # Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
+    # RHSls = Gred'*RHS
+    # Gls = Gred'*Gred
 
-    Gls = Gred'*Gred
+    if elprescribe_index!=1
+        Gred[:, 1:elprescribe_index-1] .= view(G, :, 1:elprescribe_index-1)
+    end
+    if elprescribe_index!=size(G, 2)
+        Gred[:, elprescribe_index:end] .= view(G, :, elprescribe_index+1:size(G, 2))
+    end
+    tGred = transpose(Gred)
 
+    LA.mul!(RHSls, tGred, RHS)
+    LA.mul!(Gls, tGred, Gred)
+
+    return Gls, RHSls
+end
+
+function _G_U_RHS(self::RigidWakeBody{VortexRing, 2},
+                    Uinfs::AbstractMatrix{T1}, CPs, normals,
+                    Das::AbstractMatrix{T2},
+                    Dbs::AbstractMatrix{T3},
+                    args...;
+                    optargs...
+                    ) where {T1, T2, T3}
+
+    T = promote_type(T1, T2, T3)
+
+    G = zeros(T, self.ncells, self.ncells)
+    Gred = zeros(T, self.ncells, self.ncells-1)
+    Gls = zeros(T, self.ncells-1, self.ncells-1)
+    RHS = zeros(T, self.ncells)
+    RHSls = zeros(T, self.ncells-1)
+
+    _G_U_RHS!(self, G, Gred, Gls, RHS, RHSls,
+                Uinfs, CPs, normals, Das, Dbs,
+                args...; optargs...)
 
     return Gls, RHSls
 end

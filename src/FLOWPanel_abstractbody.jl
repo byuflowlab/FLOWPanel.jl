@@ -422,6 +422,24 @@ function add_field(self::AbstractBody, field_name::String, field_type::String,
 end
 
 """
+    addfields(body::AbstractBody,
+                sourcefieldname::String, targetfieldname::String)
+
+Adds field `sourcefieldname` to field `targetfieldname`.
+"""
+function addfields(body::AbstractBody,
+                    sourcefieldname::String, targetfieldname::String)
+
+    srcfield = get_field(body, sourcefieldname)["field_data"]
+    trgfield = get_field(body, targetfieldname)["field_data"]
+
+    for (Fsrc, Ftrg) in zip(srcfield, trgfield)
+        Ftrg .+= Fsrc
+    end
+
+end
+
+"""
     remove_field(self::AbstractBody, field_name)
 
 Removes field from body.

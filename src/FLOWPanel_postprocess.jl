@@ -22,7 +22,7 @@ Calculate the velocity induced by `sourcebody` on `controlpoints` and save
 it as a field of name `fieldname` under `targetbody`. The field includes the
 freestream velocity `Uinfs`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractBody,
@@ -70,7 +70,7 @@ using `offset` and `characteristiclength`, and save it as a field in
 `targetbody`. The field includes the freestream velocity stored as field
 `\"Uinf\"` in `targetbody`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_U!(out::Arr,
@@ -119,9 +119,113 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 
+"""
+    calcfield_UDeltaGamma!(out::Matrix, body::AbstractBody;
+                            fieldname="UDeltaGamma")
 
+Calculate the surface velocity on `body` due to changes in the constant
+doublet strength and save it as a field of name `fieldname`.
 
+The field is calculated in-place and added to `out` (hence, make sure that `out`
+starts with all zeroes).
+"""
+function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
+                                fieldname="UDeltaGamma", addfield=true,
+                                Gammai=1, edgedirection=true
+                                )
+    Gammas = body.strength[:, Gammai]
+    nodes = body.grid.orggrid.nodes
 
+    (tri_out, tricoor, quadcoor,
+        quad_out, lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
+
+    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
+    linc = LinearIndices(ndivscellsc)
+    cinc = CartesianIndices(ndivscellsc)
+
+    if !edgedirection
+        # Calculate control points
+        normals = calc_normals(body)
+        controlpoints = calc_controlpoints(body, normals)
+    end
+
+    ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
+
+    for ci in 1:body.ncells             # Iterate over linear indexing
+        ccoor = cinc[ci]                 # Cartesian indexing of this cell
+
+        if edgedirection
+
+            # Fetch the cell
+            panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                            body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+
+            # Calculate normal
+            nrml1 = gt._calc_n1(nodes, panel)
+            nrml2 = gt._calc_n2(nodes, panel)
+            nrml3 = gt._calc_n3(nodes, panel)
+
+        end
+
+        for ni in 1:3                   # Iterate over neighbors
+
+            # Obtain coordinates of ni-th neighbor
+            gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
+
+            # Linear indexing of this neighbor
+            nlin = linc[ncoor...]
+
+            if edgedirection            # Case: calculate 𝐮_ΔΓ based on edge
+
+                ei, ej = ni, ni%3 + 1
+
+                # r = pj - pi
+                r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+
+                # d = r⨉n / |r⨉n|
+                d1 = r2*nrml3 - r3*nrml2
+                d2 = r3*nrml1 - r1*nrml3
+                d3 = r1*nrml2 - r2*nrml1
+
+            else                        # Case: calculate 𝐮_ΔΓ based on centroids
+                # d = (cpj - cpi) / |cpj - cpi|
+                d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+            end
+
+            dmag = sqrt(d1^2 + d2^2 + d3^2)
+            d1 /= dmag
+            d2 /= dmag
+            d3 /= dmag
+
+            # 𝐮_ΔΓ = ΔΓ*d
+            out[1, ci] -= (Gammas[nlin] - Gammas[ci]) * d1
+            out[2, ci] -= (Gammas[nlin] - Gammas[ci]) * d2
+            out[3, ci] -= (Gammas[nlin] - Gammas[ci]) * d3
+        end
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+"""
+    calcfield_UDeltaGamma(body::AbstractBody; fieldname="UDeltaGamma")
+
+Similar to [`calcfield_UDeltaGamma!`](@ref) but without in-place calculation
+(`out` is not needed).
+"""
+function calcfield_UDeltaGamma(body::AbstractBody, args...; optargs...)
+    out = zeros(3, body.ncells)
+    calcfield_UDeltaGamma!(out, body, args...; optargs...)
+    return out
+end
 
 
 ################################################################################
@@ -136,7 +240,7 @@ Calculate the pressure coefficient
 velocity `Us` of each control point. The ``C_p`` is saved as a field named
 `fieldname`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
@@ -166,7 +270,7 @@ Calculate the pressure coefficient
 the velocity field named `U_fieldname` under `body`. The ``C_p`` is saved
 as a field named `fieldname`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_Cp!(out, body, Uref; U_fieldname="U", optargs...)
@@ -211,7 +315,7 @@ calculated from the velocity `Us` at each control point, ``A`` is the area of
 each element given in `areas`, and ``\\hat{\\mathbf{n}}`` is the normal of each
 element given in `normals`. ``F`` is saved as a field named `fieldname`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_F!(out::Arr0, body::AbstractBody,
@@ -266,7 +370,7 @@ calculated from the velocity `Us` field `U_fieldname`, ``A`` is the area of
 each element, and ``\\hat{\\mathbf{n}}`` is the normal of each element. ``F``
 is saved as a field named `fieldname`.
 
-The field is calculated in place and added to `out` (hence, make sure that `out`
+The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_F!(out::Arr, body::AbstractBody,
@@ -306,7 +410,7 @@ Calculate the sectional force (a vectorial force per unit span) along the span.
 This is calculated from the force `Fs` and the control points `controlpoints`
 and saved as a field named `fieldname`.
 
-The field is calculated in place on `outf` while the spanwise position of each
+The field is calculated in-place on `outf` while the spanwise position of each
 section is stored under `outpos`.
 """
 function calcfield_sectionalforce!(outf::Arr0, outpos::Arr1,
@@ -394,7 +498,7 @@ Calculate the sectional force (a vectorial force per unit span) along the span.
 This is calculated from the force field `F_fieldname` and saved as a field named
 `fieldname`.
 
-The field is calculated in place on `outFs` while the spanwise position of each
+The field is calculated in-place on `outFs` while the spanwise position of each
 section is stored under `outpos`.
 """
 function calcfield_sectionalforce!(outFs::Arr0, outpos::Arr1,
@@ -450,7 +554,7 @@ Calculate the integrated force of this body, which is a three-dimensional vector
 This is calculated from the force of each element given in `Fs` and saved as a
 field named `fieldname`.
 
-The field is calculated in place and added to `out`.
+The field is calculated in-place and added to `out`.
 """
 function calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
                             Fs::AbstractMatrix; fieldname="Ftot", addfield=true)
@@ -479,7 +583,7 @@ Calculate the integrated force of this body, which is a three-dimensional vector
 This is calculated from the force field `F_fieldname` and saved as a field named
 `fieldname`.
 
-The field is calculated in place and added to `out`.
+The field is calculated in-place and added to `out`.
 """
 function calcfield_Ftot!(out, body; F_fieldname="F", optargs...)
     # Error case
@@ -511,7 +615,7 @@ This is calculated from the force of each element given in `Fs`.
 `out[:, 2]` is the drag vector and is saved as the field "D".
 `out[:, 3]` is the sideslip vector and is saved as the field "S".
 
-The field is calculated in place on `out`.
+The field is calculated in-place on `out`.
 """
 function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
                         Fs::AbstractMatrix,
@@ -611,7 +715,7 @@ vector) with respect to the aerodynamic center `Xac`.
 This is calculated from the force and position of each element given in `Fs`
 and `controlpoints`, respectively, and saved as a field named `fieldname`.
 
-The field is calculated in place and added to `out`.
+The field is calculated in-place and added to `out`.
 """
 function calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
                             Xac::AbstractVector, controlpoints::AbstractMatrix,
@@ -653,7 +757,7 @@ vector) with respect to the aerodynamic center `Xac`.
 This is calculated from the force field `F_fieldname` and saved as a field named
 `fieldname`.
 
-The field is calculated in place and added to `out`.
+The field is calculated in-place and added to `out`.
 """
 function calcfield_Mtot!(out, body, Xac; F_fieldname="F",
                             offset=nothing, characteristiclength=nothing,
@@ -700,7 +804,7 @@ and `controlpoints`, respectively.
 `out[:, 2]` is the pitching moment vector and is saved as the field "Mpitch".
 `out[:, 3]` is the yawing moment vector and is saved as the field "Myaw".
 
-The field is calculated in place on `out`.
+The field is calculated in-place on `out`.
 """
 function calcfield_lmn!(out::AbstractMatrix, body::AbstractBody,
                         Xac::AbstractVector, controlpoints::AbstractMatrix,
@@ -762,7 +866,7 @@ center `Xac` and decompose it as rolling, pitching, and yawing moments according
 to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
 This is calculated from the force field `F_fieldname`.
 
-The field is calculated in place on `out`.
+The field is calculated in-place on `out`.
 """
 function calcfield_lmn!(out, body, Xac, lhat, mhat, nhat; F_fieldname="F",
                             offset=nothing, characteristiclength=nothing,

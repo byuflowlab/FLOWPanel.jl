@@ -1217,7 +1217,7 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
 
-    # @warn("Sheet thickness has been hardcoded!")
+    @warn("Sheet thickness has been hardcoded!")
 
     #=
         TODO
@@ -1291,6 +1291,8 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
             # Regularized height
             # h = sqrt(z^2 + offset^2)
             h = sqrt(z^2 + (1.0*1e-2)^2)
+            # h = sqrt(z^2 + (2.5*1e-3)^2)
+            # h = sqrt(z^2 + (1.0*1e-8)^2)
 
             sqrtl1a = sqrt(l1^2 + a^2)
             sqrtl2a = sqrt(l2^2 + a^2)
