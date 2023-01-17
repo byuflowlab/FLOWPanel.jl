@@ -189,16 +189,23 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
                 nmean += 1
             end
         end
-        Xmean ./= nmean != 0 ? nmean : 1
 
-        # Determine proximity of average control point to target position
-        err = abs(dot(Xmean, _xdir) - xtarget)
+        if nmean != 0
+            Xmean ./= nmean
 
-        # Compare this candidate
-        if err <= errmin
-            pos = dot(Xmean, _xdir)
-            errmin = err
-            itarget = i
+            # Determine proximity of average control point to target position
+            err = abs(dot(Xmean, _xdir) - xtarget)
+
+            # Compare this candidate
+            if err <= errmin
+                pos = dot(Xmean, _xdir)
+                errmin = err
+                itarget = i
+
+                println(itarget)
+                println(pos)
+                println(Xmean)
+            end
         end
     end
 
