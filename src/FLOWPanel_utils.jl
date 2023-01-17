@@ -201,10 +201,6 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
                 pos = dot(Xmean, _xdir)
                 errmin = err
                 itarget = i
-
-                println(itarget)
-                println(pos)
-                println(Xmean)
             end
         end
     end
