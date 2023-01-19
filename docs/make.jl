@@ -48,6 +48,11 @@ makedocs(
                                                                 "examples/centerbody-slice.md",
                                                                 "examples/centerbody-vortexring.md"
                                                             ],
+                                        "Duct" => [
+                                                                "AOA Sweep" => "examples/duct-aoasweep.md",
+                                                                "examples/duct-fluiddomain.md",
+                                                                "examples/duct-leastsquare.md",
+                                                            ],
                                        ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",

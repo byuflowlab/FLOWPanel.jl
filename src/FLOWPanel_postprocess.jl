@@ -227,6 +227,12 @@ function calcfield_UDeltaGamma(body::AbstractBody, args...; optargs...)
     return out
 end
 
+function calcfield_Ugradmu!(args...; fieldname="Ugradmu", optargs...)
+    return calcfield_UDeltaGamma!(args...; fieldname=fieldname, optargs...)
+end
+function calcfield_Ugradmu(args...; fieldname="Ugradmu", optargs...)
+    return calcfield_UDeltaGamma(args...; fieldname=fieldname, optargs...)
+end
 
 ################################################################################
 # PRESSURE FIELDS

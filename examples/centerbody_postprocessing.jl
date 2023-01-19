@@ -1,5 +1,6 @@
 import PyPlot as plt
 import LaTeXStrings: @L_str
+include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 #=
@@ -50,7 +51,7 @@ ax2.set_yticks([])
 ax2.plot(xlims, zeros(2), ":k", alpha=0.25, linewidth=1)
 
 ax.set_xlabel(L"$x$-position (m)")
-ax.set_ylabel(L"Pressure $C_p$")
+ax.set_ylabel(L"Velocity $u/u_\infty$")
 ax.legend(loc="best", frameon=false, fontsize=8)
 
 for a in [ax, ax2]

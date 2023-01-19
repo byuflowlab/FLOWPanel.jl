@@ -14,6 +14,7 @@ of the body of revolution.
 ```julia
 import PyPlot as plt
 import LaTeXStrings: @L_str
+include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 #=

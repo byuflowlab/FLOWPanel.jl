@@ -291,7 +291,7 @@ sweep_aoa = false                       # Whether to run AOA sweep
 
 if sweep_aoa
     println("Running AOA sweep...")
-    include("sweptwing_aoasweep.jl")
+    include(joinpath(examples_path, "sweptwing_aoasweep.jl"))
 end
 
 # ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
@@ -300,5 +300,5 @@ save_outputs2 = !true
 
 if solver_benchmark
     println("Running solver benchmark...")
-    include("sweptwing_solverbenchmark.jl")
+    include(joinpath(examples_path, "sweptwing_solverbenchmark.jl"))
 end
