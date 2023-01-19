@@ -59,6 +59,8 @@ A body type `bodytype = pnl.RigidWakeBody{pnl.VortexRing}` corresponds to
 the original vortex-ring solver, while the least-square solver is called
 by declaring `bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}`.
 
+> **NOTE:** The prescribed panel can be manually set by the user through the optional arguments `elprescribe_index` and `elprescribe_value` of `FLOWPanel.solve`. If not set, the function defaults to `FLOWPanel.solve(body, Uinfs, Das, Dbs; elprescribe_index=1, elprescribe_value=0)`
+
 Even though both solvers lead to roughly the same flow field solution, the
 numerical noise of the ill-condition problem is evident when visualizing the
 potential field:

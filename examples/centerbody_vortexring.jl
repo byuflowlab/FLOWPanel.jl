@@ -32,6 +32,16 @@ println("Post processing...")
 Us = pnl.calcfield_U(body, body,
                             offset=0.08, characteristiclength=(args...)->R)
 
+# NOTE: Since the boundary integral equation of the potential flow has a
+#       discontinuity at the boundary, we need to add the gradient of the
+#       doublet strength to get an accurate surface velocity
+
+# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+# Add both velocities together
+pnl.addfields(body, "Ugradmu", "U")
+
 # Calculate pressure coefficient
 Cps = pnl.calcfield_Cp(body, magVinf)
 
