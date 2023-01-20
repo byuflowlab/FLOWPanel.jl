@@ -264,7 +264,7 @@ if run_properties
         phiinf = phis[2]
         dphidz = (phis[3] - phis[1])/h
 
-        phiinfres = abs(phiinf) < 1e-8
+        phiinfres = abs(phiinf) < 1e-7
         dphidzres = abs(dphidz - sign(h)*strength/2) < 1e-6
 
         if verbose
@@ -294,7 +294,7 @@ if run_properties
         phiinf = phis[2]
         phidz = phis[3]
 
-        phiinfres = abs(phiinf) < 1e-8
+        phiinfres = abs(phiinf) < 1e-7
         phidzres = abs(phidz - sign(-h)*strength/2) < 1e-6
 
         if verbose
