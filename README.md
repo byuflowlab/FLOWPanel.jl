@@ -7,35 +7,28 @@
 
 
 ### Features
-* Structured mesh generation through space transformation, lofting, or body of revolution.
-* Source-panel solver for non-lifting bodies.
-* Vortex-ring solver for lifting bodies.
-* Low-memory allocation.
-* Automatic differentiation for gradient-based optimization: ForwardDiff.
+* Structured mesh generation through space transformation, lofting, or body of revolution
+* Source-panel or vortex-ring solver for non-lifting bodies
+* Vortex-ring solver for lifting bodies with rigid wake
+* Low-memory allocation
+* Direct and iterative Krylov (GMRES) [solvers](http://flow.byu.edu/FLOWPanel.jl/dev/examples/sweptwing-solver/)
+* Automatic differentiation for gradient-based optimization (supports [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl), [ReverseDiff](https://github.com/JuliaDiff/ReverseDiff.jl), and [ImplicitAD](https://github.com/byuflowlab/ImplicitAD.jl)
 
 Developed and tested in Julia v1.6.
 
 ### Installation Instructions
-TODO: register this package in official Julia registry.
+1. Download and install [Julia](https://julialang.org/)
+2. In the Julia REPL: `] add FLOWPanel`
+3. (optional) For visualization, install [Paraview](https://www.paraview.org/) and make sure that [it is callable from the terminal](https://flow.byu.edu/FLOWUnsteady/tutorials/installation-instructions/#Paraview) typing `paraview`
 
-Dependencies
-  * GeometricTools: `https://github.com/byuflowlab/GeometricTools.jl`
+Copy and paste any of [the examples](http://flow.byu.edu/FLOWPanel.jl/dev/examples/sweptwing-4p2aoa/) directly in the REPL to run your first simulation
 
 ### Sponsors
 
 ![sponsors](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/sponsors01.png)
 
-### To-Do's
-* Finish documentation
-* Swept-wing validation and example
-* Implement actuator disk for ducted fan
-* Test in gradient-based optimization.
-
-### Future Work
-* Currently, all solvers use a direct explicit-matrix inversion which works well for problems with less than 1000 panels. In order the scale the solver, it is recommended that an indirect matrix inversion method (e.g., GMRES) is implemented in future work along with an implicit matrix evaluation through FMM.
-
 ### About
-FLOWPanel is an open-source project jointly led by the [FLOW Lab](http://flow.byu.edu/) at Brigham Young University and [Whisper Aero](http://whisper.aero/).
+FLOWPanel is an open-source project jointly led by [Whisper Aero](http://whisper.aero/) and the [FLOW Lab](http://flow.byu.edu/) at Brigham Young University.
 All contributions are welcome.
 
   * Main Developer  : [Eduardo J. Alvarez](https://edoalvarez.com/)
@@ -43,6 +36,10 @@ All contributions are welcome.
   * Created         : August 2021
   * License         : MIT License
 
+
+Source code: [LINK](https://github.com/byuflowlab/FLOWPanel.jl)
+
+Documentation: [LINK](http://flow.byu.edu/FLOWPanel.jl/dev/)
+
+![sphere](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/duct-hill-aoa15-slice02-small.png)
 ![sphere](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/sphere01_2.gif)
-![box](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/box01_2.gif)
-![hub](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/light/hub03_2.gif)
