@@ -19,6 +19,7 @@ makedocs(
                                         "Constant Doublet" => "elements/constantdoublet.md",
                                         "Semi-Infinite Doublet" => "elements/semiinfdoublet.md",
                                         "Non-Planar Semi-Infinite Doublet" => "elements/semiinfnonplanardoublet.md",
+                                        "Constant Vortex Sheet" => "elements/constantvortexsheet.md",
                                        ],
                 "Geometry Engine"   => [
                                         "Grid Generation" => [
