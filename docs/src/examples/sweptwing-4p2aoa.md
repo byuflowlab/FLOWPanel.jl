@@ -168,6 +168,16 @@ println("Post processing...")
 @time Us = pnl.calcfield_U(body, body; fieldname="Uoff",
                         offset=0.02, characteristiclength=(args...)->b/ar)
 
+# NOTE: Since the boundary integral equation of the potential flow has a
+#       discontinuity at the boundary, we need to add the gradient of the
+#       doublet strength to get an accurate surface velocity
+
+# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+# Add both velocities together
+pnl.addfields(body, "Ugradmu", "Uoff")
+
 # Calculate pressure coefficient
 @time Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 
@@ -210,6 +220,6 @@ distribution and spanwise loading that is plotted here below)
 
 |           | Experimental  | FLOWPanel                 | Error |
 | --------: | :-----------: | :-----------------------: | :---- |
-| $C_L$   | 0.238         | 0.22442    | 5.704% |
-| $C_D$   | 0.005         | 0.01208    | 141.695% |
+| $C_L$   | 0.238         | 0.23648    | 0.64% |
+| $C_D$   | 0.005         | 0.01306    | 161.289% |
 

@@ -152,65 +152,97 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
     ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
 
     for ci in 1:body.ncells             # Iterate over linear indexing
-        ccoor = cinc[ci]                 # Cartesian indexing of this cell
+        ccoor = cinc[ci]                # Cartesian indexing of this cell
 
-        if edgedirection
+        if isedge(body, ccoor)          # Nothing if cell is on grid's open edge
+            nothing
+        else
 
-            # Fetch the cell
-            panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
-                            body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+            if edgedirection
 
-            # Calculate normal
-            nrml1 = gt._calc_n1(nodes, panel)
-            nrml2 = gt._calc_n2(nodes, panel)
-            nrml3 = gt._calc_n3(nodes, panel)
+                # Fetch the cell
+                panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                                body.grid, collect(Tuple(ccoor)), lin, ndivscells)
 
-        end
+                # Calculate normal
+                nrml1 = gt._calc_n1(nodes, panel)
+                nrml2 = gt._calc_n2(nodes, panel)
+                nrml3 = gt._calc_n3(nodes, panel)
 
-        for ni in 1:3                   # Iterate over neighbors
-
-            # Obtain coordinates of ni-th neighbor
-            gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
-
-            # Linear indexing of this neighbor
-            nlin = linc[ncoor...]
-
-            if edgedirection            # Case: calculate 𝐮_ΔΓ based on edge
-
-                ei, ej = ni, ni%3 + 1
-
-                # r = pj - pi
-                r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
-                r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
-                r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
-
-                # d = r⨉n / |r⨉n|
-                d1 = r2*nrml3 - r3*nrml2
-                d2 = r3*nrml1 - r1*nrml3
-                d3 = r1*nrml2 - r2*nrml1
-
-            else                        # Case: calculate 𝐮_ΔΓ based on centroids
-                # d = (cpj - cpi) / |cpj - cpi|
-                d1 = controlpoints[1, nlin] - controlpoints[1, ci]
-                d2 = controlpoints[2, nlin] - controlpoints[2, ci]
-                d3 = controlpoints[3, nlin] - controlpoints[3, ci]
             end
 
-            dmag = sqrt(d1^2 + d2^2 + d3^2)
-            d1 /= dmag
-            d2 /= dmag
-            d3 /= dmag
+            for ni in 1:3                   # Iterate over neighbors
 
-            # 𝐮_ΔΓ = ΔΓ*d
-            out[1, ci] -= (Gammas[nlin] - Gammas[ci]) * d1
-            out[2, ci] -= (Gammas[nlin] - Gammas[ci]) * d2
-            out[3, ci] -= (Gammas[nlin] - Gammas[ci]) * d3
+                # Obtain coordinates of ni-th neighbor
+                gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
+
+                # Linear indexing of this neighbor
+                nlin = linc[ncoor...]
+
+                if edgedirection            # Case: calculate 𝐮_ΔΓ based on edge
+
+                    ei, ej = ni, ni%3 + 1
+
+                    # r = pj - pi
+                    r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                    r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                    r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+
+                    # d = r⨉n / |r⨉n|
+                    d1 = r2*nrml3 - r3*nrml2
+                    d2 = r3*nrml1 - r1*nrml3
+                    d3 = r1*nrml2 - r2*nrml1
+
+                else                        # Case: calculate 𝐮_ΔΓ based on centroids
+                    # d = (cpj - cpi) / |cpj - cpi|
+                    d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                    d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                    d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+                end
+
+                dmag = sqrt(d1^2 + d2^2 + d3^2)
+                d1 /= dmag
+                d2 /= dmag
+                d3 /= dmag
+
+                # Invert direction of vector if normals point inward
+                sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+
+                # 𝐮_ΔΓ = ΔΓ*d
+                out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d1
+                out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d2
+                out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d3
+            end
         end
     end
 
     # Save field in body
     if addfield
         add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+function calcfield_UDeltaGamma!(out::AbstractMatrix, mbody::MultiBody, args...;
+                                fieldname="UDeltaGamma", addfield=true,
+                                optargs...
+                                )
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+
+        calcfield_UDeltaGamma!(thisout, body, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
     end
 
     return out
@@ -226,7 +258,6 @@ function calcfield_UDeltaGamma(body::AbstractBody, args...; optargs...)
     calcfield_UDeltaGamma!(out, body, args...; optargs...)
     return out
 end
-
 function calcfield_Ugradmu!(args...; fieldname="Ugradmu", optargs...)
     return calcfield_UDeltaGamma!(args...; fieldname=fieldname, optargs...)
 end
@@ -347,8 +378,8 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
         "Invalid `Us` matrix."*
         " Expected size $((3, body.ncells)); got $(size(Us))."
 
-    # Calculating F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}, where Cp = 1 - (u/u∞)^2
-    # we calculate F directly as F = 0.5*ρ*(u^2 - u∞^2) * A * hat{n}
+    # If F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}, where Cp = 1 - (u/u∞)^2,
+    # we can calculate F directly as F = 0.5*ρ*(u^2 - u∞^2) * A * hat{n}
     for (i, (U, area, normal)) in enumerate(zip(eachcol(Us), areas, eachcol(normals)))
         val = 0.5*rho*(norm(U)^2 - Uinf^2) * area
         out[1, i] += val*normal[1]

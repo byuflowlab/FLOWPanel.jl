@@ -186,7 +186,7 @@ open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
     println(fout, "```julia")
     open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
         for (li, l) in enumerate(eachline(fin))
-            if 12 <= li <= 65
+            if 12 <= li <= 65+6
                 println(fout, l)
             end
         end
@@ -221,7 +221,7 @@ open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
     println(fout, "```julia")
     open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
         for (li, l) in enumerate(eachline(fin))
-            if 77 <= li <= 79
+            if 77+6 <= li <= 79+6
                 println(fout, l)
             end
         end
@@ -259,7 +259,7 @@ open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
     println(fout, "```julia")
     open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
         for (li, l) in enumerate(eachline(fin))
-            if 91 <= li <= 97
+            if 91+6 <= li <= 97+6
                 println(fout, l)
             end
         end
@@ -275,7 +275,7 @@ open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
     println(fout, "```julia")
     open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
         for (li, l) in enumerate(eachline(fin))
-            if 110 <= li <= 116
+            if 110+6 <= li <= 116+6
                 println(fout, l)
             end
         end
@@ -291,7 +291,7 @@ open(joinpath(output_path, output_name*"-solver.md"), "w") do fout
     println(fout, "```julia")
     open(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"), "r") do fin
         for (li, l) in enumerate(eachline(fin))
-            if 130 <= li <= 136
+            if 130+6 <= li <= 136+6
                 println(fout, l)
             end
         end

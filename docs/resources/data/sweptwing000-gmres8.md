@@ -1,9 +1,9 @@
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|  GMRES tol=1e-8 | 0.2247  | 0.0130  |
+|  GMRES tol=1e-8 | 0.2335  | 0.0132  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.57﹪
+	CL Error:	1.89﹪
 
 	Simple stats
 	 niter: 286
@@ -14,5 +14,5 @@
 	 κ₂(A): []
 	 status: solution good enough given atol and rtol
 	
-	Run time:	0.70 seconds
+	Run time:	0.71 seconds
 

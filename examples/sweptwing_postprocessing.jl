@@ -188,7 +188,7 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
                         spandirection=[0, 1, 0], dimspan=2, dimchord=1,
                         to_plot=[1, 2, 3], yscalings=[1.0, 1.0, 1.0],
                         _fig=nothing, _axs=nothing,
-                        stl=".-", xlims=[-1, 1],
+                        stl=".-", xlims=[-1, 1], ylims=nothing,
                         plot_optargs=(label="FLOWPanel",),
                         plot_exp=true, lbl_exp="Experimental", AOA=nothing,
                         out=[])
@@ -229,10 +229,10 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
         ax.plot(spanpos*2/b, lds[pi, :]*yscalings[pi], stl; plot_optargs...)
 
         if xlims!=nothing; ax.set_xlim(xlims); end;
-        # if ylims!=nothing; ax.set_ylim(ylims); end;
+        if ylims!=nothing; ax.set_ylim(ylims[axi][1:2]); end;
 
         if xlims!=nothing; ax.set_xticks(xlims[1]:0.25:xlims[2]); end;
-        # if ylims!=nothing; ax.set_yticks(ylims[1]:-0.5:ylims[2]); end
+        if ylims!=nothing; ax.set_yticks(ylims[axi][1]:ylims[axi][3]:ylims[axi][2]); end
 
         ax.set_xlabel(L"Span position $2y/b$")
         ax.set_ylabel("Sectional "*[L"lift $\ell$", L"drag $d$", L"sideslip $s$"][pi]*" (N/m)")

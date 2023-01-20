@@ -1,9 +1,9 @@
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|  GMRES tol=1e-2 | 0.2239  | 0.0123  |
+|  GMRES tol=1e-2 | 0.2331  | 0.0129  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.93﹪
+	CL Error:	2.06﹪
 
 	Simple stats
 	 niter: 88

@@ -157,6 +157,16 @@ println("Post processing...")
 @time Us = pnl.calcfield_U(body, body; fieldname="Uoff",
                         offset=0.02, characteristiclength=(args...)->b/ar)
 
+# NOTE: Since the boundary integral equation of the potential flow has a
+#       discontinuity at the boundary, we need to add the gradient of the
+#       doublet strength to get an accurate surface velocity
+
+# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+# Add both velocities together
+pnl.addfields(body, "Ugradmu", "Uoff")
+
 # Calculate pressure coefficient
 @time Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 
@@ -220,6 +230,7 @@ nondim = 0.5*rho*magVinf^2*b/ar   # Normalization factor
 fig3, axs = plot_loading(body, Lhat, Dhat, b;
                         spandirection=Shat, AOA=AOA,
                         to_plot=[1, 2], yscalings=(1/nondim)*ones(3),
+                        ylims=[[0, 0.3, 0.05], [-0.02, 0.06, 0.02]],
                         plots_optargs=[ (label="FLOWPanel", color="steelblue",),
                                         (label="", color="steelblue")]
                         )
@@ -287,7 +298,7 @@ end
 
 
 # ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
-sweep_aoa = false                       # Whether to run AOA sweep
+sweep_aoa = !true                       # Whether to run AOA sweep
 
 if sweep_aoa
     println("Running AOA sweep...")

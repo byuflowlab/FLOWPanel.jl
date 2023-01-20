@@ -61,6 +61,12 @@ function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl="")
     Us = pnl.calcfield_U(body, body; fieldname="Uoff",
                             offset=0.02, characteristiclength=(args...)->b/ar)
 
+    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+    UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+    # Add both velocities together
+    pnl.addfields(body, "Ugradmu", "Uoff")
+
     # Calculate pressure coeffiecient
     Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 
@@ -102,10 +108,10 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="Backslash")
 
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|       Backslash | 0.2247  | 0.0130  |
+|       Backslash | 0.2335  | 0.0132  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.57﹪
+	CL Error:	1.89﹪
 	Run time:	0.44 seconds
 
 ## LU decomposition
@@ -128,11 +134,11 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="LUdiv")
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|           LUdiv | 0.2247  | 0.0130  |
+|           LUdiv | 0.2335  | 0.0132  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.57﹪
-	Run time:	0.48 seconds
+	CL Error:	1.89﹪
+	Run time:	0.44 seconds
 
 ## Iterative Krylov Solver
 
@@ -162,10 +168,10 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|  GMRES tol=1e-8 | 0.2247  | 0.0130  |
+|  GMRES tol=1e-8 | 0.2335  | 0.0132  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.57﹪
+	CL Error:	1.89﹪
 
 	Simple stats
 	 niter: 286
@@ -176,7 +182,7 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 	 κ₂(A): []
 	 status: solution good enough given atol and rtol
 	
-	Run time:	0.70 seconds
+	Run time:	0.71 seconds
 
 Running the solver with tolerance $10^{-2}$:
 ```julia
@@ -190,10 +196,10 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|  GMRES tol=1e-2 | 0.2239  | 0.0123  |
+|  GMRES tol=1e-2 | 0.2331  | 0.0129  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	5.93﹪
+	CL Error:	2.06﹪
 
 	Simple stats
 	 niter: 88
@@ -218,10 +224,10 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|  GMRES tol=1e-1 | 0.2520  | 0.0126  |
+|  GMRES tol=1e-1 | 0.2625  | 0.0133  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	 5.9﹪
+	CL Error:	10.3﹪
 
 	Simple stats
 	 niter: 25
@@ -232,5 +238,5 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 	 κ₂(A): []
 	 status: solution good enough given atol and rtol
 	
-	Run time:	0.30 seconds
+	Run time:	0.29 seconds
 

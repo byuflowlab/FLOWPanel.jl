@@ -27,6 +27,12 @@ function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl="")
     Us = pnl.calcfield_U(body, body; fieldname="Uoff",
                             offset=0.02, characteristiclength=(args...)->b/ar)
 
+    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+    UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+    # Add both velocities together
+    pnl.addfields(body, "Ugradmu", "Uoff")
+
     # Calculate pressure coeffiecient
     Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 

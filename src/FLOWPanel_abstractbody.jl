@@ -900,6 +900,10 @@ function neighbor(body::AbstractBody, args...; optargs...)
     gt.neighbor(body.grid, args...; optargs...)
 end
 
+function isedge(body::AbstractBody, args...)
+    gt.isedge(body.grid, args...)
+end
+
 
 
 """
