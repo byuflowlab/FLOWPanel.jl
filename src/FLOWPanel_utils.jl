@@ -125,7 +125,7 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                                         urfl_NDIVS, lrfl_NDIVS,
                                         semispan, b_low, b_up, b_NDIVS,
                                         chords, twists, x_pos, z_pos;
-                                        dimsplit=1,
+                                        loop_dim=1, dimsplit=1,
                                         symmetric=symmetric,
                                         spl_k=spl_k, spl_s=spl_s,
                                         verify_spline=verify_spline,

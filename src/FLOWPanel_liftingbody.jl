@@ -193,8 +193,8 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3};
                 solver=solve_ludiv!, solver_optargs=(),
-                elprescribe_index::Int=1, elprescribe_value=0,
-                ) where {T1, T2, T3}
+                elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)]
+                ) where {T1, T2, T3, T4}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -207,7 +207,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2, T3, T4)
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -215,17 +215,24 @@ function solve(self::RigidWakeBody{VortexRing, 2},
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-square problem
-    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs,
-                                        elprescribe_index, elprescribe_value)
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe)
 
     # Solve system of equations
-    Gamma = zeros(T, self.ncells-1)
+    Gamma = zeros(T, self.ncells-length(elprescribe))
     solver(Gamma, G, RHS; solver_optargs...)
 
-    # Save vortex ring circulations
-    self.strength[1:elprescribe_index-1, 1] .= view(Gamma, 1:elprescribe_index-1)
-    self.strength[elprescribe_index, 1] = elprescribe_value
-    self.strength[elprescribe_index+1:end, 1] .= view(Gamma, elprescribe_index:length(Gamma))
+    # Save vortex ring circulations: add Gamma and prescribed strengths
+    prev_eli = 0
+    for (i, (eli, elval)) in enumerate(elprescribe)
+        self.strength[(prev_eli+1):(eli-1), 1] .= view(Gamma, (prev_eli+2-i):(eli-i))
+        self.strength[eli, 1] = elval
+
+        if i==length(elprescribe) && eli!=size(self.strength, 1)
+            self.strength[eli+1:end, 1] .= view(Gamma, (eli-i+1):size(Gamma, 1))
+        end
+
+        prev_eli = eli
+    end
 
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
@@ -234,25 +241,65 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 end
 
-function _G_U_RHS!(self::RigidWakeBody{VortexRing, 2},
-                    G, Gred, Gls, RHS, RHSls,
-                    Uinfs, CPs, normals,
-                    Das, Dbs,
-                    elprescribe_index::Int, elprescribe_value::Number;
-                    optargs...
-                    )
+function _G_U_RHS(self::RigidWakeBody{VortexRing, 2}, args...; optargs...)
+    return _G_U_RHS_leastsquares(self, args...; optargs...)
+end
+
+function _G_U_RHS!(self::RigidWakeBody{VortexRing, 2}, args...; optargs...)
+    return _G_U_RHS_leastsquares!(self, args...; optargs...)
+end
+
+function _G_U_RHS_leastsquares(self::AbstractBody,
+                                Uinfs::AbstractMatrix{T1}, CPs, normals,
+                                Das::AbstractMatrix{T2},
+                                Dbs::AbstractMatrix{T3},
+                                elprescribe::AbstractArray{Tuple{Int, T4}},
+                                args...;
+                                optargs...
+                                ) where {T1, T2, T3, T4}
+
+    T = promote_type(T1, T2, T3, T4)
 
     n = self.ncells
+    npres = length(elprescribe)
+
+    G = zeros(T, n, n)
+    Gred = zeros(T, n, n-npres)
+    Gls = zeros(T, n-npres, n-npres)
+    RHS = zeros(T, n)
+    RHSls = zeros(T, n-npres)
+
+    _G_U_RHS_leastsquares!(self, G, Gred, Gls, RHS, RHSls,
+                Uinfs, CPs, normals, Das, Dbs,
+                elprescribe,
+                args...; optargs...)
+
+    return Gls, RHSls
+end
+
+function _G_U_RHS_leastsquares!(self::AbstractBody,
+                                G, Gred, Gls, RHS, RHSls,
+                                Uinfs, CPs, normals,
+                                Das, Dbs,
+                                elprescribe::AbstractArray{Tuple{Int, T}};
+                                optargs...
+                                ) where {T<:Number}
+
+    n = self.ncells
+    npres = length(elprescribe)
 
     @assert size(G, 1)==n && size(G, 2)==n ""*
         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
-    @assert size(Gred, 1)==n && size(Gred, 2)==n-1 ""*
-        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-1)"
-    @assert size(Gls, 1)==n-1 && size(Gls, 2)==n-1 ""*
-        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-1)x$(n-1)"
+    @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
+        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
+    @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
+        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-npres)x$(n-npres)"
 
     @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
-    @assert length(RHSls)==n-1 "Invalid RHSls length $(length(RHSls)); expected $(n-1)"
+    @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-npres)"
+
+    # Sort prescribed elements by index
+    sort!(elprescribe, by = x -> x[1])
 
     # Calculate normal velocity of freestream for boundary condition
     calc_bc_noflowthrough!(RHS, Uinfs, normals)
@@ -261,50 +308,37 @@ function _G_U_RHS!(self::RigidWakeBody{VortexRing, 2},
     # Calculate influence of all vortex rings
     _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
 
-    # Move influence of prescribed vortex ring element to right-hand side
-    for i in 1:length(RHS)
-        RHS[i] -= elprescribe_value*G[i, elprescribe_index]
-        G[i, elprescribe_index] = 0
+    # Move influence of prescribed vortex ring elements to right-hand side
+    for (eli, elval) in elprescribe
+        for i in 1:length(RHS)
+            RHS[i] -= elval*G[i, eli]
+            G[i, eli] = 0
+        end
     end
 
-    # -------------- Least-square problem -----------------------------
+    # -------------- Least-squares problem ----------------------------
     # Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
-    # RHSls = Gred'*RHS
-    # Gls = Gred'*Gred
 
-    if elprescribe_index!=1
-        Gred[:, 1:elprescribe_index-1] .= view(G, :, 1:elprescribe_index-1)
+    # Reduce G: copy G into Gred without the prescribed elements
+    prev_eli = 0
+    for (i, (eli, elval)) in enumerate(elprescribe)
+
+        Gred[:, (prev_eli+2-i):(eli-i)] .= view(G, :, (prev_eli+1):(eli-1))
+
+        if i==length(elprescribe) && eli!=size(G, 2)
+            Gred[:, (eli-i+1):end] .= view(G, :, eli+1:size(G, 2))
+        end
+
+        prev_eli = eli
     end
-    if elprescribe_index!=size(G, 2)
-        Gred[:, elprescribe_index:end] .= view(G, :, elprescribe_index+1:size(G, 2))
-    end
+    
     tGred = transpose(Gred)
 
+    # RHSls = Gred'*RHS
     LA.mul!(RHSls, tGred, RHS)
+
+    # Gls = Gred'*Gred
     LA.mul!(Gls, tGred, Gred)
-
-    return Gls, RHSls
-end
-
-function _G_U_RHS(self::RigidWakeBody{VortexRing, 2},
-                    Uinfs::AbstractMatrix{T1}, CPs, normals,
-                    Das::AbstractMatrix{T2},
-                    Dbs::AbstractMatrix{T3},
-                    args...;
-                    optargs...
-                    ) where {T1, T2, T3}
-
-    T = promote_type(T1, T2, T3)
-
-    G = zeros(T, self.ncells, self.ncells)
-    Gred = zeros(T, self.ncells, self.ncells-1)
-    Gls = zeros(T, self.ncells-1, self.ncells-1)
-    RHS = zeros(T, self.ncells)
-    RHSls = zeros(T, self.ncells-1)
-
-    _G_U_RHS!(self, G, Gred, Gls, RHS, RHSls,
-                Uinfs, CPs, normals, Das, Dbs,
-                args...; optargs...)
 
     return Gls, RHSls
 end

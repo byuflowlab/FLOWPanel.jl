@@ -117,7 +117,8 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   bodyoptargs=(),
                                                   gridprocessing=nothing,
                                                   dimsplit::Int=1,
-                                                  loop_dim::Int=1,
+                                                  # loop_dim::Int=1,
+                                                  loop_dim::Int=2,
                                                   axis_angle=270,
                                                   optargs...
                                       ) where {B<:AbstractLiftingBody}

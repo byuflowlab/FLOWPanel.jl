@@ -35,7 +35,7 @@ save_path       = run_name                  # Where to save outputs
 fluiddomain     = false                     # Whether to generate fluid domain
 paraview        = true                      # Whether to visualize with Paraview
 
-save_plots      = true                      # Whether to save plots or not
+save_plots      = false                     # Whether to save plots or not
 # Where to save plots (default to re-generating the figures that are used
 # in the docs)
 fig_path = joinpath(pnl.examples_path, "..", "docs", "resources", "images")
@@ -79,7 +79,7 @@ NDIVS_rfl_lo = NDIVS_rfl_up                 # Discretization of airfoil lower su
 #       panel is 10 times larger than the first panel. If central, the
 #       middle panel is 10 times larger than the peripheral panels.
 
-# Solver: Vortex-ring least-square
+# Solver: Vortex-ring least-squares
 bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2} # Elements and wake model
 
 

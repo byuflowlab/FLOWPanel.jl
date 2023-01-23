@@ -12,7 +12,7 @@
 * Vortex-ring solver for lifting bodies with rigid wake
 * Low-memory allocation
 * Direct and iterative Krylov (GMRES) [solvers](http://flow.byu.edu/FLOWPanel.jl/dev/examples/sweptwing-solver/)
-* Automatic differentiation for gradient-based optimization (supports [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl), [ReverseDiff](https://github.com/JuliaDiff/ReverseDiff.jl), and [ImplicitAD](https://github.com/byuflowlab/ImplicitAD.jl)
+* Automatic differentiation for gradient-based optimization (supports [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl), [ReverseDiff](https://github.com/JuliaDiff/ReverseDiff.jl), and [ImplicitAD](https://github.com/byuflowlab/ImplicitAD.jl))
 
 Developed and tested in Julia v1.6.
 

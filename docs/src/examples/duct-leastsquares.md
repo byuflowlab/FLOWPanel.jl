@@ -1,4 +1,4 @@
-# Least-Square Solver
+# Least-Squares Solver
 
 It is well known that a purely doublet (or vortex ring) solver encounters
 difficulties when the geometry is closed (*i.e.*, watertight).
@@ -31,12 +31,12 @@ circulations) that are in the order of $10^{16}$ and large numerical
 noise.
 
 In order to circumvent this issue, we can transform the original
-problem into a least-square problem as follows.
+problem into a least-squares problem as follows.
 Since one of the panel strengths is redundant in a watertight geometry,
 we can simply pick an arbitrary panel and prescribe an arbitrary strength.
 Then, $G$ has become a $n\times n-1$ matrix, $\Gamma$ is a
 vector of length $n-1$, while $b$ is still a vector of length $n$.
-To formulate the least-square problem, we substract the velocity $b_p$
+To formulate the least-squares problem, we substract the velocity $b_p$
 induced by the "prescribed" panel  to the right-hand side,
 ```math
 \begin{align*}
@@ -52,14 +52,14 @@ and we solve the problem as
 where the superscript $t$ denotes the transposed matrix.
 
 Either solver (*i.e.*, the original vortex-ring solver or the vortex-ring
-least-square one) is automatically called whenever the function
+least-squares one) is automatically called whenever the function
 `FLOWPanel.solve(body, Uinfs, Das, Dbs)` is called.
 The solver to be used is identified based on the body type.
 A body type `bodytype = pnl.RigidWakeBody{pnl.VortexRing}` corresponds to
-the original vortex-ring solver, while the least-square solver is called
+the original vortex-ring solver, while the least-squares solver is called
 by declaring `bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}`.
 
-> **NOTE:** The prescribed panel can be manually set by the user through the optional arguments `elprescribe_index` and `elprescribe_value` of `FLOWPanel.solve`. If not set, the function defaults to `FLOWPanel.solve(body, Uinfs, Das, Dbs; elprescribe_index=1, elprescribe_value=0)`
+> **NOTE:** The prescribed panel can be manually set by the user through the optional argument `elprescribe = [(index, val), ...]` of `FLOWPanel.solve`, which is a list of element to prescribe, where `index` is the linear index of the element and `val` is the prescribed element strength. If not set, the function defaults to `FLOWPanel.solve(body, Uinfs, Das, Dbs; elprescribe=[(1, 0)])`
 
 Even though both solvers lead to roughly the same flow field solution, the
 numerical noise of the ill-condition problem is evident when visualizing the
@@ -72,7 +72,7 @@ potential field:
 </center>
 <br>
 <center>
-    <br><b>Vortex-Ring Least-Square Solver</b><br>
+    <br><b>Vortex-Ring Least-Squares Solver</b><br>
     <img src="../../assets/images/duct-hill0111-viz-phi00.png" alt="Pic here" style="width:70%;"/>
 </center>
 ```

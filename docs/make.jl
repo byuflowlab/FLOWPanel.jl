@@ -52,7 +52,7 @@ makedocs(
                                         "Duct" => [
                                                                 "AOA Sweep" => "examples/duct-aoasweep.md",
                                                                 "examples/duct-fluiddomain.md",
-                                                                "examples/duct-leastsquare.md",
+                                                                "examples/duct-leastsquares.md",
                                                             ],
                                        ],
                 # "API Reference"     => ["api.md",
