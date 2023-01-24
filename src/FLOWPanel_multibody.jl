@@ -84,7 +84,9 @@ function MultiBody(bodies::Array{B, 1}, args...; optargs...) where {B<:Union{Abs
     ellist = [typeof(body).parameters[1] for body in bodies]
     E = Union{ellist...}
 
-    return MultiBody{E, _count(E), B}(bodies, args...; optargs...)
+    N = max(maximum(typeof(body).parameters[2] for body in bodies), _count(E))
+
+    return MultiBody{E, N, B}(bodies, args...; optargs...)
 end
 
 "Returns the requested body"
@@ -245,10 +247,15 @@ function save(multibody::MultiBody, filename::String, args...; optargs...)
     return str
 end
 
+
+
+
+
+
 ################################################################################
 # PURE VORTEX RING SOLVER
 ################################################################################
-function solve(self::MultiBody{VortexRing},
+function solve(self::MultiBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3}; optargs...) where {T1, T2, T3}
@@ -264,7 +271,7 @@ function solve(self::MultiBody{VortexRing},
     solve!(self, G, normals, CPs, Uinfs, Das, Dbs; optargs...)
 end
 
-function solve!(self::MultiBody{VortexRing},
+function solve!(self::MultiBody{VortexRing, 1},
                 G::AbstractMatrix{T1},
                 normals::AbstractMatrix{T2}, CPs::AbstractMatrix,
                 Uinfs::AbstractMatrix{T3}, Das::AbstractMatrix, Dbs::AbstractMatrix;
@@ -301,36 +308,115 @@ function solve!(self::MultiBody{VortexRing},
     add_field(self, "Gamma", "scalar", Gamma, "cell")
 end
 
-function _solve(::MultiBody{VortexRing}, normals, G, Uinfs)
 
-    # Define right-hand side
-    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
-                                        zip(eachcol(Uinfs), eachcol(normals))]
 
-    # Solve the system of equations
-    Gamma = G\lambda
 
-    return Gamma
+
+################################################################################
+# PURE VORTEX-RING LEAST-SQUARE SOLVER
+################################################################################
+function solve(self::MultiBody{VortexRing, 2},
+                Uinfs::AbstractMatrix{T1},
+                Das::AbstractMatrix{T2},
+                Dbs::AbstractMatrix{T3};
+                elprescribe="automatic",
+                optargs...
+                ) where {T1, T2, T3}
+
+    T = promote_type(T1, T2, T3)
+
+    # Determine prescribed elements
+    _elprescribe = elprescribe=="automatic" ? calc_elprescribe(self) : elprescribe
+
+    n = self.ncells
+    npres = length(_elprescribe)
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Allocate solver memory
+    Gamma = zeros(T, n)
+    Gammals = zeros(T, n-npres)
+    G = zeros(T, n, n)
+    Gred = zeros(T, n, n-npres)
+    Gls = zeros(T, n-npres, n-npres)
+    RHS = zeros(T, n)
+    RHSls = zeros(T, n-npres)
+
+    # Solve the least-squares problem to calculate strengths
+    solve!(self, Gamma, Gammals,
+            G, Gred, Gls, RHS, RHSls,
+            normals, CPs,
+            Uinfs, Das, Dbs; elprescribe=_elprescribe, optargs...)
 end
 
-function _set_strength(self::MultiBody{VortexRing}, Gamma)
+function solve!(self::MultiBody{VortexRing, 2},
+                Gamma, Gammals,
+                G::AbstractMatrix, Gred, Gls, RHS, RHSls,
+                normals::AbstractMatrix, CPs::AbstractMatrix,
+                Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix;
+                solver=solve_ludiv!, solver_optargs=(),
+                elprescribe=Tuple{Int, Float64}[]
+                )
 
-    ncells = 0
+    n = self.ncells
+    npres = length(elprescribe)
 
-    for body in self.bodies
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, self.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, self.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
 
-        strength = view(Gamma, (1:body.ncells) .+ ncells)
+    @assert length(Gammals)==n-npres ""*
+        "Invalid Gammals; expected length $(n-npres), got $(length(Gammals))"
+    @assert length(Gamma)==n ""*
+        "Invalid Gamma; expected length $(n), got $(length(Gamma))"
 
-        if body isa MultiBody
-            _set_strength(body, strength)
-        else
-            body.strength[:, 1] .= strength
+    # Compute geometric matrix (left-hand-side influence matrix) and boundary
+    # conditions (right-hand-side) converted into a least-squares problem
+    _G_U_RHS!(self, G, Gred, Gls, RHS, RHSls,
+                            Uinfs, CPs, normals, Das, Dbs, elprescribe)
+
+    # Solve system of equations
+    solver(Gammals, Gls, RHSls; solver_optargs...)
+
+    # Save solution
+    prev_eli = 0
+    for (i, (eli, elval)) in enumerate(elprescribe)
+
+        Gamma[(prev_eli+1):(eli-1)] .= view(Gammals, (prev_eli+2-i):(eli-i))
+
+        Gamma[eli] = elval
+
+        if i==length(elprescribe) && eli!=length(Gamma)
+            Gamma[eli+1:end] .= view(Gammals, (eli-i+1):length(Gammals))
         end
 
-        ncells += body.ncells
+        prev_eli = eli
     end
+    _set_strength(self, Gamma)
+
+    _solvedflag(self, true)
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
+    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
+    add_field(self, "Gamma", "scalar", Gamma, "cell")
 end
 
+function _G_U_RHS(self::MultiBody{VortexRing, 2}, args...; optargs...)
+    return _G_U_RHS_leastsquares(self, args...; optargs...)
+end
+
+function _G_U_RHS!(self::MultiBody{VortexRing, 2}, args...; optargs...)
+    return _G_U_RHS_leastsquares!(self, args...; optargs...)
+end
 
 
 ################################################################################
@@ -364,6 +450,93 @@ function _G_U!(self::MultiBody,
 
     end
 
+end
+
+function _G_Uvortexring!(self::MultiBody, G, CPs, normals, Das, Dbs; optargs...)
+
+    ncells = 0
+    nsheddings = 0
+
+    for body in self.bodies
+
+        if body isa AbstractLiftingBody || body isa MultiBody
+
+            _G_Uvortexring!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals,
+                        view(Das, :, (1:body.nsheddings) .+ nsheddings),
+                        view(Dbs, :, (1:body.nsheddings) .+ nsheddings); optargs...)
+
+            nsheddings += body.nsheddings
+
+        else
+            _G_Uvortexring!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals; optargs...)
+        end
+
+        ncells += body.ncells
+
+    end
+
+end
+
+"""
+    `calc_elprescribe(multibody::MultiBody; indices=[1], values=[0.0])`
+
+Automatically calculate the elements to prescribe in a MultiBody, recognizing
+all bodies that are watertight and prescribing the strength of elements of
+indices `indices` in each body the values `values`. Returns array `elprescribe`
+that is used by `solve!`.
+"""
+function calc_elprescribe(self::MultiBody;
+                            indices::AbstractArray{Int}=[1],
+                            values::AbstractArray{<:Number}=[0.0],
+                            elprescribe=Tuple{Int, Float64}[], ncells0=0)
+
+    @assert length(indices)==length(values) ""*
+        "Got unequal number of indices ($(length(indices)) and "*
+        "values ($(length(values)))"
+
+    ncells = ncells0
+
+    for body in self.bodies
+
+        # Recursive case
+        if body isa MultiBody
+
+            calc_elprescribe(body; elprescribe=elpresecribe, ncells0=ncells)
+
+        # Base case: watertight body
+        elseif body isa RigidWakeBody{VortexRing, 2}
+
+            for (ind, val) in zip(indices, values)
+                push!(elprescribe, (ncells+ind, val))
+            end
+
+        # Base case: non-watertight body
+        else
+            nothing
+        end
+
+        ncells += body.ncells
+    end
+
+    return elprescribe
+end
+
+function _set_strength(self::MultiBody{VortexRing}, Gamma)
+
+    ncells = 0
+
+    for body in self.bodies
+
+        strength = view(Gamma, (1:body.ncells) .+ ncells)
+
+        if body isa MultiBody
+            _set_strength(body, strength)
+        else
+            body.strength[:, 1] .= strength
+        end
+
+        ncells += body.ncells
+    end
 end
 
 

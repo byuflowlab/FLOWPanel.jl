@@ -214,7 +214,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     CPs = _calc_controlpoints(self, normals)
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
-    # conditions (right-hand-side) converted into a least-square problem
+    # conditions (right-hand-side) converted into a least-squares problem
     G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe)
 
     # Solve system of equations
@@ -312,7 +312,7 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
     for (eli, elval) in elprescribe
         for i in 1:length(RHS)
             RHS[i] -= elval*G[i, eli]
-            G[i, eli] = 0
+            # G[i, eli] = 0
         end
     end
 
@@ -331,7 +331,7 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
 
         prev_eli = eli
     end
-    
+
     tGred = transpose(Gred)
 
     # RHSls = Gred'*RHS
