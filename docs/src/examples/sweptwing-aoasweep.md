@@ -50,9 +50,9 @@ for AOA in AOAs
     Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
 
     # Integrated force decomposed into lift and drag
-    Dhat = Vinf/norm(Vinf)        # Drag direction
+    Dhat = Vinf/pnl.norm(Vinf)    # Drag direction
     Shat = [0, 1, 0]              # Span direction
-    Lhat = cross(Dhat, Shat)      # Lift direction
+    Lhat = pnl.cross(Dhat, Shat)  # Lift direction
 
     LDS = pnl.calcfield_LDS(body, Lhat, Dhat, Shat)
 

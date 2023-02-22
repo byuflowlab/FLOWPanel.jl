@@ -13,16 +13,6 @@
   * License   : MIT License
 =###############################################################################
 
-#=
-TODO
-* [x] Generate fluid domain
-* [ ] Upload Paraview state file
-* [x] Generate example in docs
-* [ ] Regenerate plots in other examples
-* [ ] Add Ugradmu to other examples
-* [ ] Push to remote
-=#
-
 import FLOWPanel as pnl
 import CSV
 import DataFrames: DataFrame

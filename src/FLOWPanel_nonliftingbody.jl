@@ -22,11 +22,11 @@ Non-lifting body that is solved using a combination of N panel elements.
 `grid` is the grid surface (paneled geometry).
 
   **Properties**
-  * `nnodes::Int64`                     : Number of nodes
-  * `ncells::Int64`                     : Number of cells
-  * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T,2} where {T<:Real}` : Coordinate system of original grid
-  * `O::Array{T,1} where {T<:Real}`     : Position of CS of original grid
+  * `nnodes::Int`                       : Number of nodes
+  * `ncells::Int`                       : Number of cells
+  * `fields::Vector{String}`            : Available fields (solutions)
+  * `Oaxis::Matrix`                     : Coordinate system of body w.r.t. global
+  * `O::Vector`                         : Origin of body w.r.t. global
 
 """
 struct NonLiftingBody{E, N} <: AbstractBody{E, N}
@@ -35,8 +35,8 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
     grid::gt.GridTriangleSurface              # Paneled geometry
 
     # Properties
-    nnodes::Int64                             # Number of nodes
-    ncells::Int64                             # Number of cells
+    nnodes::Int                               # Number of nodes
+    ncells::Int                               # Number of cells
     fields::Array{String, 1}                  # Available fields (solutions)
     Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
     O::Array{<:Number,1}                      # Position of CS of original grid

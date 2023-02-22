@@ -205,6 +205,10 @@ function find_i(body::Union{NonLiftingBody, AbstractLiftingBody}, controlpoints,
         end
     end
 
+    if itarget==-1
+        error("Logic error: no slice found! (itarget=$(itarget))")
+    end
+
     return itarget, pos, errmin, lin
 end
 
@@ -317,6 +321,7 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
     gdim = row ? 1 : 2                          # Dimension to slice
     islice, pos, errmin, lin = find_i(body, controlpoints, position, gdim, -1;
                                                 xdir=direction, filter=filter)
+                                                
     # Slice field
     ncell = get_ndivscells(body)[row ? 2 : 1]   # Number of cells in the slice
     indices = collect(row==1 ? lin[islice, j] : lin[j, islice] for j in 1:ncell)

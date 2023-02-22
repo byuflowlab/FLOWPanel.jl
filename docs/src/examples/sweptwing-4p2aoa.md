@@ -30,8 +30,7 @@ import FLOWPanel as pnl
 run_name        = "sweptwing000"                # Name of this run
 
 save_path       = run_name                      # Where to save outputs
-examples_path   = splitdir(@__FILE__)[1]        # Path to examples
-airfoil_path    = joinpath(examples_path, "data") # Where to find airfoil contours
+airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
 paraview        = true                          # Whether to visualize with Paraview
 

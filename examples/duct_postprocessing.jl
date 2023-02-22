@@ -43,7 +43,7 @@ function plot_Cp(body, AOA)
         end
 
         fname = joinpath(pnl.examples_path, "data", fname)
-        Cp_exp = CSV.read(fname, DataFrame)
+        Cp_exp = CSV.read(fname, DataFrame, skipto=1)
 
         ax.plot(Cp_exp[:, 1], Cp_exp[:, 2], "ok",
                                     markersize=5, label="Experimental")

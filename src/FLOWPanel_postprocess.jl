@@ -143,11 +143,11 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
     linc = LinearIndices(ndivscellsc)
     cinc = CartesianIndices(ndivscellsc)
 
-    if !edgedirection
+    # if !edgedirection
         # Calculate control points
         normals = calc_normals(body)
         controlpoints = calc_controlpoints(body, normals)
-    end
+    # end
 
     ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
 
@@ -205,13 +205,32 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                 d2 /= dmag
                 d3 /= dmag
 
+                # Distance between centroids
+                # deltax =  (controlpoints[1, nlin] - controlpoints[1, ci])^2
+                # deltax += (controlpoints[2, nlin] - controlpoints[2, ci])^2
+                # deltax += (controlpoints[3, nlin] - controlpoints[3, ci])^2
+                # deltax = sqrt(deltax)
+
+                # deltax =  -(controlpoints[1, nlin] - controlpoints[1, ci])*d1
+                # deltax += -(controlpoints[2, nlin] - controlpoints[2, ci])*d2
+                # deltax += -(controlpoints[3, nlin] - controlpoints[3, ci])*d3
+
+                deltax =  -((nodes[1, tri_out[ej]] + nodes[1, tri_out[ei]])/2 - controlpoints[1, ci])*d1
+                deltax += -((nodes[2, tri_out[ej]] + nodes[2, tri_out[ei]])/2 - controlpoints[2, ci])*d2
+                deltax += -((nodes[3, tri_out[ej]] + nodes[3, tri_out[ei]])/2 - controlpoints[3, ci])*d3
+                deltax *= 2
+
+                deltax = abs(deltax)
+
                 # Invert direction of vector if normals point inward
                 sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
 
                 # 𝐮_ΔΓ = ΔΓ*d
-                out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d1
-                out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d2
-                out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci]) * d3
+                if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
+                    out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d1
+                    out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
+                    out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
+                end
             end
         end
     end

@@ -53,6 +53,9 @@ const examples_path = joinpath(module_path, "..", "examples")
 # Discretization parameter type
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
+# Identity matrix
+const Im = Array(1.0I, 3, 3)
+
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",

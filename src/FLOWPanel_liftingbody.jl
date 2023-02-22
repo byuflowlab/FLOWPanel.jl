@@ -31,13 +31,13 @@ The user must ensure that both edges are coincident, and the strength of the
 wake is equal to the difference between the strengths of both panels.
 
   **Properties**
-  * `nnodes::Int64`                     : Number of nodes
-  * `ncells::Int64`                     : Number of cells
-  * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T<:Real, 2} `         : Coordinate system of original grid
-  * `O::Array{T<:Real,1} `              : Position of CS of original grid
-  * `ncellsTE::Int64`                   : Number of cells along trailing edge
-  * `nnodesTE::Int64`                   : Number of nodes along trailing edge
+  * `nnodes::Int`                       : Number of nodes
+  * `ncells::Int`                       : Number of cells
+  * `fields::Vector{String}`            : Available fields (solutions)
+  * `Oaxis::Matrix`                     : Coordinate system of body w.r.t. global
+  * `O::Vector`                         : Origin of body w.r.t. global
+  * `ncellsTE::Int`                     : Number of cells along trailing edge
+  * `nnodesTE::Int`                     : Number of nodes along trailing edge
 
 """
 struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
@@ -47,9 +47,9 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
     shedding::Array{Int, 2}                   # Indicates edges along which to
                                               # shed the wake
     # Properties
-    nnodes::Int64                             # Number of nodes
-    ncells::Int64                             # Number of cells
-    nsheddings::Int64                         # Number of shedding edges
+    nnodes::Int                               # Number of nodes
+    ncells::Int                               # Number of cells
+    nsheddings::Int                           # Number of shedding edges
     fields::Array{String, 1}                  # Available fields (solutions)
     Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
     O::Array{<:Number,1}                      # Position of CS of original grid

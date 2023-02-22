@@ -21,9 +21,9 @@ Implementations of AbstractBody are expected to have the following fields
 * `grid::GeometricTools.GridTriangleSurface `     : Paneled geometry
 * `nnodes::Int`                       : Number of nodes
 * `ncells::Int`                       : Number of cells
-* `fields::Array{String, 1}`          : Available fields (solutions)
-* `Oaxis::Matrix`                     : Coordinate system of original grid (3x3 matrix)
-* `O::Vector`                         : Position of CS of original grid (3-dim vector)
+* `fields::Vector{String}`            : Available fields (solutions)
+* `Oaxis::Matrix`                     : Coordinate system of body w.r.t global (3x3 matrix)
+* `O::Vector`                         : Origin of body w.r.t. global (3-dim vector)
 * `strength::Matrix`                  : Strength of each element of each type (ncells x N matrix)
 * `CPoffset::Real`                    : Control point offset in normal direction
 * `characteristiclength::Function`    : Function for computing the characteristic
@@ -477,31 +477,58 @@ function check_solved(self::AbstractBody)
 end
 
 
-# """
-#     rotate(body::AbstractBody, roll::Real, pitch::Real, yaw::Real;
-#             translation::Array{T, 1}=zeros(3), reset_fields::Bool=true
-#             ) where{T<:Real}
-#
-# Rotates and translates the body by the given axial angles.
-#
-# NOTE: Naming follows aircraft convention, with
-# * roll:   rotation about x-axis.
-# * pitch:  rotation about y-axis.
-# * yaw:    rotation about z-axis.
-# """
-# function rotate(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
-#                   translation::Array{<:Number, 1}=zeros(3),
-#                   reset_fields::Bool=true
-#                 )
-#
-#     M = gt.rotation_matrix2(roll, pitch, yaw)
-#     gt.lintransform!(body.grid, M, translation; reset_fields=reset_fields)
-#
-#     body.Oaxis[:,:] = M*body.Oaxis
-#     body.O[:] += translation
-#
-#     nothing
-# end
+"""
+    `rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
+                translation::Vector=zeros(3), reset_fields::Bool=true)`
+
+Rotates the body by the given axial angles. Nomenclature follows the aircraft
+convention, with
+* roll:   rotation about local x-axis
+* pitch:  rotation about local y-axis
+* yaw:    rotation about local z-axis
+
+Use `translation` to also translate the body.
+"""
+function rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
+                  translation::AbstractVector=zeros(3),
+                  reset_fields::Bool=true
+                )
+
+    # Generate rotation matrix
+    M = gt.rotation_matrix2(-roll, -pitch, -yaw)
+
+    return rotatetranslate!(body, M, translation; reset_fields=reset_fields)
+end
+
+"""
+    rotatetranslate!(body::AbstractBody, M::Matrix, T::Vector; optargs...)
+
+Rotate and translate `body` by rotation matrix `M` and translation vector `T`.
+"""
+function rotatetranslate!(body::AbstractBody,
+                            M::AbstractMatrix, T::AbstractVector; optargs...)
+
+    @assert length(T)==3 ""*
+        "Invalid translation vector $(T): it is not three-dimensional!"
+    @assert ndims(M)==2 && size(M, 1)==3 && size(M, 2)==3 ""*
+        "Invalid"
+
+    # Bring back to the origin
+    body.O .*= -1
+    gt.lintransform!(body.grid, Im, body.O; optargs...)
+    body.O .*= -1
+
+    # Add translation to previous position
+    body.O .+= T
+
+    # Rotate and translate to new position
+    gt.lintransform!(body.grid, M, body.O; optargs...)
+
+    # Update coordinate system
+    body.Oaxis .= M*body.Oaxis
+
+    nothing
+end
 
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
@@ -929,6 +956,8 @@ end
 function _count(type::Type)
     if type isa Union
         return _count(type.a) + _count(type.b)
+    elseif type isa Core.TypeofBottom
+        return 0
     else
         return 1
     end

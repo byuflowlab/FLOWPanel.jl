@@ -16,32 +16,6 @@
 ################################################################################
 # MULTIBODY TYPE
 ################################################################################
-"""
-  `RigidWakeBody{E::AbstractElement, N}(grid::gt.GridTriangleSurface,
-shedding::Matrix{Int})`
-
-Lifting body that is solver using a combination of N panel elements and a steady
-rigid wake. `grid` is the grid surface (paneled geometry).
-
-`shedding[:, i]` contains the information of the i-th edge along which to shed
-the wake, where `shedding[1, i]` is the linear index of the panel shedding the
- wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that
- make the edge. Since the wake is typically shed at the edge between two panels,
-`shedding[3, i]` is the index of the partner partner (use -1 if none) and
-`shedding[4:5, i]` are the node indices in that panel that make the edge.
-The user must ensure that both edges are coincident, and the strength of the
-wake is equal to the difference between the strengths of both panels.
-
-  **Properties**
-  * `nnodes::Int64`                     : Number of nodes
-  * `ncells::Int64`                     : Number of cells
-  * `fields::Array{String, 1}`          : Available fields (solutions)
-  * `Oaxis::Array{T<:Real, 2}           : Coordinate system of original grid
-  * `O::Array{T<:Real,1}                : Position of CS of original grid
-  * `ncellsTE::Int64`                   : Number of cells along trailing edge
-  * `nnodesTE::Int64`                   : Number of nodes along trailing edge
-
-"""
 struct MultiBody{E, N, B<:Union{AbstractBody, AbstractLiftingBody}} <: AbstractBody{E, N}
 
     # User inputs
@@ -84,10 +58,15 @@ function MultiBody(bodies::Array{B, 1}, args...; optargs...) where {B<:Union{Abs
     ellist = [typeof(body).parameters[1] for body in bodies]
     E = Union{ellist...}
 
-    N = max(maximum(typeof(body).parameters[2] for body in bodies), _count(E))
+    countEbodies = length(bodies) > 0 ? maximum(typeof(body).parameters[2] for body in bodies) : 0
+
+    N = max(countEbodies, _count(E))
 
     return MultiBody{E, N, B}(bodies, args...; optargs...)
 end
+
+# Empty initializer
+MultiBody() = MultiBody(AbstractBody[], String[])
 
 "Returns the requested body"
 function get_body(self::MultiBody, bodyname::String)
@@ -247,8 +226,20 @@ function save(multibody::MultiBody, filename::String, args...; optargs...)
     return str
 end
 
+function rotatetranslate!(multibody::MultiBody,
+                            M::AbstractMatrix, T::AbstractVector; optargs...)
 
+    # Recursively update bodies
+    for body in multibody.bodies
+        rotatetranslate!(body, M, T; optargs...)
+    end
 
+    # Update position and coordinate system of the overall system
+    multibody.O .+= T
+    multibody.Oaxis .= M*multibody.Oaxis
+
+    nothing
+end
 
 
 
