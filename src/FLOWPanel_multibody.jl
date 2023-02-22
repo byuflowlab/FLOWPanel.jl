@@ -31,26 +31,31 @@ struct MultiBody{E, N, B<:Union{AbstractBody, AbstractLiftingBody}} <: AbstractB
     Oaxis::Array{<:Number,2}                  # Coordinate system orientation
     O::Array{<:Number,1}                      # Coordinate system origin
 
-    MultiBody{E, N, B}(
-                    bodies, names;
-                    nbodies=length(bodies),
-                    nnodes=sum(body.nnodes for body in bodies),
-                    ncells=sum(body.ncells for body in bodies),
-                    nsheddings=_calc_nsheddings(bodies),
-                    fields=Array{String,1}(),
-                    Oaxis=Array(1.0I, 3, 3), O=zeros(3)
-                  ) where {E, N, B} =
-                    length(bodies)!=length(names) ?             error("Found different number of bodies than names.") :
-                    length(unique(names)) != length(names) ?    error("Got repeated names: $(names)") :
-                                                                new(
-                    bodies, names,
-                    nbodies,
-                    nnodes,
-                    ncells,
-                    nsheddings,
-                    fields,
-                    Oaxis, O,
-                  )
+    function MultiBody{E, N, B}(    bodies, names;
+                                    nbodies=length(bodies),
+                                    nnodes=sum(body.nnodes for body in bodies; init=0),
+                                    ncells=sum(body.ncells for body in bodies; init=0),
+                                    nsheddings=_calc_nsheddings(bodies),
+                                    fields=Array{String,1}(),
+                                    Oaxis=Array(1.0I, 3, 3), O=zeros(3)
+                                    ) where {E, N, B}
+
+            @assert length(bodies)==length(names) ""*
+                "Found different number of bodies than names"
+
+            @assert length(unique(names)) == length(names) ""*
+                "Got repeated names: $(names)"
+
+            return new(
+                        bodies, names,
+                        nbodies,
+                        nnodes,
+                        ncells,
+                        nsheddings,
+                        fields,
+                        Oaxis, O,
+                      )
+    end
 end
 
 function MultiBody(bodies::Array{B, 1}, args...; optargs...) where {B<:Union{AbstractBody, AbstractLiftingBody}}

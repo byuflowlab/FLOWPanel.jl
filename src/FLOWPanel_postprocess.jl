@@ -226,11 +226,11 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                 sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
 
                 # 𝐮_ΔΓ = ΔΓ*d
-                if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
+                # if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
                     out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d1
                     out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
                     out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
-                end
+                # end
             end
         end
     end
