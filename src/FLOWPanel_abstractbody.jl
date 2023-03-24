@@ -138,6 +138,7 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
                                                  out_nodeindex::Bool=false,
                                                  out_controlpoints::Bool=false,
                                                  debug::Bool=false,
+                                                 suffix::String="",
                                                  optargs...)
 
     str = ""
@@ -145,28 +146,30 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
     # Add special fields
     if out_cellindex || debug
         gt.add_field(body.grid, "cellindex", "scalar",
-                            [i for i in 1:body.ncells], "cell")
+                        [i for i in 1:body.ncells], "cell"; raise_warn=false)
     end
 
     if out_nodeindex || debug
         gt.add_field(body.grid, "nodeindex", "scalar",
-                            [i for i in 1:body.nnodes], "node")
+                        [i for i in 1:body.nnodes], "node"; raise_warn=false)
     end
 
     _out_cellindexdim = debug && length(out_cellindexdim)==0 ? [1, 2] : out_cellindexdim
     for dim in _out_cellindexdim
         ndivs = gt.get_ndivscells(body.grid)[1:2]
         data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
-        gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell")
+        gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell";
+                                                            raise_warn=false)
     end
 
     # Outputs control points
     if out_controlpoints || debug
-        str *= save_controlpoints(body, filename; debug=debug, optargs...)
+        str *= save_controlpoints(body, filename; debug=debug,
+                                                optargs..., suffix="_cp")
     end
 
     # Saves body
-    str *= gt.save(body.grid, filename; format="vtk", optargs...)
+    str *= gt.save(body.grid, filename*suffix; format="vtk", optargs...)
 
     # Return path to files
     return str
@@ -487,7 +490,7 @@ convention, with
 * pitch:  rotation about local y-axis
 * yaw:    rotation about local z-axis
 
-Use `translation` to also translate the body.
+Use keyword argument `translation` to also translate the body.
 """
 function rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
                   translation::AbstractVector=zeros(3),
@@ -527,7 +530,26 @@ function rotatetranslate!(body::AbstractBody,
     # Update coordinate system
     body.Oaxis .= M*body.Oaxis
 
-    nothing
+    return nothing
+end
+
+"""
+    set_coordinatesystem(body::AbstractBody, O::Vector, Oaxis::Matrix)
+
+Redefines the local coordinate system of the body, where `O` is the new origin
+and `Oaxis` is the matrix of new unit vectors.
+"""
+function set_coordinatesystem(body::AbstractBody,
+                                O::AbstractVector, Oaxis::AbstractMatrix;
+                                optargs...)
+
+    # Undo its current coordinate system
+    rotatetranslate!(body, inv(body.Oaxis), -body.O; optargs...)
+
+    # Set new coordinate system
+    rotatetranslate!(body, Oaxis, O; optargs...)
+
+    return nothing
 end
 
 

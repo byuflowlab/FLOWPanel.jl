@@ -70,6 +70,11 @@ function MultiBody(bodies::Array{B, 1}, args...; optargs...) where {B<:Union{Abs
     return MultiBody{E, N, B}(bodies, args...; optargs...)
 end
 
+function MultiBody(bodies::Array{<:Union{AbstractBody, AbstractLiftingBody}, 1}; optargs...)
+    names = ["Body$(bi)" for (bi, body) in enumerate(bodies)]
+    return MultiBody(bodies, names; optargs...)
+end
+
 # Empty initializer
 MultiBody() = MultiBody(AbstractBody[], String[])
 
@@ -244,6 +249,23 @@ function rotatetranslate!(multibody::MultiBody,
     multibody.Oaxis .= M*multibody.Oaxis
 
     nothing
+end
+
+function set_coordinatesystem(multibody::MultiBody,
+                                O::AbstractVector, Oaxis::AbstractMatrix;
+                                optargs...)
+
+    for body in multibody.bodies
+        set_coordinatesystem(body, O, Oaxis; optargs...)
+    end
+
+    # Undo its current coordinate system
+    rotatetranslate!(body, inv(body.Oaxis), -body.O; optargs...)
+
+    # Set new coordinate system
+    rotatetranslate!(body, Oaxis, O; optargs...)
+
+    return nothing
 end
 
 
