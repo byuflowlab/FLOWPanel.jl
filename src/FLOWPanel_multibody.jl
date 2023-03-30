@@ -293,7 +293,8 @@ function solve!(self::MultiBody{VortexRing, 1},
                 G::AbstractMatrix{T1},
                 normals::AbstractMatrix{T2}, CPs::AbstractMatrix,
                 Uinfs::AbstractMatrix{T3}, Das::AbstractMatrix, Dbs::AbstractMatrix;
-                solver=solve_ludiv!, solver_optargs=()) where {T1, T2, T3}
+                solver=solve_ludiv!, solver_optargs=(), optargs...
+                ) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -307,7 +308,7 @@ function solve!(self::MultiBody{VortexRing, 1},
     end
 
     # Compute geometric matrix (left-hand-side influence matrix)
-    _G_U!(self, G, CPs, normals, Das, Dbs)
+    _G_U!(self, G, CPs, normals, Das, Dbs; optargs...)
 
     # Calculate boundary conditions (right-hand side of system of equations)
     RHS = calc_bc_noflowthrough(Uinfs, normals)
@@ -375,7 +376,8 @@ function solve!(self::MultiBody{VortexRing, 2},
                 normals::AbstractMatrix, CPs::AbstractMatrix,
                 Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix;
                 solver=solve_ludiv!, solver_optargs=(),
-                elprescribe=Tuple{Int, Float64}[]
+                elprescribe=Tuple{Int, Float64}[],
+                optargs...
                 )
 
     n = self.ncells
@@ -400,7 +402,7 @@ function solve!(self::MultiBody{VortexRing, 2},
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     _G_U_RHS!(self, G, Gred, Gls, RHS, RHSls,
-                            Uinfs, CPs, normals, Das, Dbs, elprescribe)
+                        Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
 
     # Solve system of equations
     solver(Gammals, Gls, RHSls; solver_optargs...)

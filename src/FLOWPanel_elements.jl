@@ -424,7 +424,8 @@ adds the velocity at the i-th target to out[i].
 function U_vortexring(nodes::Arr1, panel, strength, targets, out;
                         dot_with=nothing,
                         # closed_ring::Bool=true,
-                        cutoff=1e-14, offset=1e-8
+                        cutoff=1e-14, offset=1e-8,
+                        omit_wake=false
                      ) where{T1, Arr1<:AbstractArray{T1,2}}
 
     nn = length(panel)                      # Number of nodes
@@ -594,15 +595,18 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                                     targets, out;
                                     dot_with=nothing,
                                     cutoff=1e-14, offset=1e-8,
+                                    omit_wake=false
                                   ) where{T1, Arr1<:AbstractArray{T1,2}}
 
-    # Semi-infinite vortex coming in (from ∞ to pi)
-    U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
-                            d1, d2, d3, -strength,
-                            targets, out;
-                            dot_with=dot_with,
-                            cutoff=cutoff, offset=offset
-                         )
+    if !omit_wake
+        # Semi-infinite vortex coming in (from ∞ to pi)
+        U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                                d1, d2, d3, -strength,
+                                targets, out;
+                                dot_with=dot_with,
+                                cutoff=cutoff, offset=offset
+                             )
+    end
 
     # Bound vortex (from pi and pj)
     U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
@@ -613,13 +617,15 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                     cutoff=cutoff, offset=offset
                  )
 
-    # Semi-infinite vortex going to (from pj to ∞)
-    U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
-                            d1, d2, d3, strength,
-                            targets, out;
-                            dot_with=dot_with,
-                            cutoff=cutoff, offset=offset
-                         )
+    if !omit_wake
+        # Semi-infinite vortex going to (from pj to ∞)
+        U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                                d1, d2, d3, strength,
+                                targets, out;
+                                dot_with=dot_with,
+                                cutoff=cutoff, offset=offset
+                             )
+    end
 end
 
 """
@@ -643,15 +649,18 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                                     targets, out;
                                     dot_with=nothing,
                                     cutoff=1e-14, offset=1e-8,
+                                    omit_wake=false
                                   ) where{T1, Arr1<:AbstractArray{T1,2}}
 
-    # Semi-infinite vortex coming in (from ∞ to pi)
-    U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
-                            da1, da2, da3, -strength,
-                            targets, out;
-                            dot_with=dot_with,
-                            cutoff=cutoff, offset=offset
-                         )
+    if !omit_wake
+        # Semi-infinite vortex coming in (from ∞ to pi)
+        U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                                da1, da2, da3, -strength,
+                                targets, out;
+                                dot_with=dot_with,
+                                cutoff=cutoff, offset=offset
+                             )
+    end
 
     # Bound vortex (from pi and pj)
     U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
@@ -661,14 +670,15 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                     dot_with=dot_with,
                     cutoff=cutoff, offset=offset
                  )
-
-    # Semi-infinite vortex going to (from pj to ∞)
-    U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
-                            db1, db2, db3, strength,
-                            targets, out;
-                            dot_with=dot_with,
-                            cutoff=cutoff, offset=offset
-                         )
+    if !omit_wake
+        # Semi-infinite vortex going to (from pj to ∞)
+        U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                                db1, db2, db3, strength,
+                                targets, out;
+                                dot_with=dot_with,
+                                cutoff=cutoff, offset=offset
+                             )
+    end
 end
 
 ################################################################################

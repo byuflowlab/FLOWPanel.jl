@@ -124,7 +124,8 @@ function solve(self::RigidWakeBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3};
-                solver=solve_ludiv!, solver_optargs=()
+                solver=solve_ludiv!, solver_optargs=(),
+                optargs...
                 ) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
@@ -146,7 +147,7 @@ function solve(self::RigidWakeBody{VortexRing, 1},
 
     # Compute geometric matrix (left-hand-side influence matrix)
     G = zeros(T, self.ncells, self.ncells)
-    _G_U!(self, G, CPs, normals, Das, Dbs)
+    _G_U!(self, G, CPs, normals, Das, Dbs; optargs...)
 
     # Calculate boundary conditions (right-hand side of system of equations)
     RHS = calc_bc_noflowthrough(Uinfs, normals)
@@ -193,7 +194,8 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3};
                 solver=solve_ludiv!, solver_optargs=(),
-                elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)]
+                elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)],
+                optargs...
                 ) where {T1, T2, T3, T4}
 
     if size(Uinfs) != (3, self.ncells)
@@ -215,7 +217,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
-    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe)
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
 
     # Solve system of equations
     Gamma = zeros(T, self.ncells-length(elprescribe))

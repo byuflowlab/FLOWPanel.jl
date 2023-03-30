@@ -26,7 +26,8 @@ The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractBody,
-                        controlpoints::Arr2, Uinfs::Arr3; fieldname="U", addfield=true,
+                        controlpoints::Arr2, Uinfs::Arr3;
+                        fieldname="U", addfield=true, optargs...
                         ) where {   Arr1<:AbstractArray{<:Number,2},
                                     Arr2<:AbstractArray{<:Number,2},
                                     Arr3<:AbstractArray{<:Number,2}}
@@ -50,7 +51,7 @@ function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractB
     out .+= Uinfs
 
     # Add induced velocity at each control point
-    Uind!(sourcebody, controlpoints, out)
+    Uind!(sourcebody, controlpoints, out; optargs...)
 
     # Save field in body
     if addfield
