@@ -50,7 +50,7 @@ The solution is stored under `y`.
 ```@example
 import FLOWPanel as pnl
 
-Alu = pnl.calc_lu(A)
+Alu = pnl.calc_Alu(A)
 pnl.solve_ludiv!(y, A, b; Alu=Alu)
 ```
 """
@@ -70,7 +70,7 @@ function solve_ludiv!(y::AbstractVector,
     else                        # Case: LU decomposition provided
 
         # Solve the linear system using ldiv!
-        y .= IAD.implicit_linear(A, b, LA.ldiv!, Alu)
+        y .= IAD.implicit_linear(A, b; lsolve=LA.ldiv!, Af=Alu)
 
     end
 
@@ -206,8 +206,7 @@ function calc_Alu!(A::AbstractMatrix{T}) where {T}
         Alu =  LA.lu!(A)
     end
 
-    # LU decomposition
-    return calc_Alu!(Apivot, A)
+    return Alu
 end
 
 """
