@@ -184,7 +184,7 @@ pnl.addfields(body, "Ugradmu", "Uoff")
 @time Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
 
 
-# ----------------- VISUALIZATION --------------------------------------------------
+# ----------------- VISUALIZATION ----------------------------------------------
 if paraview
     str = save_path*"/"
 
