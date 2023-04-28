@@ -347,14 +347,26 @@ function solve(self::MultiBody{VortexRing, 2},
     # Determine prescribed elements
     _elprescribe = elprescribe=="automatic" ? calc_elprescribe(self) : elprescribe
 
-    n = self.ncells
-    npres = length(_elprescribe)
-
     # Compute normals and control points
     normals = _calc_normals(self)
     CPs = _calc_controlpoints(self, normals)
 
     # Allocate solver memory
+    Gamma, Gammals, G, Gred, Gls, RHS, RHSls = allocate_solver(self, _elprescribe, T)
+
+    # Solve the least-squares problem to calculate strengths
+    solve!(self, Gamma, Gammals,
+            G, Gred, Gls, RHS, RHSls,
+            normals, CPs,
+            Uinfs, Das, Dbs; elprescribe=_elprescribe, optargs...)
+end
+
+function allocate_solver(self::Union{MultiBody{VortexRing, 2}, RigidWakeBody{VortexRing, 2}},
+                                                                        _elprescribe, T::Type)
+
+    n = self.ncells
+    npres = length(_elprescribe)
+
     Gamma = zeros(T, n)
     Gammals = zeros(T, n-npres)
     G = zeros(T, n, n)
@@ -363,11 +375,7 @@ function solve(self::MultiBody{VortexRing, 2},
     RHS = zeros(T, n)
     RHSls = zeros(T, n-npres)
 
-    # Solve the least-squares problem to calculate strengths
-    solve!(self, Gamma, Gammals,
-            G, Gred, Gls, RHS, RHSls,
-            normals, CPs,
-            Uinfs, Das, Dbs; elprescribe=_elprescribe, optargs...)
+    return Gamma, Gammals, G, Gred, Gls, RHS, RHSls
 end
 
 function solve!(self::MultiBody{VortexRing, 2},
@@ -408,6 +416,13 @@ function solve!(self::MultiBody{VortexRing, 2},
     solver(Gammals, Gls, RHSls; solver_optargs...)
 
     # Save solution
+    set_solution(self, Gamma, Gammals, elprescribe, Uinfs, Das, Dbs)
+end
+
+function set_solution(self::MultiBody{VortexRing, 2},
+                        Gamma, Gammals, elprescribe,
+                        Uinfs, Das, Dbs)
+
     prev_eli = 0
     for (i, (eli, elval)) in enumerate(elprescribe)
 
