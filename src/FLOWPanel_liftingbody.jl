@@ -223,14 +223,24 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     Gamma = zeros(T, self.ncells-length(elprescribe))
     solver(Gamma, G, RHS; solver_optargs...)
 
+    # Save solution
+    set_solution(self, nothing, Gamma, elprescribe, Uinfs, Das, Dbs)
+end
+
+calc_elprescribe(::RigidWakeBody{VortexRing, 2}) = [(1, 0.0)]
+
+function set_solution(self::RigidWakeBody{VortexRing, 2},
+                        dummy, Gammals, elprescribe,
+                        Uinfs, Das, Dbs)
+
     # Save vortex ring circulations: add Gamma and prescribed strengths
     prev_eli = 0
     for (i, (eli, elval)) in enumerate(elprescribe)
-        self.strength[(prev_eli+1):(eli-1), 1] .= view(Gamma, (prev_eli+2-i):(eli-i))
+        self.strength[(prev_eli+1):(eli-1), 1] .= view(Gammals, (prev_eli+2-i):(eli-i))
         self.strength[eli, 1] = elval
 
         if i==length(elprescribe) && eli!=size(self.strength, 1)
-            self.strength[eli+1:end, 1] .= view(Gamma, (eli-i+1):size(Gamma, 1))
+            self.strength[eli+1:end, 1] .= view(Gammals, (eli-i+1):size(Gammals, 1))
         end
 
         prev_eli = eli
