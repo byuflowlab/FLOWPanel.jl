@@ -224,8 +224,12 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                     dMain = norm(cross(vecMain, [r1, r2, r3]))
                     dNear = norm(cross(vecNear, [r1, r2, r3]))
 
-                    # Compute interpolation factor
-                    f = dMain/(dMain + dNear)
+                    # Compute inverse distance weighted interpolation factor
+                    f = dNear/(dMain + dNear)
+
+                    # Override interpolation factor to 0.5 for debugging
+                    # This is just averaging between gamma
+                    # f = 0.5
 
                     # Compute face gamma
                     faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
