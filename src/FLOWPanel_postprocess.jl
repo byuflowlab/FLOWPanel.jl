@@ -132,7 +132,8 @@ starts with all zeroes).
 """
 function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                                 fieldname="UDeltaGamma", addfield=true,
-                                Gammai=1, edgedirection=true
+                                Gammai=1, edgedirection=true,
+                                useGreenGauss=false
                                 )
     Gammas = body.strength[:, Gammai]
     nodes = body.grid.orggrid.nodes
@@ -172,6 +173,10 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
 
             end
 
+            # Cell area - this needs to be computed using some native GT function
+            cellArea = 0.5*norm(cross(nodes[1:3, tri_out[3]] - nodes[1:3, tri_out[1]],
+                                      nodes[1:3, tri_out[2]] - nodes[1:3, tri_out[1]]))
+
             for ni in 1:3                   # Iterate over neighbors
 
                 # Obtain coordinates of ni-th neighbor
@@ -206,6 +211,35 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                 d2 /= dmag
                 d3 /= dmag
 
+                if useGreenGauss
+                    # Use Green-Gauss method to compute gradient of circulation
+                    # where the interpolated gamma at each face (edge) is used
+
+                    # Compute vector from one edge vertex to cell-center
+                    vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+                    vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
+
+                    # Compute approx. distance of cell-center to edge
+                    # Common denominator has been cancelled out
+                    dMain = norm(cross(vecMain, [r1, r2, r3]))
+                    dNear = norm(cross(vecNear, [r1, r2, r3]))
+
+                    # Compute interpolation factor
+                    f = dMain/(dMain + dNear)
+
+                    # Compute face gamma
+                    faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+
+                    # Invert direction of vector if normals point inward
+                    sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+
+                    # Add contribution from face gamma
+                    mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / cellArea
+                    out[1, ci] += sgn * d1 * mag
+                    out[2, ci] += sgn * d2 * mag
+                    out[3, ci] += sgn * d3 * mag
+
+                else
                 # Distance between centroids
                 # deltax =  (controlpoints[1, nlin] - controlpoints[1, ci])^2
                 # deltax += (controlpoints[2, nlin] - controlpoints[2, ci])^2
@@ -232,6 +266,7 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                     out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
                     out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
                 # end
+                end
             end
         end
     end
