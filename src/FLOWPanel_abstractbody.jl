@@ -410,11 +410,13 @@ existed).
     data structure.
 """
 function add_field(self::AbstractBody, field_name::String, field_type::String,
-                    field_data, entry_type::String; raise_warn=false)
+                    field_data, entry_type::String;
+                    raise_warn=false, collectfield=true)
 
     # Add field to grid
     gt.add_field(self.grid, field_name, field_type,
-                    collect(field_data), entry_type; raise_warn=raise_warn)
+                    collectfield ? collect(field_data) : field_data, entry_type;
+                    raise_warn=raise_warn)
 
     # Register the field
     if !(field_name in self.fields)
