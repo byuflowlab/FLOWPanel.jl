@@ -100,7 +100,9 @@ end
 function save(body::RigidWakeBody, args...;
                 out_wake::Bool=true, debug::Bool=false,
                 wake_len::Number=1.0,
-                wake_panel::Bool=true, optargs...)
+                wake_panel::Bool=true,
+                wake_suffix="_wake",
+                optargs...)
 
 
     str = ""
@@ -108,7 +110,8 @@ function save(body::RigidWakeBody, args...;
 
     # Output the wake
     if out_wake || debug
-        str *= _savewake(body, args...; len=wake_len, panel=wake_panel, optargs...)
+        str *= _savewake(body, args...; len=wake_len, panel=wake_panel,
+                            optargs..., suffix=wake_suffix)
     end
 
     return str
@@ -855,7 +858,7 @@ end
 Outputs a vtk file with the wake.
 """
 function _savewake(self::RigidWakeBody, filename::String;
-                    len::Number=1.0, panel::Bool=true, suffix="_wake",optargs...)
+                    len::Number=1.0, panel::Bool=true, suffix="_wake", optargs...)
 
     if check_field(self, "Da")==false
         error("Requested to save wake, but Da field was not found."*
