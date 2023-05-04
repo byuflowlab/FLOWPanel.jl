@@ -238,15 +238,19 @@ function set_solution(self::RigidWakeBody{VortexRing, 2},
 
     # Save vortex ring circulations: add Gamma and prescribed strengths
     prev_eli = 0
-    for (i, (eli, elval)) in enumerate(elprescribe)
-        self.strength[(prev_eli+1):(eli-1), 1] .= view(Gammals, (prev_eli+2-i):(eli-i))
-        self.strength[eli, 1] = elval
+    if length(elprescribe)==0
+        self.strength[:, 1] .= Gammals
+    else
+        for (i, (eli, elval)) in enumerate(elprescribe)
+            self.strength[(prev_eli+1):(eli-1), 1] .= view(Gammals, (prev_eli+2-i):(eli-i))
+            self.strength[eli, 1] = elval
 
-        if i==length(elprescribe) && eli!=size(self.strength, 1)
-            self.strength[eli+1:end, 1] .= view(Gammals, (eli-i+1):size(Gammals, 1))
+            if i==length(elprescribe) && eli!=size(self.strength, 1)
+                self.strength[eli+1:end, 1] .= view(Gammals, (eli-i+1):size(Gammals, 1))
+            end
+
+            prev_eli = eli
         end
-
-        prev_eli = eli
     end
 
     _solvedflag(self, true)

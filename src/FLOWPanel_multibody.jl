@@ -423,18 +423,22 @@ function set_solution(self::MultiBody{VortexRing, 2},
                         Gamma, Gammals, elprescribe,
                         Uinfs, Das, Dbs)
 
-    prev_eli = 0
-    for (i, (eli, elval)) in enumerate(elprescribe)
+    if length(elprescribe)==0
+        Gamma .= Gammals
+    else
+        prev_eli = 0
+        for (i, (eli, elval)) in enumerate(elprescribe)
 
-        Gamma[(prev_eli+1):(eli-1)] .= view(Gammals, (prev_eli+2-i):(eli-i))
+            Gamma[(prev_eli+1):(eli-1)] .= view(Gammals, (prev_eli+2-i):(eli-i))
 
-        Gamma[eli] = elval
+            Gamma[eli] = elval
 
-        if i==length(elprescribe) && eli!=length(Gamma)
-            Gamma[eli+1:end] .= view(Gammals, (eli-i+1):length(Gammals))
+            if i==length(elprescribe) && eli!=length(Gamma)
+                Gamma[eli+1:end] .= view(Gammals, (eli-i+1):length(Gammals))
+            end
+
+            prev_eli = eli
         end
-
-        prev_eli = eli
     end
     _set_strength(self, Gamma)
 
