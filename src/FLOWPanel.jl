@@ -22,6 +22,7 @@ export  solve, save, Uind!, phi!,
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import PyPlot
+import PyPlot: @L_str
 const plt = PyPlot
 import LinearAlgebra as LA
 import LinearAlgebra: I
@@ -61,7 +62,7 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "utils", "postprocess"
+                    "utils", "postprocess", "monitor"
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end
