@@ -224,6 +224,11 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
                     dMain = norm(cross(vecMain, [r1, r2, r3]))
                     dNear = norm(cross(vecNear, [r1, r2, r3]))
 
+                    # r = [r1, r2, r3]
+                    # rhat = r/norm(r)
+                    # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+                    # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+
                     # Compute inverse distance weighted interpolation factor
                     f = dNear/(dMain + dNear)
 
@@ -239,39 +244,50 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
 
                     # Add contribution from face gamma
                     mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / cellArea
-                    out[1, ci] += sgn * d1 * mag
-                    out[2, ci] += sgn * d2 * mag
-                    out[3, ci] += sgn * d3 * mag
+
+
+                    # if abs(mag) < 1000  # <---- Quick fix to omit the high gradient at the trailing edge
+                        out[1, ci] -= 0.5*sgn * d1 * mag
+                        out[2, ci] -= 0.5*sgn * d2 * mag
+                        out[3, ci] -= 0.5*sgn * d3 * mag
+                    # end
 
                 else
-                # Distance between centroids
-                # deltax =  (controlpoints[1, nlin] - controlpoints[1, ci])^2
-                # deltax += (controlpoints[2, nlin] - controlpoints[2, ci])^2
-                # deltax += (controlpoints[3, nlin] - controlpoints[3, ci])^2
-                # deltax = sqrt(deltax)
+                    # Distance between centroids
+                    # deltax =  (controlpoints[1, nlin] - controlpoints[1, ci])^2
+                    # deltax += (controlpoints[2, nlin] - controlpoints[2, ci])^2
+                    # deltax += (controlpoints[3, nlin] - controlpoints[3, ci])^2
+                    # deltax = sqrt(deltax)
 
-                # deltax =  -(controlpoints[1, nlin] - controlpoints[1, ci])*d1
-                # deltax += -(controlpoints[2, nlin] - controlpoints[2, ci])*d2
-                # deltax += -(controlpoints[3, nlin] - controlpoints[3, ci])*d3
+                    # deltax =  -(controlpoints[1, nlin] - controlpoints[1, ci])*d1
+                    # deltax += -(controlpoints[2, nlin] - controlpoints[2, ci])*d2
+                    # deltax += -(controlpoints[3, nlin] - controlpoints[3, ci])*d3
 
-                deltax =  -((nodes[1, tri_out[ej]] + nodes[1, tri_out[ei]])/2 - controlpoints[1, ci])*d1
-                deltax += -((nodes[2, tri_out[ej]] + nodes[2, tri_out[ei]])/2 - controlpoints[2, ci])*d2
-                deltax += -((nodes[3, tri_out[ej]] + nodes[3, tri_out[ei]])/2 - controlpoints[3, ci])*d3
-                deltax *= 2
+                    deltax =  -((nodes[1, tri_out[ej]] + nodes[1, tri_out[ei]])/2 - controlpoints[1, ci])*d1
+                    deltax += -((nodes[2, tri_out[ej]] + nodes[2, tri_out[ei]])/2 - controlpoints[2, ci])*d2
+                    deltax += -((nodes[3, tri_out[ej]] + nodes[3, tri_out[ei]])/2 - controlpoints[3, ci])*d3
+                    deltax *= 2
 
-                deltax = abs(deltax)
+                    deltax = abs(deltax)
 
-                # Invert direction of vector if normals point inward
-                sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+                    # Invert direction of vector if normals point inward
+                    sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
 
-                # 𝐮_ΔΓ = ΔΓ*d
-                # if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
-                    out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d1
-                    out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
-                    out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
-                # end
+                    # 𝐮_ΔΓ = ΔΓ*d
+                    # if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
+                        out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d1
+                        out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
+                        out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
+                    # end
                 end
             end
+        end
+    end
+
+    # Quick fix to omit the high gradient at the trailing edge
+    for ci in 1:body.ncells
+        if norm(out[:, ci]) > 400
+            out[:, ci] *= 0
         end
     end
 
