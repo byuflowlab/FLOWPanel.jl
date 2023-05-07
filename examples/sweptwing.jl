@@ -145,16 +145,9 @@ Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
-# NOTE: A thick body with only vortex ring elements leads to a surface velocity
-#       that is inaccurate at the exact surface of the body, but that
-#       approximates the physical solution away from the surface. For this
-#       reason, we probe the velocity used to calculate Cp slightly away from
-#       the body
 
-
-# Calculate velocity away from the body
-@time Us = pnl.calcfield_U(body, body; fieldname="Uoff",
-                        offset=0.02, characteristiclength=(args...)->b/ar)
+# Calculate surface velocity induced by the body on itself
+@time Us = pnl.calcfield_U(body, body; characteristiclength=(args...)->b/ar)
 
 # NOTE: Since the boundary integral equation of the potential flow has a
 #       discontinuity at the boundary, we need to add the gradient of the
@@ -164,13 +157,13 @@ println("Post processing...")
 UDeltaGamma = pnl.calcfield_Ugradmu(body)
 
 # Add both velocities together
-pnl.addfields(body, "Ugradmu", "Uoff")
+pnl.addfields(body, "Ugradmu", "U")
 
 # Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
+@time Cps = pnl.calcfield_Cp(body, magVinf)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
+@time Fs = pnl.calcfield_F(body, magVinf, rho)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------
@@ -188,14 +181,14 @@ end
 
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
-include(joinpath(examples_path, "sweptwing_postprocessing.jl"))
+include(joinpath(pnl.examples_path, "sweptwing_postprocessing.jl"))
 
-save_outputs = !true                        # Whether to save outputs or not
+save_outputs = true                        # Whether to save outputs or not
 
 # Where to save figures (default to re-generating the figures that are used
 # in the docs)
-fig_path = joinpath(examples_path, "..", "docs", "resources", "images")
-outdata_path = joinpath(examples_path, "..", "docs", "resources", "data")
+fig_path = joinpath(pnl.examples_path, "..", "docs", "resources", "images")
+outdata_path = joinpath(pnl.examples_path, "..", "docs", "resources", "data")
 
 # --------- Chordwise pressure distribution
 side = [-1, 1][2]               # Side of wing to plot, -1==left, 1==right
@@ -301,7 +294,7 @@ sweep_aoa = !true                       # Whether to run AOA sweep
 
 if sweep_aoa
     println("Running AOA sweep...")
-    include(joinpath(examples_path, "sweptwing_aoasweep.jl"))
+    include(joinpath(pnl.examples_path, "sweptwing_aoasweep.jl"))
 end
 
 # ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
@@ -310,5 +303,5 @@ save_outputs2 = !true
 
 if solver_benchmark
     println("Running solver benchmark...")
-    include(joinpath(examples_path, "sweptwing_solverbenchmark.jl"))
+    include(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"))
 end
