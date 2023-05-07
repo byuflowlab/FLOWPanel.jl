@@ -153,7 +153,7 @@ function monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
     # Save plots
     if disp_plot
 
-        fig.tight_layout()
+        # fig.tight_layout()
 
         if !isnothing(save_path) && savefig
             fig.savefig(joinpath(save_path, filepref*_fignum*figext);
