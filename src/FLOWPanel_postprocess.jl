@@ -575,9 +575,13 @@ end
 Similar to [`calcfield_Ugradmu!`](@ref) but without in-place calculation
 (`out` is not needed).
 """
-function calcfield_Ugradmu(body::AbstractBody, args...; optargs...)
+function calcfield_Ugradmu(body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
     out = zeros(3, body.ncells)
-    calcfield_Ugradmu!(out, body, args...; optargs...)
+    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
