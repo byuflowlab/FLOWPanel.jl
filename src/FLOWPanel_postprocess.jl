@@ -495,7 +495,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     end
 
     # Smoothen gradient of edge cells AFTER computation of all gradients
-    if smoothRows[1] != 0 || smoothPass != 0
+    if smoothRows[1] != 0 && smoothPass != 0
         if body.grid.orggrid.loop_dim == 2 && body.grid.dimsplit == 1
             for pass = 1:smoothPass
                 for i in smoothRows, j in 1:body.grid.orggrid.NDIVS[2]
