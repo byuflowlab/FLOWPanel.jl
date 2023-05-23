@@ -560,13 +560,13 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody; optargs...)
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
 
-    normals = calc_normals(mbody)
-    controlpoints = calc_controlpoints(mbody, normals)
-    areas = calc_areas(mbody)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
 
-    return calcfield_Ugradmu!(out, mbody, areas, normals, controlpoints; optargs...)
+    return calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
 end
 
 """
