@@ -173,7 +173,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     for ci in 1:body.ncells             # Iterate over linear indexing
         ccoor = cinc[ci]                # Cartesian indexing of this cell
 
-        if false && isedge(body, ccoor) # Nothing if cell is on grid's open edge
+        if false && isedge(body, ci) # Nothing if cell is on grid's open edge
             nothing
         else
 
@@ -310,7 +310,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     for ci in 1:body.ncells             # Iterate over linear indexing
         ccoor = cinc[ci]                # Cartesian indexing of this cell
 
-        if false && isedge(body, ccoor) # Nothing if cell is on grid's open edge
+        if false && isedge(body, ci) # Nothing if cell is on grid's open edge
             nothing
         else
 
@@ -419,7 +419,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
 
                 ei, ej = ni, ni%3 + 1
 
-                if false && isedge(body, ccoor) # Nothing if cell is on grid's open edge
+                if false && isedge(body, ci) # Nothing if cell is on grid's open edge
                     nothing
                 else
 
