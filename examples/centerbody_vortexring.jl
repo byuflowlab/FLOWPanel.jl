@@ -29,8 +29,7 @@ println("Post processing...")
 #       the body
 
 # Calculate surface velocity on the body
-Us = pnl.calcfield_U(body, body,
-                            offset=0.08, characteristiclength=(args...)->R)
+Us = pnl.calcfield_U(body, body)
 
 # NOTE: Since the boundary integral equation of the potential flow has a
 #       discontinuity at the boundary, we need to add the gradient of the
