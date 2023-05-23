@@ -277,6 +277,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
                                 fieldname="Ugradmu", addfield=true,
                                 Gammai=1,
                                 maxgrad=Inf,
+                                smoothPass=0, smoothRows=[0]
                                 )
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
@@ -310,84 +311,80 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     for ci in 1:body.ncells             # Iterate over linear indexing
         ccoor = cinc[ci]                # Cartesian indexing of this cell
 
-        if false && isedge(body, ccoor) # Nothing if cell is on grid's open edge
-            nothing
-        else
 
-            # Fetch the cell
-            panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
-                            body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+        # Fetch the cell
+        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
 
-            for ni in 1:3                   # Iterate over neighbors
+        for ni in 1:3                   # Iterate over neighbors
 
-                # Obtain coordinates of ni-th neighbor
-                gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
+            # Obtain coordinates of ni-th neighbor
+            gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
 
-                # Linear indexing of this neighbor
-                nlin = linc[ncoor...]
+            # Linear indexing of this neighbor
+            nlin = linc[ncoor...]
 
-                ei, ej = ni, ni%3 + 1
+            ei, ej = ni, ni%3 + 1
 
-                # r = pj - pi
-                r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
-                r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
-                r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+            # r = pj - pi
+            r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+            r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+            r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
 
-                # d = r⨉n / |r⨉n| (normal to edge)
-                d1 = r2*normals[3, ci] - r3*normals[2, ci]
-                d2 = r3*normals[1, ci] - r1*normals[3, ci]
-                d3 = r1*normals[2, ci] - r2*normals[1, ci]
+            # d = r⨉n / |r⨉n| (normal to edge)
+            d1 = r2*normals[3, ci] - r3*normals[2, ci]
+            d2 = r3*normals[1, ci] - r1*normals[3, ci]
+            d3 = r1*normals[2, ci] - r2*normals[1, ci]
 
-                # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
-                # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
-                # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
-                # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+            # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
+            # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+            # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+            # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
 
-                dmag = sqrt(d1^2 + d2^2 + d3^2)
-                d1 /= dmag
-                d2 /= dmag
-                d3 /= dmag
+            dmag = sqrt(d1^2 + d2^2 + d3^2)
+            d1 /= dmag
+            d2 /= dmag
+            d3 /= dmag
 
-                # Use Green-Gauss method to compute gradient of circulation
-                # where the interpolated gamma at each face (edge) is used
+            # Use Green-Gauss method to compute gradient of circulation
+            # where the interpolated gamma at each face (edge) is used
 
-                # Compute vector from one edge vertex to cell-center
-                vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
-                vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
+            # Compute vector from one edge vertex to cell-center
+            vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+            vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
 
-                # Compute approx. distance of cell-center to edge
-                # Common denominator has been cancelled out
-                dMain = norm(cross(vecMain, [r1, r2, r3]))
-                dNear = norm(cross(vecNear, [r1, r2, r3]))
+            # Compute approx. distance of cell-center to edge
+            # Common denominator has been cancelled out
+            dMain = norm(cross(vecMain, [r1, r2, r3]))
+            dNear = norm(cross(vecNear, [r1, r2, r3]))
 
-                # r = [r1, r2, r3]
-                # rhat = r/norm(r)
-                # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
-                # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+            # r = [r1, r2, r3]
+            # rhat = r/norm(r)
+            # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+            # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
 
-                # Compute inverse distance weighted interpolation factor
-                f = dNear/(dMain + dNear)
+            # Compute inverse distance weighted interpolation factor
+            f = dNear/(dMain + dNear)
 
-                # Override interpolation factor to 0.5 for debugging
-                # This is just averaging between gamma
-                # f = 0.5
+            # Override interpolation factor to 0.5 for debugging
+            # This is just averaging between gamma
+            # f = 0.5
 
-                # Compute face gamma
-                faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+            # Compute face gamma
+            faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
 
-                # Invert direction of vector if normals point inward
-                sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+            # Invert direction of vector if normals point inward
+            sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
 
-                # Add contribution from face gamma
-                mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+            # Add contribution from face gamma
+            mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
 
-                # if abs(mag) < maxgrad
-                    out[1, ci] -= 0.5 * sgn * d1 * mag
-                    out[2, ci] -= 0.5 * sgn * d2 * mag
-                    out[3, ci] -= 0.5 * sgn * d3 * mag
-                # end
+            # if abs(mag) < maxgrad
+                out[1, ci] -= 0.5 * sgn * d1 * mag
+                out[2, ci] -= 0.5 * sgn * d2 * mag
+                out[3, ci] -= 0.5 * sgn * d3 * mag
+            # end
 
-            end
         end
 
     end
@@ -497,6 +494,38 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
 
         end
 
+    end
+
+    # Smoothen gradient of edge cells AFTER computation of all gradients
+    if smoothRows[1] != 0 || smoothPass != 0
+        if body.grid.orggrid.loop_dim == 2 && body.grid.dimsplit == 1
+            for pass = 1:smoothPass
+                for i in smoothRows, j in 1:body.grid.orggrid.NDIVS[2]
+                    ci = linc[i, j, 1]
+
+                    out[1:3, ci] .= 0.0
+                    denom = 0
+
+                    for ni in 1:3  # Iterate over neighbors
+
+                        # Obtain coordinates of ni-th neighbor
+                        ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+
+                        if all(ncoor != [0,0,0])
+                            denom += 1
+                            # Linear indexing of this neighbor
+                            nlin = linc[ncoor...]
+
+                            out[1, ci] += out[1, nlin]
+                            out[2, ci] += out[2, nlin]
+                            out[3, ci] += out[3, nlin]
+                        end
+                    end
+                    # Average of the gradient of neighboring cells
+                    out[1:3, ci] = out[1:3, ci] ./ denom
+                end
+            end
+        end
     end
 
     # Quick and dirty fix to omit the high gradient at the trailing edge
