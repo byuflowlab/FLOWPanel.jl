@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>AOA Sweep · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><span class="tocitem">Elements</span><ul><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/constantvortexsheet/">Constant Vortex Sheet</a></li></ul></li><li><span class="tocitem">Geometry Engine</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/gridgeneration/">Methods</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../../geometry/basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../../geometry/basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../../geometry/basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../../geometry/basics-surfacegrid/">Surface Grid</a></li></ul></li></ul></li><li><span class="tocitem">Examples</span><ul><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox" checked/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li class="is-active"><a class="tocitem" href>AOA Sweep</a></li><li><a class="tocitem" href="../duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../duct-leastsquares/">Least-Squares Solver</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li><a class="is-disabled">Duct</a></li><li class="is-active"><a href>AOA Sweep</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>AOA Sweep</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/examples/duct-aoasweep.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><center>
+  <img src="../../assets/images/duct-hill-aoa15-0001-viz-glyph00.png" alt="Pic here" style="width: 100%;"/>
+</center><p>In this example we solve the flow around a fan duct (<em>aka</em> annular airfoil or engine cowl) at an angle of attack leading to asymmetric flow. The geometry is generated as a body of revolution that is watertight.</p><h1 id="AOA-Sweep"><a class="docs-heading-anchor" href="#AOA-Sweep">AOA Sweep</a><a id="AOA-Sweep-1"></a><a class="docs-heading-anchor-permalink" href="#AOA-Sweep" title="Permalink"></a></h1><p>Here we generate the duct as a body of revolution and then we run a sweep of inflow angle of attack</p><pre><code class="language-julia hljs">#=##############################################################################
+# DESCRIPTION
+    Fan duct replicating the experiment reported by V. P. Hill (1978), &quot;A
+    Surface Vorticity Theory for Propeller Ducts and Turbofan Engine Cowls in
+    Non-Axisymmetric Incompressible Flow.&quot; The same experiment is also
+    discussed in Sections 4.4 and 6.3.1 of Lewis, R. (1991), &quot;Vortex Element
+    Methods for Fluid Dynamic Analysis of Engineering Systems.&quot;
+
+# AUTHORSHIP
+  * Author    : Eduardo J. Alvarez
+  * Email     : Edo.AlvarezR@gmail.com
+  * Created   : Jan 2023
+  * License   : MIT License
+=###############################################################################
+
+import FLOWPanel as pnl
+import CSV
+import DataFrames: DataFrame
+
+include(joinpath(pnl.examples_path, &quot;duct_postprocessing.jl&quot;))
+
+run_name        = &quot;duct-hill00&quot;             # Name of this run
+
+save_path       = run_name                  # Where to save outputs
+fluiddomain     = false                     # Whether to generate fluid domain
+paraview        = true                      # Whether to visualize with Paraview
+
+save_plots      = false                     # Whether to save plots or not
+# Where to save plots (default to re-generating the figures that are used
+# in the docs)
+fig_path = joinpath(pnl.examples_path, &quot;..&quot;, &quot;docs&quot;, &quot;resources&quot;, &quot;images&quot;)
+
+
+# ----------------- SIMULATION PARAMETERS --------------------------------------
+AOAs            = [0, 5, 15]                # (deg) angles of attack to evaluate
+magVinf         = 30.0                      # (m/s) freestream velocity
+rho             = 1.225                     # (kg/m^3) air density
+
+
+# ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+# Read duct contour (table in figure 7.4 of Lewis 1991)
+filename        = joinpath(pnl.examples_path, &quot;data&quot;, &quot;naca662015.csv&quot;)
+contour         = CSV.read(filename, DataFrame)
+
+aspectratio     = 0.6                       # Duct trailing edge aspect ratio l/d
+d               = 2*0.835                   # (m) duct diameter
+
+
+# ----------------- SOLVER PARAMETERS ------------------------------------------
+# Discretization
+NDIVS_theta     = 60                        # Number of azimuthal panels
+
+# NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
+#       either an integer, or an array of tuples as shown below
+
+n_rfl           = 10                        # This controls the number of chordwise panels
+
+NDIVS_rfl_up = [                            # Discretization of airfoil upper surface
+            # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
+                (0.25, n_rfl,   10.0, false),
+            # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
+                (0.50, n_rfl,    1.0, true),
+            # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
+                (0.25, n_rfl,    0.1, false)]
+
+NDIVS_rfl_lo = NDIVS_rfl_up                 # Discretization of airfoil lower surface
+
+# NOTE: A geometric expansion of 10 that is not central means that the last
+#       panel is 10 times larger than the first panel. If central, the
+#       middle panel is 10 times larger than the peripheral panels.
+
+# Solver: Vortex-ring least-squares
+bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2} # Elements and wake model
+
+
+# ----------------- GENERATE BODY ----------------------------------------------
+# Re-discretize the contour of the body of revolution according to NDIVS
+xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+                                        NDIVS_rfl_up, NDIVS_rfl_lo;
+                                        verify_spline=false)
+
+# Make sure that the contour is closed
+ys[end] = ys[1]
+
+# Scale contour by duct length
+xs *= d*aspectratio
+ys *= d*aspectratio
+
+# Move contour to the radial position
+ys .+= d/2
+
+# Collect points that make the contour of the body of revolution
+points = hcat(xs, ys)
+
+# Generate body of revolution
+body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+                                        bodyoptargs = (
+                                                        CPoffset=1e-14,
+                                                        kerneloffset=1e-8,
+                                                        kernelcutoff=1e-14,
+                                                        characteristiclength=(args...)-&gt;d*aspectratio
+                                            )
+                                        )
+
+println(&quot;Number of panels:\t$(body.ncells)&quot;)
+
+vtks = save_path*&quot;/&quot;                        # String with VTK output files
+
+
+# ----------------- CALL SOLVER ------------------------------------------------
+for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
+
+    println(&quot;Solving body...&quot;)
+
+    # Freestream vector
+    Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
+
+    # Freestream at every control point
+    Uinfs = repeat(Vinf, 1, body.ncells)
+
+    # Unitary direction of semi-infinite vortex at points `a` and `b` of each
+    # trailing edge panel
+    Das = repeat(Vinf/magVinf, 1, body.nsheddings)
+    Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
+
+    # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
+    # `Das` and `Dbs` as trailing edge rigid wake direction
+    @time pnl.solve(body, Uinfs, Das, Dbs)
+
+    # ----------------- POST PROCESSING ----------------------------------------
+    println(&quot;Post processing...&quot;)
+    # NOTE: A thick body with only vortex ring elements leads to a surface
+    #       velocity that is inaccurate at the exact surface of the body, but
+    #       that approximates the physical solution away from the surface. For
+    #       this reason, we probe the velocity used to calculate Cp slightly
+    #       away from the body
+
+    # Calculate surface velocity U on the body probed at a distance
+    # offset*characteristiclength away from each panel in the normal direction
+    Us = pnl.calcfield_U(body, body, characteristiclength=(args...)-&gt;d*aspectratio)
+
+    # NOTE: Since the boundary integral equation of the potential flow has a
+    #       discontinuity at the boundary, we need to add the gradient of the
+    #       doublet strength to get an accurate surface velocity
+
+    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+    UDeltaGamma = pnl.calcfield_Ugradmu(body)
+
+    # Add both velocities together
+    pnl.addfields(body, &quot;Ugradmu&quot;, &quot;U&quot;)
+
+    # Calculate pressure coefficient (based on U + U_∇μ)
+    @time Cps = pnl.calcfield_Cp(body, magVinf)
+
+    # Calculate the force of each panel (based on Cp)
+    @time Fs = pnl.calcfield_F(body, magVinf, rho)
+
+    # ----------------- COMPARISON TO EXPERIMENTAL DATA ------------------------
+    # Plot surface pressure along slices of the duct
+    fig, axs = plot_Cp(body, AOA)
+
+    if save_plots
+        fname = &quot;$(run_name)-Cp-AOA$(ceil(Int, AOA)).png&quot;
+        fig.savefig(joinpath(fig_path, fname), dpi=300, transparent=true)
+    end
+
+    # ----------------- VISUALIZATION ------------------------------------------
+    # Compute fluid domain and save as VTK
+    if fluiddomain
+        global vtks *= generate_fluiddomain(body, AOA, Vinf, d,
+                                                aspectratio, save_path; num=i)
+    end
+
+    # Save body as VTK
+    if paraview
+        global vtks *= pnl.save(body, &quot;duct&quot;; path=save_path, num=i,
+                                        wake_panel=false, debug=true)
+    end
+
+end
+
+# Call Paraview
+if paraview
+    run(`paraview --data=$(vtks)`)
+end</code></pre><p>(see the complete example under <a href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/duct.jl">examples/duct.jl</a> )</p><center>
+    <br><b>No AOA (symmetric flow)</b><br>
+    <img src="../../assets/images/duct-hill00-Cp-AOA0.png" alt="Pic here" style="width:100%;"/>
+</center>
+
+<center>
+    <br><b>5° angle of attack</b><br>
+    <img src="../../assets/images/duct-hill00-Cp-AOA5.png" alt="Pic here" style="width:100%;"/>
+</center>
+
+<center>
+    <br><b>15° angle of attack</b><br>
+    <img src="../../assets/images/duct-hill00-Cp-AOA15.png" alt="Pic here" style="width:100%;"/>
+</center><p>In the plots above, the upper and lower sides correspond to the slice shown here below:</p><center>
+  <img src="../../assets/images/duct-hill-aoa15-slice02.png" alt="Pic here" style="width: 100%;"/>
+</center></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../centerbody-vortexring/">« Vortex Ring Elements</a><a class="docs-footer-nextpage" href="../duct-fluiddomain/">Fluid Domain »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Thursday 17 August 2023 21:02">Thursday 17 August 2023</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
