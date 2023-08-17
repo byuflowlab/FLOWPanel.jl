@@ -1,7 +1,7 @@
 name = "FLOWPanel"
 uuid = "6be8c882-484d-4309-b349-d23112750151"
 author = ["Eduardo Alvarez <Edo.AlvarezR@gmail.com>"]
-version = "0.0.1"
+version = "0.0.2"
 
 [deps]
 Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
