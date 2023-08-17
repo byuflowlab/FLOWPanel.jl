@@ -156,16 +156,9 @@ Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
-# NOTE: A thick body with only vortex ring elements leads to a surface velocity
-#       that is inaccurate at the exact surface of the body, but that
-#       approximates the physical solution away from the surface. For this
-#       reason, we probe the velocity used to calculate Cp slightly away from
-#       the body
 
-
-# Calculate velocity away from the body
-@time Us = pnl.calcfield_U(body, body; fieldname="Uoff",
-                        offset=0.02, characteristiclength=(args...)->b/ar)
+# Calculate surface velocity induced by the body on itself
+@time Us = pnl.calcfield_U(body, body; characteristiclength=(args...)->b/ar)
 
 # NOTE: Since the boundary integral equation of the potential flow has a
 #       discontinuity at the boundary, we need to add the gradient of the
@@ -175,13 +168,13 @@ println("Post processing...")
 UDeltaGamma = pnl.calcfield_Ugradmu(body)
 
 # Add both velocities together
-pnl.addfields(body, "Ugradmu", "Uoff")
+pnl.addfields(body, "Ugradmu", "U")
 
 # Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
+@time Cps = pnl.calcfield_Cp(body, magVinf)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
+@time Fs = pnl.calcfield_F(body, magVinf, rho)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------
@@ -219,6 +212,6 @@ distribution and spanwise loading that is plotted here below)
 
 |           | Experimental  | FLOWPanel                 | Error |
 | --------: | :-----------: | :-----------------------: | :---- |
-| $C_L$   | 0.238         | 0.23648    | 0.64% |
-| $C_D$   | 0.005         | 0.01306    | 161.289% |
+| $C_L$   | 0.238         | 0.28193    | 18.459% |
+| $C_D$   | 0.005         | 0.01294    | 158.841% |
 
