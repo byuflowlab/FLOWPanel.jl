@@ -17,8 +17,8 @@ v_lvl = 0
 solvers_to_test = (
                         ( "Backslash", (solver=pnl.solve_backslash!, solver_optargs=()) ),
                         ( "LUdiv", (solver=pnl.solve_ludiv!, solver_optargs=()) ),
-                        ( "GMRES tol=1e-8", (solver=pnl.solve_gmres!, solver_optargs=(atol=1e-8, rtol=1e-8,)) ),
-                        ( "GMRES tol=1e-2", (solver=pnl.solve_gmres!, solver_optargs=(atol=1e-2, rtol=1e-2,)) ),
+                        # ( "GMRES tol=1e-8", (solver=pnl.solve_gmres!, solver_optargs=(atol=1e-8, rtol=1e-8,)) ),
+                        # ( "GMRES tol=1e-2", (solver=pnl.solve_gmres!, solver_optargs=(atol=1e-2, rtol=1e-2,)) ),
                   )
 
 

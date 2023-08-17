@@ -67,13 +67,13 @@ end
 
 # Optional modules and headers
 try
-    import PyPlot
+    import PyPlot as plt
     import PyPlot: @L_str
-    const plt = PyPlot
 
     for header_name in ["monitor"]
       include("FLOWPanel_"*header_name*".jl")
     end
+    
 catch e
     @warn "Could not load monitors because of the following error:\n$(e)"
 end
