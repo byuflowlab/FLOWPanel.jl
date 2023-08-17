@@ -72,6 +72,6 @@ deploydocs(
     target = "build",
     deps = nothing,
     make = nothing,
-    devbranch = "master"
-    # devbranch = "dev"
+    # devbranch = "master"
+    devbranch = "dev"
 )
