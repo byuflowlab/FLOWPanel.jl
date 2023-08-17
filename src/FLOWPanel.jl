@@ -21,9 +21,6 @@ export  solve, save, Uind!, phi!,
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
-import PyPlot
-import PyPlot: @L_str
-const plt = PyPlot
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
@@ -62,9 +59,23 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "utils", "postprocess", "monitor"
+                    "utils", "postprocess"
                     ]
   include("FLOWPanel_"*header_name*".jl")
+end
+
+
+# Optional modules and headers
+try
+    import PyPlot
+    import PyPlot: @L_str
+    const plt = PyPlot
+
+    for header_name in ["monitor"]
+      include("FLOWPanel_"*header_name*".jl")
+    end
+catch e
+    @warn "Could not load monitors because of the following error:\n$(e)"
 end
 
 end # END OF MODULE
