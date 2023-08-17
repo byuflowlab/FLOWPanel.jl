@@ -24,6 +24,7 @@ import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import Requires: @require
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -64,18 +65,18 @@ for header_name in ["elements", "linearsolver",
   include("FLOWPanel_"*header_name*".jl")
 end
 
+# Conditionally load monitors if PyPlot is available
+function __init__()
+    @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
-# Optional modules and headers
-try
-    import PyPlot as plt
-    import PyPlot: @L_str
+        import .PyPlot as plt
+        import .PyPlot: @L_str
 
-    for header_name in ["monitor"]
-      include("FLOWPanel_"*header_name*".jl")
+        for header_name in ["monitor"]
+          include("FLOWPanel_"*header_name*".jl")
+        end
+
     end
-    
-catch e
-    @warn "Could not load monitors because of the following error:\n$(e)"
 end
 
 end # END OF MODULE
