@@ -121,22 +121,45 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 """
-    calcfield_UDeltaGamma!(out::Matrix, body::AbstractBody;
-                            fieldname="UDeltaGamma")
+    calcfield_Ugradmu!(out::Matrix, body::AbstractBody;
+                            fieldname="Ugradmu")
 
 Calculate the surface velocity on `body` due to changes in the constant
 doublet strength and save it as a field of name `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
+
+TODO: Avoid the large gradient at the trailing edge recognizing the trailing
+        edge and omiting the neighbor that should be the wake.
 """
-function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
-                                fieldname="UDeltaGamma", addfield=true,
-                                Gammai=1, edgedirection=true
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+                                areas::AbstractVector,
+                                normals::AbstractMatrix,
+                                controlpoints::AbstractMatrix;
+                                fieldname="Ugradmu", addfield=true,
+                                Gammai=1,
+                                maxgrad=Inf,
                                 )
-    Gammas = body.strength[:, Gammai]
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Fetch data
+    Gammas = view(body.strength, :, Gammai)
     nodes = body.grid.orggrid.nodes
 
+    # Pre-allocate memory
     (tri_out, tricoor, quadcoor,
         quad_out, lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
 
@@ -144,95 +167,95 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
     linc = LinearIndices(ndivscellsc)
     cinc = CartesianIndices(ndivscellsc)
 
-    # if !edgedirection
-        # Calculate control points
-        normals = calc_normals(body)
-        controlpoints = calc_controlpoints(body, normals)
-    # end
-
     ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
 
+    # Iterate over cells
     for ci in 1:body.ncells             # Iterate over linear indexing
         ccoor = cinc[ci]                # Cartesian indexing of this cell
 
-        if isedge(body, ccoor)          # Nothing if cell is on grid's open edge
-            nothing
-        else
+        # Fetch the cell
+        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
 
-            if edgedirection
+        for ni in 1:3                   # Iterate over neighbors
 
-                # Fetch the cell
-                panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
-                                body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+            # Obtain coordinates of ni-th neighbor
+            ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
 
-                # Calculate normal
-                nrml1 = gt._calc_n1(nodes, panel)
-                nrml2 = gt._calc_n2(nodes, panel)
-                nrml3 = gt._calc_n3(nodes, panel)
-
-            end
-
-            for ni in 1:3                   # Iterate over neighbors
-
-                # Obtain coordinates of ni-th neighbor
-                gt.neighbor!(ncoor, ni, ci, ccoor, ndivscellsc, body.grid.dimsplit)
-
+            if ncoor[1] != 0
                 # Linear indexing of this neighbor
                 nlin = linc[ncoor...]
 
-                if edgedirection            # Case: calculate 𝐮_ΔΓ based on edge
+                ei, ej = ni, ni%3 + 1
 
-                    ei, ej = ni, ni%3 + 1
+                # r = pj - pi
+                r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
 
-                    # r = pj - pi
-                    r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
-                    r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
-                    r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+                # d = r⨉n / |r⨉n| (normal to edge)
+                d1 = r2*normals[3, ci] - r3*normals[2, ci]
+                d2 = r3*normals[1, ci] - r1*normals[3, ci]
+                d3 = r1*normals[2, ci] - r2*normals[1, ci]
 
-                    # d = r⨉n / |r⨉n|
-                    d1 = r2*nrml3 - r3*nrml2
-                    d2 = r3*nrml1 - r1*nrml3
-                    d3 = r1*nrml2 - r2*nrml1
-
-                else                        # Case: calculate 𝐮_ΔΓ based on centroids
-                    # d = (cpj - cpi) / |cpj - cpi|
-                    d1 = controlpoints[1, nlin] - controlpoints[1, ci]
-                    d2 = controlpoints[2, nlin] - controlpoints[2, ci]
-                    d3 = controlpoints[3, nlin] - controlpoints[3, ci]
-                end
+                # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
+                # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
 
                 dmag = sqrt(d1^2 + d2^2 + d3^2)
                 d1 /= dmag
                 d2 /= dmag
                 d3 /= dmag
 
-                # Distance between centroids
-                # deltax =  (controlpoints[1, nlin] - controlpoints[1, ci])^2
-                # deltax += (controlpoints[2, nlin] - controlpoints[2, ci])^2
-                # deltax += (controlpoints[3, nlin] - controlpoints[3, ci])^2
-                # deltax = sqrt(deltax)
+                # Use Green-Gauss method to compute gradient of circulation
+                # where the interpolated gamma at each face (edge) is used
 
-                # deltax =  -(controlpoints[1, nlin] - controlpoints[1, ci])*d1
-                # deltax += -(controlpoints[2, nlin] - controlpoints[2, ci])*d2
-                # deltax += -(controlpoints[3, nlin] - controlpoints[3, ci])*d3
+                # Compute vector from one edge vertex to cell-center
+                vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+                vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
 
-                deltax =  -((nodes[1, tri_out[ej]] + nodes[1, tri_out[ei]])/2 - controlpoints[1, ci])*d1
-                deltax += -((nodes[2, tri_out[ej]] + nodes[2, tri_out[ei]])/2 - controlpoints[2, ci])*d2
-                deltax += -((nodes[3, tri_out[ej]] + nodes[3, tri_out[ei]])/2 - controlpoints[3, ci])*d3
-                deltax *= 2
+                # Compute approx. distance of cell-center to edge
+                # Common denominator has been cancelled out
+                dMain = norm(cross(vecMain, [r1, r2, r3]))
+                dNear = norm(cross(vecNear, [r1, r2, r3]))
 
-                deltax = abs(deltax)
+                # r = [r1, r2, r3]
+                # rhat = r/norm(r)
+                # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+                # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+
+                # Compute inverse distance weighted interpolation factor
+                f = dNear/(dMain + dNear)
+
+                # Override interpolation factor to 0.5 for debugging
+                # This is just averaging between gamma
+                # f = 0.5
+
+                # Compute face gamma
+                faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
 
                 # Invert direction of vector if normals point inward
                 sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
 
-                # 𝐮_ΔΓ = ΔΓ*d
-                # if abs((Gammas[nlin] - Gammas[ci])/deltax) < 1000
-                    out[1, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d1
-                    out[2, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d2
-                    out[3, ci] -= sgn * (Gammas[nlin] - Gammas[ci])/deltax * d3
+                # Add contribution from face gamma
+                mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+
+                # if abs(mag) < maxgrad
+                    out[1, ci] -= 0.5 * sgn * d1 * mag
+                    out[2, ci] -= 0.5 * sgn * d2 * mag
+                    out[3, ci] -= 0.5 * sgn * d3 * mag
                 # end
+
             end
+        end
+
+    end
+
+    # Quick and dirty fix to omit the high gradient at the trailing edge
+    for ci in 1:body.ncells
+        if norm(view(out, :, ci)) >= maxgrad
+            out[:, ci] *= 0
         end
     end
 
@@ -243,10 +266,302 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, body::AbstractBody;
 
     return out
 end
-function calcfield_UDeltaGamma!(out::AbstractMatrix, mbody::MultiBody, args...;
-                                fieldname="UDeltaGamma", addfield=true,
+
+function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
+                                areas::AbstractVector,
+                                normals::AbstractMatrix,
+                                controlpoints::AbstractMatrix;
+                                fieldname="Ugradmu", addfield=true,
+                                Gammai=1,
+                                maxgrad=Inf,
+                                smoothPass=0, smoothRows=[0]
+                                )
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Fetch data
+    Gammas = view(body.strength, :, Gammai)
+    nodes = body.grid.orggrid.nodes
+
+    # Pre-allocate memory
+    (tri_out, tricoor, quadcoor,
+        quad_out, lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
+
+    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
+    linc = LinearIndices(ndivscellsc)
+    cinc = CartesianIndices(ndivscellsc)
+
+    ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
+
+    # Iterate over cells
+    for ci in 1:body.ncells             # Iterate over linear indexing
+        ccoor = cinc[ci]                # Cartesian indexing of this cell
+
+
+        # Fetch the cell
+        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+
+        for ni in 1:3                   # Iterate over neighbors
+
+            # Obtain coordinates of ni-th neighbor
+            ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+
+            if ncoor[1] != 0
+                # Linear indexing of this neighbor
+                nlin = linc[ncoor...]
+
+                ei, ej = ni, ni%3 + 1
+
+                # r = pj - pi
+                r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+
+                # d = r⨉n / |r⨉n| (normal to edge)
+                d1 = r2*normals[3, ci] - r3*normals[2, ci]
+                d2 = r3*normals[1, ci] - r1*normals[3, ci]
+                d3 = r1*normals[2, ci] - r2*normals[1, ci]
+
+                # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
+                # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+
+                dmag = sqrt(d1^2 + d2^2 + d3^2)
+                d1 /= dmag
+                d2 /= dmag
+                d3 /= dmag
+
+                # Use Green-Gauss method to compute gradient of circulation
+                # where the interpolated gamma at each face (edge) is used
+
+                # Compute vector from one edge vertex to cell-center
+                vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+                vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
+
+                # Compute approx. distance of cell-center to edge
+                # Common denominator has been cancelled out
+                dMain = norm(cross(vecMain, [r1, r2, r3]))
+                dNear = norm(cross(vecNear, [r1, r2, r3]))
+
+                # r = [r1, r2, r3]
+                # rhat = r/norm(r)
+                # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+                # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+
+                # Compute inverse distance weighted interpolation factor
+                f = dNear/(dMain + dNear)
+
+                # Override interpolation factor to 0.5 for debugging
+                # This is just averaging between gamma
+                # f = 0.5
+
+                # Compute face gamma
+                faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+
+                # Invert direction of vector if normals point inward
+                sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+
+                # Add contribution from face gamma
+                mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+
+                # if abs(mag) < maxgrad
+                    out[1, ci] -= 0.5 * sgn * d1 * mag
+                    out[2, ci] -= 0.5 * sgn * d2 * mag
+                    out[3, ci] -= 0.5 * sgn * d3 * mag
+                # end
+            end
+
+        end
+
+    end
+
+    # Iterate over TE cells
+    for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+
+        sides = pj!=-1 ? ((pi, nia, nib), (pj, nja, njb)) : ((pi, nia, nib),)
+
+
+        # for (ci, ei, ej) in sides               # Iterate over both sides
+            # # Identify neighbor index where the wake is
+            # ni =    (ei==1 && ej==2) || (ei==2 && ej==1) ? 1 :
+            #         (ei==2 && ej==3) || (ei==3 && ej==2) ? 2 :
+            #         (ei==3 && ej==1) || (ei==1 && ej==3) ? 3 :
+            #         error("Logic error: Invalid trailing edge!")
+
+        for (ci, _, _) in sides               # Iterate over both sides
+
+            for ni in 1:3                   # Iterate over neighbors
+
+                ccoor = cinc[ci]                # Cartesian indexing of this cell
+
+                # Obtain coordinates of ni-th neighbor
+                ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+
+                if ncoor[1] != 0
+                    # Linear indexing of this neighbor
+                    nlin = linc[ncoor...]
+
+                    ei, ej = ni, ni%3 + 1
+
+                    # Fetch the cell
+                    panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                                    body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+
+                    # Obtain coordinates of ni-th neighbor
+                    ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+
+                    if ncoor[1] != 0
+                        # Linear indexing of this neighbor
+                        nlin = linc[ncoor...]
+
+                        # r = pj - pi
+                        r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                        r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                        r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+
+                        # d = r⨉n / |r⨉n| (normal to edge)
+                        d1 = r2*normals[3, ci] - r3*normals[2, ci]
+                        d2 = r3*normals[1, ci] - r1*normals[3, ci]
+                        d3 = r1*normals[2, ci] - r2*normals[1, ci]
+
+                        # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
+                        # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                        # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                        # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+
+                        dmag = sqrt(d1^2 + d2^2 + d3^2)
+                        d1 /= dmag
+                        d2 /= dmag
+                        d3 /= dmag
+
+                        # Use Green-Gauss method to compute gradient of circulation
+                        # where the interpolated gamma at each face (edge) is used
+
+                        # Compute vector from one edge vertex to cell-center
+                        vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+                        vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
+
+                        # Compute approx. distance of cell-center to edge
+                        # Common denominator has been cancelled out
+                        dMain = norm(cross(vecMain, [r1, r2, r3]))
+                        dNear = norm(cross(vecNear, [r1, r2, r3]))
+
+                        # r = [r1, r2, r3]
+                        # rhat = r/norm(r)
+                        # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+                        # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+
+                        # Compute inverse distance weighted interpolation factor
+                        f = dNear/(dMain + dNear)
+
+                        # Override interpolation factor to 0.5 for debugging
+                        # This is just averaging between gamma
+                        # f = 0.5
+
+                        # Compute face gamma
+                        faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+
+                        # Invert direction of vector if normals point inward
+                        sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+
+                        # Add contribution from face gamma
+                        mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+
+                        # Cancels out the neighbor where the wake is supposed to be
+                        # if abs(mag) < maxgrad
+                            out[1, ci] += 0.5 * sgn * d1 * mag
+                            out[2, ci] += 0.5 * sgn * d2 * mag
+                            out[3, ci] += 0.5 * sgn * d3 * mag
+                        # end
+                    end
+                end
+            end
+
+        end
+
+    end
+
+    # Smoothen gradient of edge cells AFTER computation of all gradients
+    if smoothRows[1] != 0 && smoothPass != 0
+        if body.grid.orggrid.loop_dim == 2 && body.grid.dimsplit == 1
+            for pass = 1:smoothPass
+                for i in smoothRows, j in 1:body.grid.orggrid.NDIVS[2]
+                    ci = linc[i, j, 1]
+
+                    out[1:3, ci] .= 0.0
+                    denom = 0
+
+                    for ni in 1:3  # Iterate over neighbors
+
+                        # Obtain coordinates of ni-th neighbor
+                        ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+
+                        if ncoor[1] != 0
+                            denom += 1
+                            # Linear indexing of this neighbor
+                            nlin = linc[ncoor...]
+
+                            out[1, ci] += out[1, nlin]
+                            out[2, ci] += out[2, nlin]
+                            out[3, ci] += out[3, nlin]
+                        end
+                    end
+                    # Average of the gradient of neighboring cells
+                    out[1:3, ci] = out[1:3, ci] ./ denom
+                end
+            end
+        end
+    end
+
+    # Quick and dirty fix to omit the high gradient at the trailing edge
+    for ci in 1:body.ncells
+        if norm(view(out, :, ci)) >= maxgrad
+            out[:, ci] *= 0
+        end
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
+                                areas::AbstractVector,
+                                normals::AbstractMatrix,
+                                controlpoints::AbstractMatrix, args...;
+                                fieldname="Ugradmu", addfield=true,
                                 optargs...
                                 )
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
 
     counter = 0
 
@@ -254,8 +569,12 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, mbody::MultiBody, args...;
 
         offset = body.ncells
         thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
 
-        calcfield_UDeltaGamma!(thisout, body, args...;
+        calcfield_Ugradmu!(thisout, body, thisareas, thisnormals,
+                                thiscontrolpoints, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
         counter += offset
@@ -267,22 +586,30 @@ function calcfield_UDeltaGamma!(out::AbstractMatrix, mbody::MultiBody, args...;
 
     return out
 end
-"""
-    calcfield_UDeltaGamma(body::AbstractBody; fieldname="UDeltaGamma")
 
-Similar to [`calcfield_UDeltaGamma!`](@ref) but without in-place calculation
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
+
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    return calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+end
+
+"""
+    calcfield_Ugradmu(body::AbstractBody; fieldname="Ugradmu")
+
+Similar to [`calcfield_Ugradmu!`](@ref) but without in-place calculation
 (`out` is not needed).
 """
-function calcfield_UDeltaGamma(body::AbstractBody, args...; optargs...)
+function calcfield_Ugradmu(body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
     out = zeros(3, body.ncells)
-    calcfield_UDeltaGamma!(out, body, args...; optargs...)
+    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
     return out
-end
-function calcfield_Ugradmu!(args...; fieldname="Ugradmu", optargs...)
-    return calcfield_UDeltaGamma!(args...; fieldname=fieldname, optargs...)
-end
-function calcfield_Ugradmu(args...; fieldname="Ugradmu", optargs...)
-    return calcfield_UDeltaGamma(args...; fieldname=fieldname, optargs...)
 end
 
 ################################################################################

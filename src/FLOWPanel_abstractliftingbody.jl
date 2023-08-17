@@ -120,6 +120,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   # loop_dim::Int=1,
                                                   loop_dim::Int=2,
                                                   axis_angle=270,
+                                                  overwrite_shedding=nothing,
                                                   optargs...
                                       ) where {B<:AbstractLiftingBody}
     # Revolves the geometry
@@ -141,20 +142,25 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
     # dimsplit = 2              # Dimension along which to split
     triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
-    ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
-    U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
-    L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
+    if isnothing(overwrite_shedding)
 
-    nedges = length(U)
-    shedding = zeros(Int, 6, nedges)
-    for (ei, (u, l)) in enumerate(zip(U, L))
-        shedding[1, ei] = u
-        shedding[2, ei] = 3
-        shedding[3, ei] = 2
+        ndivs = gt.get_ndivscells(triang_grid)                 # Cells in each dimension
+        U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
+        L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
-        shedding[4, ei] = l
-        shedding[5, ei] = 3
-        shedding[6, ei] = 2
+        nedges = length(U)
+        shedding = zeros(Int, 6, nedges)
+        for (ei, (u, l)) in enumerate(zip(U, L))
+            shedding[1, ei] = u
+            shedding[2, ei] = 3
+            shedding[3, ei] = 2
+
+            shedding[4, ei] = l
+            shedding[5, ei] = 3
+            shedding[6, ei] = 2
+        end
+    else
+        shedding = overwrite_shedding
     end
 
     return bodytype(triang_grid, shedding; bodyoptargs...)

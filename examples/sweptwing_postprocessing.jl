@@ -8,9 +8,9 @@ import CSV
 import DataFrames: DataFrame
 import OrderedCollections: OrderedDict
 import PyPlot: @L_str
-include(joinpath(examples_path, "plotformat.jl"))
+include(joinpath(pnl.examples_path, "plotformat.jl"))
 
-expdata_path = joinpath(examples_path, "data")
+expdata_path = joinpath(pnl.examples_path, "data")
 
 dot(A, B) = sum(a*b for (a,b) in zip(A, B))
 norm(A) = sqrt(mapreduce(x->x^2, +, A))

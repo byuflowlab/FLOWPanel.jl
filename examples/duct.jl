@@ -137,9 +137,7 @@ for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 
     # Calculate surface velocity U on the body probed at a distance
     # offset*characteristiclength away from each panel in the normal direction
-    Us = pnl.calcfield_U(body, body,
-                            offset=0.03,
-                            characteristiclength=(args...)->d*aspectratio)
+    Us = pnl.calcfield_U(body, body, characteristiclength=(args...)->d*aspectratio)
 
     # NOTE: Since the boundary integral equation of the potential flow has a
     #       discontinuity at the boundary, we need to add the gradient of the

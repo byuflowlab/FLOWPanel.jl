@@ -21,12 +21,10 @@ export  solve, save, Uind!, phi!,
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
-import PyPlot
-import PyPlot: @L_str
-const plt = PyPlot
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import Requires: @require
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -62,9 +60,23 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "utils", "postprocess", "monitor"
+                    "utils", "postprocess"
                     ]
   include("FLOWPanel_"*header_name*".jl")
+end
+
+# Conditionally load monitors if PyPlot is available
+function __init__()
+    @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
+
+        import .PyPlot as plt
+        import .PyPlot: @L_str
+
+        for header_name in ["monitor"]
+          include("FLOWPanel_"*header_name*".jl")
+        end
+
+    end
 end
 
 end # END OF MODULE

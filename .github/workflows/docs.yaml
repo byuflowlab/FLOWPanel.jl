@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+      - 'releases/**'
+      - dev
     tags: '*'
   pull_request:
 
@@ -11,10 +13,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Install matplotlib
+        run: if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y python3-matplotlib; fi
+        shell: bash
       - uses: actions/checkout@v2
       - uses: julia-actions/setup-julia@latest
         with:
           version: '1.6'
+      - name: Override Conda Python
+        run: if [ "$RUNNER_OS" = "Linux" ]; then julia -e 'import Pkg; Pkg.add("PyCall"); ENV["PYTHON"]="/usr/bin/python3"; Pkg.build("PyCall")'; fi
+        shell: bash
       - name: Install dependencies
         env:
           PYTHON: ""
