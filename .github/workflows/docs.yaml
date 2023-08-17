@@ -20,6 +20,9 @@ jobs:
       - uses: julia-actions/setup-julia@latest
         with:
           version: '1.6'
+      - name: Override Conda Python
+        run: if [ "$RUNNER_OS" = "Linux" ]; then julia -e 'import Pkg; Pkg.add("PyCall"); ENV["PYTHON"]="/usr/bin/python3"; Pkg.build("PyCall")'; fi
+        shell: bash
       - name: Install dependencies
         env:
           PYTHON: ""
