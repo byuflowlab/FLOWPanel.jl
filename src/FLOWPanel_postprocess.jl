@@ -267,6 +267,26 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
+function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::RigidWakeBody,
+                                    areas::AbstractVector, normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix;
+                                    fieldname="Ugradmu", addfield=true, Gammai=1)
+ 
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+end
+
 function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
@@ -609,6 +629,16 @@ function calcfield_Ugradmu(body::AbstractBody; optargs...)
 
     out = zeros(3, body.ncells)
     calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+function calcfield_Ugradmu_nodal(body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    out = zeros(3, body.ncells)
+    calcfield_Ugradmu_nodal!(out, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
