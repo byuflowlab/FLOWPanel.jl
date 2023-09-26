@@ -642,7 +642,7 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody,
     Gammas = view(body.strength, :, Gammai)
 
     # Compute nodal data for each node
-    nodal_data = gt.get_nodal_data(body.grid, Gammas)
+    nodal_data = gt.get_nodal_data(body.grid, Gammas; areas=areas)
 
     # Pre-allocate required arrays
     A = Array{Float64}(undef, 3, 3)
@@ -662,9 +662,18 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody,
 
         # Find slope of 'plane' created by field values at vertices
         # in the local coordinate system
-        A[1, :] = [1.0, t1[1]-t0[1], t1[2]-t0[2]]
-        A[2, :] = [1.0, t2[1]-t0[1], t2[2]-t0[2]]
-        A[3, :] = [1.0, t3[1]-t0[1], t3[2]-t0[2]]
+        A[1, 1] = 1.0
+        A[1, 2] = t1[1]-t0[1]
+        A[1, 3] = t1[2]-t0[2]
+
+        A[2, 1] = 1.0
+        A[2, 2] = t2[1]-t0[1]
+        A[2, 3] = t2[2]-t0[2]
+
+        A[3, 1] = 1.0
+        A[3, 2] = t3[1]-t0[1]
+        A[3, 3] = t3[2]-t0[2]
+
         b .= nodal_data[vtx]
         res = A\b
         dx = res[2]
