@@ -121,11 +121,11 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 """
-    calcfield_Ugradmu!(out::Matrix, body::AbstractBody;
+    calcfield_Ugradmu_cell!(out::Matrix, body::AbstractBody;
                             fieldname="Ugradmu")
 
 Calculate the surface velocity on `body` due to changes in the constant
-doublet strength and save it as a field of name `fieldname`.
+doublet strength using the Green-Gauss method and save it as a field of name `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -133,7 +133,7 @@ starts with all zeroes).
 TODO: Avoid the large gradient at the trailing edge recognizing the trailing
         edge and omiting the neighbor that should be the wake.
 """
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -267,7 +267,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -541,7 +541,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, mbody::MultiBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix, args...;
@@ -573,7 +573,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
         thisnormals = view(normals, 1:3, (1:offset) .+ counter)
         thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
 
-        calcfield_Ugradmu!(thisout, body, thisareas, thisnormals,
+        calcfield_Ugradmu_cell!(thisout, body, thisareas, thisnormals,
                                 thiscontrolpoints, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
@@ -587,28 +587,28 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody; optargs...)
 
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
-    return calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    return calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
 end
 
 """
-    calcfield_Ugradmu(body::AbstractBody; fieldname="Ugradmu")
+    calcfield_Ugradmu_cell(body::AbstractBody; fieldname="Ugradmu")
 
-Similar to [`calcfield_Ugradmu!`](@ref) but without in-place calculation
+Similar to [`calcfield_Ugradmu_cell!`](@ref) but without in-place calculation
 (`out` is not needed).
 """
-function calcfield_Ugradmu(body::AbstractBody; optargs...)
+function calcfield_Ugradmu_cell(body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
     out = zeros(3, body.ncells)
-    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
@@ -616,7 +616,7 @@ end
 # GRADIENT COMPUTATION USING NODAL VALUES
 ################################################################################
 
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody,
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                                     areas::AbstractVector, normals::AbstractMatrix,
                                     controlpoints::AbstractMatrix;
                                     fieldname="Ugradmu", addfield=true, Gammai=1)
@@ -689,7 +689,7 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody,
     end
 end
 
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, mbody::MultiBody,
+function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix, args...;
@@ -721,7 +721,7 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, mbody::MultiBody,
         thisnormals = view(normals, 1:3, (1:offset) .+ counter)
         thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
 
-        calcfield_Ugradmu_nodal!(thisout, body, thisareas, thisnormals,
+        calcfield_Ugradmu!(thisout, body, thisareas, thisnormals,
                                 thiscontrolpoints, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
@@ -735,7 +735,7 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody; optargs...)
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
@@ -744,13 +744,13 @@ function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody; optar
     return out
 end
 
-function calcfield_Ugradmu_nodal(body::AbstractBody; optargs...)
+function calcfield_Ugradmu(body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
     out = zeros(3, body.ncells)
-    calcfield_Ugradmu_nodal!(out, body, areas, normals, controlpoints; optargs...)
+    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
