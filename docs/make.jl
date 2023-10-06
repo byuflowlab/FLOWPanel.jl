@@ -35,6 +35,7 @@ makedocs(
                                                                 "geometry/basics-transformations.md",
                                                                 "geometry/basics-loopedgrid.md",
                                                                 "geometry/basics-surfacegrid.md",
+                                                                "geometry/panel-gradient.md"
                                                             ]
                                       ],
                 "Examples"          => [

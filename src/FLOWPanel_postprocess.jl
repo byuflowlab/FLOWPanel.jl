@@ -121,11 +121,11 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 """
-    calcfield_Ugradmu!(out::Matrix, body::AbstractBody;
+    calcfield_Ugradmu_cell!(out::Matrix, body::AbstractBody;
                             fieldname="Ugradmu")
 
 Calculate the surface velocity on `body` due to changes in the constant
-doublet strength and save it as a field of name `fieldname`.
+doublet strength using the Green-Gauss method and save it as a field of name `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -133,7 +133,7 @@ starts with all zeroes).
 TODO: Avoid the large gradient at the trailing edge recognizing the trailing
         edge and omiting the neighbor that should be the wake.
 """
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -267,7 +267,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -541,6 +541,159 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     return out
 end
 
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, mbody::MultiBody,
+                                areas::AbstractVector,
+                                normals::AbstractMatrix,
+                                controlpoints::AbstractMatrix, args...;
+                                fieldname="Ugradmu", addfield=true,
+                                optargs...
+                                )
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
+
+        calcfield_Ugradmu_cell!(thisout, body, thisareas, thisnormals,
+                                thiscontrolpoints, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
+    end
+
+    return out
+end
+
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody; optargs...)
+
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    return calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
+end
+
+"""
+    calcfield_Ugradmu_cell(body::AbstractBody; fieldname="Ugradmu")
+
+Similar to [`calcfield_Ugradmu_cell!`](@ref) but without in-place calculation
+(`out` is not needed).
+"""
+function calcfield_Ugradmu_cell(body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    out = zeros(3, body.ncells)
+    calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+################################################################################
+# GRADIENT COMPUTATION USING NODAL VALUES
+################################################################################
+
+function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+                                    areas::AbstractVector, normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix;
+                                    fieldname="Ugradmu", addfield=true, Gammai=1)
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Fetch data
+    nodes = body.grid.orggrid.nodes
+
+    # This algorithm might be inaccurate if the body has multiple types of elements
+    Gammas = view(body.strength, :, Gammai)
+
+    # Compute nodal data for each node
+    nodal_data = gt.get_nodal_data(body.grid, Gammas; areas=areas)
+
+    # Pre-allocate required arrays
+    A = Array{Float64}(undef, 3, 3)
+    b = zeros(3)
+    t1 = zeros(2)
+    t2 = zeros(2)
+    t3 = zeros(2)
+    e1 = zeros(3)
+    e2 = zeros(3)
+
+    # Compute cell-based gradient for each cell
+    for i = 1:prod(body.grid._ndivscells[1:2])
+        # Convert cell vertices to a local x,y coordinate frame
+        vtx = gt.get_cell(body.grid, i)
+        gt.project_3d_2d!(t2, t3, e1, e2,
+                          nodes[:, vtx[1]],
+                          nodes[:, vtx[2]],
+                          nodes[:, vtx[3]])
+
+        # The (x, y) coordinate of t1 is always at origin
+        t0 = @. (t1 + t2 + t3) / 3.0
+
+        # Find slope of 'plane' created by field values at vertices
+        # in the local coordinate system
+        A[1, 1] = 1.0
+        A[1, 2] = t1[1]-t0[1]
+        A[1, 3] = t1[2]-t0[2]
+
+        A[2, 1] = 1.0
+        A[2, 2] = t2[1]-t0[1]
+        A[2, 3] = t2[2]-t0[2]
+
+        A[3, 1] = 1.0
+        A[3, 2] = t3[1]-t0[1]
+        A[3, 3] = t3[2]-t0[2]
+
+        b .= nodal_data[vtx]
+        res = A\b
+        dx = res[2]
+        dy = res[3]
+
+        # Transform slopes back to global coordinate system
+        out[:, i] = @. -0.5 * (dx*e1 + dy*e2)
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+end
+
 function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
@@ -588,20 +741,14 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
 end
 
 function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
-
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
-    return calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    return out
 end
 
-"""
-    calcfield_Ugradmu(body::AbstractBody; fieldname="Ugradmu")
-
-Similar to [`calcfield_Ugradmu!`](@ref) but without in-place calculation
-(`out` is not needed).
-"""
 function calcfield_Ugradmu(body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
@@ -609,139 +756,6 @@ function calcfield_Ugradmu(body::AbstractBody; optargs...)
 
     out = zeros(3, body.ncells)
     calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
-    return out
-end
-
-################################################################################
-# GRADIENT COMPUTATION USING NODAL VALUES
-################################################################################
-
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody,
-                                    areas::AbstractVector, normals::AbstractMatrix,
-                                    controlpoints::AbstractMatrix;
-                                    fieldname="Ugradmu", addfield=true, Gammai=1)
-
-    # Error cases
-    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
-        "Invalid `out` matrix."*
-        " Expected size $((3, body.ncells)); got $(size(out))."
-    @assert length(areas)==body.ncells ""*
-        "Invalid `areas` vector."*
-        " Expected length $(body.ncells); got $(length(areas))."
-    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
-        "Invalid `normals` matrix."*
-        " Expected size $((3, body.ncells)); got $(size(normals))."
-    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
-        "Invalid `controlpoints` matrix."*
-        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
-
-    # Fetch data
-    nodes = body.grid.orggrid.nodes
-
-    # This algorithm might be inaccurate if the body has multiple types of elements
-    Gammas = view(body.strength, :, Gammai)
-
-    # Compute nodal data for each node
-    nodal_data = gt.get_nodal_data(body.grid, Gammas)
-
-    # Pre-allocate required arrays
-    A = Array{Float64}(undef, 3, 3)
-    b = zeros(3)
-    t1 = zeros(2)
-
-    # Compute cell-based gradient for each cell
-    for i = 1:prod(body.grid._ndivscells[1:2])
-        # Convert cell vertices to a local x,y coordinate frame
-        vtx = gt.get_cell(body.grid, i)
-        t2, t3, e1, e2 = gt.project_3d_2d(nodes[:, vtx[1]],
-                                          nodes[:, vtx[2]],
-                                          nodes[:, vtx[3]])
-
-        # The (x, y) coordinate of t1 is always at origin
-        t0 = @. (t1 + t2 + t3) / 3.0
-
-        # Find slope of 'plane' created by field values at vertices
-        # in the local coordinate system
-        A[1, :] = [1.0, t1[1]-t0[1], t1[2]-t0[2]]
-        A[2, :] = [1.0, t2[1]-t0[1], t2[2]-t0[2]]
-        A[3, :] = [1.0, t3[1]-t0[1], t3[2]-t0[2]]
-        b .= nodal_data[vtx]
-        res = A\b
-        dx = res[2]
-        dy = res[3]
-
-        # Transform slopes back to global coordinate system
-        out[:, i] = @. -0.5 * (dx*e1 + dy*e2)
-    end
-
-    # Save field in body
-    if addfield
-        add_field(body, fieldname, "vector", eachcol(out), "cell")
-    end
-end
-
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, mbody::MultiBody,
-                                areas::AbstractVector,
-                                normals::AbstractMatrix,
-                                controlpoints::AbstractMatrix, args...;
-                                fieldname="Ugradmu", addfield=true,
-                                optargs...
-                                )
-
-    # Error cases
-    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
-        "Invalid `out` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(out))."
-    @assert length(areas)==mbody.ncells ""*
-        "Invalid `areas` vector."*
-        " Expected length $(mbody.ncells); got $(length(areas))."
-    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
-        "Invalid `normals` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(normals))."
-    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
-        "Invalid `controlpoints` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
-
-    counter = 0
-
-    for body in mbody.bodies
-
-        offset = body.ncells
-        thisout = view(out, 1:3, (1:offset) .+ counter)
-        thisareas = view(areas, (1:offset) .+ counter)
-        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
-        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
-
-        calcfield_Ugradmu_nodal!(thisout, body, thisareas, thisnormals,
-                                thiscontrolpoints, args...;
-                                fieldname=fieldname, addfield=addfield,
-                                optargs...)
-        counter += offset
-    end
-
-    if addfield && !(fieldname in mbody.fields)
-        push!(mbody.fields, fieldname)
-    end
-
-    return out
-end
-
-function calcfield_Ugradmu_nodal!(out::AbstractMatrix, body::AbstractBody; optargs...)
-    normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals)
-    areas = calc_areas(body)
-
-    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
-    return out
-end
-
-function calcfield_Ugradmu_nodal(body::AbstractBody; optargs...)
-    normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals)
-    areas = calc_areas(body)
-
-    out = zeros(3, body.ncells)
-    calcfield_Ugradmu_nodal!(out, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
