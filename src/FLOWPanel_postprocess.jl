@@ -657,10 +657,10 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     for i = 1:prod(body.grid._ndivscells[1:2])
         # Convert cell vertices to a local x,y coordinate frame
         vtx = gt.get_cell(body.grid, i)
-        project_3d_2d!(t2, t3, e1, e2,
-                       nodes[:, vtx[1]],
-                       nodes[:, vtx[2]],
-                       nodes[:, vtx[3]])
+        gt.project_3d_2d!(t2, t3, e1, e2,
+                          nodes[:, vtx[1]],
+                          nodes[:, vtx[2]],
+                          nodes[:, vtx[3]])
 
         # The (x, y) coordinate of t1 is always at origin
         t0 = @. (t1 + t2 + t3) / 3.0
