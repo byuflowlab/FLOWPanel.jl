@@ -50,12 +50,13 @@ airfoil         = &quot;airfoil-rae101.csv&quot;          # Airfoil contour file
 
 n_rfl           = 8                             # Control number of chordwise panels
 # n_rfl         = 10                            # &lt;-- uncomment this for finer discretization
-            # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
-NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
-            # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
-              (0.50, n_rfl,    1.0, true),
-            # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
-              (0.25, n_rfl, 1/10.0, false)]
+#             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
+# NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
+#             # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
+#               (0.50, n_rfl,    1.0, true),
+#             # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
+#               (0.25, n_rfl, 1/10.0, false)]
+NDIVS_rfl = [ (1.0, 3*n_rfl,   1.0, false) ]
 
 # NOTE: A geometric expansion of 10 that is not central means that the last
 #       panel is 10 times larger than the first panel. If central, the
@@ -191,4 +192,4 @@ end
 
     <br><br><b>Spanwise loading distribution</b>
     <img src="../../assets/images/sweptwing000-loading.png" alt="Pic here" style="width: 100%;"/>
-</center><table><tr><th style="text-align: right"></th><th style="text-align: center">Experimental</th><th style="text-align: center">FLOWPanel</th><th style="text-align: left">Error</th></tr><tr><td style="text-align: right"><span>$C_L$</span></td><td style="text-align: center">0.238</td><td style="text-align: center">0.28193</td><td style="text-align: left">18.459%</td></tr><tr><td style="text-align: right"><span>$C_D$</span></td><td style="text-align: center">0.005</td><td style="text-align: center">0.01294</td><td style="text-align: left">158.841%</td></tr></table></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../geometry/panel-gradient/">« Panel Gradients</a><a class="docs-footer-nextpage" href="../sweptwing-aoasweep/">AOA Sweep »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Friday 20 October 2023 22:43">Friday 20 October 2023</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</center><table><tr><th style="text-align: right"></th><th style="text-align: center">Experimental</th><th style="text-align: center">FLOWPanel</th><th style="text-align: left">Error</th></tr><tr><td style="text-align: right"><span>$C_L$</span></td><td style="text-align: center">0.238</td><td style="text-align: center">0.28193</td><td style="text-align: left">18.459%</td></tr><tr><td style="text-align: right"><span>$C_D$</span></td><td style="text-align: center">0.005</td><td style="text-align: center">0.01294</td><td style="text-align: left">158.841%</td></tr></table></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../geometry/panel-gradient/">« Panel Gradients</a><a class="docs-footer-nextpage" href="../sweptwing-aoasweep/">AOA Sweep »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Friday 20 October 2023 23:09">Friday 20 October 2023</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
