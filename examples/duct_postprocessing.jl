@@ -6,7 +6,7 @@ include(joinpath(pnl.examples_path, "plotformat.jl"))
 Compare solution to experimental surface pressure (figures 4.8 and 6.4 in Lewis
 1991)
 """
-function plot_Cp(body, AOA)
+function plot_Cp(body, AOA; plot_experimental=true)
 
     fig = plt.figure("AOA $(AOA)", figsize=[7, 5*0.8]*2/3 .* [2, 1])
     axs = fig.subplots(1, 2)
@@ -33,20 +33,23 @@ function plot_Cp(body, AOA)
 
         side = upperside ? "upper" : "lower"
 
-        # Plot experimental surface pressure (figures 4.8 and 6.4 in Lewis 1991)
-        if AOA==0
-            fname = "lewis1991-fig4p8a.csv"
-        elseif AOA==5 || AOA==15
-            fname = "lewis1991-fig6p4$(side)-aoa$(ceil(Int, AOA)).csv"
-        else
-            error("Experimental data for AOA $(AOA) not available")
+        if plot_experimental
+
+            # Plot experimental surface pressure (figures 4.8 and 6.4 in Lewis 1991)
+            if AOA==0
+                fname = "lewis1991-fig4p8a.csv"
+            elseif AOA==5 || AOA==15
+                fname = "lewis1991-fig6p4$(side)-aoa$(ceil(Int, AOA)).csv"
+            else
+                error("Experimental data for AOA $(AOA) not available")
+            end
+
+            fname = joinpath(pnl.examples_path, "data", fname)
+            Cp_exp = CSV.read(fname, DataFrame, skipto=1)
+
+            ax.plot(Cp_exp[:, 1], Cp_exp[:, 2], "ok",
+                                        markersize=5, label="Experimental")
         end
-
-        fname = joinpath(pnl.examples_path, "data", fname)
-        Cp_exp = CSV.read(fname, DataFrame, skipto=1)
-
-        ax.plot(Cp_exp[:, 1], Cp_exp[:, 2], "ok",
-                                    markersize=5, label="Experimental")
 
         # Plot surface pressure of FLOWPanel
         ax.plot(slicepoints[1, :]/(d*aspectratio), sliceCps, "-", color="cyan",
