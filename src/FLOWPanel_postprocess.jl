@@ -654,12 +654,12 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     e1 = zeros(3)
     e2 = zeros(3)
     grad = zeros(3)
-    
+
     # Use CPoffset as a flag to know if the normals are flipped into the
     # body. If that's the case, then it flips the sign of the nodal quantity
     # to have the effect of implicitly flipping the normals out
     gamma_sign = (-1)^(body.CPoffset<0)
-    
+
     # Compute cell-based gradient for each cell
     for i = 1:prod(body.grid._ndivscells[1:2])
         # Convert cell vertices to a local x,y coordinate frame
@@ -681,6 +681,10 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
 
     # If it's a sharp TE, do not use contribution from the other side of the mesh
     # while converting from cell to nodal data
+    # NOTE: This automatically calculates the TE with some assumptions which
+    # might not generally hold true. Redo this part using the information in
+    # body.sheddings (in the case of a lifting over) to iterate over the TE
+    # instead
     if sharpTE && body.grid.orggrid.loop_dim == 1
         if body.grid.dimsplit == 1
             # Compute TE node indices
@@ -830,6 +834,7 @@ The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
+                        correct_kuttacondition=true,
                         fieldname="Cp", addfield=true
                         ) where {Arr1<:AbstractArray{<:Number,1},
                                  Arr2<:AbstractArray{<:Number,2}}
@@ -837,6 +842,21 @@ function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
     # Calculate pressure coefficient
     for (i, U) in enumerate(eachcol(Us))
         out[i] += 1 - (norm(U)/Uref)^2
+    end
+
+    # Kutta-condition correction bringing the pressure on both sides of the TE
+    # to be equal (average between upper and lower)
+    if typeof(body) <: AbstractLiftingBody
+
+         # Iterate over TE panels
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+            if pj != -1
+                ave = (out[pi] + out[pj])/2
+                out[pi] = ave
+                out[pj] = ave
+            end
+        end
+
     end
 
     # Save field in body
@@ -879,7 +899,13 @@ not needed).
 calcfield_Cp(body::AbstractBody, args...; optargs...) = calcfield_Cp!(zeros(body.ncells), body, args...; optargs...)
 
 
+function calcfield_Cp(mbody::MultiBody, args...; optargs...)
 
+    for body in mbody.bodies
+        calcfield_Cp(body, args...; optargs...)
+    end
+
+end
 
 
 
