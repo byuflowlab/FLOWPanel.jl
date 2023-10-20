@@ -619,7 +619,8 @@ end
 function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                                     areas::AbstractVector, normals::AbstractMatrix,
                                     controlpoints::AbstractMatrix;
-                                    fieldname="Ugradmu", addfield=true, Gammai=1)
+                                    fieldname="Ugradmu", addfield=true, Gammai=1,
+                                    sharpTE=false)
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
@@ -646,13 +647,19 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
 
     # Pre-allocate required arrays
     A = Array{Float64}(undef, 3, 3)
-    b = zeros(3)
+    t0 = zeros(2)
     t1 = zeros(2)
     t2 = zeros(2)
     t3 = zeros(2)
     e1 = zeros(3)
     e2 = zeros(3)
-
+    grad = zeros(3)
+    
+    # Use CPoffset as a flag to know if the normals are flipped into the
+    # body. If that's the case, then it flips the sign of the nodal quantity
+    # to have the effect of implicitly flipping the normals out
+    gamma_sign = (-1)^(body.CPoffset<0)
+    
     # Compute cell-based gradient for each cell
     for i = 1:prod(body.grid._ndivscells[1:2])
         # Convert cell vertices to a local x,y coordinate frame
@@ -665,47 +672,95 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
         # The (x, y) coordinate of t1 is always at origin
         t0 = @. (t1 + t2 + t3) / 3.0
 
-        # Find slope of 'plane' created by field values at vertices
-        # in the local coordinate system
-        A[1, 1] = 1.0
-        A[1, 2] = t1[1]-t0[1]
-        A[1, 3] = t1[2]-t0[2]
-
-        A[2, 1] = 1.0
-        A[2, 2] = t2[1]-t0[1]
-        A[2, 3] = t2[2]-t0[2]
-
-        A[3, 1] = 1.0
-        A[3, 2] = t3[1]-t0[1]
-        A[3, 3] = t3[2]-t0[2]
-
-        b .= nodal_data[vtx]
-        res = A\b
-        dx = res[2]
-        dy = res[3]
+        # Get gradient of plane formed by three scalar values at vertices
+        gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
 
         # Transform slopes back to global coordinate system
-        out[:, i] = @. -0.5 * (dx*e1 + dy*e2)
+        out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
     end
+
+    # If it's a sharp TE, do not use contribution from the other side of the mesh
+    # while converting from cell to nodal data
+    if sharpTE && body.grid.orggrid.loop_dim == 1
+        if body.grid.dimsplit == 1
+            # Compute TE node indices
+            lin_node = LinearIndices(body.grid._ndivsnodes)
+            TE_idx = lin_node[1, :, 1]
+
+            # Compute trailing cell indices that share vertices with TE nodes
+            lin_cell = LinearIndices(body.grid._ndivscells[1:2])
+            cells_U = vec(lin_cell[end-1:end, :])
+            cells_L = vec(lin_cell[1:2, :])
+
+            nodal_data_U, nodal_data_L = gt.get_nodal_data_TEcells(body.grid, Gammas,
+                                                                   TE_idx,
+                                                                   cells_U, cells_L;
+                                                                   areas=areas)
+
+            # Overwrite TE node values for cells on upper side
+            nodal_data[TE_idx] .= nodal_data_U
+            for i in cells_U
+                # Convert cell vertices to a local x,y coordinate frame
+                vtx = gt.get_cell(body.grid, i)
+                gt.project_3d_2d!(t2, t3, e1, e2,
+                                  nodes[:, vtx[1]],
+                                  nodes[:, vtx[2]],
+                                  nodes[:, vtx[3]])
+
+                # The (x, y) coordinate of t1 is always at origin
+                t0 = @. (t1 + t2 + t3) / 3.0
+
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
+
+                # Transform slopes back to global coordinate system
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
+            end
+
+            # Overwrite TE node values for cells on lower side
+            nodal_data[TE_idx] .= nodal_data_L
+            for i in cells_L
+                # Convert cell vertices to a local x,y coordinate frame
+                vtx = gt.get_cell(body.grid, i)
+                gt.project_3d_2d!(t2, t3, e1, e2,
+                                  nodes[:, vtx[1]],
+                                  nodes[:, vtx[2]],
+                                  nodes[:, vtx[3]])
+
+                # The (x, y) coordinate of t1 is always at origin
+                t0 = @. (t1 + t2 + t3) / 3.0
+
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
+
+                # Transform slopes back to global coordinate system
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
+            end
+        end
+    end
+
+    # Gamma / 2
+    @. out *= -0.5
 
     # Save field in body
     if addfield
+        add_field(body, "gamma_node", "scalar", nodal_data, "node")
         add_field(body, fieldname, "vector", eachcol(out), "cell")
     end
 end
 
 function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
-                                areas::AbstractVector,
-                                normals::AbstractMatrix,
-                                controlpoints::AbstractMatrix, args...;
-                                fieldname="Ugradmu", addfield=true,
-                                optargs...
-                                )
+        areas::AbstractVector,
+        normals::AbstractMatrix,
+        controlpoints::AbstractMatrix, args...;
+        fieldname="Ugradmu", addfield=true,
+        optargs...
+    )
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
-        "Invalid `out` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    "Invalid `out` matrix."*
+    " Expected size $((3, mbody.ncells)); got $(size(out))."
     @assert length(areas)==mbody.ncells ""*
         "Invalid `areas` vector."*
         " Expected length $(mbody.ncells); got $(length(areas))."
