@@ -654,7 +654,12 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     e1 = zeros(3)
     e2 = zeros(3)
     grad = zeros(3)
-
+    
+    # Use CPoffset as a flag to know if the normals are flipped into the
+    # body. If that's the case, then it flips the sign of the nodal quantity
+    # to have the effect of implicitly flipping the normals out
+    gamma_sign = (-1)^(body.CPoffset<0)
+    
     # Compute cell-based gradient for each cell
     for i = 1:prod(body.grid._ndivscells[1:2])
         # Convert cell vertices to a local x,y coordinate frame
@@ -668,7 +673,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
         t0 = @. (t1 + t2 + t3) / 3.0
 
         # Get gradient of plane formed by three scalar values at vertices
-        gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
+        gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
 
         # Transform slopes back to global coordinate system
         out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
@@ -706,7 +711,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                 t0 = @. (t1 + t2 + t3) / 3.0
 
                 # Get gradient of plane formed by three scalar values at vertices
-                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
 
                 # Transform slopes back to global coordinate system
                 out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
@@ -726,7 +731,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                 t0 = @. (t1 + t2 + t3) / 3.0
 
                 # Get gradient of plane formed by three scalar values at vertices
-                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
 
                 # Transform slopes back to global coordinate system
                 out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
