@@ -680,6 +680,10 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
         A[3, 3] = t3[2]-t0[2]
 
         b .= nodal_data[vtx]
+        # Use CPoffset as a flag to know if the normals are flipped into the
+        # body. If that's the case, then it flips the sign of the nodal quantity
+        # to have the effect of implicitly flipping the normals out
+        b .*= (-1)^(body.CPoffset<0)
         res = A\b
         dx = res[2]
         dy = res[3]
