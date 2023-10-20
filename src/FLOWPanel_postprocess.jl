@@ -647,12 +647,13 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
 
     # Pre-allocate required arrays
     A = Array{Float64}(undef, 3, 3)
-    b = zeros(3)
+    t0 = zeros(2)
     t1 = zeros(2)
     t2 = zeros(2)
     t3 = zeros(2)
     e1 = zeros(3)
     e2 = zeros(3)
+    grad = zeros(3)
 
     # Compute cell-based gradient for each cell
     for i = 1:prod(body.grid._ndivscells[1:2])
@@ -666,28 +667,11 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
         # The (x, y) coordinate of t1 is always at origin
         t0 = @. (t1 + t2 + t3) / 3.0
 
-        # Find slope of 'plane' created by field values at vertices
-        # in the local coordinate system
-        A[1, 1] = 1.0
-        A[1, 2] = t1[1]-t0[1]
-        A[1, 3] = t1[2]-t0[2]
-
-        A[2, 1] = 1.0
-        A[2, 2] = t2[1]-t0[1]
-        A[2, 3] = t2[2]-t0[2]
-
-        A[3, 1] = 1.0
-        A[3, 2] = t3[1]-t0[1]
-        A[3, 3] = t3[2]-t0[2]
-
-        b .= nodal_data[vtx]
-
-        res = A\b
-        dx = res[2]
-        dy = res[3]
+        # Get gradient of plane formed by three scalar values at vertices
+        gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
 
         # Transform slopes back to global coordinate system
-        out[:, i] = @. (dx*e1 + dy*e2)
+        out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
     end
 
     # If it's a sharp TE, do not use contribution from the other side of the mesh
@@ -721,28 +705,11 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                 # The (x, y) coordinate of t1 is always at origin
                 t0 = @. (t1 + t2 + t3) / 3.0
 
-                # Find slope of 'plane' created by field values at vertices
-                # in the local coordinate system
-                A[1, 1] = 1.0
-                A[1, 2] = t1[1]-t0[1]
-                A[1, 3] = t1[2]-t0[2]
-
-                A[2, 1] = 1.0
-                A[2, 2] = t2[1]-t0[1]
-                A[2, 3] = t2[2]-t0[2]
-
-                A[3, 1] = 1.0
-                A[3, 2] = t3[1]-t0[1]
-                A[3, 3] = t3[2]-t0[2]
-
-                b .= nodal_data[vtx]
-
-                res = A\b
-                dx = res[2]
-                dy = res[3]
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
 
                 # Transform slopes back to global coordinate system
-                out[:, i] = @. (dx*e1 + dy*e2)
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
             end
 
             # Overwrite TE node values for cells on lower side
@@ -758,28 +725,11 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
                 # The (x, y) coordinate of t1 is always at origin
                 t0 = @. (t1 + t2 + t3) / 3.0
 
-                # Find slope of 'plane' created by field values at vertices
-                # in the local coordinate system
-                A[1, 1] = 1.0
-                A[1, 2] = t1[1]-t0[1]
-                A[1, 3] = t1[2]-t0[2]
-
-                A[2, 1] = 1.0
-                A[2, 2] = t2[1]-t0[1]
-                A[2, 3] = t2[2]-t0[2]
-
-                A[3, 1] = 1.0
-                A[3, 2] = t3[1]-t0[1]
-                A[3, 3] = t3[2]-t0[2]
-
-                b .= nodal_data[vtx]
-
-                res = A\b
-                dx = res[2]
-                dy = res[3]
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, nodal_data[vtx])
 
                 # Transform slopes back to global coordinate system
-                out[:, i] = @. (dx*e1 + dy*e2)
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
             end
         end
     end
