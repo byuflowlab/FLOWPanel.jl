@@ -48,12 +48,12 @@ airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 n_rfl           = 8                             # Control number of chordwise panels
 # n_rfl         = 10                            # <-- uncomment this for finer discretization
 #             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
-# NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
-#             # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
-#               (0.50, n_rfl,    1.0, true),
-#             # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
-#               (0.25, n_rfl, 1/10.0, false)]
-NDIVS_rfl = [ (1.0, 3*n_rfl,   1.0, false) ]
+NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
+            # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
+              (0.50, n_rfl,    1.0, true),
+            # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
+              (0.25, n_rfl, 1/10.0, false)]
+# NDIVS_rfl = [ (1.0, 3*n_rfl,   1.0, false) ]
 
 # NOTE: A geometric expansion of 10 that is not central means that the last
 #       panel is 10 times larger than the first panel. If central, the
@@ -155,7 +155,8 @@ println("Post processing...")
 #       doublet strength to get an accurate surface velocity
 
 # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true)
+# UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true)
+UDeltaGamma = pnl.calcfield_Ugradmu_cell(body;)
 
 # Add both velocities together
 pnl.addfields(body, "Ugradmu", "U")

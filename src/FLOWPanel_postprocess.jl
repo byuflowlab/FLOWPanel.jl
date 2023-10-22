@@ -833,7 +833,9 @@ velocity `Us` of each control point. The ``C_p`` is saved as a field named
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
+function calcfield_Cp!(out::Arr1,
+                        body::Union{NonLiftingBody, AbstractLiftingBody},
+                        Us::Arr2, Uref::Number;
                         correct_kuttacondition=true,
                         fieldname="Cp", addfield=true
                         ) where {Arr1<:AbstractArray{<:Number,1},
@@ -846,14 +848,20 @@ function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
 
     # Kutta-condition correction bringing the pressure on both sides of the TE
     # to be equal (average between upper and lower)
-    if typeof(body) <: AbstractLiftingBody
+    if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
 
-         # Iterate over TE panels
+        # Iterate over TE panels
         for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
             if pj != -1
-                ave = (out[pi] + out[pj])/2
+                ave = (out[pi] + out[pi+1] + out[pj] + out[pj-1]) / 4
                 out[pi] = ave
+                out[pi+1] = ave
                 out[pj] = ave
+                out[pj-1] = ave
+            else
+                ave = (out[pi] + out[pi+1] ) / 2
+                out[pi] = ave
+                out[pi+1] = ave
             end
         end
 
@@ -862,6 +870,39 @@ function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
     # Save field in body
     if addfield
         add_field(body, fieldname, "scalar", out, "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_Cp!(out::AbstractVector, mbody::MultiBody, Us::AbstractMatrix,
+                        args...; addfield=true, fieldname="Cp", optargs...)
+
+
+    # Error cases
+    @assert length(out)==mbody.ncells ""*
+        "Invalid `out` vector."*
+        " Expected length $(mbody.ncells); got $(length(out))."
+    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
+        "Invalid `Us` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(Us))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, (1:offset) .+ counter)
+        thisUs = view(Us, 1:3, (1:offset) .+ counter)
+
+        calcfield_Cp!(thisout, body, thisUs, args...;
+                        fieldname=fieldname, addfield=addfield, optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
     end
 
     return out
@@ -899,17 +940,6 @@ not needed).
 calcfield_Cp(body::AbstractBody, args...; optargs...) = calcfield_Cp!(zeros(body.ncells), body, args...; optargs...)
 
 
-function calcfield_Cp(mbody::MultiBody, args...; optargs...)
-
-    for body in mbody.bodies
-        calcfield_Cp(body, args...; optargs...)
-    end
-
-end
-
-
-
-
 
 
 ################################################################################
@@ -930,9 +960,10 @@ element given in `normals`. ``F`` is saved as a field named `fieldname`.
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_F!(out::Arr0, body::AbstractBody,
+function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody},
                          areas::Arr1, normals::Arr2, Us::Arr3,
                          Uinf::Number, rho::Number;
+                         correct_kuttacondition=true,
                          addfield=true, fieldname="F"
                          ) where {   Arr0<:AbstractArray{<:Number,2},
                                      Arr1<:AbstractArray{<:Number,1},
@@ -962,9 +993,106 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
         out[3, i] += val*normal[3]
     end
 
+    # Kutta-condition correction bringing the pressure on both sides of the TE
+    # to be equal (average between upper and lower)
+    # NOTE: This overwrites any previous force value instead of accumulating it
+    if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
+
+        q = 0.5*rho*Uinf^2
+
+        # Iterate over TE panels
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+
+            if pj != -1
+                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                                (norm(view(Us, :, pi+1))/Uinf)^2 +
+                                (norm(view(Us, :, pj))/Uinf)^2 +
+                                (norm(view(Us, :, pj-1))/Uinf)^2
+                            ) / 4
+
+                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+                out[1, pj] = -aveCp * q * areas[pj] * normals[1, pj]
+                out[2, pj] = -aveCp * q * areas[pj] * normals[2, pj]
+                out[3, pj] = -aveCp * q * areas[pj] * normals[3, pj]
+                out[1, pj-1] = -aveCp * q * areas[pj-1] * normals[1, pj-1]
+                out[2, pj-1] = -aveCp * q * areas[pj-1] * normals[2, pj-1]
+                out[3, pj-1] = -aveCp * q * areas[pj-1] * normals[3, pj-1]
+
+            else
+                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                                (norm(view(Us, :, pi+1))/Uinf)^2
+                            ) / 2
+
+                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+
+            end
+        end
+
+    end
+
     # Save field in body
     if addfield
         add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
+                        areas::AbstractVector, normals::AbstractMatrix, Us::AbstractMatrix,
+                        args...;
+                        addfield=true, fieldname="F",
+                        optargs...)
+
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
+        "Invalid `Us` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(Us))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thisUs = view(Us, 1:3, (1:offset) .+ counter)
+
+        calcfield_F!(thisout, body, thisareas, thisnormals,
+                                thisUs, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
     end
 
     return out
@@ -1008,6 +1136,7 @@ Similar to [`calcfield_F!`](@ref) but without in-place calculation (`out` is
 not needed).
 """
 calcfield_F(body::AbstractBody, args...; optargs...) = calcfield_F!(zeros(3, body.ncells), body, args...; optargs...)
+
 
 """
     calcfield_sectionalforce!(outf::Matrix, outpos::Vector,
