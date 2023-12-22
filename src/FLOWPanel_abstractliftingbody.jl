@@ -71,7 +71,9 @@ Generates a lofted lifting body of type `bodytype`. See documentation of
 function.
 """
 function generate_loft_liftbody(bodytype::Type{B}, args...;
-                                bodyoptargs=(), dimsplit::Int=2, optargs...
+                                bodyoptargs=(), dimsplit::Int=2,
+                                overwrite_shedding=nothing,
+                                optargs...
                                ) where {B<:AbstractLiftingBody}
     # Lofts the surface geometry
     grid = gt.generate_loft(args...; optargs...)
@@ -84,16 +86,22 @@ function generate_loft_liftbody(bodytype::Type{B}, args...;
     U = [ Base._sub2ind(ndivs, ndivs[1]-1, i) for i in 1:ndivs[2] ] # Upper LE cells
     L = [ Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2] ]          # Lower LE cells
 
-    nedges = length(U)
-    shedding = zeros(Int, 6, nedges)
-    for (ei, (u, l)) in enumerate(zip(U, L))
-        shedding[1, ei] = u
-        shedding[2, ei] = 3
-        shedding[3, ei] = 2
+    if isnothing(overwrite_shedding)
 
-        shedding[4, ei] = l
-        shedding[5, ei] = 3
-        shedding[6, ei] = 2
+        nedges = length(U)
+        shedding = zeros(Int, 6, nedges)
+        for (ei, (u, l)) in enumerate(zip(U, L))
+            shedding[1, ei] = u
+            shedding[2, ei] = 3
+            shedding[3, ei] = 2
+
+            shedding[4, ei] = l
+            shedding[5, ei] = 3
+            shedding[6, ei] = 2
+        end
+
+    else
+        shedding = overwrite_shedding
     end
 
     return bodytype(triang_grid, shedding; bodyoptargs...)
@@ -121,6 +129,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   loop_dim::Int=2,
                                                   axis_angle=270,
                                                   overwrite_shedding=nothing,
+                                                  closed_contour=true,
                                                   optargs...
                                       ) where {B<:AbstractLiftingBody}
     # Revolves the geometry
@@ -155,7 +164,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
             shedding[2, ei] = 3
             shedding[3, ei] = 2
 
-            shedding[4, ei] = l
+            shedding[4, ei] = closed_contour ? l : -1
             shedding[5, ei] = 3
             shedding[6, ei] = 2
         end

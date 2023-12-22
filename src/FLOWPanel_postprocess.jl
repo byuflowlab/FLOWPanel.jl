@@ -120,12 +120,15 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 
+################################################################################
+# GRADIENT COMPUTATION USING CELL VALUES
+################################################################################
 """
-    calcfield_Ugradmu!(out::Matrix, body::AbstractBody;
+    calcfield_Ugradmu_cell!(out::Matrix, body::AbstractBody;
                             fieldname="Ugradmu")
 
 Calculate the surface velocity on `body` due to changes in the constant
-doublet strength and save it as a field of name `fieldname`.
+doublet strength using the Green-Gauss method and save it as a field of name `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -133,7 +136,7 @@ starts with all zeroes).
 TODO: Avoid the large gradient at the trailing edge recognizing the trailing
         edge and omiting the neighbor that should be the wake.
 """
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -267,7 +270,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix;
@@ -541,7 +544,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::RigidWakeBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, mbody::MultiBody,
                                 areas::AbstractVector,
                                 normals::AbstractMatrix,
                                 controlpoints::AbstractMatrix, args...;
@@ -573,7 +576,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
         thisnormals = view(normals, 1:3, (1:offset) .+ counter)
         thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
 
-        calcfield_Ugradmu!(thisout, body, thisareas, thisnormals,
+        calcfield_Ugradmu_cell!(thisout, body, thisareas, thisnormals,
                                 thiscontrolpoints, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
@@ -587,28 +590,454 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
+function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody; optargs...)
 
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
-    return calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    return calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
 end
 
 """
-    calcfield_Ugradmu(body::AbstractBody; fieldname="Ugradmu")
+    calcfield_Ugradmu_cell(body::AbstractBody; fieldname="Ugradmu")
 
-Similar to [`calcfield_Ugradmu!`](@ref) but without in-place calculation
+Similar to [`calcfield_Ugradmu_cell!`](@ref) but without in-place calculation
 (`out` is not needed).
 """
-function calcfield_Ugradmu(body::AbstractBody; optargs...)
+function calcfield_Ugradmu_cell(body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
     out = zeros(3, body.ncells)
-    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    calcfield_Ugradmu_cell!(out, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+
+################################################################################
+# GRADIENT COMPUTATION USING NODAL VALUES
+################################################################################
+function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody,
+                                    areas::AbstractVector, normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix;
+                                    fieldname="Ugradmu", addfield=true, Gammai=1,
+                                    sharpTE=false)
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Fetch data
+    nodes = body.grid.orggrid.nodes
+
+    # This algorithm might be inaccurate if the body has multiple types of elements
+    Gammas = view(body.strength, :, Gammai)
+
+    # Compute nodal data for each node
+    nodal_data = gt.get_nodal_data(body.grid, Gammas; areas=areas)
+
+    # Pre-allocate required arrays
+    A = Array{Float64}(undef, 3, 3)
+    t0 = zeros(2)
+    t1 = zeros(2)
+    t2 = zeros(2)
+    t3 = zeros(2)
+    e1 = zeros(3)
+    e2 = zeros(3)
+    grad = zeros(3)
+
+    # Use CPoffset as a flag to know if the normals are flipped into the
+    # body. If that's the case, then it flips the sign of the nodal quantity
+    # to have the effect of implicitly flipping the normals out
+    gamma_sign = (-1)^(body.CPoffset<0)
+
+    # Compute cell-based gradient for each cell
+    for i = 1:prod(body.grid._ndivscells[1:2])
+        # Convert cell vertices to a local x,y coordinate frame
+        vtx = gt.get_cell(body.grid, i)
+        gt.project_3d_2d!(t2, t3, e1, e2,
+                          nodes[:, vtx[1]],
+                          nodes[:, vtx[2]],
+                          nodes[:, vtx[3]])
+
+        # The (x, y) coordinate of t1 is always at origin
+        t0 = @. (t1 + t2 + t3) / 3.0
+
+        # Get gradient of plane formed by three scalar values at vertices
+        gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
+
+        # Transform slopes back to global coordinate system
+        out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
+    end
+
+    # If it's a sharp TE, do not use contribution from the other side of the mesh
+    # while converting from cell to nodal data
+    # NOTE: This automatically calculates the TE with some assumptions which
+    # might not generally hold true. Redo this part using the information in
+    # body.sheddings (in the case of a lifting over) to iterate over the TE
+    # instead
+    if sharpTE && body.grid.orggrid.loop_dim == 1
+        if body.grid.dimsplit == 1
+            # Compute TE node indices
+            lin_node = LinearIndices(body.grid._ndivsnodes)
+            TE_idx = lin_node[1, :, 1]
+
+            # Compute trailing cell indices that share vertices with TE nodes
+            lin_cell = LinearIndices(body.grid._ndivscells[1:2])
+            cells_U = vec(lin_cell[end-1:end, :])
+            cells_L = vec(lin_cell[1:2, :])
+
+            nodal_data_U, nodal_data_L = gt.get_nodal_data_TEcells(body.grid, Gammas,
+                                                                   TE_idx,
+                                                                   cells_U, cells_L;
+                                                                   areas=areas)
+
+            # Overwrite TE node values for cells on upper side
+            nodal_data[TE_idx] .= nodal_data_U
+            for i in cells_U
+                # Convert cell vertices to a local x,y coordinate frame
+                vtx = gt.get_cell(body.grid, i)
+                gt.project_3d_2d!(t2, t3, e1, e2,
+                                  nodes[:, vtx[1]],
+                                  nodes[:, vtx[2]],
+                                  nodes[:, vtx[3]])
+
+                # The (x, y) coordinate of t1 is always at origin
+                t0 = @. (t1 + t2 + t3) / 3.0
+
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
+
+                # Transform slopes back to global coordinate system
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
+            end
+
+            # Overwrite TE node values for cells on lower side
+            nodal_data[TE_idx] .= nodal_data_L
+            for i in cells_L
+                # Convert cell vertices to a local x,y coordinate frame
+                vtx = gt.get_cell(body.grid, i)
+                gt.project_3d_2d!(t2, t3, e1, e2,
+                                  nodes[:, vtx[1]],
+                                  nodes[:, vtx[2]],
+                                  nodes[:, vtx[3]])
+
+                # The (x, y) coordinate of t1 is always at origin
+                t0 = @. (t1 + t2 + t3) / 3.0
+
+                # Get gradient of plane formed by three scalar values at vertices
+                gt.get_tri_gradient!(grad, t1, t2, t3, t0, e1, e2, A, gamma_sign*nodal_data[vtx])
+
+                # Transform slopes back to global coordinate system
+                out[:, i] = @. (grad[2]*e1 + grad[3]*e2)
+            end
+        end
+    end
+
+    # Gamma / 2
+    @. out *= -0.5
+
+    # Save field in body
+    if addfield
+        add_field(body, "gamma_node", "scalar", nodal_data, "node")
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+end
+
+function calcfield_Ugradmu_node!(out::AbstractMatrix, mbody::MultiBody,
+        areas::AbstractVector,
+        normals::AbstractMatrix,
+        controlpoints::AbstractMatrix, args...;
+        fieldname="Ugradmu", addfield=true,
+        optargs...
+    )
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+    "Invalid `out` matrix."*
+    " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
+
+        calcfield_Ugradmu_node!(thisout, body, thisareas, thisnormals,
+                                thiscontrolpoints, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
+    end
+
+    return out
+end
+
+function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    calcfield_Ugradmu_node!(out, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+function calcfield_Ugradmu_node(body::AbstractBody; optargs...)
+    out = zeros(3, body.ncells)
+    calcfield_Ugradmu_node!(out, body; optargs...)
+    return out
+end
+
+
+################################################################################
+# COMBINED GRADIENT COMPUTATION
+################################################################################
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    body::RigidWakeBody,
+                                    areas::AbstractVector, normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix;
+                                    fieldname="Ugradmu", addfield=true, Gammai=1,
+                                    sharpTE=false, force_cellTE=true,
+                                    anglecrit=30)
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert size(out)==size(out_cell)==size(out_node) ""*
+        "Incompatible sizes of output matrices: $(size(out)), $(size(out_cell)), $(size(out_node))"
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Pre-allocate memory
+    (tri_out, tricoor, quadcoor,
+    quad_out, lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
+
+    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
+    linc = LinearIndices(ndivscellsc)
+    cinc = CartesianIndices(ndivscellsc)
+
+    ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
+
+    # Compute cell-centered gradmu
+    calcfield_Ugradmu_cell!(out_cell, body, areas, normals, controlpoints;
+                                                Gammai=Gammai, addfield=false)
+
+    # Compute node-centered gradmu
+    calcfield_Ugradmu_node!(out_node, body, areas, normals, controlpoints;
+                                Gammai=Gammai, sharpTE=sharpTE, addfield=false)
+
+
+    # The cell-centered scheme seems to do better at the trailing edge,
+    # so here we force it to use the cell computation by overwritting the
+    # node-centered computation along the TE
+    if force_cellTE
+
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+            for i in 1:3
+
+                out_node[i, pi] = out_cell[i, pi]
+                out_node[i, pi+1] = out_cell[i, pi+1]
+                if pj != -1
+                    out_node[i, pj] = out_cell[i, pj]
+                    out_node[i, pj-1] = out_cell[i, pj-1]
+                end
+
+            end
+        end
+
+    end
+
+    # Criterion for categorizing edges
+    cosanglecrit = cosd(anglecrit)
+
+    # Iterate over cells identifying edges to use node-centered computation
+    for ci in 1:body.ncells             # Iterate over linear indexing
+
+
+        this_normal = view(normals, :, ci)  # Normal of this cell
+        ccoor = cinc[ci]                # Cartesian indexing of this cell
+
+        # Fetch the cell
+        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+
+        use_node = false                # Flag to use node-centered scheme
+
+        for ni in 1:3                   # Iterate over neighbors
+
+            # Obtain coordinates of ni-th neighbor
+            # NOTE: preserveEdge=true will output [0,0,0] for a non-existent
+            # neighbor cell as in the edges of the grid
+            ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+            # ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=false)
+
+            if ncoor[1] == 0
+
+                use_node = true
+                break
+
+            else
+
+                # Linear indexing of this neighbor
+                nlin = linc[ncoor...]
+
+                neig_normal = view(normals, :, nlin)  # Normal of this neighbor
+
+                # If the angle between normals is larger than anglecrit, this
+                # cell has an accute edge and is flagged to use the
+                # node-centered scheme
+                # NOTE: This works well for the cell sharing an edge at the TE,
+                #       but the adjacent cell (which still shares a node with
+                #       the TE) doesn't fit this criterion. Improve the
+                #       criterion to include the adjacent cell in the future
+                cosangle = dot(this_normal, neig_normal)
+
+                if cosangle < cosanglecrit
+                    use_node = true
+                    break
+                end
+
+            end
+
+        end
+
+        # Combine cell and node-centered results
+        for i in 1:3
+            if use_node
+                out[i, ci] += out_node[i, ci]
+            else
+                out[i, ci] += out_cell[i, ci]
+            end
+        end
+
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    mbody::MultiBody,
+                                    areas::AbstractVector,
+                                    normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix, args...;
+                                    fieldname="Ugradmu", addfield=true,
+                                    optargs...
+                                )
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert size(out)==size(out_cell)==size(out_node) ""*
+        "Incompatible sizes of output matrices: $(size(out)), $(size(out_cell)), $(size(out_node))"
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisout_cell = view(out_cell, 1:3, (1:offset) .+ counter)
+        thisout_node = view(out_node, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
+
+        calcfield_Ugradmu!(thisout, thisout_cell, thisout_node,
+                                body, thisareas, thisnormals,
+                                thiscontrolpoints, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
+    end
+
+    return out
+end
+
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    calcfield_Ugradmu!(out, out_cell, out_node, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+function calcfield_Ugradmu(body::AbstractBody; optargs...)
+
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    out = zeros(3, body.ncells)
+    out_cell = zeros(3, body.ncells)
+    out_node = zeros(3, body.ncells)
+
+    calcfield_Ugradmu!(out, out_cell, out_node,
+                            body, areas, normals, controlpoints; optargs...)
     return out
 end
 
@@ -627,7 +1056,10 @@ velocity `Us` of each control point. The ``C_p`` is saved as a field named
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
+function calcfield_Cp!(out::Arr1,
+                        body::Union{NonLiftingBody, AbstractLiftingBody},
+                        Us::Arr2, Uref::Number;
+                        correct_kuttacondition=true,
                         fieldname="Cp", addfield=true
                         ) where {Arr1<:AbstractArray{<:Number,1},
                                  Arr2<:AbstractArray{<:Number,2}}
@@ -637,9 +1069,63 @@ function calcfield_Cp!(out::Arr1, body::AbstractBody, Us::Arr2, Uref::Number;
         out[i] += 1 - (norm(U)/Uref)^2
     end
 
+    # Kutta-condition correction bringing the pressure on both sides of the TE
+    # to be equal (average between upper and lower)
+    if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
+
+        # Iterate over TE panels
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+            if pj != -1
+                ave = (out[pi] + out[pi+1] + out[pj] + out[pj-1]) / 4
+                out[pi] = ave
+                out[pi+1] = ave
+                out[pj] = ave
+                out[pj-1] = ave
+            else
+                ave = (out[pi] + out[pi+1] ) / 2
+                out[pi] = ave
+                out[pi+1] = ave
+            end
+        end
+
+    end
+
     # Save field in body
     if addfield
         add_field(body, fieldname, "scalar", out, "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_Cp!(out::AbstractVector, mbody::MultiBody, Us::AbstractMatrix,
+                        args...; addfield=true, fieldname="Cp", optargs...)
+
+
+    # Error cases
+    @assert length(out)==mbody.ncells ""*
+        "Invalid `out` vector."*
+        " Expected length $(mbody.ncells); got $(length(out))."
+    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
+        "Invalid `Us` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(Us))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, (1:offset) .+ counter)
+        thisUs = view(Us, 1:3, (1:offset) .+ counter)
+
+        calcfield_Cp!(thisout, body, thisUs, args...;
+                        fieldname=fieldname, addfield=addfield, optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
     end
 
     return out
@@ -679,11 +1165,6 @@ calcfield_Cp(body::AbstractBody, args...; optargs...) = calcfield_Cp!(zeros(body
 
 
 
-
-
-
-
-
 ################################################################################
 # FORCE FIELDS
 ################################################################################
@@ -702,9 +1183,10 @@ element given in `normals`. ``F`` is saved as a field named `fieldname`.
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_F!(out::Arr0, body::AbstractBody,
+function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody},
                          areas::Arr1, normals::Arr2, Us::Arr3,
                          Uinf::Number, rho::Number;
+                         correct_kuttacondition=true,
                          addfield=true, fieldname="F"
                          ) where {   Arr0<:AbstractArray{<:Number,2},
                                      Arr1<:AbstractArray{<:Number,1},
@@ -734,9 +1216,106 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
         out[3, i] += val*normal[3]
     end
 
+    # Kutta-condition correction bringing the pressure on both sides of the TE
+    # to be equal (average between upper and lower)
+    # NOTE: This overwrites any previous force value instead of accumulating it
+    if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
+
+        q = 0.5*rho*Uinf^2
+
+        # Iterate over TE panels
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+
+            if pj != -1
+                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                                (norm(view(Us, :, pi+1))/Uinf)^2 +
+                                (norm(view(Us, :, pj))/Uinf)^2 +
+                                (norm(view(Us, :, pj-1))/Uinf)^2
+                            ) / 4
+
+                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+                out[1, pj] = -aveCp * q * areas[pj] * normals[1, pj]
+                out[2, pj] = -aveCp * q * areas[pj] * normals[2, pj]
+                out[3, pj] = -aveCp * q * areas[pj] * normals[3, pj]
+                out[1, pj-1] = -aveCp * q * areas[pj-1] * normals[1, pj-1]
+                out[2, pj-1] = -aveCp * q * areas[pj-1] * normals[2, pj-1]
+                out[3, pj-1] = -aveCp * q * areas[pj-1] * normals[3, pj-1]
+
+            else
+                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                                (norm(view(Us, :, pi+1))/Uinf)^2
+                            ) / 2
+
+                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+
+            end
+        end
+
+    end
+
     # Save field in body
     if addfield
         add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
+                        areas::AbstractVector, normals::AbstractMatrix, Us::AbstractMatrix,
+                        args...;
+                        addfield=true, fieldname="F",
+                        optargs...)
+
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
+        "Invalid `Us` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(Us))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thisUs = view(Us, 1:3, (1:offset) .+ counter)
+
+        calcfield_F!(thisout, body, thisareas, thisnormals,
+                                thisUs, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
     end
 
     return out
@@ -780,6 +1359,7 @@ Similar to [`calcfield_F!`](@ref) but without in-place calculation (`out` is
 not needed).
 """
 calcfield_F(body::AbstractBody, args...; optargs...) = calcfield_F!(zeros(3, body.ncells), body, args...; optargs...)
+
 
 """
     calcfield_sectionalforce!(outf::Matrix, outpos::Vector,
