@@ -828,7 +828,8 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
                                     areas::AbstractVector, normals::AbstractMatrix,
                                     controlpoints::AbstractMatrix;
                                     fieldname="Ugradmu", addfield=true, Gammai=1,
-                                    sharpTE=false, anglecrit=30)
+                                    sharpTE=false, force_cellTE=true,
+                                    anglecrit=30)
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
@@ -868,15 +869,21 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
     # The cell-centered scheme seems to do better at the trailing edge,
     # so here we force it to use the cell computation by overwritting the
     # node-centered computation along the TE
-    for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
-        for i in 1:3
-            out_node[i, pi] = out_cell[i, pi]
-            out_node[i, pi+1] = out_cell[i, pi+1]
-            if pj != -1
-                out_node[i, pj] = out_cell[i, pj]
-                out_node[i, pj-1] = out_cell[i, pj-1]
+    if force_cellTE
+
+        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+            for i in 1:3
+
+                out_node[i, pi] = out_cell[i, pi]
+                out_node[i, pi+1] = out_cell[i, pi+1]
+                if pj != -1
+                    out_node[i, pj] = out_cell[i, pj]
+                    out_node[i, pj-1] = out_cell[i, pj-1]
+                end
+                
             end
         end
+
     end
 
     # Criterion for categorizing edges
