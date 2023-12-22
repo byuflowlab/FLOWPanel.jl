@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Source Elements · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><span class="tocitem">Elements</span><ul><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/constantvortexsheet/">Constant Vortex Sheet</a></li></ul></li><li><span class="tocitem">Geometry Engine</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/gridgeneration/">Methods</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../../geometry/basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../../geometry/basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../../geometry/basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../../geometry/basics-surfacegrid/">Surface Grid</a></li><li><a class="tocitem" href="../../geometry/panel-gradient/">Panel Gradients</a></li></ul></li></ul></li><li><span class="tocitem">Examples</span><ul><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox" checked/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li class="is-active"><a class="tocitem" href>Source Elements</a></li><li><a class="tocitem" href="../centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../duct-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../duct-leastsquares/">Least-Squares Solver</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Examples</a></li><li><a class="is-disabled">Centerbody</a></li><li class="is-active"><a href>Source Elements</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Source Elements</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/examples/centerbody-source.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><center>
+  <img src="../../assets/images/centerbody-viz00.png" alt="Pic here" style="width: 100%;"/>
+</center><p>In this example we solve the flow around a body of revolution resembling the centerbody (hub) of a ducted fan.</p><h1 id="Source-Elements"><a class="docs-heading-anchor" href="#Source-Elements">Source Elements</a><a id="Source-Elements-1"></a><a class="docs-heading-anchor-permalink" href="#Source-Elements" title="Permalink"></a></h1><p>First we run this example with source elements, which are especially accurate for non-lifting bodies.</p><pre><code class="language-julia hljs">#=##############################################################################
+# DESCRIPTION
+    Centerbody (body of revolution) replicating the experiment reported in
+    Section Section 4.3.2 of Lewis, R. (1991), &quot;Vortex Element Methods for
+    Fluid Dynamic Analysis of Engineering Systems.&quot;
+
+# AUTHORSHIP
+  * Author    : Eduardo J. Alvarez
+  * Email     : Edo.AlvarezR@gmail.com
+  * Created   : Dec 2022
+  * License   : MIT License
+=###############################################################################
+
+import FLOWPanel as pnl
+import CSV
+import DataFrames: DataFrame
+
+run_name        = &quot;centerbody-lewis00&quot;      # Name of this run
+
+save_path       = &quot;&quot;                        # Where to save outputs
+paraview        = true                      # Whether to visualize with Paraview
+
+
+# ----------------- SIMULATION PARAMETERS --------------------------------------
+AOA             = 0.0                       # (deg) angle of attack
+magVinf         = 30.0                      # (m/s) freestream velocity
+Vinf            = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)] # Freestream
+
+rho             = 1.225                     # (kg/m^3) air density
+
+
+# ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+# Read body contour (table 4.2 in Lewis 1991)
+filename        = joinpath(pnl.examples_path, &quot;data&quot;,
+                                &quot;centerbody-lewis-table4p2.csv&quot;)
+contour_lewis   = CSV.read(filename, DataFrame)
+
+R               = maximum(contour_lewis[:, 2]) # (m) max radius
+
+# ----------------- SOLVER PARAMETERS ------------------------------------------
+# Discretization
+NDIVS_theta     = 60                        # Number of azimuthal panels
+
+# Solver
+bodytype        = pnl.NonLiftingBody{pnl.ConstantSource}    # Elements and wake model
+
+
+# ----------------- GENERATE BODY ----------------------------------------------
+# Generate grid of body of revolution
+# holeradius      = 0.10*R                    # Hole in centerbody
+                                            # Points of contour to revolve
+points = Matrix(contour_lewis[2:end-1, :])
+# points[1, 2] += holeradius
+
+grid = pnl.gt.surface_revolution(points, NDIVS_theta;
+                                    # Loop the azimuthal dimension to close the surface
+                                    loop_dim=2,
+                                    # Rotate the axis of rotation to align with x-axis
+                                    axis_angle=90
+                                )
+
+# Rotate the body of revolution to align centerline with x-axis
+Oaxis = pnl.gt.rotation_matrix2(0, 0, 90)          # Rotation matrix
+O = zeros(3)                                       # Translation of coordinate system
+pnl.gt.lintransform!(grid, Oaxis, O)
+
+# Triangular grid (splits quadrangular panels into triangular panels)
+split_dim = 1                               # Dimension to split into triangles
+trigrid = pnl.gt.GridTriangleSurface(grid, split_dim)
+
+# Generate body to be solved
+body = bodytype(trigrid)
+
+println(&quot;Number of panels:\t$(body.ncells)&quot;)
+
+
+# ----------------- CALL SOLVER ------------------------------------------------
+println(&quot;Solving body...&quot;)
+
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body.ncells)
+
+# Solve body (panel strengths) giving `Uinfs` as boundary conditions
+@time pnl.solve(body, Uinfs)
+
+
+# ----------------- POST PROCESSING --------------------------------------------
+println(&quot;Post processing...&quot;)
+
+# Calculate surface velocity on the body
+@time Us = pnl.calcfield_U(body, body)
+
+# Calculate pressure coefficient
+@time Cps = pnl.calcfield_Cp(body, magVinf)
+
+# Calculate the force of each panel
+@time Fs = pnl.calcfield_F(body, magVinf, rho)
+
+
+# ----------------- VISUALIZATION ----------------------------------------------
+if paraview
+    str = save_path*&quot;/&quot;
+
+    # Save body as a VTK
+    str *= pnl.save(body, run_name; path=save_path, debug=true)
+
+    # Call Paraview
+    run(`paraview --data=$(str)`)
+end
+
+</code></pre><p>(see the complete example under <a href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/centerbody.jl">examples/centerbody.jl</a> )</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../sweptwing-solver/">« Solver Benchmark</a><a class="docs-footer-nextpage" href="../centerbody-slice/">Slice »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Friday 22 December 2023 05:15">Friday 22 December 2023</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

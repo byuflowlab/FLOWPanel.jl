@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Grid Triangulation · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><span class="tocitem">Elements</span><ul><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/constantvortexsheet/">Constant Vortex Sheet</a></li></ul></li><li><span class="tocitem">Geometry Engine</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox" checked/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gridgeneration/">Methods</a></li><li><a class="tocitem" href="../gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../gridgeneration-transf/">Space Transformation Method</a></li><li class="is-active"><a class="tocitem" href>Grid Triangulation</a><ul class="internal"><li><a class="tocitem" href="#Triangulated-Lofted-Surface"><span>Triangulated Lofted Surface</span></a></li><li><a class="tocitem" href="#Triangulated-Surface-of-Revolution"><span>Triangulated Surface of Revolution</span></a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../basics-surfacegrid/">Surface Grid</a></li><li><a class="tocitem" href="../panel-gradient/">Panel Gradients</a></li></ul></li></ul></li><li><span class="tocitem">Examples</span><ul><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../../examples/sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../../examples/centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../../examples/centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/duct-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../../examples/duct-leastsquares/">Least-Squares Solver</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Geometry Engine</a></li><li><a class="is-disabled">Grid Generation</a></li><li class="is-active"><a href>Grid Triangulation</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Grid Triangulation</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/geometry/gridgeneration-triang.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Grid-Triangulation"><a class="docs-heading-anchor" href="#Grid-Triangulation">Grid Triangulation</a><a id="Grid-Triangulation-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Triangulation" title="Permalink"></a></h1><p>Since some element types require planar panels, the quadrilateral grids generated through the previous methods need to be transformed into triangular grids that ensure planar panels. This is done by splitting each quadrilateral panel into two triangular panel through the following function:</p><article class="docstring"><header><a class="docstring-binding" id="GeometricTools.GridTriangleSurface" href="#GeometricTools.GridTriangleSurface"><code>GeometricTools.GridTriangleSurface</code></a> — <span class="docstring-category">Type</span></header><section><div><p><code>GridTriangleSurface(orggrid, dimsplit)</code></p><p>Receives a 3D surface grid (like the one in <code>Paneled Wing Example</code> in the documentation), which by construction is made of nonplanar quadrilateral panels, and creates a surface grid of planar triangular panels by splitting every original quadrilateral panel into triangles.</p><p><strong>Arguments</strong></p><ul><li><code>orggrid</code>         : Original quadrilateral surface grid.</li><li><code>dimsplit</code>        : Dimension along which to split the quadrilaterals.</li></ul></div></section></article><h2 id="Triangulated-Lofted-Surface"><a class="docs-heading-anchor" href="#Triangulated-Lofted-Surface">Triangulated Lofted Surface</a><a id="Triangulated-Lofted-Surface-1"></a><a class="docs-heading-anchor-permalink" href="#Triangulated-Lofted-Surface" title="Permalink"></a></h2><p>The indexing pattern of a triangulated lofted surface is shown below</p><center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/loft-triang-nodeindex00.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellindex00.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>First Coordinate</center>
+          </th>
+          <th>
+              <center>Second Coordinate</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/loft-triang-cellcoordinate03.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellcoordinate02.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Cell (1, 1)</center>
+          </th>
+          <th>
+              <center>Cell (31, 1)</center>
+          </th>
+          <th>
+              <center>Cell (30, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0000.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0002.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0005.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <center>Cell (2, 1)</center>
+          </th>
+          <th>
+              <center>Cell (32, 1)</center>
+          </th>
+          <th>
+              <center>Cell (1, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0001.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0003.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-cellnodes00.0004.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br><p>It is possible to define a normal vector on a planar panel, which is then used to define the panel coordinate system as explained in <a href="../../elements/paneldefinition/#Panel-Definition">Panel Definition</a>. The normal vector of each panel is shown here below in the left, while the orthonormal bases <span>$\left( \hat{\mathbf{t}},\, \hat{\mathbf{o}},\, \hat{\mathbf{n}} \right)$</span> are shown in the right (<span>$\hat{\mathbf{t}} = \mathrm{red}$</span>, <span>$\hat{\mathbf{o}} = \mathrm{yellow}$</span>, <span>$\hat{\mathbf{n}} = \mathrm{green}$</span>).</p><center>
+  <table>
+      <tr>
+          <th>
+              <center>Normals</center>
+          </th>
+          <th>
+              <center>Panel Coordinate System</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/loft-triang-normals00.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/loft-triang-vectors03.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center><h2 id="Triangulated-Surface-of-Revolution"><a class="docs-heading-anchor" href="#Triangulated-Surface-of-Revolution">Triangulated Surface of Revolution</a><a id="Triangulated-Surface-of-Revolution-1"></a><a class="docs-heading-anchor-permalink" href="#Triangulated-Surface-of-Revolution" title="Permalink"></a></h2><p>The indexing pattern of a triangulated surface of revolution is shown below</p><center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-nodeindex-000transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindex-000transp.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>First Coordinate</center>
+          </th>
+          <th>
+              <center>Second Coordinate</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindexdim1-002transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cellindexdim2-000transp.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Cell (1, 1)</center>
+          </th>
+          <th>
+              <center>Cell (79, 1)</center>
+          </th>
+          <th>
+              <center>Cell (78, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0000.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0002.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0004.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <center>Cell (2, 1)</center>
+          </th>
+          <th>
+              <center>Cell (80, 1)</center>
+          </th>
+          <th>
+              <center>Cell (1, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0001.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0003.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-cell-000transp.0005.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center>
+
+<br><br><p>It is possible to define a normal vector on a planar panel, which is then used to define the panel coordinate system as explained in <a href="../../elements/paneldefinition/#Panel-Definition">Panel Definition</a>. The normal vector of each panel is shown here below in the left, while the orthonormal bases <span>$\left( \hat{\mathbf{t}},\, \hat{\mathbf{o}},\, \hat{\mathbf{n}} \right)$</span> are shown in the right (<span>$\hat{\mathbf{t}} = \mathrm{red}$</span>, <span>$\hat{\mathbf{o}} = \mathrm{yellow}$</span>, <span>$\hat{\mathbf{n}} = \mathrm{green}$</span>).</p><center>
+  <table>
+      <tr>
+          <th>
+              <center>Normals</center>
+          </th>
+          <th>
+              <center>Panel Coordinate System</center>
+          </th>
+      </tr>
+      <tr>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-normals-002transp.png" alt="Pic here" width="450px">
+          </th>
+          <th>
+              <img src="../../assets/images/bodyrev-triang-coordinatesystem-000transp.png" alt="Pic here" width="450px">
+          </th>
+      </tr>
+  </table>
+</center></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../gridgeneration-transf/">« Space Transformation Method</a><a class="docs-footer-nextpage" href="../basics/"><code>GeometricTools.jl</code> »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Friday 22 December 2023 05:15">Friday 22 December 2023</span>. Using Julia version 1.6.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
