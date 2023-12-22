@@ -880,7 +880,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
                     out_node[i, pj] = out_cell[i, pj]
                     out_node[i, pj-1] = out_cell[i, pj-1]
                 end
-                
+
             end
         end
 
@@ -925,6 +925,10 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
                 # If the angle between normals is larger than anglecrit, this
                 # cell has an accute edge and is flagged to use the
                 # node-centered scheme
+                # NOTE: This works well for the cell sharing an edge at the TE,
+                #       but the adjacent cell (which still shares a node with
+                #       the TE) doesn't fit this criterion. Improve the
+                #       criterion to include the adjacent cell in the future
                 cosangle = dot(this_normal, neig_normal)
 
                 if cosangle < cosanglecrit
