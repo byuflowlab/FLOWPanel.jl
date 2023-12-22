@@ -155,9 +155,7 @@ println("Post processing...")
 #       doublet strength to get an accurate surface velocity
 
 # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true)
-# UDeltaGamma = pnl.calcfield_Ugradmu_node(body; sharpTE=true)
-# UDeltaGamma = pnl.calcfield_Ugradmu_cell(body;)
+UDeltaGamma = pnl.calcfield_Ugradmu(body)
 
 # Add both velocities together
 pnl.addfields(body, "Ugradmu", "U")
