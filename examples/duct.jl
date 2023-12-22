@@ -145,6 +145,7 @@ for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 
     # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
     UDeltaGamma = pnl.calcfield_Ugradmu(body)
+    # UDeltaGamma = pnl.calcfield_Ugradmu_cell(body)
 
     # Add both velocities together
     pnl.addfields(body, "Ugradmu", "U")

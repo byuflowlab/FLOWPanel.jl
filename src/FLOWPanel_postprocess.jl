@@ -120,6 +120,9 @@ calcfield_Uoff(args...; optargs...) = calcfield_U(args...; optargs..., fieldname
 
 
 
+################################################################################
+# GRADIENT COMPUTATION USING CELL VALUES
+################################################################################
 """
     calcfield_Ugradmu_cell!(out::Matrix, body::AbstractBody;
                             fieldname="Ugradmu")
@@ -612,11 +615,11 @@ function calcfield_Ugradmu_cell(body::AbstractBody; optargs...)
     return out
 end
 
+
 ################################################################################
 # GRADIENT COMPUTATION USING NODAL VALUES
 ################################################################################
-
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
+function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody,
                                     areas::AbstractVector, normals::AbstractMatrix,
                                     controlpoints::AbstractMatrix;
                                     fieldname="Ugradmu", addfield=true, Gammai=1,
@@ -753,7 +756,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody,
     end
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
+function calcfield_Ugradmu_node!(out::AbstractMatrix, mbody::MultiBody,
         areas::AbstractVector,
         normals::AbstractMatrix,
         controlpoints::AbstractMatrix, args...;
@@ -785,7 +788,7 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
         thisnormals = view(normals, 1:3, (1:offset) .+ counter)
         thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
 
-        calcfield_Ugradmu!(thisout, body, thisareas, thisnormals,
+        calcfield_Ugradmu_node!(thisout, body, thisareas, thisnormals,
                                 thiscontrolpoints, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
@@ -799,22 +802,231 @@ function calcfield_Ugradmu!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-function calcfield_Ugradmu!(out::AbstractMatrix, body::AbstractBody; optargs...)
+function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody; optargs...)
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
-    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    calcfield_Ugradmu_node!(out, body, areas, normals, controlpoints; optargs...)
+    return out
+end
+
+function calcfield_Ugradmu_node(body::AbstractBody; optargs...)
+    out = zeros(3, body.ncells)
+    calcfield_Ugradmu_node!(out, body; optargs...)
+    return out
+end
+
+
+################################################################################
+# COMBINED GRADIENT COMPUTATION
+################################################################################
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    body::RigidWakeBody,
+                                    areas::AbstractVector, normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix;
+                                    fieldname="Ugradmu", addfield=true, Gammai=1,
+                                    sharpTE=false, anglecrit=30)
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(out))."
+    @assert size(out)==size(out_cell)==size(out_node) ""*
+        "Incompatible sizes of output matrices: $(size(out)), $(size(out_cell)), $(size(out_node))"
+    @assert length(areas)==body.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(body.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==body.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, body.ncells)); got $(size(controlpoints))."
+
+    # Pre-allocate memory
+    (tri_out, tricoor, quadcoor,
+    quad_out, lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
+
+    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
+    linc = LinearIndices(ndivscellsc)
+    cinc = CartesianIndices(ndivscellsc)
+
+    ncoor = ones(Int, 3)                # Stores coordinates of neighbor here
+
+    # Compute cell-centered gradmu
+    calcfield_Ugradmu_cell!(out_cell, body, areas, normals, controlpoints;
+                                                Gammai=Gammai, addfield=false)
+
+    # Compute node-centered gradmu
+    calcfield_Ugradmu_node!(out_node, body, areas, normals, controlpoints;
+                                Gammai=Gammai, sharpTE=sharpTE, addfield=false)
+
+
+    # The cell-centered scheme seems to do better at the trailing edge,
+    # so here we force it to use the cell computation by overwritting the
+    # node-centered computation along the TE
+    for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+        for i in 1:3
+            out_node[i, pi] = out_cell[i, pi]
+            out_node[i, pi+1] = out_cell[i, pi+1]
+            if pj != -1
+                out_node[i, pj] = out_cell[i, pj]
+                out_node[i, pj-1] = out_cell[i, pj-1]
+            end
+        end
+    end
+
+    # Criterion for categorizing edges
+    cosanglecrit = cosd(anglecrit)
+
+    # Iterate over cells identifying edges to use node-centered computation
+    for ci in 1:body.ncells             # Iterate over linear indexing
+
+
+        this_normal = view(normals, :, ci)  # Normal of this cell
+        ccoor = cinc[ci]                # Cartesian indexing of this cell
+
+        # Fetch the cell
+        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+
+        use_node = false                # Flag to use node-centered scheme
+
+        for ni in 1:3                   # Iterate over neighbors
+
+            # Obtain coordinates of ni-th neighbor
+            # NOTE: preserveEdge=true will output [0,0,0] for a non-existent
+            # neighbor cell as in the edges of the grid
+            ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
+            # ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=false)
+
+            if ncoor[1] == 0
+
+                use_node = true
+                break
+
+            else
+
+                # Linear indexing of this neighbor
+                nlin = linc[ncoor...]
+
+                neig_normal = view(normals, :, nlin)  # Normal of this neighbor
+
+                # If the angle between normals is larger than anglecrit, this
+                # cell has an accute edge and is flagged to use the
+                # node-centered scheme
+                cosangle = dot(this_normal, neig_normal)
+
+                if cosangle < cosanglecrit
+                    use_node = true
+                    break
+                end
+
+            end
+
+        end
+
+        # Combine cell and node-centered results
+        for i in 1:3
+            if use_node
+                out[i, ci] += out_node[i, ci]
+            else
+                out[i, ci] += out_cell[i, ci]
+            end
+        end
+
+    end
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    mbody::MultiBody,
+                                    areas::AbstractVector,
+                                    normals::AbstractMatrix,
+                                    controlpoints::AbstractMatrix, args...;
+                                    fieldname="Ugradmu", addfield=true,
+                                    optargs...
+                                )
+
+    # Error cases
+    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(out))."
+    @assert size(out)==size(out_cell)==size(out_node) ""*
+        "Incompatible sizes of output matrices: $(size(out)), $(size(out_cell)), $(size(out_node))"
+    @assert length(areas)==mbody.ncells ""*
+        "Invalid `areas` vector."*
+        " Expected length $(mbody.ncells); got $(length(areas))."
+    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
+        "Invalid `normals` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(normals))."
+    @assert size(controlpoints, 1)==3 && size(controlpoints, 2)==mbody.ncells ""*
+        "Invalid `controlpoints` matrix."*
+        " Expected size $((3, mbody.ncells)); got $(size(controlpoints))."
+
+    counter = 0
+
+    for body in mbody.bodies
+
+        offset = body.ncells
+        thisout = view(out, 1:3, (1:offset) .+ counter)
+        thisout_cell = view(out_cell, 1:3, (1:offset) .+ counter)
+        thisout_node = view(out_node, 1:3, (1:offset) .+ counter)
+        thisareas = view(areas, (1:offset) .+ counter)
+        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
+        thiscontrolpoints = view(controlpoints, 1:3, (1:offset) .+ counter)
+
+        calcfield_Ugradmu!(thisout, thisout_cell, thisout_node,
+                                body, thisareas, thisnormals,
+                                thiscontrolpoints, args...;
+                                fieldname=fieldname, addfield=addfield,
+                                optargs...)
+        counter += offset
+    end
+
+    if addfield && !(fieldname in mbody.fields)
+        push!(mbody.fields, fieldname)
+    end
+
+    return out
+end
+
+function calcfield_Ugradmu!(out::AbstractMatrix,
+                                    out_cell::AbstractMatrix,
+                                    out_node::AbstractMatrix,
+                                    body::AbstractBody; optargs...)
+    normals = calc_normals(body)
+    controlpoints = calc_controlpoints(body, normals)
+    areas = calc_areas(body)
+
+    calcfield_Ugradmu!(out, out_cell, out_node, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
 function calcfield_Ugradmu(body::AbstractBody; optargs...)
+
     normals = calc_normals(body)
     controlpoints = calc_controlpoints(body, normals)
     areas = calc_areas(body)
 
     out = zeros(3, body.ncells)
-    calcfield_Ugradmu!(out, body, areas, normals, controlpoints; optargs...)
+    out_cell = zeros(3, body.ncells)
+    out_node = zeros(3, body.ncells)
+
+    calcfield_Ugradmu!(out, out_cell, out_node,
+                            body, areas, normals, controlpoints; optargs...)
     return out
 end
 

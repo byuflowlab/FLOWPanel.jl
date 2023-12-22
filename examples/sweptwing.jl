@@ -155,8 +155,9 @@ println("Post processing...")
 #       doublet strength to get an accurate surface velocity
 
 # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-# UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true)
-UDeltaGamma = pnl.calcfield_Ugradmu_cell(body;)
+UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true)
+# UDeltaGamma = pnl.calcfield_Ugradmu_node(body; sharpTE=true)
+# UDeltaGamma = pnl.calcfield_Ugradmu_cell(body;)
 
 # Add both velocities together
 pnl.addfields(body, "Ugradmu", "U")
@@ -299,7 +300,7 @@ if sweep_aoa
     include(joinpath(pnl.examples_path, "sweptwing_aoasweep.jl"))
 end
 
-# ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
+# ----------------- SOLVER BENCHMARK -------------------------------------------
 solver_benchmark = !true                # Whether to run solver benchmark
 save_outputs2 = !true
 
