@@ -15,7 +15,6 @@ ImplicitAD = "e7cbb90b-9b31-4eb2-a8c8-45099c074ee1"
 julia = "1"
 Dierckx = "0.5"
 GeometricTools = "2"
-PyPlot = "< 2.11.2"
 
 
 [extras]
