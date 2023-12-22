@@ -129,6 +129,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   loop_dim::Int=2,
                                                   axis_angle=270,
                                                   overwrite_shedding=nothing,
+                                                  closed_contour=true,
                                                   optargs...
                                       ) where {B<:AbstractLiftingBody}
     # Revolves the geometry
@@ -163,7 +164,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
             shedding[2, ei] = 3
             shedding[3, ei] = 2
 
-            shedding[4, ei] = l
+            shedding[4, ei] = closed_contour ? l : -1
             shedding[5, ei] = 3
             shedding[6, ei] = 2
         end
