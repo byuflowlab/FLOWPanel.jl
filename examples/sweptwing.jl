@@ -13,7 +13,6 @@
   * License   : MIT License
 =###############################################################################
 
-
 import FLOWPanel as pnl
 
 run_name        = "sweptwing000"                # Name of this run
