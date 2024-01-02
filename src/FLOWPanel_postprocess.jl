@@ -1358,7 +1358,7 @@ function calcfield_F!(out::Arr, body::AbstractBody,
         "Field $(Cp_fieldname) not found;"*
         " Please run `calcfield_Cp(args...; fieldname=$(Cp_fieldname), optargs...)`"
 
-    Cps = hcat(get_field(body, Cp_fieldname)["field_data"]...)
+    Cps = get_field(body, Cp_fieldname)["field_data"]
     areas = calc_areas(body)
     normals = calc_normals(body; flipbyCPoffset=true)
 
