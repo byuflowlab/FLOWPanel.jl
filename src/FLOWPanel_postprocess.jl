@@ -1170,13 +1170,13 @@ calcfield_Cp(body::AbstractBody, args...; optargs...) = calcfield_Cp!(zeros(body
 ################################################################################
 """
     calcfield_F!(out::Vector, body::AbstractBody,
-                         areas::Vector, normals::Matrix, Us::Matrix,
+                         areas::Vector, normals::Matrix, Cps::Vector,
                          Uinf::Number, rho::Number;
                          fieldname="F")
 
 Calculate the force of each element
 ``F = - C_p \\frac{\\rho U_\\infty}{2} A \\hat{\\mathbf{n}}``, where ``C_p``is
-calculated from the velocity `Us` at each control point, ``A`` is the area of
+calculated from the velocity `Cps` at each control point, ``A`` is the area of
 each element given in `areas`, and ``\\hat{\\mathbf{n}}`` is the normal of each
 element given in `normals`. ``F`` is saved as a field named `fieldname`.
 
@@ -1184,14 +1184,14 @@ The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody},
-                         areas::Arr1, normals::Arr2, Us::Arr3,
+                         areas::Arr1, normals::Arr2, Cps::Arr3,
                          Uinf::Number, rho::Number;
                          correct_kuttacondition=true,
                          addfield=true, fieldname="F"
                          ) where {   Arr0<:AbstractArray{<:Number,2},
                                      Arr1<:AbstractArray{<:Number,1},
                                      Arr2<:AbstractArray{<:Number,2},
-                                     Arr3<:AbstractArray{<:Number,2}}
+                                     Arr3<:AbstractArray{<:Number,1}}
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
@@ -1203,14 +1203,21 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
     @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
         "Invalid `normals` matrix."*
         " Expected size $((3, body.ncells)); got $(size(normals))."
-    @assert size(Us, 1)==3 && size(Us, 2)==body.ncells ""*
-        "Invalid `Us` matrix."*
-        " Expected size $((3, body.ncells)); got $(size(Us))."
+    @assert length(Cps)==body.ncells ""*
+        "Invalid `Cps` vector."*
+        " Expected length $(body.ncells); got $(length(Cps))."
 
-    # If F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}, where Cp = 1 - (u/u∞)^2,
-    # we can calculate F directly as F = 0.5*ρ*(u^2 - u∞^2) * A * hat{n}
-    for (i, (U, area, normal)) in enumerate(zip(eachcol(Us), areas, eachcol(normals)))
-        val = 0.5*rho*(norm(U)^2 - Uinf^2) * area
+    # # If F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}, where Cp = 1 - (u/u∞)^2,
+    # # we can calculate F directly as F = 0.5*ρ*(u^2 - u∞^2) * A * hat{n}
+    # for (i, (U, area, normal)) in enumerate(zip(eachcol(Us), areas, eachcol(normals)))
+    #     val = 0.5*rho*(norm(U)^2 - Uinf^2) * area
+    #     out[1, i] += val*normal[1]
+    #     out[2, i] += val*normal[2]
+    #     out[3, i] += val*normal[3]
+    # end
+
+    for (i, (Cp, area, normal)) in enumerate(zip(Cps, areas, eachcol(normals)))
+        val = 0.5*rho*Uinf^2 * Cp * area
         out[1, i] += val*normal[1]
         out[2, i] += val*normal[2]
         out[3, i] += val*normal[3]
@@ -1227,12 +1234,15 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
         for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
 
             if pj != -1
-                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
-                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
-                                (norm(view(Us, :, pi+1))/Uinf)^2 +
-                                (norm(view(Us, :, pj))/Uinf)^2 +
-                                (norm(view(Us, :, pj-1))/Uinf)^2
-                            ) / 4
+                # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                #                 (norm(view(Us, :, pi+1))/Uinf)^2 +
+                #                 (norm(view(Us, :, pj))/Uinf)^2 +
+                #                 (norm(view(Us, :, pj-1))/Uinf)^2
+                #             ) / 4
+
+                # Calculate average Cp
+                aveCp = ( Cps[pi] + Cps[pi+1] + Cps[pj] + Cps[pj-1] ) / 4
 
                 # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
                 out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
@@ -1249,10 +1259,13 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
                 out[3, pj-1] = -aveCp * q * areas[pj-1] * normals[3, pj-1]
 
             else
-                # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
-                aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
-                                (norm(view(Us, :, pi+1))/Uinf)^2
-                            ) / 2
+                # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                #                 (norm(view(Us, :, pi+1))/Uinf)^2
+                #             ) / 2
+
+                # Calculate average Cp
+                aveCp = ( Cps[pi] + Cps[pi+1] ) / 2
 
                 # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
                 out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
@@ -1277,7 +1290,7 @@ end
 
 
 function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
-                        areas::AbstractVector, normals::AbstractMatrix, Us::AbstractMatrix,
+                        areas::AbstractVector, normals::AbstractMatrix, Cps::AbstractVector,
                         args...;
                         addfield=true, fieldname="F",
                         optargs...)
@@ -1293,9 +1306,9 @@ function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
     @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
         "Invalid `normals` matrix."*
         " Expected size $((3, mbody.ncells)); got $(size(normals))."
-    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
-        "Invalid `Us` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(Us))."
+    @assert length(Cps)==mbody.ncells ""*
+        "Invalid `Cps` vector."*
+        " Expected length $(mbody.ncells); got $(length(Cps))."
 
     counter = 0
 
@@ -1305,10 +1318,10 @@ function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
         thisout = view(out, 1:3, (1:offset) .+ counter)
         thisareas = view(areas, (1:offset) .+ counter)
         thisnormals = view(normals, 1:3, (1:offset) .+ counter)
-        thisUs = view(Us, 1:3, (1:offset) .+ counter)
+        thisCps = view(Cps, (1:offset) .+ counter)
 
         calcfield_F!(thisout, body, thisareas, thisnormals,
-                                thisUs, args...;
+                                thisCps, args...;
                                 fieldname=fieldname, addfield=addfield,
                                 optargs...)
         counter += offset
@@ -1324,12 +1337,12 @@ end
 """
     calcfield_F!(out::Vector, body::AbstractBody,
                             Uinf::Number, rho::Number;
-                            U_fieldname="U", optargs...
+                            Cp_fieldname="Cp", optargs...
                          )
 
 Calculate the force of each element
 ``F = - C_p \\frac{\\rho U_\\infty}{2} A \\hat{\\mathbf{n}}``, where ``C_p``is
-calculated from the velocity `Us` field `U_fieldname`, ``A`` is the area of
+fetched from the field of name `Cp_fieldname`, ``A`` is the area of
 each element, and ``\\hat{\\mathbf{n}}`` is the normal of each element. ``F``
 is saved as a field named `fieldname`.
 
@@ -1338,18 +1351,18 @@ starts with all zeroes).
 """
 function calcfield_F!(out::Arr, body::AbstractBody,
                         Uinf::Number, rho::Number;
-                        U_fieldname="U", optargs...
+                        Cp_fieldname="Cp", optargs...
                      ) where {Arr<:AbstractArray{<:Number,2}}
     # Error cases
-    @assert check_field(body, U_fieldname) ""*
-        "Field $(U_fieldname) not found;"*
-        " Please run `calcfield_U(args...; fieldname=$(U_fieldname), optargs...)`"
+    @assert check_field(body, Cp_fieldname) ""*
+        "Field $(Cp_fieldname) not found;"*
+        " Please run `calcfield_Cp(args...; fieldname=$(Cp_fieldname), optargs...)`"
 
-    Us = hcat(get_field(body, U_fieldname)["field_data"]...)
+    Cps = hcat(get_field(body, Cp_fieldname)["field_data"]...)
     areas = calc_areas(body)
     normals = calc_normals(body; flipbyCPoffset=true)
 
-    return calcfield_F!(out, body, areas, normals, Us, Uinf, rho; optargs...)
+    return calcfield_F!(out, body, areas, normals, Cps, Uinf, rho; optargs...)
 end
 
 """
