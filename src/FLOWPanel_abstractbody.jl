@@ -438,8 +438,16 @@ function addfields(body::AbstractBody,
     srcfield = get_field(body, sourcefieldname)["field_data"]
     trgfield = get_field(body, targetfieldname)["field_data"]
 
-    for (Fsrc, Ftrg) in zip(srcfield, trgfield)
-        Ftrg .+= Fsrc
+    if get_field(body, sourcefieldname)["field_type"]=="vector"
+
+        for (Fsrc, Ftrg) in zip(srcfield, trgfield)
+            Ftrg .+= Fsrc
+        end
+
+    else
+
+        trgfield += srcfield
+        
     end
 
 end
