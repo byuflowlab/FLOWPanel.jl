@@ -143,7 +143,7 @@ solvers_to_test = (
             Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 
             # Calculate the force of each panel
-            Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
+            Fs = pnl.calcfield_F(body, magVinf, rho)
             # Calculate total force of the vehicle decomposed as lfit, drag, and sideslip
             Dhat = Vinf/pnl.norm(Vinf)        # Drag direction
             Shat = [0, 1, 0]              # Span direction

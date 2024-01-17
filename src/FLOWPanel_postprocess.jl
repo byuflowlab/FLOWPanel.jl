@@ -1217,7 +1217,7 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
     # end
 
     for (i, (Cp, area, normal)) in enumerate(zip(Cps, areas, eachcol(normals)))
-        val = 0.5*rho*Uinf^2 * Cp * area
+        val = -0.5*rho*Uinf^2 * Cp * area
         out[1, i] += val*normal[1]
         out[2, i] += val*normal[2]
         out[3, i] += val*normal[3]
