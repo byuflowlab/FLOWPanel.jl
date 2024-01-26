@@ -24,7 +24,6 @@ angle of attack of $4.2^\circ$ using a rigid wake model.
   * License   : MIT License
 =###############################################################################
 
-
 import FLOWPanel as pnl
 
 run_name        = "sweptwing000"                # Name of this run
@@ -58,12 +57,13 @@ airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 
 n_rfl           = 8                             # Control number of chordwise panels
 # n_rfl         = 10                            # <-- uncomment this for finer discretization
-            # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
+#             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
             # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
               (0.50, n_rfl,    1.0, true),
             # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
               (0.25, n_rfl, 1/10.0, false)]
+# NDIVS_rfl = [ (1.0, 3*n_rfl,   1.0, false) ]
 
 # NOTE: A geometric expansion of 10 that is not central means that the last
 #       panel is 10 times larger than the first panel. If central, the
@@ -212,6 +212,6 @@ distribution and spanwise loading that is plotted here below)
 
 |           | Experimental  | FLOWPanel                 | Error |
 | --------: | :-----------: | :-----------------------: | :---- |
-| $C_L$   | 0.238         | 0.28193    | 18.459% |
-| $C_D$   | 0.005         | 0.01294    | 158.841% |
+| $C_L$   | 0.238         | 0.28523    | 19.843% |
+| $C_D$   | 0.005         | 0.0077    | 54.02% |
 

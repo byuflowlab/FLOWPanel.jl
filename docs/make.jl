@@ -25,6 +25,7 @@ makedocs(
                                         "Grid Generation" => [
                                                                 "geometry/gridgeneration.md",
                                                                 "geometry/gridgeneration-loft.md",
+                                                                "geometry/gridgeneration-pathloft.md",
                                                                 "geometry/gridgeneration-rev.md",
                                                                 "geometry/gridgeneration-transf.md",
                                                                 "geometry/gridgeneration-triang.md",
