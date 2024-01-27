@@ -1,6 +1,16 @@
-verbose = true
+using Pkg
+this_dir = @__DIR__
+Pkg.activate(normpath(joinpath(this_dir,"..")))
 
-include("runtests_elements.jl")
-include("runtests_semiinfiniteelements.jl")
-include("runtests_grid.jl")
-include("runtests_solvers.jl")
+using FLOWPanel
+using FLOWPanel.StaticArrays
+using FLOWPanel.WriteVTK
+using FLOWPanel.FLOWFMM
+using Random, Test, ForwardDiff
+using LinearAlgebra: norm, cross
+Random.seed!(123)
+
+include("auxiliary_functions.jl")
+# include("kernel_test.jl")
+include("grid_test.jl")
+include("fmm_test.jl")

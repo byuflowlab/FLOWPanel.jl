@@ -1,82 +1,23 @@
-"""
-  Three-dimensional panel method for high-Reynolds aerodynamics.
-
-  # AUTHORSHIP
-    * Created by    : Eduardo J. Alvarez
-    * Email         : Edo.AlvarezR@gmail.com
-    * Date          : Jun 2018 originally as MyPanel.jl
-    * License       : MIT License
-"""
 module FLOWPanel
 
-export  solve, save, Uind!, phi!,
-        get_ndivscells, get_ndivsnodes,
-        get_cart2lin_cells, get_cart2lin_nodes,
-        get_field, get_fieldval, add_field,
-        calc_normals!, calc_normals,
-        calc_tangents!, calc_tangents,
-        calc_obliques!, calc_obliques,
-        calc_controlpoints!, calc_controlpoints,
-        calc_areas!, calc_areas
+using StaticArrays
+using LinearAlgebra: cross, norm, dot
+using WriteVTK
+using FLOWFMM
 
-# ------------ GENERIC MODULES -------------------------------------------------
-import Dierckx
-import LinearAlgebra as LA
-import LinearAlgebra: I
-import Krylov
-import Requires: @require
+const ONE_OVER_4PI = 1/4/pi
 
-# ------------ FLOW LAB MODULES ------------------------------------------------
-# GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
-import GeometricTools
-const gt = GeometricTools
-import ImplicitAD as IAD
-import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
+include("types.jl")
+include("panel.jl")
+include("kernel.jl")
+include("geometry.jl")
+include("fmm.jl")
+include("freestream.jl")
+include("vtk.jl")
 
-
-# ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
-const module_path = splitdir(@__FILE__)[1]      # Path to this module
-                                                # Default path to data files
-const def_data_path = joinpath(module_path, "..", "docs", "resources", "data")
-                                            # Default path to airfoil data files
-const def_rfl_path = joinpath(def_data_path, "airfoils")
-                                                # Path to examples
-const examples_path = joinpath(module_path, "..", "examples")
-
-# const RType = Union{Float64,                    # Concrete real types
-#                     Int64,
-#                     # ForwardDiff.Dual{Nothing,Float64,3},
-#                     # ForwardDiff.Dual{Nothing,Int64,3}
-#                     }
-
-# Discretization parameter type
-const ndivstype = Union{Float64, gt.multidisctype, Nothing}
-
-# Identity matrix
-const Im = Array(1.0I, 3, 3)
-
-# ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements", "linearsolver",
-                    "abstractbody", "nonliftingbody",
-                    "abstractliftingbody", "liftingbody",
-                    "multibody",
-                    "utils", "postprocess"
-                    ]
-  include("FLOWPanel_"*header_name*".jl")
-end
-
-# Conditionally load monitors if PyPlot is available
-function __init__()
-    @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
-
-        import .PyPlot as plt
-        import .PyPlot: @L_str
-
-        for header_name in ["monitor"]
-          include("FLOWPanel_"*header_name*".jl")
-        end
-
-    end
-end
+export Panel, PanelArray
+export ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet
+export induced, apply_freestream!
+export vtk
 
 end # END OF MODULE
