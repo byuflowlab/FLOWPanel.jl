@@ -7,10 +7,11 @@ using FLOWPanel.StaticArrays
 using FLOWPanel.WriteVTK
 using FLOWPanel.FLOWFMM
 using Random, Test, ForwardDiff
-using LinearAlgebra: norm, cross
+using LinearAlgebra: norm, cross, dot
 Random.seed!(123)
 
 include("auxiliary_functions.jl")
 # include("kernel_test.jl")
-include("grid_test.jl")
-include("fmm_test.jl")
+# include("grid_test.jl")
+# include("fmm_test.jl")
+include("solver_test.jl")

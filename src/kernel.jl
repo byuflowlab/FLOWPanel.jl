@@ -64,7 +64,9 @@ end
 
 @inline function rotate_to_panel(panel::Panel{TFP,<:Any,<:Any}) where TFP
     # unpack panel
-    (; normal, vertices) = panel
+    # (; normal, vertices) = panel
+    normal = panel.normal
+    vertices = panel.vertices
     
     # rotate into panel frame
     new_z = normal
@@ -81,17 +83,13 @@ end
     return R, Rxprime, Ryprime, Rzprime
 end
 
-#####
-##### constant source
-#####
-
-struct ConstantSource <: AbstractKernel end
-
-@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
+@inline function source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
     # unpack panel
-    (;control_point, normal, vertices, strength) = panel
+    # (;control_point, normal, vertices, strength) = panel
+    control_point = panel.control_point
+    vertices = panel.vertices
+    strength = panel.strength
     centroid = control_point
-    strength = strength[1]
 
     # promote types
     TF = promote_type(TFT,TFP)
@@ -127,6 +125,19 @@ struct ConstantSource <: AbstractKernel end
     rs = get_rs(es, target_R[2], vertices_yR)
     rx_over_rs = get_rxy_over_rs(rxs, rs)
     ry_over_rs = get_rxy_over_rs(rys, rs)
+
+    return strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs
+end
+
+#####
+##### constant source
+#####
+
+struct ConstantSource <: AbstractKernel end
+
+@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
+    # prelimilary computations
+    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -188,9 +199,9 @@ struct ConstantSource <: AbstractKernel end
 
     end
 
-    potential *= strength * ONE_OVER_4PI
-    velocity = -strength * ONE_OVER_4PI * R * velocity
-    velocity_gradient = -strength * ONE_OVER_4PI * R * hessian * R'
+    potential *= strength[1] * ONE_OVER_4PI
+    velocity = -strength[1] * ONE_OVER_4PI * R * velocity
+    velocity_gradient = -strength[1] * ONE_OVER_4PI * R * hessian * R'
 
     return potential, velocity, velocity_gradient
 end
@@ -204,45 +215,8 @@ end
 struct ConstantNormalDoublet <: AbstractKernel end
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
-    # unpack panel
-    (;control_point, normal, vertices, strength) = panel
-    centroid = control_point
-    strength = strength[1]
-
-    # promote types
-    TF = promote_type(TFT,TFP)
-    
-    # rotate target
-    target_R = R' * target
-
-    # induced potential, velocity, gradient
-    potential = zero(TF)
-    velocity = @SVector zeros(TF,3)
-    hessian = @SMatrix zeros(TF,3,3)
-    
-    # intermediate quantities
-    dz = target_R[3] - Rzprime' * centroid
-    iszero(dz) && (dz = eps())
-    
-    vertices_xR = get_vertices_xyR(Rxprime, vertices)
-    vertices_yR = get_vertices_xyR(Ryprime, vertices)
-    
-    dxs = get_dxys(vertices_xR)
-    dys = get_dxys(vertices_yR)
-
-    ds = get_ds(dxs, dys)
-    ms = get_ms(dxs, dys)
-    
-    dz2 = dz^2
-    
-    rxs = get_rxys(target_R[1], vertices_xR)
-    rys = get_rxys(target_R[2], vertices_yR)
-
-    es, hs = get_es_hs(rxs, rys, dz2)
-
-    rs = get_rs(es, target_R[2], vertices_yR)
-    rx_over_rs = get_rxy_over_rs(rxs, rs)
-    ry_over_rs = get_rxy_over_rs(rys, rs)
+    # prelimilary computations
+    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -312,9 +286,15 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
 
     end
 
-    potential *= strength * ONE_OVER_4PI
-    velocity = strength * ONE_OVER_4PI * R * velocity
-    velocity_gradient = -strength * ONE_OVER_4PI * R * hessian * R'
+    potential *= strength[1] * ONE_OVER_4PI
+    velocity = strength[1] * ONE_OVER_4PI * R * velocity
+    velocity_gradient = -strength[1] * ONE_OVER_4PI * R * hessian * R'
+
+    # dx = target - panel.control_point
+    # if isapprox(dx' * dx, 0.0; atol=2*eps())
+    #     velocity /= 2
+    #     velocity_gradient /= 2
+    # end
 
     return potential, velocity, velocity_gradient
 end
@@ -328,45 +308,9 @@ end
 struct ConstantSourceNormalDoublet <: AbstractKernel end
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
-    # unpack panel
-    (;control_point, normal, vertices, strength) = panel
-    centroid = control_point
-    source_strength, doublet_strength = strength
-
-    # promote types
-    TF = promote_type(TFT,TFP)
-    
-    # rotate target
-    target_R = R' * target
-
-    # induced potential, velocity, gradient
-    potential = zero(TF)
-    velocity = @SVector zeros(TF,3)
-    hessian = @SMatrix zeros(TF,3,3)
-    
-    # intermediate quantities
-    dz = target_R[3] - Rzprime' * centroid
-    iszero(dz) && (dz = eps())
-    
-    vertices_xR = get_vertices_xyR(Rxprime, vertices)
-    vertices_yR = get_vertices_xyR(Ryprime, vertices)
-    
-    dxs = get_dxys(vertices_xR)
-    dys = get_dxys(vertices_yR)
-
-    ds = get_ds(dxs, dys)
-    ms = get_ms(dxs, dys)
-    
-    dz2 = dz^2
-    
-    rxs = get_rxys(target_R[1], vertices_xR)
-    rys = get_rxys(target_R[2], vertices_yR)
-
-    es, hs = get_es_hs(rxs, rys, dz2)
-
-    rs = get_rs(es, target_R[2], vertices_yR)
-    rx_over_rs = get_rxy_over_rs(rxs, rs)
-    ry_over_rs = get_rxy_over_rs(rys, rs)
+    # prelimilary computations;
+    # note that strength[1] is the source strength and strength[2] is the dipole strength
+    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -383,8 +327,8 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
         
         if toggle_potential# && !isinf(ms[i])
-            potential += source_strength * ((rxs[i] * dys[i] - rys[i] * dxs[i]) / ds[i] * log_term + dz * tan_term)
-            potential -= doublet_strength * tan_term
+            potential += strength[1] * ((rxs[i] * dys[i] - rys[i] * dxs[i]) / ds[i] * log_term + dz * tan_term)
+            potential -= strength[2] * tan_term
         end
         
         if toggle_velocity
@@ -393,12 +337,12 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
             lambda = rxs[i] * rys[i+1] - rxs[i+1] * rys[i]
             val4 = r_plus_rp1 / (r_times_rp1 * rho)
-            velocity -= source_strength * SVector{3}(
+            velocity -= strength[1] * SVector{3}(
                 dys[i] / ds[i] * log_term,
                 -dxs[i] / ds[i] * log_term,
                 tan_term
             )
-            velocity += doublet_strength * SVector{3}(
+            velocity += strength[2] * SVector{3}(
                 dz * dys[i] * val4,
                 -dz * dxs[i] * val4,
                 lambda * val4
@@ -417,11 +361,11 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
 
             val1 = r_plus_rp1_2 - d2
             val2 = rx_over_rs[i] + rx_over_rs[i+1]
-            val2 *= source_strength
+            val2 *= strength[1]
             val3 = ry_over_rs[i] + ry_over_rs[i+1]
-            val3 *= source_strength
+            val3 *= strength[1]
             val4 = r_plus_rp1 / (r_times_rp1 * rho)
-            val4 *= source_strength
+            val4 *= strength[1]
 
             # construct hessian
             phi_xx = 2 * dys[i] / val1 * val2
@@ -454,7 +398,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val8 = val3 * val7
             psi_xz = -dys[i] * val8
             psi_yz = dxs[i] * val8
-            hessian += doublet_strength * SMatrix{3,3,eltype(hessian),9}(
+            hessian += strength[2] * SMatrix{3,3,eltype(hessian),9}(
                 psi_xx, psi_xy, psi_xz,
                 psi_xy, psi_yy, psi_yz,
                 psi_xz, psi_yz, psi_zz

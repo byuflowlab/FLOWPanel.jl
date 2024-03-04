@@ -2,7 +2,12 @@
 
 # create single panel
 panel = create_panel()
-(; vertices, control_point, normal, strength) = panel
+# (; vertices, control_point, normal, strength) = panel
+vertices = panel.vertices
+control_point = panel.control_point
+normal = panel.normal
+strength = panel.strength
+
 strength = strength[1]
 
 #####
@@ -172,13 +177,16 @@ end
 
 @testset "single constant doublet panel" begin
 
-panel = create_panel()
+panel = create_random_panel()
 
 target = rand(SVector{3}) * 2
-vz_source = induced(target, panel, ConstantSource())[2][3]
+
+phi_source(n) = induced(target + panel.normal * n, panel, ConstantSource())[1]
+dphi_dn_source = ForwardDiff.derivative(phi_source, 0.0)
+
 psi_doublet, v_doublet, grad_doublet = induced(target, panel, ConstantNormalDoublet())
 
-@test isapprox(vz_source, psi_doublet; atol=1e-10)
+@test isapprox(-dphi_dn_source, psi_doublet; atol=1e-10)
 
 v_doublet_test = test_velocity(target, panel, ConstantNormalDoublet())
 
@@ -196,7 +204,7 @@ end
 
 @testset "single constant source plus doublet panel" begin
 
-panel = create_panel(; strength=SVector{2}(1.0,1.0))
+panel = create_random_panel(; strength=SVector{2}(1.0,1.0))
 
 target = rand(SVector{3}) * 2
 

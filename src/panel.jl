@@ -14,11 +14,19 @@ function get_radius(centroid, vertices...)
     return radius
 end
 
+function get_area(vertices::SVector{NS,<:Any}) where NS
+    area = 0.0
+    for i in 1:NS-2
+        area += norm(cross(vertices[i] - vertices[NS], vertices[i+1] - vertices[NS]))
+    end
+    return area / 2
+end
+
 #####
 ##### unstructured grid
 #####
 
-struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,NS}
+struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     # WriteVTK unstructured grid
     points::Vector{SVector{3,TF}}
     meshcells::Vector{MeshCell{VTKCellType,SVector{NS,Int}}}
@@ -71,7 +79,7 @@ end
 ##### structured grid
 #####
 
-struct StructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,NS}
+struct StructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     # WriteVTK structured grid
     corner_grid::Array{SVector{3,TF},3}
     
@@ -166,6 +174,94 @@ function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::AbstractK
     return StructuredGrid{kernel,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, panels, wake_points)
 end
 
+function panels_2_vector_strengths!(strengths, panels::AbstractVector{Panel{TF,NK,NS}}) where {TF,NK,NS}
+    n_panels = length(panels)
+    @assert length(strengths) == length(panels) * NK "size of strengths vector inconsistent with panels"
+    strengths_reshaped = reshape(strengths, NK, n_panels)
+    for (i,panel) in enumerate(panels)
+        strengths_reshaped[:,i] .= panel.strength
+    end
+    return nothing
+end
+
+function vector_2_panels_strengths!(panels::AbstractVector{Panel{TF,NK,NS}}, strengths) where {TF,NK,NS}
+    n_panels = length(panels)
+    @assert length(strengths) == length(panels) * NK "size of strengths vector inconsistent with panels"
+    strengths_reshaped = reshape(strengths, NK, n_panels)
+    for i in eachindex(panels)
+        # (; vertices, control_point, normal, radius) = panels[i]
+        vertices = panels[i].vertices
+        control_point = panels[i].control_point
+        normal = panels[i].normal
+        radius = panels[i].radius
+        new_strength = SVector{NK,TF}(strengths_reshaped[j,i] for j in 1:NK)
+        panels[i] = Panel(vertices, control_point, normal, new_strength, radius)
+    end
+    return nothing
+end
+
+function set_unit_strength!(panels::AbstractVector{Panel{TF,1,NS}}) where {TF,NS}
+    for i in eachindex(panels)
+        # (; vertices, control_point, normal, radius) = panels[i]
+        vertices = panels[i].vertices
+        control_point = panels[i].control_point
+        normal = panels[i].normal
+        radius = panels[i].radius
+
+        new_strength = SVector{1,TF}(1.0)
+        panels[i] = Panel(vertices, control_point, normal, new_strength, radius)
+    end
+end
+
+function reset_potential_velocity!(panels)
+    for i in eachindex(panels.velocity)
+        panels.velocity[i] = zero(eltype(panels.velocity))
+        panels.potential[i] = zero(eltype(panels.potential))
+    end
+end
+
+function grid_2_panels_strength!(panel_array::StructuredGrid{<:Any,TF,NK,NS}) where {TF,NK,NS}
+    # (; strengths, panels) = panel_array
+    strengths = panel_array.strengths
+    panels = panel_array.panels
+    i = 1
+    nx, ny, _ = size(panel_array.normals)
+    for iy in 1:ny
+        for ix in 1:nx
+            # current panel values
+            # (; vertices, control_point, normal, radius) = panels[i]
+            vertices = panels[i].vertices
+            control_point = panels[i].control_point
+            normal = panels[i].normal
+            radius = panels[i].radius
+
+            # create fast-access panel
+            panels[i] = Panel{TF,NK,NS}(
+                vertices, control_point, normal, strengths[ix,iy,1], radius
+            )
+            i += 1
+        end
+    end
+end
+
+function grid_2_panels_strength!(panel_array::UnstructuredGrid{<:Any,TF,NK,NS}) where {TF,NK,NS}
+    # (; strengths, panels) = panel_array
+    strengths = panel_array.strengths
+    panels = panel_array.panels
+    for i_panel in eachindex(panels)
+        # current panel values
+        # (; vertices, control_point, normal, radius) = panels[i_panel]
+        vertices = panels[i_panel].vertices
+        control_point = panels[i_panel].control_point
+        normal = panels[i_panel].normal
+        radius = panels[i_panel].radius
+
+        # create fast-access panel
+        panels[i_panel] = Panel{TF,NK,NS}(
+            vertices, control_point, normal, strengths[i_panel], radius
+        )
+    end
+end
 
 #=
 function structured_grid_corner_indices(centroid_index::Int, nx::Int)

@@ -1,6 +1,9 @@
 function apply_freestream!(panel_array::AbstractPanels, freestream::AbstractVector{<:Number})
     # unpack panels
-    (; panels, potential, velocity) = panel_array
+    # (; panels, potential, velocity) = panel_array
+    panels = panel_array.panels
+    potential = panel_array.potential
+    velocity = panel_array.velocity
 
     # potential
     for (i,panel) in enumerate(panels)
