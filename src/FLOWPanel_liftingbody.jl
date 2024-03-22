@@ -109,7 +109,7 @@ function save(body::RigidWakeBody, args...;
     str *= save_base(body, args...; debug=debug, optargs...)
 
     # Output the wake
-    if out_wake || debug
+    if out_wake
         str *= _savewake(body, args...; len=wake_len, panel=wake_panel,
                             optargs..., suffix=wake_suffix)
     end
@@ -402,7 +402,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_vortexring(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -458,7 +458,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
         db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
 
         U_semiinfinite_horseshoe(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -481,7 +481,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
              TE[2] = panel[njb]
 
              U_semiinfinite_horseshoe(
-                               self.grid.orggrid.nodes,           # All nodes
+                               self.grid._nodes,                  # All nodes
                                TE,                                # Indices of nodes that make the shedding edge
                                db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
                                da1, da2, da3,                     # Semi-infinite direction db
@@ -522,7 +522,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
 
         # Velocity of i-th panel on every target
         U_vortexring(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, stri],            # Unitary strength
                             targets,                           # Targets
@@ -550,7 +550,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
         db1, db2, db3 = Dbs[ei]
 
         U_semiinfinite_horseshoe(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -572,7 +572,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
              TE[2] = panel[njb]
 
              U_semiinfinite_horseshoe(
-                               self.grid.orggrid.nodes,           # All nodes
+                               self.grid._nodes,                  # All nodes
                                TE,                                # Indices of nodes that make the shedding edge
                                db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
                                da1, da2, da3,                     # Semi-infinite direction db
@@ -609,7 +609,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
 
         # Potential of i-th panel on every target
         phi_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -635,7 +635,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
         db1, db2, db3 = Dbs[ei]
 
         phi_semiinfinite_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -655,7 +655,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
              TE[2] = panel[njb]
 
              phi_semiinfinite_doublet(
-                               self.grid.orggrid.nodes,           # All nodes
+                               self.grid._nodes,                  # All nodes
                                TE,                                # Indices of nodes that make the shedding edge
                                db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
                                da1, da2, da3,                     # Semi-infinite direction db
@@ -783,7 +783,7 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}
         s = pj%2==1 ? -1 : 1        # Alternate + and - strengths to get them all aligned
 
         U_constant_vortexsheet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           s*weight_gammat,                   # Tangential strength
                           s*weight_gammao,                   # Oblique strength
@@ -826,7 +826,7 @@ function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
 
         # Velocity of i-th panel on every target
         U_constant_vortexsheet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, strti],           # Tangential strength
                             self.strength[i, stroi],           # Oblique strength
@@ -873,7 +873,7 @@ function _savewake(self::RigidWakeBody, filename::String;
     end
 
 
-    nodes = self.grid.orggrid.nodes
+    nodes = self.grid._nodes
     nedges = size(self.shedding, 2)
     points = zeros(3, 4*nedges)
 

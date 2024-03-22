@@ -160,7 +160,7 @@ function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::AbstractBody,
 
     # Fetch data
     Gammas = view(body.strength, :, Gammai)
-    nodes = body.grid.orggrid.nodes
+    nodes = body.grid._nodes
 
     # Pre-allocate memory
     (tri_out, tricoor, quadcoor,
@@ -295,7 +295,7 @@ function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
 
     # Fetch data
     Gammas = view(body.strength, :, Gammai)
-    nodes = body.grid.orggrid.nodes
+    nodes = body.grid._nodes
 
     # Pre-allocate memory
     (tri_out, tricoor, quadcoor,
@@ -640,7 +640,7 @@ function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody,
         " Expected size $((3, body.ncells)); got $(size(controlpoints))."
 
     # Fetch data
-    nodes = body.grid.orggrid.nodes
+    nodes = body.grid._nodes
 
     # This algorithm might be inaccurate if the body has multiple types of elements
     Gammas = view(body.strength, :, Gammai)
