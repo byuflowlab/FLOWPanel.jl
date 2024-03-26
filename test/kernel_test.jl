@@ -14,7 +14,7 @@ strength = strength[1]
 ##### potential function
 #####
 
-probe(target) = induced(target, panel, ConstantSource(); toggle_potential=true, toggle_velocity=true, toggle_hessian=true)
+probe(target) = induced(target, panel, ConstantSource(), DerivativesSwitch(true, false, true, true))
 
 pots = []
 vs = []
@@ -79,7 +79,7 @@ end
 #####
 panel_inverted = create_panel(; invert_normals=true)
 
-probe2(target) = induced(target, panel_inverted, ConstantSource())
+probe2(target) = induced(target, panel_inverted, ConstantSource(), DerivativesSwitch(true, false, true, true))
 
 pots = []
 vs = []
@@ -154,7 +154,7 @@ direction = SVector{3,Float64}(direction)
 targets = [centroid + direction * nondimensional_targets[i] for i in eachindex(nondimensional_targets)]
 
 for target in targets[2:end]
-    v = induced(target, new_panel, ConstantSource())[2]
+    v = induced(target, new_panel, ConstantSource(), DerivativesSwitch(true, false, true, true))[2]
     v_check = test_velocity(target, new_panel)
     for j in eachindex(v)
         @test isapprox(v, v_check; atol=1e-12)
@@ -164,7 +164,7 @@ end
 vgrads = []
 vgradchecks = []
 for target in targets[2:end]
-    vgrad = induced(target, new_panel, ConstantSource())[3]
+    vgrad = induced(target, new_panel, ConstantSource(), DerivativesSwitch(false, false, false, true))[3]
     vgrad_check = test_gradient(target, new_panel)
     push!(vgrads, vgrad)
     push!(vgradchecks, vgrad_check)
@@ -181,10 +181,10 @@ panel = create_random_panel()
 
 target = rand(SVector{3}) * 2
 
-phi_source(n) = induced(target + panel.normal * n, panel, ConstantSource())[1]
+phi_source(n) = induced(target + panel.normal * n, panel, ConstantSource(), DerivativesSwitch(true, false, true, true))[1]
 dphi_dn_source = ForwardDiff.derivative(phi_source, 0.0)
 
-psi_doublet, v_doublet, grad_doublet = induced(target, panel, ConstantNormalDoublet())
+psi_doublet, v_doublet, grad_doublet = induced(target, panel, ConstantNormalDoublet(), DerivativesSwitch(true, false, true, true))
 
 @test isapprox(-dphi_dn_source, psi_doublet; atol=1e-10)
 
@@ -208,13 +208,13 @@ panel = create_random_panel(; strength=SVector{2}(1.0,1.0))
 
 target = rand(SVector{3}) * 2
 
-psi_source, v_source, grad_source = induced(target, panel, ConstantSource())
-psi_doublet, v_doublet, grad_doublet = induced(target, panel, ConstantNormalDoublet())
+psi_source, v_source, grad_source = induced(target, panel, ConstantSource(), DerivativesSwitch(true, false, true, true))
+psi_doublet, v_doublet, grad_doublet = induced(target, panel, ConstantNormalDoublet(), DerivativesSwitch(true, false, true, true))
 psi_combined = psi_source + psi_doublet
 v_combined = v_source + v_doublet
 grad_combined = grad_source + grad_doublet
 
-psi_source_doublet, v_source_doublet, grad_source_doublet = induced(target, panel, ConstantSourceNormalDoublet())
+psi_source_doublet, v_source_doublet, grad_source_doublet = induced(target, panel, ConstantSourceNormalDoublet(), DerivativesSwitch(true, false, true, true))
 
 @test isapprox(psi_combined, psi_source_doublet; atol=1e-10)
 
@@ -224,6 +224,79 @@ end
 
 for i in eachindex(grad_doublet)
     @test isapprox(grad_combined[i], grad_source_doublet[i]; atol=1e-10)
+end
+
+end
+
+@testset "vortex ring" begin
+
+#--- single bound vortex ---#
+
+# approximate an infinitely long vortex
+distance = 1
+infinity = 100
+target = SVector{3,Float64}(0,distance,0)
+vertex_1 = SVector{3,Float64}(-infinity,0,0)
+vertex_2 = SVector{3,Float64}(infinity,0,0)
+r1 = vertex_1 - target
+r2 = vertex_2 - target
+finite_core, core_size = false, 1e-3
+
+# parameters
+r1norm = sqrt(r1'*r1)
+r2norm = sqrt(r2'*r2)
+r1normr2norm = r1norm*r2norm
+rcross = cross(r1, r2)
+rdot = dot(r1, r2)
+ONE_OVER_4PI = 1/4/pi
+vinduced = FLOWPanel._bound_vortex_velocity(r1norm, r2norm, r1normr2norm, rcross, rdot, finite_core, core_size; epsilon=10*eps())
+
+# theoretical velocity
+function vinduced_theoretical(target, vertex_1, vertex_2)
+    ds = vertex_2 - vertex_1
+    ds /= norm(ds)
+    r1n = target-vertex_1
+    r2n = target-vertex_2
+
+    # theta
+    theta_1 = acos(dot(ds, r1n/norm(r1n)))
+    theta_2 = acos(dot(ds, r2n/norm(r2n)))
+    
+    # h
+    h = norm(r1n - dot(r1n,ds)*ds)
+
+    # direction
+    d = cross(ds,r1n)
+    d /= norm(d)
+
+    # velocity magnitude
+    v = 1/4/pi/h * (cos(theta_1) - cos(theta_2))
+
+    return d * v
+end
+
+vinduced_check = vinduced_theoretical(target, vertex_1, vertex_2)
+
+for i in 1:3
+    @test isapprox(vinduced[i], vinduced_check[i]; atol=1e-12)
+end
+
+#--- vortex ring ---#
+
+panel = create_random_panel()
+target = SVector{3,Float64}(2.0,3.0,1.3)
+_, vinduced, _ = induced(target, panel, VortexRing(), DerivativesSwitch(false, false, true, true))
+
+vinduced_check = zero(SVector{3,Float64})
+for i in 1:length(panel.vertices)
+    ip1 = i < length(panel.vertices) ? i+1 : 1
+    v1 = panel.vertices[i]
+    v2 = panel.vertices[ip1]
+    vinduced_check += vinduced_theoretical(target, v1, v2)
+end
+
+for i in 1:3
+    @test isapprox(vinduced[i], vinduced_check[i]; atol=1e-12)
 end
 
 end

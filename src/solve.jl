@@ -181,7 +181,7 @@ struct FastJacobi{NK,TF,NP,FO,S<:Scheme} <: AbstractSolver
     # fmm options
     expansion_order::Int
     n_per_branch::Int
-    theta::Float64
+    multipole_acceptance_criterion::Float64
     shrink_recenter::Bool
     ndivisions::Int
     # solver options
@@ -196,7 +196,7 @@ end
 # end
 
 function FastJacobi(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme; 
-    fit_order=2, max_iter=200, epsilon=1e-4, n_previous_steps=3, expansion_order=5, n_per_branch=50, theta=0.4, ndivisions=10, shrink_recenter=true
+    fit_order=2, max_iter=200, epsilon=1e-4, n_previous_steps=3, expansion_order=5, n_per_branch=50, multipole_acceptance_criterion=0.4, ndivisions=10, shrink_recenter=true
 ) where {TF,NK}
 
     @assert fit_order < n_previous_steps "`fit_order` and `n_previous_steps` inconsistent: cannot create a best fit of order $(fit_order) with $n_previous_steps data points"    
@@ -212,7 +212,7 @@ function FastJacobi(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme;
     old_velocity = similar(vec(panels.velocity))
 
     # sort into octree
-    tree = FLOWFMM.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
+    tree = FastMultipole.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
     
     # update inflence matrices
     # branch_index = get_branch_index(tree.levels_index, n_per_branch, max_n_per_matrix)
@@ -220,9 +220,9 @@ function FastJacobi(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme;
     update_influence_matrices!(influence_matrices, panels, tree)
 
     # resort panels
-    FLOWFMM.unsort!(panels, tree)
+    FastMultipole.unsort!(panels, tree)
 
-    return FastJacobi{NK,TF,n_previous_steps,fit_order,scheme}(influence_matrices, strength_history, previous_dt, internal_right_hand_side, external_right_hand_side, old_potential, old_velocity, expansion_order, n_per_branch, theta, shrink_recenter, ndivisions, max_iter, epsilon)
+    return FastJacobi{NK,TF,n_previous_steps,fit_order,scheme}(influence_matrices, strength_history, previous_dt, internal_right_hand_side, external_right_hand_side, old_potential, old_velocity, expansion_order, n_per_branch, multipole_acceptance_criterion, shrink_recenter, ndivisions, max_iter, epsilon)
 end
 
 """
@@ -231,7 +231,7 @@ end
 function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi{NK,TF,<:Any,FO,S}, dt=nothing; update_influence_matrices=false, verbose=false) where {TK,NK,TF,FO,S}
     # unpack solver
     # (; influence_matrices, strength_history, previous_dt, external_right_hand_side, internal_right_hand_side, old_potential, old_velocity,
-    #     expansion_order, n_per_branch, theta, shrink_recenter, ndivisions, max_iter, epsilon) = solver
+    #     expansion_order, n_per_branch, multipole_acceptance_criterion, shrink_recenter, ndivisions, max_iter, epsilon) = solver
     # sort_index = solver.sort_index
     influence_matrices = solver.influence_matrices
     strength_history = solver.strength_history
@@ -242,14 +242,14 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi
     old_velocity = solver.old_velocity
     expansion_order = solver.expansion_order
     n_per_branch = solver.n_per_branch
-    theta = solver.theta
+    multipole_acceptance_criterion = solver.multipole_acceptance_criterion
     shrink_recenter = solver.shrink_recenter
     ndivisions = solver.ndivisions
     max_iter = solver.max_iter
     epsilon = solver.epsilon
 
     # sort into octree
-    tree = FLOWFMM.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
+    tree = FastMultipole.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
 
     # update inflence matrices
     update_influence_matrices && ( update_influence_matrices!(influence_matrices, panels, tree) )
@@ -285,7 +285,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi
             panels.velocity[i] = SVector{3,TF}(0,0,0)
             panels.potential[i] = zero(TF)
         end
-        FLOWFMM.fmm!(tree, panels; theta, self_induced=false, unsort_bodies=false)
+        FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, self_induced=false, unsort_bodies=false)
 
         # move to right-hand side
         internal_right_hand_side .= zero(eltype(internal_right_hand_side))
@@ -321,7 +321,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi
             panels.potential[i] = old_potential[i]
             panels.velocity[i] = old_velocity[i]
         end
-        FLOWFMM.fmm!(tree, panels; theta, self_induced=true, unsort_bodies=false)
+        FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, self_induced=true, unsort_bodies=false)
         error = zero(error)
         for (panel, velocity) in zip(panels.panels, panels.velocity)
             error += dot(velocity, panel.normal)^2
@@ -341,7 +341,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi
     # println("Update after")
     # @show strength_history
     
-    FLOWFMM.unsort!(panels, tree)
+    FastMultipole.unsort!(panels, tree)
 
     # update panels
     for (i,panel) in enumerate(panels.panels)
@@ -351,7 +351,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastJacobi
     return nothing
 end
 
-function update_influence_matrices!(influence_matrices, panels::AbstractPanels{TK,TF,<:Any,<:Any}, tree::FLOWFMM.Tree) where {TK,TF}
+function update_influence_matrices!(influence_matrices, panels::AbstractPanels{TK,TF,<:Any,<:Any}, tree::FastMultipole.Tree) where {TK,TF}
     # resize influence matrices
     leaf_index = tree.leaf_index
     n_leaves = length(leaf_index)
@@ -516,18 +516,16 @@ end
 struct GaussSeidelMatrices{TF}
     matrix_A::Vector{TF}
     size_A::Int
+    matrix_branch_list::Vector{Int}
     bodies_index_A::Vector{Int}
-    matrix_B::Vector{TF}
-    size_B::Tuple{Int,Int}
-    bodies_index_B_target::Vector{Int}
-    bodies_index_B_source::Vector{Int}
+    rhs_branch_list::Vector{Tuple{Int,Int}}
 end
 
 struct FastGaussSeidel{NK,TF,NP,FO,S<:Scheme} <: AbstractSolver
     # containers
     # sort_index::Vector{Int}
     influence_matrices::Vector{GaussSeidelMatrices{TF}} # use vectors as they may be resized
-    direct_checklist::Vector{Bool} # keep track of which direct interactions have already been accounted for
+    branch_checklist::Vector{Bool} # keep track of which direct interactions have already been accounted for
     strength_history::Matrix{TF}
     previous_dt::MVector{NP,TF}
     internal_right_hand_side::Vector{TF}
@@ -537,7 +535,7 @@ struct FastGaussSeidel{NK,TF,NP,FO,S<:Scheme} <: AbstractSolver
     # fmm options
     expansion_order::Int
     n_per_branch::Int
-    theta::Float64
+    multipole_acceptance_criterion::Float64
     shrink_recenter::Bool
     ndivisions::Int
     # solver options
@@ -546,7 +544,7 @@ struct FastGaussSeidel{NK,TF,NP,FO,S<:Scheme} <: AbstractSolver
 end
 
 function FastGaussSeidel(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme; 
-    fit_order=2, max_iter=200, epsilon=1e-4, n_previous_steps=3, expansion_order=5, n_per_branch=50, theta=0.4, ndivisions=10, shrink_recenter=true
+    fit_order=2, max_iter=200, epsilon=1e-4, n_previous_steps=3, expansion_order=5, n_per_branch=50, multipole_acceptance_criterion=0.4, ndivisions=10, shrink_recenter=true
 ) where {TF,NK}
 
     @assert fit_order < n_previous_steps "`fit_order` and `n_previous_steps` inconsistent: cannot create a best fit of order $(fit_order) with $n_previous_steps data points"    
@@ -554,7 +552,7 @@ function FastGaussSeidel(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme;
     # initialize memory
     influence_matrices = GaussSeidelMatrices{TF}[]
     n_unknowns = length(panels.panels)*NK
-    strength_history = zeros(TF,n_unknowns,n_previous_steps)
+    strength_history = ones(TF,n_unknowns,n_previous_steps)
     previous_dt = MVector{n_previous_steps}(t for t in range(0.0,stop=1.0,length=n_previous_steps))
     internal_right_hand_side = Vector{TF}(undef,n_unknowns)
     external_right_hand_side = Vector{TF}(undef,n_unknowns)
@@ -562,18 +560,19 @@ function FastGaussSeidel(panels::AbstractPanels{<:Any,TF,NK,<:Any}, scheme;
     old_velocity = similar(vec(panels.velocity))
 
     # sort into octree
-    tree = FLOWFMM.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
-    direct_checklist = fill(false, length(tree.leaf_index))
-    
+    tree = FastMultipole.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
+    branch_checklist = fill(false, length(tree.branches)) # only need the leaves, but this makes it easier to navigate, and Bools are cheap
+    m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_acceptance_criterion, true, true, true)
+    @show m2l_list direct_list multipole_acceptance_criterion n_per_branch
     # update inflence matrices
     # branch_index = get_branch_index(tree.levels_index, n_per_branch, max_n_per_matrix)
     # sort_index = get_sort_index(tree.branches, branch_index)
-    update_influence_matrices!(influence_matrices, panels, tree, theta, direct_checklist)
+    update_influence_matrices!(influence_matrices, panels, tree, multipole_acceptance_criterion, branch_checklist)
 
     # resort panels
-    FLOWFMM.unsort!(panels, tree)
+    FastMultipole.unsort!(panels, tree)
 
-    return FastGaussSeidel{NK,TF,n_previous_steps,fit_order,scheme}(influence_matrices, direct_checklist, strength_history, previous_dt, internal_right_hand_side, external_right_hand_side, old_potential, old_velocity, expansion_order, n_per_branch, theta, shrink_recenter, ndivisions, max_iter, epsilon), tree
+    return FastGaussSeidel{NK,TF,n_previous_steps,fit_order,scheme}(influence_matrices, branch_checklist, strength_history, previous_dt, internal_right_hand_side, external_right_hand_side, old_potential, old_velocity, expansion_order, n_per_branch, multipole_acceptance_criterion, shrink_recenter, ndivisions, max_iter, epsilon), tree
 end
 
 
@@ -583,10 +582,10 @@ end
 function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussSeidel{NK,TF,<:Any,FO,S}, dt=nothing; update_influence_matrices=false, verbose=false) where {TK,NK,TF,FO,S}
     # unpack solver
     # (; influence_matrices, strength_history, previous_dt, external_right_hand_side, internal_right_hand_side, old_potential, old_velocity,
-    #     expansion_order, n_per_branch, theta, shrink_recenter, ndivisions, max_iter, epsilon) = solver
+    #     expansion_order, n_per_branch, multipole_acceptance_criterion, shrink_recenter, ndivisions, max_iter, epsilon) = solver
     # sort_index = solver.sort_index
     influence_matrices = solver.influence_matrices
-    direct_checklist = solver.direct_checklist
+    branch_checklist = solver.branch_checklist
     strength_history = solver.strength_history
     previous_dt = solver.previous_dt
     external_right_hand_side = solver.external_right_hand_side
@@ -595,19 +594,20 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
     old_velocity = solver.old_velocity
     expansion_order = solver.expansion_order
     n_per_branch = solver.n_per_branch
-    theta = solver.theta
+    multipole_acceptance_criterion = solver.multipole_acceptance_criterion
     shrink_recenter = solver.shrink_recenter
     ndivisions = solver.ndivisions
     max_iter = solver.max_iter
     epsilon = solver.epsilon
 
     # sort into octree
-    tree = FLOWFMM.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
+    tree = FastMultipole.Tree(panels; expansion_order, n_per_branch, shrink_recenter, ndivisions)
+    m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_acceptance_criterion, true, true, true)
 
     # update inflence matrices
-    update_influence_matrices && ( update_influence_matrices!(influence_matrices, panels, tree, theta, direct_checklist) )
+    update_influence_matrices && ( update_influence_matrices!(influence_matrices, panels, tree, multipole_acceptance_criterion, branch_checklist) )
 
-    # save velocity
+    # save velocity/potential
     for i in eachindex(old_potential)
         old_potential[i] = panels.potential[i]
         old_velocity[i] = panels.velocity[i]
@@ -618,6 +618,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
                                                                  # guess_strengths! stores its guess in the final column, as it will be discarded
     solved_strengths = view(strength_history,:,size(strength_history,2))
     vector_2_panels_strengths!(panels.panels, solved_strengths)
+    @show solved_strengths
 
     # 2. form external RHS using wake- and freestream-induced velocity (noting that panels.velocity HAS already been sorted)
     for (i,panel) in enumerate(panels.panels)
@@ -632,41 +633,68 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
 
     # get far-field influence by running the FMM to prepare the first iteration
     # reset_potential_velocity!(panels)
-    # FLOWFMM.fmm!(tree, panels; theta, nearfield=false, unsort_bodies=false)
+    # FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, nearfield=false, unsort_bodies=false)
     
     while error > epsilon && i_iter < max_iter
         verbose && (println("\titeration $i_iter: error = $error"))
         
         # temporarily try this in the while loop
         reset_potential_velocity!(panels)
-        FLOWFMM.fmm!(tree, panels; theta, nearfield=false, unsort_bodies=false)
+        # FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, nearfield=false, unsort_bodies=false)
+        # direct for debugging
+        for (i_branch_target,i_branch_source) in m2l_list
+            this_target_index = tree.branches[i_branch_target].bodies_index
+            this_source_index = tree.branches[i_branch_source].bodies_index
+            FastMultipole._direct!(panels, this_target_index, panels, this_source_index)
+        end
         
         # add farfield fmm influence and external influence to the RHS
         set_right_hand_side!(internal_right_hand_side, external_right_hand_side, panels)
+        # i_iter == 1 && (internal_right_hand_side .=  [-0.4141721227865395,0.6907473543746981,-0.3980402370037941,-0.7738129213817879,-0.5033733566366838,0.9017307671895831,0.6907473543746981,-0.6240273847307353,-0.4872414708539383])
 
+        # @show internal_right_hand_side external_right_hand_side
+
+        # @show length(influence_matrices)
         # solve blocks
-        for (i_matrix,matrix_object) in enumerate(influence_matrices)
+        for matrix_object in influence_matrices
             # unpack matrix object
             matrix_A = reshape(matrix_object.matrix_A, matrix_object.size_A, matrix_object.size_A)
             bodies_index_A = matrix_object.bodies_index_A
-            matrix_B = reshape(matrix_object.matrix_B, matrix_object.size_B)
-            bodies_index_B_source = matrix_object.bodies_index_B_source
+            rhs_branch_list = matrix_object.rhs_branch_list
 
             # add the influence of previously-solved panels to RHS
-            if length(bodies_index_B_source) > 0
-                strengths = view(solved_strengths, bodies_index_B_source)
-                rhs = view(internal_right_hand_side, tree.branches[tree.leaf_index[i_matrix]].bodies_index)
-                mul!(rhs, matrix_B, strengths, -1, 1)
+            @show rhs_branch_list
+            for (i_target, i_source) in rhs_branch_list
+                # extract branches
+                target_index = tree.branches[i_target].bodies_index
+                source_index = tree.branches[i_source].bodies_index
+
+                # reset panels
+                panels.potential[target_index] .= zero(TF)
+                for i in target_index
+                    panels.velocity[i] = SVector{3,TF}(0,0,0)
+                end
+
+                # perform direct calculation
+                FastMultipole._direct!(panels, target_index, panels, source_index)
+
+                # add to RHS
+                for i_target in target_index
+                    velocity = panels.velocity[i_target]
+                    normal = panels.panels[i_target].normal
+                    internal_right_hand_side[i_target] -= dot(velocity, normal)
+                end
             end
 
             # solve matrix equation
             strengths = view(solved_strengths, bodies_index_A)
             rhs = view(internal_right_hand_side, bodies_index_A)
+            @show rhs
             strengths .= matrix_A \ rhs
+            @show strengths
+            # update panels
+            vector_2_panels_strengths!(view(panels.panels,bodies_index_A), strengths)
         end
-
-        # update strengths
-        vector_2_panels_strengths!(panels.panels, solved_strengths)
 
         #####
         ##### evaluate error
@@ -674,7 +702,7 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
 
         # # update the farfield influence of the panels
         # reset_potential_velocity!(panels)
-        # FLOWFMM.fmm!(tree, panels; theta, nearfield=false, unsort_bodies=false)
+        # FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, nearfield=false, unsort_bodies=false)
         
         # # add farfield fmm influence and external influence to the RHS, which is now our residual
         # set_right_hand_side!(internal_right_hand_side, external_right_hand_side, panels)
@@ -711,7 +739,8 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
 
         # for debugging purposes, evaluate the entire FMM
         reset_potential_velocity!(panels)
-        FLOWFMM.fmm!(tree, panels; theta, nearfield=true, unsort_bodies=false)
+        # FastMultipole.fmm!(tree, panels; multipole_acceptance_criterion, nearfield=true, unsort_bodies=false)
+        FastMultipole.direct!(panels)
         set_right_hand_side!(internal_right_hand_side, external_right_hand_side, panels)
 
         # Linf norm error of the residual vector
@@ -731,11 +760,17 @@ function solve!(panels::AbstractPanels{TK,<:Any,<:Any,<:Any}, solver::FastGaussS
     # update strength history
     update_strength_history!(strength_history, previous_dt, panels.panels, dt)
     
-    FLOWFMM.unsort!(panels, tree)
+    FastMultipole.unsort!(panels, tree)
 
     # update panels
     for (i,panel) in enumerate(panels.panels)
         panels.strengths[i] = panel.strength
+    end
+
+    # restore velocity
+    for i in eachindex(old_potential)
+        panels.potential[i] += old_potential[i]
+        panels.velocity[i] += old_velocity[i]
     end
 
     return nothing
@@ -751,153 +786,87 @@ function set_right_hand_side!(internal_right_hand_side, external_right_hand_side
     end
 end
 
-function update_influence_matrices!(influence_matrices::Vector{<:GaussSeidelMatrices}, panels::AbstractPanels{TK,TF,<:Any,<:Any}, tree::FLOWFMM.Tree, theta, direct_checklist) where {TK,TF}
+function update_influence_matrices!(influence_matrices::Vector{<:GaussSeidelMatrices}, panels::AbstractPanels{TK,TF,<:Any,<:Any}, tree::FastMultipole.Tree, multipole_acceptance_criterion, branch_checklist) where {TK,TF}
     # obtain direct interaction list
     farfield, nearfield, self_induced = true, true, true
-    m2l_list, direct_list = FLOWFMM.build_interaction_lists(tree.branches, tree.branches, theta, farfield, nearfield, self_induced)
-    # @show m2l_list direct_list
+    m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_acceptance_criterion, farfield, nearfield, self_induced)
+    # @show m2l_list direct_list multipole_acceptance_criterion tree.levels_index tree.leaf_index
 
-    # resize influence matrices
+    # unpack leaf index
     leaf_index = tree.leaf_index
     n_leaves = length(leaf_index)
+    @show leaf_index tree.levels_index m2l_list direct_list multipole_acceptance_criterion
 
     # reset direct checklist
-    direct_checklist .= false
+    branch_checklist .= false
 
-    # update size and number of existing matrices
-    for i_matrix in eachindex(influence_matrices)
-        # unpack the current influence matrix
-        matrix_A = influence_matrices[i_matrix].matrix_A
-        bodies_index_A = influence_matrices[i_matrix].bodies_index_A
-        matrix_B = influence_matrices[i_matrix].matrix_B
-        bodies_index_B_source = influence_matrices[i_matrix].bodies_index_B_source
+    resize!(influence_matrices,0)
 
-        # count number of bodies participating in each influence matrix
-        n_influencers_A, n_influencers_B = get_n_influencers!(direct_checklist, tree.branches, i_matrix, leaf_index[i_matrix], leaf_index, direct_list)
+    @assert length(influence_matrices) == 0 "should start with zero matrices"
 
-        # resize appropriately
-        resize!(matrix_A, n_influencers_A^2)
-        resize!(bodies_index_A, n_influencers_A)
-        n_in_leaf = length(tree.branches[leaf_index[i_matrix]].bodies_index)
-        resize!(matrix_B, n_influencers_B*n_in_leaf)
-        resize!(bodies_index_B_source, n_influencers_B)
+    # allocate influence matrices
+    for (i_leaf,i_branch) in enumerate(leaf_index)
+        if !branch_checklist[i_branch] # this leaf hasn't been included in an influence matrix yet
+            matrix_branch_list = Int[]
+            bodies_index_A = Int[]
+            rhs_branch_list = Tuple{Int,Int}[]
 
-        # repack
-        influence_matrices[i_matrix] = GaussSeidelMatrices(matrix_A, n_influencers_A, bodies_index_A, matrix_B, (n_in_leaf, n_influencers_B), bodies_index_B_source)
-    end
+            # find which branches in the interaction list haven't been included in a solve yet
+            for (i_target,i_source) in direct_list
+                if i_target == i_branch # in the interaction list
+                    if !branch_checklist[i_source] # this source hasn't already been included in an influence matrix
+                        println("filling matrix_branch_list:")
+                        @show i_target i_source
+                        println()
+                        push!(matrix_branch_list, i_source)
+                        branch_checklist[i_source] = true # mark it so it isn't repeated
+                    end
+                end
+            end
 
-    # add additional matrices if needed
-    for i_remaining in length(influence_matrices)+1:n_leaves
-        # count number of bodies participating in each influence matrix
-        n_influencers_A, n_influencers_B = get_n_influencers!(direct_checklist, tree.branches, i_remaining, leaf_index[i_remaining], leaf_index, direct_list)
-        n_in_leaf = length(tree.branches[leaf_index[i_remaining]].bodies_index)
-
-        # create new influence matrices
-        matrix_A = zeros(TF, n_influencers_A^2)
-        matrix_B = zeros(TF, n_influencers_B * n_in_leaf)
-
-        # create bodies indices
-        bodies_index_A = zeros(Int,n_influencers_A)
-        bodies_index_B_source = zeros(Int,n_influencers_B)
-
-        # create influence object
-        push!(influence_matrices, GaussSeidelMatrices(matrix_A, n_influencers_A, bodies_index_A, matrix_B, (n_in_leaf, n_influencers_B), bodies_index_B_source))
-    end
-    resize!(influence_matrices, n_leaves) # in case we had too many before
-
-    # update indices
-    direct_checklist .= false
-    for (i_matrix, matrix_object) in enumerate(influence_matrices)
-        update_indices!(matrix_object.bodies_index_A, matrix_object.bodies_index_B_source, direct_checklist, tree.branches, leaf_index[i_matrix], leaf_index, direct_list)
+            # which branches should be added to the RHS
+            for i_branch in matrix_branch_list # loop over branches included in this solve
+                for (i_target, i_source) in direct_list # find all branches in the interaction list that aren't included in this solve
+                    if i_target == i_branch && !(i_source in matrix_branch_list)
+                        push!(rhs_branch_list, (i_target,i_source))
+                    end
+                end
+            end
+            
+            # create Gauss-Seidel influence matrix
+            n_influencers = 0
+            for leaf in view(tree.branches,matrix_branch_list)
+                n_influencers += length(leaf.bodies_index)
+            end
+            resize!(bodies_index_A, n_influencers)
+            i_start = 1
+            for leaf in view(tree.branches,matrix_branch_list)
+                bodies_index_A[i_start:i_start+length(leaf.bodies_index)-1] .= leaf.bodies_index
+                i_start += length(leaf.bodies_index)
+            end
+            matrix_A = zeros(TF,n_influencers^2)
+            push!(influence_matrices, GaussSeidelMatrices(matrix_A, n_influencers, matrix_branch_list, bodies_index_A, rhs_branch_list))
+        end
     end
 
     # update influence matrices
-    direct_checklist .= false
     set_unit_strength!(panels.panels)
-    for (i_matrix, matrix_object) in enumerate(influence_matrices)
+    for matrix_object in influence_matrices
         
         # unpack matrix object
         matrix_A = reshape(matrix_object.matrix_A, matrix_object.size_A, matrix_object.size_A)
         bodies_index_A = matrix_object.bodies_index_A
-        matrix_B = reshape(matrix_object.matrix_B, matrix_object.size_B)
-        bodies_index_B_source = matrix_object.bodies_index_B_source
 
         # update matrix A
-        for (i_source_panel, source_panel) in enumerate(view(panels.panels, bodies_index_A))
-            for (i_target_panel, target_panel) in enumerate(view(panels.panels, bodies_index_A))
+        for (i_source_matrix, i_source_panel) in enumerate(bodies_index_A)
+            source_panel = panels.panels[i_source_panel]
+            for (i_target_matrix, i_target_panel) in enumerate(bodies_index_A)
+                target_panel = panels.panels[i_target_panel]
                 _, velocity, _ = induced(target_panel.control_point, source_panel, TK; toggle_potential=false, toggle_velocity=true, toggle_hessian=false)
-                matrix_A[i_target_panel,i_source_panel] = dot(velocity, target_panel.normal)
-            end
-        end
-
-        # update matrix B
-        leaf = tree.branches[leaf_index[i_matrix]]
-        bodies_index_target = leaf.bodies_index
-        for (i_source_panel, source_panel) in enumerate(view(panels.panels, bodies_index_B_source))
-            for (i_target_panel, target_panel) in enumerate(view(panels.panels, bodies_index_target))
-                _, velocity, _ = induced(target_panel.control_point, source_panel, TK; toggle_potential=false, toggle_velocity=true, toggle_hessian=false)
-                matrix_B[i_target_panel,i_source_panel] = dot(velocity, target_panel.normal)
+                matrix_A[i_target_matrix, i_source_matrix] = dot(velocity, target_panel.normal)
             end
         end
     end
 
     return nothing
-end
-
-function get_n_influencers!(direct_checklist, branches, i_matrix_target, i_leaf, leaf_index, direct_list)
-    n_influencers_A = 0
-    n_influencers_B = 0
-    if !direct_checklist[i_matrix_target] # if leaf i_leaf hasn't yet been included in an A matrix
-        for (i_target, i_source) in direct_list
-            if i_target == i_leaf
-                # number of bodies to account for in this source branch
-                n_influencers = length(branches[i_source].bodies_index)
-                
-                # get matrix index of the source branch TODO: save the inverse leaf index in the FMM
-                i_matrix_source = 0
-                for i in eachindex(leaf_index)
-                    leaf_index[i] == i_source && (i_matrix_source = i)
-                end
-
-                if direct_checklist[i_matrix_source] # this source leaf has already been accounted for, so add its influence to matrix B
-                    n_influencers_B += n_influencers
-                else
-                    n_influencers_A += n_influencers
-                    direct_checklist[i_matrix_source] = true
-                end
-
-                if i_source != i_leaf # then we need to add the direct list of leaf i_source to matrix B
-
-                end
-            end
-        end
-    end
-    return n_influencers_A, n_influencers_B
-end
-
-function update_indices!(bodies_index_A, bodies_index_B_source, direct_checklist, branches, i_leaf, leaf_index, direct_list)
-    if length(bodies_index_A) > 0 # if the A matrix doesn't exist, then do nothing (that means this leaf is already included in another matrix)
-        i_start_A = 1
-        i_start_B_source = 1
-        for (i_target, i_source) in direct_list
-            if i_target == i_leaf
-                bodies_index = branches[i_source].bodies_index
-                
-                # get matrix index of the source branch TODO: save the inverse leaf index in the FMM
-                i_matrix_source = 0
-                for i in eachindex(leaf_index)
-                    leaf_index[i] == i_source && (i_matrix_source = i)
-                end
-
-                if direct_checklist[i_matrix_source] # this source leaf has already been accounted for, so add its influence to matrix B, if it exists
-                    bodies_index_B_source[i_start_B_source:i_start_B_source+length(bodies_index)-1] .= bodies_index
-                    i_start_B_source += length(bodies_index)
-                else
-                    direct_checklist[i_matrix_source] = true # flag this source leaf so it isn't double-counted
-                    bodies_index_A[i_start_A:i_start_A+length(bodies_index)-1] .= bodies_index
-                    i_start_A += length(bodies_index)
-                end
-            end
-        end
-    end
 end

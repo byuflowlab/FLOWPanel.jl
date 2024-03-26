@@ -103,12 +103,12 @@ function create_tripanel(;
 end
 
 function test_velocity(target, panel, kernel=ConstantSource())
-    this_potential(target) = induced(target, panel, kernel)[1]
+    this_potential(target) = induced(target, panel, kernel, DerivativesSwitch(true, false, false, false))[1]
     return -ForwardDiff.gradient(this_potential, target)
 end
 
 function test_gradient(target, panel, kernel=ConstantSource())
-    this_velocity(target) = induced(target, panel, kernel)[2]
+    this_velocity(target) = induced(target, panel, kernel, DerivativesSwitch(false, false, true, false))[2]
     return ForwardDiff.jacobian(this_velocity, target)
 end
 

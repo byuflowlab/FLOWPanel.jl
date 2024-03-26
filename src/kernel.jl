@@ -1,8 +1,15 @@
-function induced(target, panel, kernel; toggle_potential=true, toggle_velocity=true, toggle_hessian=true)
+function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
     
     Rprime, Rxprime, Ryprime, Rzprime = rotate_to_panel(panel)
 
-    potential, velocity, velocity_gradient = _induced(target, panel, kernel, Rprime, Rxprime, Ryprime, Rzprime; toggle_potential, toggle_velocity, toggle_hessian)
+    potential, velocity, velocity_gradient = _induced(target, panel, kernel, Rprime, Rxprime, Ryprime, Rzprime, derivatives_switch)
+    
+    return potential, velocity, velocity_gradient
+end
+
+function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
+    
+    potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
     
     return potential, velocity, velocity_gradient
 end
@@ -100,7 +107,7 @@ end
     # induced potential, velocity, gradient
     potential = zero(TF)
     velocity = @SVector zeros(TF,3)
-    hessian = @SMatrix zeros(TF,3,3)
+    velocity_gradient = @SMatrix zeros(TF,3,3)
 
     # intermediate quantities
     vertices_xR = get_vertices_xyR(Rxprime, vertices, centroid)
@@ -126,18 +133,18 @@ end
     rx_over_rs = get_rxy_over_rs(rxs, rs)
     ry_over_rs = get_rxy_over_rs(rys, rs)
 
-    return strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs
+    return strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs
 end
 
 #####
 ##### constant source
 #####
 
-struct ConstantSource <: AbstractKernel end
+struct ConstantSource <: AbstractRotatedKernel end
 
-@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
+@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
-    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
+    strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -155,12 +162,12 @@ struct ConstantSource <: AbstractKernel end
         dx = dxs[i]
         dy = dys[i]
         
-        if toggle_potential# && !isinf(ms[i])
+        if PS# && !isinf(ms[i])
             potential += (rxs[i] * dy - rys[i] * dx) / ds[i] * log_term
             potential += dz * tan_term
         end
 
-        if toggle_velocity
+        if VS
             velocity += SVector{3}(
                 dy / ds[i] * log_term,
                 -dx / ds[i] * log_term,
@@ -168,7 +175,7 @@ struct ConstantSource <: AbstractKernel end
             )
         end
 
-        if toggle_hessian
+        if GS
             # intermediate values
             d2 = ds[i]^2
             r_plus_rp1 = rs[i] + rs[i+1]
@@ -183,14 +190,14 @@ struct ConstantSource <: AbstractKernel end
             val3 = ry_over_rs[i] + ry_over_rs[i+1]
             val4 = r_plus_rp1 / (r_times_rp1 * rho)
 
-            # construct hessian
+            # construct velocity_gradient
             phi_xx = 2 * dy / val1 * val2
             phi_xy = -2 * dx / val1 * val2
             phi_xz = dz * dy * val4
             phi_yy = -2 * dx / val1 * val3
             phi_yz = -dz * dx * val4
             phi_zz = lambda * val4
-            hessian += SMatrix{3,3,eltype(hessian),9}(
+            velocity_gradient += SMatrix{3,3,eltype(velocity_gradient),9}(
                 phi_xx, phi_xy, phi_xz,
                 phi_xy, phi_yy, phi_yz,
                 phi_xz, phi_yz, phi_zz
@@ -199,9 +206,15 @@ struct ConstantSource <: AbstractKernel end
 
     end
 
-    potential *= strength[1] * ONE_OVER_4PI
-    velocity = -strength[1] * ONE_OVER_4PI * R * velocity
-    velocity_gradient = -strength[1] * ONE_OVER_4PI * R * hessian * R'
+    if PS
+        potential *= strength[1] * ONE_OVER_4PI
+    end
+    if VS
+        velocity = -strength[1] * ONE_OVER_4PI * R * velocity
+    end
+    if GS
+        velocity_gradient = -strength[1] * ONE_OVER_4PI * R * velocity_gradient * R'
+    end
 
     return potential, velocity, velocity_gradient
 end
@@ -212,11 +225,11 @@ end
 ##### constant normal doublet
 #####
 
-struct ConstantNormalDoublet <: AbstractKernel end
+struct ConstantNormalDoublet <: AbstractRotatedKernel end
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
-    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
+    strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -232,11 +245,11 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         iszero(rip1) && (rip1 += eps())
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
         
-        if toggle_potential# && !isinf(ms[i])
+        if PS# && !isinf(ms[i])
             potential -= tan_term
         end
         
-        if toggle_velocity
+        if VS
             r_plus_rp1 = rs[i] + rs[i+1]
             r_times_rp1 = rs[i] * rs[i+1]
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
@@ -249,7 +262,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             )
         end
             
-        if toggle_hessian
+        if GS
             # intermediate values
             d2 = ds[i]^2
             r_plus_rp1 = rs[i] + rs[i+1]
@@ -265,7 +278,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val2 /= rho * rs[i+1] * r_plus_rp1
             val3 = r_plus_rp1 / (rho * r_times_rp1^2)
             
-            # construct hessian
+            # construct velocity_gradient
             psi_xx = dz * dys[i] * val3 * (rxs[i] * val1 + rxs[i+1] * val2)
             psi_xy = dz * dys[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
             psi_yy = -dz * dxs[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
@@ -277,7 +290,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val8 = val3 * val7
             psi_xz = -dys[i] * val8
             psi_yz = dxs[i] * val8
-            hessian += SMatrix{3,3,eltype(hessian),9}(
+            velocity_gradient += SMatrix{3,3,eltype(velocity_gradient),9}(
                 psi_xx, psi_xy, psi_xz,
                 psi_xy, psi_yy, psi_yz,
                 psi_xz, psi_yz, psi_zz
@@ -286,9 +299,15 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
 
     end
 
-    potential *= strength[1] * ONE_OVER_4PI
-    velocity = strength[1] * ONE_OVER_4PI * R * velocity
-    velocity_gradient = -strength[1] * ONE_OVER_4PI * R * hessian * R'
+    if PS
+        potential *= strength[1] * ONE_OVER_4PI
+    end
+    if VS
+        velocity = strength[1] * ONE_OVER_4PI * R * velocity
+    end
+    if GS
+        velocity_gradient = -strength[1] * ONE_OVER_4PI * R * velocity_gradient * R'
+    end
 
     # dx = target - panel.control_point
     # if isapprox(dx' * dx, 0.0; atol=2*eps())
@@ -305,12 +324,12 @@ end
 ##### constant source plus constant normal doublet
 #####
 
-struct ConstantSourceNormalDoublet <: AbstractKernel end
+struct ConstantSourceNormalDoublet <: AbstractRotatedKernel end
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime; toggle_potential=true, toggle_velocity=true, toggle_hessian=true) where {TFT,TFP,NS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations;
     # note that strength[1] is the source strength and strength[2] is the dipole strength
-    strength, TF, potential, velocity, hessian, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
+    strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
     # loop over side contributions
     for i in 1:NS
@@ -326,12 +345,12 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         iszero(rip1) && (rip1 += eps())
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
         
-        if toggle_potential# && !isinf(ms[i])
+        if PS# && !isinf(ms[i])
             potential += strength[1] * ((rxs[i] * dys[i] - rys[i] * dxs[i]) / ds[i] * log_term + dz * tan_term)
             potential -= strength[2] * tan_term
         end
         
-        if toggle_velocity
+        if VS
             r_plus_rp1 = rs[i] + rs[i+1]
             r_times_rp1 = rs[i] * rs[i+1]
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
@@ -349,7 +368,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             )
         end
             
-        if toggle_hessian
+        if GS
             # intermediate values
             d2 = ds[i]^2
             r_plus_rp1 = rs[i] + rs[i+1]
@@ -367,14 +386,14 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val4 = r_plus_rp1 / (r_times_rp1 * rho)
             val4 *= strength[1]
 
-            # construct hessian
+            # construct velocity_gradient
             phi_xx = 2 * dys[i] / val1 * val2
             phi_xy = -2 * dxs[i] / val1 * val2
             phi_xz = dz * dys[i] * val4
             phi_yy = -2 * dxs[i] / val1 * val3
             phi_yz = -dz * dxs[i] * val4
             phi_zz = lambda * val4
-            hessian += SMatrix{3,3,eltype(hessian),9}(
+            velocity_gradient += SMatrix{3,3,eltype(velocity_gradient),9}(
                 phi_xx, phi_xy, phi_xz,
                 phi_xy, phi_yy, phi_yz,
                 phi_xz, phi_yz, phi_zz
@@ -386,7 +405,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val2 /= rho * rs[i+1] * r_plus_rp1
             val3 = r_plus_rp1 / (rho * r_times_rp1^2)
             
-            # construct hessian
+            # construct velocity_gradient
             psi_xx = dz * dys[i] * val3 * (rxs[i] * val1 + rxs[i+1] * val2)
             psi_xy = dz * dys[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
             psi_yy = -dz * dxs[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
@@ -398,7 +417,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
             val8 = val3 * val7
             psi_xz = -dys[i] * val8
             psi_yz = dxs[i] * val8
-            hessian += strength[2] * SMatrix{3,3,eltype(hessian),9}(
+            velocity_gradient += strength[2] * SMatrix{3,3,eltype(velocity_gradient),9}(
                 psi_xx, psi_xy, psi_xz,
                 psi_xy, psi_yy, psi_yz,
                 psi_xz, psi_yz, psi_zz
@@ -407,11 +426,136 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
 
     end
 
-    potential *= ONE_OVER_4PI
-    velocity = ONE_OVER_4PI * R * velocity
-    velocity_gradient = -ONE_OVER_4PI * R * hessian * R'
+    PS && (potential *= ONE_OVER_4PI)
+    VS && (velocity = ONE_OVER_4PI * R * velocity)
+    GS && (velocity_gradient = -ONE_OVER_4PI * R * velocity_gradient * R')
 
     return potential, velocity, velocity_gradient
 end
 
 @inline kernel_multiplicity(::ConstantSourceNormalDoublet) = 2
+
+#####
+##### vortex ring panel
+#####
+
+struct VortexRing <: AbstractUnrotatedKernel end
+
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+    TF = promote_type(TFT,TFP)
+    corner_vectors = SVector{NS,SVector{3,TF}}(corner - target for corner in panel.vertices)
+    velocity = zero(SVector{3,TF})
+    gradient = zero(SMatrix{3,3,TF,9})
+    
+    # finite core settings
+    finite_core = false
+    core_size = 1e-3
+
+    # evaluate velocity/gradient
+    for i in 1:NS-1
+        r1 = panel.vertices[i] - target
+        r2 = panel.vertices[i+1] - target
+
+        # parameters
+        r1norm = sqrt(r1'*r1)
+        r2norm = sqrt(r2'*r2)
+        r1normr2norm = r1norm*r2norm
+        rcross = cross(r1, r2)
+        rdot = dot(r1, r2)
+        ONE_OVER_4PI = 1/4/pi
+
+        if VS
+            # velocity
+            v = _bound_vortex_velocity(r1norm, r2norm, r1normr2norm, rcross, rdot, finite_core, core_size; epsilon=10*eps())
+            velocity += v
+        end
+        if GS
+            # velocity gradient
+            g = _bound_vortex_gradient(r1, r2, r1norm, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps())
+            gradient += g
+        end
+    end
+
+    # wrap vertex
+    r1 = panel.vertices[NS] - target
+    r2 = panel.vertices[1] - target
+
+    # parameters
+    r1norm = sqrt(r1'*r1)
+    r2norm = sqrt(r2'*r2)
+    r1normr2norm = r1norm*r2norm
+    rcross = cross(r1, r2)
+    rdot = dot(r1, r2)
+    ONE_OVER_4PI = 1/4/pi
+
+    if VS
+        # velocity
+        v = _bound_vortex_velocity(r1norm, r2norm, r1normr2norm, rcross, rdot, finite_core, core_size; epsilon=10*eps())
+        velocity += v
+    end
+    if GS
+        # velocity gradient
+        g = _bound_vortex_gradient(r1, r2, r1norm, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps())
+        gradient += g
+    end
+
+    return zero(TF), velocity, gradient 
+end
+
+function _bound_vortex_velocity(r1norm::TF, r2norm, r1normr2norm, rcross, rdot, finite_core::Bool, core_size::Number; epsilon=10*eps()) where TF
+    # check if evaluation point is colinear with the bound vortex
+    if norm(rcross) < epsilon # colinear if true
+        if isapprox(rdot, -r1normr2norm; atol=epsilon) # at the midpoint, so return zero
+            return zero(SVector{3,TF})
+        elseif rdot <= 0.0 && finite_core # coincident with the filament so use the finite core model
+            r1s, r2s, εs = r1norm^2, r2norm^2, core_size^2
+            f1 = rcross/(r1s*r2s - rdot^2 + εs*(r1s + r2s - 2*r1normr2norm))
+            f2 = (r1s - rdot)/sqrt(r1s + εs) + (r2s - rdot)/sqrt(r2s + εs)
+            velocity = (f1*f2)/(4*pi)
+            return velocity
+        end
+    end
+    
+    # otherwise, use singular kernel
+    f1 = rcross/(r1normr2norm + rdot)
+    f2 = (1/r1norm + 1/r2norm)
+
+    velocity = (f1*f2) * ONE_OVER_4PI
+    
+    return velocity
+end
+
+function _bound_vortex_gradient(r1, r2, r1norm::TF, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps()) where TF
+    # zeta
+    t1 = 1/(r1norm*r2norm + rdot)
+    t2 = 1/r1norm + 1/r2norm
+    z = t1*t2*ONE_OVER_4PI
+
+    # zeta gradient
+    r1norm3 = r1norm^3
+    r2norm3 = r2norm^3
+    t4 = SVector{3,TF}(r1[i]/r1norm^3 + r2[i]/r2norm^3 for i in 1:3)
+    t5 = SVector{3,TF}(r1norm/r2norm*r2[i] + r2norm/r1norm*r1[i] + r1[i] + r2[i] for i in 1:3)
+    zgrad = ONE_OVER_4PI*(-t1*t4 - t2*t5*t1^2)
+
+    # Omega
+    o = cross(r1,r2)
+
+    # Omega gradient
+    ograd = SMatrix{3,3,TF,9}(
+        0.0,# 1,1
+        r1[3]-r2[3], # 2,1
+        r2[2]-r1[2], # 3,1
+        r2[3]-r1[3], # 1,2
+        0.0, # 2,2
+        r1[1]-r2[1], # 3,2
+        r1[2]-r2[2], # 1,3
+        r2[1]-r1[1], # 2,3
+        0.0 # 3,3
+    )
+    gradient = transpose(zgrad * transpose(o)) + z * ograd
+
+    return gradient
+end
+
+@inline kernel_multiplicity(::VortexRing) = 1
