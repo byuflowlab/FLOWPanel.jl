@@ -201,6 +201,8 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 optargs...
                 ) where {T1, T2, T3, T4}
 
+t = @elapsed begin
+
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
@@ -218,16 +220,29 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     normals = _calc_normals(self)
     CPs = _calc_controlpoints(self, normals)
 
+end
+println("Normals and CPs: $(round(t; digits=3)) secs")
+t = @elapsed begin
+
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
+end
+println("G and RHS: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # Solve system of equations
     Gamma = zeros(T, self.ncells-length(elprescribe))
     solver(Gamma, G, RHS; solver_optargs...)
+end
+println("Solver: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # Save solution
     set_solution(self, nothing, Gamma, elprescribe, Uinfs, Das, Dbs)
+end
+println("Set solution: $(round(t; digits=3)) secs")
+
 end
 
 calc_elprescribe(::RigidWakeBody{VortexRing, 2}) = [(1, 0.0)]
@@ -277,6 +292,7 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
                                 optargs...
                                 ) where {T1, T2, T3, T4}
 
+t = @elapsed begin
     T = promote_type(T1, T2, T3, T4)
 
     n = self.ncells
@@ -284,11 +300,14 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
 
     G = zeros(T, n, n)
     Gred = zeros(T, n, n-npres)
+    tGred = zeros(T, n-npres, n)
     Gls = zeros(T, n-npres, n-npres)
     RHS = zeros(T, n)
     RHSls = zeros(T, n-npres)
+end
+println("Least squares allocation: $(round(t; digits=3)) secs")
 
-    _G_U_RHS_leastsquares!(self, G, Gred, Gls, RHS, RHSls,
+    _G_U_RHS_leastsquares!(self, G, Gred, tGred, Gls, RHS, RHSls,
                 Uinfs, CPs, normals, Das, Dbs,
                 elprescribe,
                 args...; optargs...)
@@ -297,13 +316,14 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
 end
 
 function _G_U_RHS_leastsquares!(self::AbstractBody,
-                                G, Gred, Gls, RHS, RHSls,
+                                G, Gred, tGred, Gls, RHS, RHSls,
                                 Uinfs, CPs, normals,
                                 Das, Dbs,
                                 elprescribe::AbstractArray{Tuple{Int, T}};
                                 optargs...
                                 ) where {T<:Number}
 
+t = @elapsed begin
     n = self.ncells
     npres = length(elprescribe)
 
@@ -311,6 +331,8 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
     @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
         "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
+    @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
+        "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
     @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
         "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-npres)x$(n-npres)"
 
@@ -322,6 +344,9 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
 
     # Calculate normal velocity of freestream for boundary condition
     calc_bc_noflowthrough!(RHS, Uinfs, normals)
+end
+println("\tSort and BC: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # -------------- Influence of vortex rings -------------------------
     # Calculate influence of all vortex rings
@@ -334,10 +359,14 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
             # G[i, eli] = 0
         end
     end
+end
+println("\tG calc: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # -------------- Least-squares problem ----------------------------
     # Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
 
+t = @elapsed begin
     # Reduce G: copy G into Gred without the prescribed elements
     prev_eli = 0
     for (i, (eli, elval)) in enumerate(elprescribe)
@@ -350,14 +379,30 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
 
         prev_eli = eli
     end
+end
+println("\tReduce G: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
-    tGred = transpose(Gred)
+    # tGred = transpose(Gred)               # <- Very slow to multiply later on
+    # tGred = collect(transpose(tGred))     # <- Much faster but allocating memory
+    # tGred = permutedims(Gred)             # <- Ditto
+    permutedims!(tGred, Gred, [2, 1])       # <- No memory allocation
+end
+println("\tTranspose: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # RHSls = Gred'*RHS
     LA.mul!(RHSls, tGred, RHS)
+end
+println("\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
     # Gls = Gred'*Gred
     LA.mul!(Gls, tGred, Gred)
+end
+println("\tGls = Gred'*Gred: $(round(t; digits=3)) secs")
+end
+println("Least squares formulation: $(round(t; digits=3)) secs")
 
     return Gls, RHSls
 end

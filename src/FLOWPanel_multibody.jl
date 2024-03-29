@@ -352,7 +352,7 @@ function solve(self::MultiBody{VortexRing, 2},
     CPs = _calc_controlpoints(self, normals)
 
     # Allocate solver memory
-    Gamma, Gammals, G, Gred, Gls, RHS, RHSls = allocate_solver(self, _elprescribe, T)
+    Gamma, Gammals, G, Gred, tGred, Gls, RHS, RHSls = allocate_solver(self, _elprescribe, T)
 
     # Solve the least-squares problem to calculate strengths
     solve!(self, Gamma, Gammals,
@@ -371,16 +371,17 @@ function allocate_solver(self::Union{MultiBody{VortexRing, 2}, RigidWakeBody{Vor
     Gammals = zeros(T, n-npres)
     G = zeros(T, n, n)
     Gred = zeros(T, n, n-npres)
+    tGred = zeros(T, n-npres, n)
     Gls = zeros(T, n-npres, n-npres)
     RHS = zeros(T, n)
     RHSls = zeros(T, n-npres)
 
-    return Gamma, Gammals, G, Gred, Gls, RHS, RHSls
+    return Gamma, Gammals, G, Gred, tGred, Gls, RHS, RHSls
 end
 
 function solve!(self::MultiBody{VortexRing, 2},
                 Gamma, Gammals,
-                G::AbstractMatrix, Gred, Gls, RHS, RHSls,
+                G::AbstractMatrix, Gred, tGred, Gls, RHS, RHSls,
                 normals::AbstractMatrix, CPs::AbstractMatrix,
                 Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix;
                 solver=solve_ludiv!, solver_optargs=(),
@@ -409,7 +410,7 @@ function solve!(self::MultiBody{VortexRing, 2},
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
-    _G_U_RHS!(self, G, Gred, Gls, RHS, RHSls,
+    _G_U_RHS!(self, G, Gred, tGred, Gls, RHS, RHSls,
                         Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
 
     # Solve system of equations
