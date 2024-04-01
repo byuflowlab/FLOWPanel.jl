@@ -198,6 +198,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 Dbs::AbstractMatrix{T3};
                 solver=solve_ludiv!, solver_optargs=(),
                 elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)],
+                GPUArray=Array{promote_type(T1, T2, T3, T4)},
                 optargs...
                 ) where {T1, T2, T3, T4}
 
@@ -226,14 +227,22 @@ t = @elapsed begin
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
-    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe;
+                                                GPUArray=GPUArray, optargs...)
 end
 println("G and RHS: $(round(t; digits=3)) secs")
 t = @elapsed begin
 
     # Solve system of equations
-    Gamma = zeros(T, self.ncells-length(elprescribe))
+    Gamma = GPUArray(undef, self.ncells-length(elprescribe))
     solver(Gamma, G, RHS; solver_optargs...)
+
+    # Port solution back to CPU if solved in GPU
+    if !(GPUArray <: Array)
+        Gamma = Array{T}(Gamma)
+    end
+
+    display(Gamma)
 end
 println("Solver: $(round(t; digits=3)) secs")
 t = @elapsed begin
@@ -289,6 +298,7 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
                                 Dbs::AbstractMatrix{T3},
                                 elprescribe::AbstractArray{Tuple{Int, T4}},
                                 args...;
+                                GPUArray=Array{promote_type(T1, T2, T3, T4)},
                                 optargs...
                                 ) where {T1, T2, T3, T4}
 
@@ -301,22 +311,26 @@ t = @elapsed begin
     G = zeros(T, n, n)
     Gred = zeros(T, n, n-npres)
     tGred = zeros(T, n-npres, n)
-    Gls = zeros(T, n-npres, n-npres)
+    gpuGred = GPUArray(undef, size(Gred))
+    Gls = GPUArray(undef, n-npres, n-npres)
     RHS = zeros(T, n)
-    RHSls = zeros(T, n-npres)
+    RHSls = GPUArray(undef, n-npres)
 end
 println("Least squares allocation: $(round(t; digits=3)) secs")
+t = @elapsed begin
 
-    _G_U_RHS_leastsquares!(self, G, Gred, tGred, Gls, RHS, RHSls,
+    _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                 Uinfs, CPs, normals, Das, Dbs,
                 elprescribe,
                 args...; optargs...)
+end
+println("_G_U_RHS_leastsquares!: $(round(t; digits=3)) secs")
 
     return Gls, RHSls
 end
 
 function _G_U_RHS_leastsquares!(self::AbstractBody,
-                                G, Gred, tGred, Gls, RHS, RHSls,
+                                G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                                 Uinfs, CPs, normals,
                                 Das, Dbs,
                                 elprescribe::AbstractArray{Tuple{Int, T}};
@@ -361,7 +375,6 @@ t = @elapsed begin
     end
 end
 println("\tG calc: $(round(t; digits=3)) secs")
-t = @elapsed begin
 
     # -------------- Least-squares problem ----------------------------
     # Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
@@ -381,28 +394,57 @@ t = @elapsed begin
     end
 end
 println("\tReduce G: $(round(t; digits=3)) secs")
+
+
+    if typeof(gpuGred) <: Array   # Case: CPU arrays
+
 t = @elapsed begin
 
-    # tGred = transpose(Gred)               # <- Very slow to multiply later on
-    # tGred = collect(transpose(tGred))     # <- Much faster but allocating memory
-    # tGred = permutedims(Gred)             # <- Ditto
-    permutedims!(tGred, Gred, [2, 1])       # <- No memory allocation
+        # tGred = transpose(Gred)               # <- Very slow to multiply later on
+        # tGred = collect(transpose(Gred))      # <- Much faster but allocating memory
+        # tGred = permutedims(Gred)             # <- Ditto
+        permutedims!(tGred, Gred, [2, 1])       # <- No memory allocation
+
 end
-println("\tTranspose: $(round(t; digits=3)) secs")
+println("\t\tTranspose: $(round(t; digits=3)) secs")
 t = @elapsed begin
 
-    # RHSls = Gred'*RHS
-    LA.mul!(RHSls, tGred, RHS)
+        # RHSls = Gred'*RHS
+        LA.mul!(RHSls, tGred, RHS)
 end
-println("\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
+println("\t\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
 t = @elapsed begin
 
-    # Gls = Gred'*Gred
-    LA.mul!(Gls, tGred, Gred)
+        # Gls = Gred'*Gred
+        LA.mul!(Gls, tGred, Gred)
 end
 println("\tGls = Gred'*Gred: $(round(t; digits=3)) secs")
+
+    else                          # Case: GPU arrays
+
+t = @elapsed begin
+
+        copyto!(gpuGred, Gred)
+        tGred = transpose(gpuGred)
+
 end
-println("Least squares formulation: $(round(t; digits=3)) secs")
+println("\t\tTranspose: $(round(t; digits=3)) secs")
+t = @elapsed begin
+
+        # RHSls = Gred'*RHS
+        LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
+
+end
+println("\t\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
+t = @elapsed begin
+
+        # Gls = Gred'*Gred
+        LA.mul!(Gls, tGred, gpuGred)
+
+end
+println("\tGls = Gred'*Gred: $(round(t; digits=3)) secs")
+
+    end
 
     return Gls, RHSls
 end

@@ -196,7 +196,8 @@ function calc_Alu!(A::AbstractMatrix{T}) where {T}
     if T<:FD.Dual || T<:RD.TrackedReal  # Automatic differentiation case
 
         Tprimal = T.parameters[T<:FD.Dual ? 2 : 1]
-        Apivot = zeros(Tprimal, size(A))
+        # Apivot = zeros(Tprimal, size(A))
+        Apivot = similar(A, Tprimal)
 
         # LU decomposition
         Alu = calc_Alu!(Apivot, A)
@@ -220,10 +221,12 @@ function calc_Alu(A::AbstractMatrix{T}) where {T}
     if T<:FD.Dual || T<:RD.TrackedReal  # Automatic differentiation case
 
         Tprimal = T.parameters[T<:FD.Dual ? 2 : 1]
-        Apivot = zeros(Tprimal, size(A))
+        # Apivot = zeros(Tprimal, size(A))
+        Apivot = similar(A, Tprimal)
 
     else
-        Apivot = zeros(T, size(A))
+        # Apivot = zeros(T, size(A))
+        Apivot = similar(A, T)
     end
 
     # LU decomposition
@@ -262,7 +265,8 @@ function calc_Avalue(A::AbstractMatrix{T}) where {T}
     if T<:FD.Dual || T<:RD.TrackedReal  # Automatic differentiation case
 
         Tprimal = T.parameters[T<:FD.Dual ? 2 : 1]
-        Avalue = zeros(Tprimal, size(A))
+        # Avalue = zeros(Tprimal, size(A))
+        Avalue = similar(A, Tprimal)
         calc_Avalue!(Avalue, A)
 
         return Avalue
