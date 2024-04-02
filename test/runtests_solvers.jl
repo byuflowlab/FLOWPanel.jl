@@ -93,6 +93,8 @@ solvers_to_test = (
                                 rfl_NDIVS=rfl_NDIVS,
                                 delim=",",
                                 span_NDIVS=span_NDIVS_l,
+                                verify_spline=false,
+                                verify_rflspline=false,
                                 b_low=-1.0, b_up=0.0
                                )
 
@@ -104,6 +106,8 @@ solvers_to_test = (
                                 rfl_NDIVS=rfl_NDIVS,
                                 delim=",",
                                 span_NDIVS=span_NDIVS_r,
+                                verify_spline=false,
+                                verify_rflspline=false,
                                 b_low=1.0, b_up=0.0,
                                )
 

@@ -475,108 +475,102 @@ function _G_Uvortexring!(self::RigidWakeBody,
     end
 
 
-    # Pre-allocate memory for panel calculation
-    tri_out, tricoor, quadcoor, quad_out, lin, ndivscells, cin = gt.generate_getcellt_args!(self.grid)
+    # Build geometric matrix from panel contributions
+    panels = 1:self.ncells
+    chunks = collect(Iterators.partition(panels, max(length(panels) ÷ Threads.nthreads(), 3*Threads.nthreads())))
 
-    # Build geometric matrix: Panels
-    for (pj, Gslice) in enumerate(eachcol(G))
+    Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
 
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
+        # Pre-allocate memory for panel calculation
+        tri_out, tricoor, quadcoor, quad_out, lin, ndivscells, cin = gt.generate_getcellt_args!(self.grid)
 
-        U_vortexring(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                    # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                          optargs...
-                         )
+        # for (pj, Gslice) in enumerate(eachcol(G))
+        for pj in chunk                       # Iterate over panels
+
+            panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                self.grid, pj, lin, ndivscells, cin)
+
+            U_vortexring(
+                              self.grid._nodes,                  # All nodes
+                              panel,                             # Indices of nodes that make this panel
+                              1.0,                               # Unitary strength
+                              CPs,                               # Targets
+                              view(G, :, pj);                    # Velocity of j-th panel on every CP
+                              # Gslice;
+                              dot_with=normals,                  # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+         end
     end
 
-    #=
-    # Back-diagonal correction to avoid matrix singularity in closed geometries.
-    # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
-    # Dynamic Analysis of Engineering Systems"
-
-    println("PROTOTYPE BACK DIAGONAL CORRECTION")
-    # TODO: Remove memory allocation associated with areas
-    areas = calc_areas(self)
-
-    for m in 1:size(G, 2)
-
-        rowi = size(G, 1) + 1 - m
-
-        val = 0
-        for n in 1:size(G, 1)
-            if n != rowi
-
-                val += G[n, m] * areas[n]
-
-            end
-        end
-
-        # G[rowi, m] -= val/areas[rowi]
-        G[rowi, m] = -val/areas[rowi]
-
-    end
-    =#
 
     # Add wake contributions
-    TE = zeros(Int, 2)
-    for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
+    sheddings = 1:self.nsheddings
+    chunks = collect(Iterators.partition(sheddings, max(length(sheddings) ÷ Threads.nthreads(), 3*Threads.nthreads())))
 
-        # Fetch nodes of upper wake panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pi, lin, ndivscells, cin)
+    Threads.@threads for chunk in chunks        # Distribute wake panel iteration among all CPU threads
 
-        # Indicate nodes in the upper shedding edge
-        TE[1] = panel[nia]
-        TE[2] = panel[nib]
-        da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
-        db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
+        # Pre-allocate memory for panel calculation
+        TE = zeros(Int, 2)
+        _tri_out, _tricoor, _quadcoor, _quad_out, _lin, _ndivscells, _cin = gt.generate_getcellt_args!(self.grid)
 
-        U_semiinfinite_horseshoe(
-                          self.grid._nodes,                  # All nodes
-                          TE,                                # Indices of nodes that make the shedding edge
-                          da1, da2, da3,                     # Semi-infinite direction da
-                          db1, db2, db3,                     # Semi-infinite direction db
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          view(G, :, pi);                    # Velocity of upper wake panel on every CP
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                          optargs...
-                         )
+        # for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding))
+        for ei in chunk                          # Iterate over wake-shedding panels
 
-         if pj != -1
-             # Fetch nodes of lower wake panel
-             panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                 self.grid, pj, lin, ndivscells, cin)
+            pi, nia, nib, pj, nja, njb = view(self.shedding, :, ei)
 
-             # Indicate nodes in the lower shedding edge
-             TE[1] = panel[nja]
-             TE[2] = panel[njb]
+            # Fetch nodes of upper wake panel
+            panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
+                                                self.grid, pi, _lin, _ndivscells, _cin)
 
-             U_semiinfinite_horseshoe(
-                               self.grid._nodes,                  # All nodes
-                               TE,                                # Indices of nodes that make the shedding edge
-                               db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
-                               da1, da2, da3,                     # Semi-infinite direction db
-                               1.0,                               # Unitary strength
-                               CPs,                               # Targets
-                               view(G, :, pj);                    # Velocity of lower wake panel on every CP
-                               dot_with=normals,                  # Normal of every CP
-                               offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                               optargs...
-                              )
-         end
+            # Indicate nodes in the upper shedding edge
+            TE[1] = panel[nia]
+            TE[2] = panel[nib]
+            da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
+            db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
+
+            U_semiinfinite_horseshoe(
+                              self.grid._nodes,                  # All nodes
+                              TE,                                # Indices of nodes that make the shedding edge
+                              da1, da2, da3,                     # Semi-infinite direction da
+                              db1, db2, db3,                     # Semi-infinite direction db
+                              1.0,                               # Unitary strength
+                              CPs,                               # Targets
+                              view(G, :, pi);                    # Velocity of upper wake panel on every CP
+                              dot_with=normals,                  # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+             if pj != -1
+                 # Fetch nodes of lower wake panel
+                 panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
+                                                     self.grid, pj, _lin, _ndivscells, _cin)
+
+                 # Indicate nodes in the lower shedding edge
+                 TE[1] = panel[nja]
+                 TE[2] = panel[njb]
+
+                 U_semiinfinite_horseshoe(
+                                   self.grid._nodes,                  # All nodes
+                                   TE,                                # Indices of nodes that make the shedding edge
+                                   db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
+                                   da1, da2, da3,                     # Semi-infinite direction db
+                                   1.0,                               # Unitary strength
+                                   CPs,                               # Targets
+                                   view(G, :, pj);                    # Velocity of lower wake panel on every CP
+                                   dot_with=normals,                  # Normal of every CP
+                                   offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                                   cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                                   optargs...
+                                  )
+             end
+        end
+
     end
 
 end
