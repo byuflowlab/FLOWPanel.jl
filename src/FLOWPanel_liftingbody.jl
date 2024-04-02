@@ -202,8 +202,6 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 optargs...
                 ) where {T1, T2, T3}
 
-t = @elapsed begin
-
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
@@ -221,18 +219,11 @@ t = @elapsed begin
     normals = _calc_normals(self)
     CPs = _calc_controlpoints(self, normals)
 
-end
-println("Normals and CPs: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe;
                                                 GPUArray=GPUArray,
                                                 optargs...)
-end
-println("G and RHS: $(round(t; digits=3)) secs")
-t = @elapsed begin
 
     # Solve system of equations
     Gamma = GPUArray(undef, self.ncells-length(elprescribe))
@@ -243,14 +234,8 @@ t = @elapsed begin
         Gamma = Array{T}(Gamma)
     end
 
-end
-println("Solver: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
     # Save solution
     set_solution(self, nothing, Gamma, elprescribe, Uinfs, Das, Dbs)
-end
-println("Set solution: $(round(t; digits=3)) secs")
 
 end
 
@@ -302,7 +287,6 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
                                 optargs...
                                 ) where {T1, T2, T3, T4}
 
-t = @elapsed begin
     T = promote_type(T1, T2, T3, T4)
 
     n = self.ncells
@@ -316,16 +300,10 @@ t = @elapsed begin
     RHS = zeros(T, n)
     RHSls = GPUArray(undef, n-npres)
 
-end
-println("Least squares allocation: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
     _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                 Uinfs, CPs, normals, Das, Dbs,
                 elprescribe,
                 args...; optargs...)
-end
-println("_G_U_RHS_leastsquares!: $(round(t; digits=3)) secs")
 
     return Gls, RHSls
 end
@@ -338,7 +316,6 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
                                 optargs...
                                 ) where {T<:Number}
 
-t = @elapsed begin
     n = self.ncells
     npres = length(elprescribe)
 
@@ -359,9 +336,6 @@ t = @elapsed begin
 
     # Calculate normal velocity of freestream for boundary condition
     calc_bc_noflowthrough!(RHS, Uinfs, normals)
-end
-println("\tSort and BC: $(round(t; digits=3)) secs")
-t = @elapsed begin
 
     # -------------- Influence of vortex rings -------------------------
     # Calculate influence of all vortex rings
@@ -374,13 +348,10 @@ t = @elapsed begin
             # G[i, eli] = 0
         end
     end
-end
-println("\tG calc: $(round(t; digits=3)) secs")
 
     # -------------- Least-squares problem ----------------------------
     # Gred = view(G, :, vcat(1:elprescribe_index-1, elprescribe_index+1:size(G, 2)))
 
-t = @elapsed begin
     # Reduce G: copy G into Gred without the prescribed elements
     prev_eli = 0
     for (i, (eli, elval)) in enumerate(elprescribe)
@@ -393,57 +364,31 @@ t = @elapsed begin
 
         prev_eli = eli
     end
-end
-println("\tReduce G: $(round(t; digits=3)) secs")
 
-
+    # Produce least-squares matrix
     if typeof(gpuGred) <: Array   # Case: CPU arrays
-
-t = @elapsed begin
 
         # tGred = transpose(Gred)               # <- Very slow to multiply later on
         # tGred = collect(transpose(Gred))      # <- Much faster but allocating memory
         # tGred = permutedims(Gred)             # <- Ditto
         permutedims!(tGred, Gred, [2, 1])       # <- No memory allocation
 
-end
-println("\t\tTranspose: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
         # RHSls = Gred'*RHS
         LA.mul!(RHSls, tGred, RHS)
-end
-println("\t\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
-t = @elapsed begin
 
         # Gls = Gred'*Gred
         LA.mul!(Gls, tGred, Gred)
-end
-println("\tGls = Gred'*Gred: $(round(t; digits=3)) secs")
 
     else                          # Case: GPU arrays
-
-t = @elapsed begin
 
         copyto!(gpuGred, Gred)
         tGred = transpose(gpuGred)
 
-end
-println("\t\tTranspose: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
         # RHSls = Gred'*RHS
         LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
 
-end
-println("\t\tRHSls = Gred'*RHS: $(round(t; digits=3)) secs")
-t = @elapsed begin
-
         # Gls = Gred'*Gred
         LA.mul!(Gls, tGred, gpuGred)
-
-end
-println("\tGls = Gred'*Gred: $(round(t; digits=3)) secs")
 
     end
 
