@@ -474,20 +474,12 @@ function _G_Uvortexring!(self::RigidWakeBody,
               " got $(size(normals)), expected (3, $M).")
     end
 
+
     # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
+    tri_out, tricoor, quadcoor, quad_out, lin, ndivscells, cin = gt.generate_getcellt_args!(self.grid)
 
     # Build geometric matrix: Panels
     for (pj, Gslice) in enumerate(eachcol(G))
-    # eachcolG = eachcol(G)
-    # Threads.@threads for pj in axes(eachcolG, 1)
-    #     Gslice = eachcolG[pj]
 
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                             self.grid, pj, lin, ndivscells, cin)
@@ -497,7 +489,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
+                          # view(G, :, pj);                    # Velocity of j-th panel on every CP
                           Gslice;
                           dot_with=normals,                  # Normal of every CP
                           offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -537,9 +529,6 @@ function _G_Uvortexring!(self::RigidWakeBody,
     # Add wake contributions
     TE = zeros(Int, 2)
     for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
-    # eachcolsheddings = eachcol(self.shedding)
-    # Threads.@threads for ei in axes(eachcolsheddings, 1) # Iterate over wake-shedding panels
-    #     (pi, nia, nib, pj, nja, njb) = eachcolsheddings[ei]
 
         # Fetch nodes of upper wake panel
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
