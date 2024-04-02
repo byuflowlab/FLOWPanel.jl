@@ -197,10 +197,10 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3};
                 solver=solve_ludiv!, solver_optargs=(),
-                elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)],
-                GPUArray=Array{promote_type(T1, T2, T3, T4)},
+                elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
+                GPUArray=Array{promote_type(T1, T2, T3)},
                 optargs...
-                ) where {T1, T2, T3, T4}
+                ) where {T1, T2, T3}
 
 t = @elapsed begin
 
@@ -215,7 +215,7 @@ t = @elapsed begin
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
-    T = promote_type(T1, T2, T3, T4)
+    T = promote_type(T1, T2, T3)
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -242,7 +242,6 @@ t = @elapsed begin
         Gamma = Array{T}(Gamma)
     end
 
-    display(Gamma)
 end
 println("Solver: $(round(t; digits=3)) secs")
 t = @elapsed begin
@@ -484,6 +483,9 @@ function _G_Uvortexring!(self::RigidWakeBody,
 
     # Build geometric matrix: Panels
     for (pj, Gslice) in enumerate(eachcol(G))
+    # eachcolG = eachcol(G)
+    # Threads.@threads for pj in axes(eachcolG, 1)
+    #     Gslice = eachcolG[pj]
 
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                             self.grid, pj, lin, ndivscells, cin)
@@ -533,6 +535,9 @@ function _G_Uvortexring!(self::RigidWakeBody,
     # Add wake contributions
     TE = zeros(Int, 2)
     for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
+    # eachcolsheddings = eachcol(self.shedding)
+    # Threads.@threads for ei in axes(eachcolsheddings, 1) # Iterate over wake-shedding panels
+    #     (pi, nia, nib, pj, nja, njb) = eachcolsheddings[ei]
 
         # Fetch nodes of upper wake panel
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
