@@ -1,7 +1,7 @@
 name = "FLOWPanel"
 uuid = "6be8c882-484d-4309-b349-d23112750151"
 author = ["Eduardo Alvarez <Edo.AlvarezR@gmail.com>"]
-version = "1.0.0"
+version = "1.1.0"
 
 [deps]
 Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
@@ -12,7 +12,7 @@ GeometricTools = "83792f5e-c6a1-11e8-2e0a-93511f02ae5f"
 ImplicitAD = "e7cbb90b-9b31-4eb2-a8c8-45099c074ee1"
 
 [compat]
-julia = "1"
+julia = "1.8"
 Dierckx = "0.5"
 GeometricTools = "2"
 
