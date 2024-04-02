@@ -228,7 +228,8 @@ t = @elapsed begin
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe;
-                                                GPUArray=GPUArray, optargs...)
+                                                GPUArray=GPUArray,
+                                                optargs...)
 end
 println("G and RHS: $(round(t; digits=3)) secs")
 t = @elapsed begin
@@ -314,6 +315,7 @@ t = @elapsed begin
     Gls = GPUArray(undef, n-npres, n-npres)
     RHS = zeros(T, n)
     RHSls = GPUArray(undef, n-npres)
+
 end
 println("Least squares allocation: $(round(t; digits=3)) secs")
 t = @elapsed begin

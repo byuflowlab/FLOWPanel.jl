@@ -27,24 +27,26 @@ solvers_to_test = Any[
                   ]
 
 # Add GPU test cases if GPU hardware is available
+# NOTE: Here we test with Float64 instead of Float32 since the later leads to
+#       and error larger than the tolerance
 if CUDA.functional()
 
     using CUDA
-    push!(solvers_to_test, ( "LUdiv + GPU (CUDA)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float32}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (CUDA)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float64}, solver_optargs=()) ) )
 
 end
 
 if Metal.functional()
 
     using Metal
-    push!(solvers_to_test, ( "LUdiv + GPU (Metal)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float32}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (Metal)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
 
 end
 
 if AMDGPU.functional()
 
     using AMDGPU
-    push!(solvers_to_test, ( "LUdiv + GPU (AMD)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float32}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (AMD)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float64}, solver_optargs=()) ) )
 
 end
 
@@ -179,7 +181,7 @@ end
             Derr = abs(D-Dref)/Dref
 
             if verbose
-                @printf "%s%19.19s %-7.1f %-7.1f %4.2f seconds\t%4.3g\t%4.3g﹪\n" "\t"^(v_lvl+1) lbl L D t Lerr*100 Derr*100
+                @printf "%s%19.19s %-7.1f %-7.1f %4.2f seconds\t%4.3g﹪\t%4.3g﹪\n" "\t"^(v_lvl+1) lbl L D t Lerr*100 Derr*100
             end
 
             Lres = Lerr <= 0.005
