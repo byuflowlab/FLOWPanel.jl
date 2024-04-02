@@ -8,6 +8,10 @@ import Printf: @printf
 import CSV
 import DataFrames: DataFrame
 
+import CUDA
+import Metal
+import AMDGPU
+
 import FLOWPanel as pnl
 
 try
@@ -17,10 +21,33 @@ catch
 end
 v_lvl = 0
 
-solvers_to_test = (
+solvers_to_test = Any[
                         ( "Backslash", (solver=pnl.solve_backslash!, solver_optargs=()) ),
                         ( "LUdiv", (solver=pnl.solve_ludiv!, solver_optargs=()) ),
-                  )
+                  ]
+
+# Add GPU test cases if GPU hardware is available
+if CUDA.functional()
+
+    using CUDA
+    push!(solvers_to_test, ( "LUdiv + GPU (CUDA)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float32}, solver_optargs=()) ) )
+
+end
+
+if Metal.functional()
+
+    using Metal
+    push!(solvers_to_test, ( "LUdiv + GPU (Metal)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float32}, solver_optargs=()) ) )
+
+end
+
+if AMDGPU.functional()
+
+    using AMDGPU
+    push!(solvers_to_test, ( "LUdiv + GPU (AMD)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float32}, solver_optargs=()) ) )
+
+end
+
 
 
 @testset verbose=verbose "Solver Tests 2" begin
@@ -110,8 +137,8 @@ solvers_to_test = (
 
     if verbose
         println()
-        @printf "%s%15.15s %-7s %-7s %-12s\t%-10s\t%-10s\n" "\t"^(v_lvl+1) "Solver" "Lift" "Drag" "Time" "L error" "D error"
-        @printf "%s%15.15s %-7.1f %-7.1f %-12s\t%-10s\t%-10s\n" "\t"^(v_lvl+1) "Reference" Lref Dref "-" "-" "-"
+        @printf "%s%19.19s %-7s %-7s %-12s\t%-10s\t%-10s\n" "\t"^(v_lvl+1) "Solver" "Lift" "Drag" "Time" "L error" "D error"
+        @printf "%s%19.19s %-7.1f %-7.1f %-12s\t%-10s\t%-10s\n" "\t"^(v_lvl+1) "Reference" Lref Dref "-" "-" "-"
     end
 
     for (lbl, (optargs)) in solvers_to_test
@@ -152,7 +179,7 @@ solvers_to_test = (
             Derr = abs(D-Dref)/Dref
 
             if verbose
-                @printf "%s%15.15s %-7.1f %-7.1f %4.2f seconds\t%4.3g\t%4.3g﹪\n" "\t"^(v_lvl+1) lbl L D t Lerr*100 Derr*100
+                @printf "%s%19.19s %-7.1f %-7.1f %4.2f seconds\t%4.3g\t%4.3g﹪\n" "\t"^(v_lvl+1) lbl L D t Lerr*100 Derr*100
             end
 
             Lres = Lerr <= 0.005
