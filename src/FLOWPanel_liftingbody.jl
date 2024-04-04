@@ -868,6 +868,127 @@ function _phi!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}, ar
 end
 
 
+
+
+################################################################################
+# COMMON FUNCTIONS
+################################################################################
+"""
+    `calc_shedding(grid::GridTriangleSurface{Meshes.SimpleMesh},
+trailingedge::Matrix; tolerance=1e2*eps())`
+
+Given an unstructured `grid` and a collection of points (line) `trailingedge`,
+it finds the points in `grid` that are closer than `tolerance` to the line,
+and automatically builds a `shedding` matrix that can be used to shed the wake
+from this trailing edge.
+
+Note: It is important that the points in `trailingedge` have been previously
+    sorted to be contiguous to each other, otherwise the resulting `shedding`
+    might have panels that are not contiguous to each other, fail to recognize
+    panels that are at the trailing edge, or unphysically large trailing
+    vortices.
+"""
+function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+                            tolerance=1e2*eps()) where {G<:gt.Meshes.SimpleMesh}
+
+    nodes = grid._nodes
+    topology = grid._halfedgetopology
+    connec = grid.orggrid.topology.connec
+
+    # Identify the nodes that are on the TE line
+    TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
+    TEindices = [nodei for (nodei, pointi) in TEindices]
+
+    # All node pairs that could form an edge at the TE
+    paircandidates = zip(view(TEindices, 1:length(TEindices)-1), view(TEindices, 2:length(TEindices)))
+
+    # All node pairs that actually form an edge at the TE
+    pairs = [pair for pair in paircandidates if haskey(topology.edge4pair, pair)]
+
+    # Fetch all the first halfedge of each edges (node pairs) along the TE
+    halfedges = [gt.Meshes.half4pair(topology, pair) for pair in pairs]
+
+    # Build shedding matrix
+    shedding = zeros(Int, 6, length(halfedges))
+
+    for (ei, halfedge) in enumerate(halfedges)
+
+        pair = pairs[ei]
+
+        # pi is the panel associated with this half edge
+        # pj is the panel associated with the other half
+
+        # Case: Single-sided edge
+        if isnothing(halfedge.elem) || isnothing(halfedge.half.elem)
+
+            if isnothing(halfedge.half.elem)
+                pi = halfedge.elem
+            else
+                pi = halfedge.half.elem
+            end
+
+            # Declare the other half as inexistent
+            pj = -1
+
+        # Case: Two-sided edge
+        else
+
+            # Identify which panel is "on top" and which "bottom" by matching
+            # the order of the node pair
+            inds1 = connec[halfedge.elem].indices
+            inds2 = connec[halfedge.half.elem].indices
+
+            if (
+                    (inds1[1]==pair[1] && inds1[2]==pair[2])
+                    ||
+                    (inds1[2]==pair[1] && inds1[3]==pair[2])
+                    ||
+                    (inds1[3]==pair[1] && inds1[1]==pair[2])
+                )
+
+                pi = halfedge.elem
+                pj = halfedge.half.elem
+
+            elseif (
+                    (inds2[1]==pair[1] && inds2[2]==pair[2])
+                    ||
+                    (inds2[2]==pair[1] && inds2[3]==pair[2])
+                    ||
+                    (inds2[3]==pair[1] && inds2[1]==pair[2])
+                )
+
+                pi = halfedge.half.elem
+                pj = halfedge.elem
+
+            else
+                error("Logic error: Could not match panel to node pair")
+            end
+
+        end
+
+        # Nodes of first half
+        nia = findfirst(globindex -> globindex==pair[2], connec[pi].indices)  # Local-index of the first node
+        nib = findfirst(globindex -> globindex==pair[1], connec[pi].indices)  # Local-index of the second node
+
+        # Nodes of other half
+        if pj != -1
+            nja = findfirst(globindex -> globindex==pair[1], connec[pj].indices)  # Local-index of the second node
+            njb = findfirst(globindex -> globindex==pair[2], connec[pj].indices)  # Local-index of the first node
+        else
+            nja = njb = -1
+        end
+
+        shedding[:, ei] .= (pi, nia, nib, pj, nja, njb)
+
+    end
+
+    return shedding
+end
+
+
+
+
+
 ##### INTERNAL FUNCTIONS  ######################################################
 function _get_wakestrength_mu(self::RigidWakeBody, i; stri=1)
     strength1 = self.strength[self.shedding[1, i], stri]

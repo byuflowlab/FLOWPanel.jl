@@ -54,6 +54,9 @@ const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 # Identity matrix
 const Im = Array(1.0I, 3, 3)
 
+# Shedding matrix for a RigidWakeBody without shedding
+const noshedding = zeros(Int, 6, 0)
+
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
