@@ -32,21 +32,21 @@ solvers_to_test = Any[
 if CUDA.functional()
 
     using CUDA
-    push!(solvers_to_test, ( "LUdiv + GPU (CUDA)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float64}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (CUDA 64)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float64}, solver_optargs=()) ) )
 
 end
 
 if Metal.functional()
 
     using Metal
-    push!(solvers_to_test, ( "LUdiv + GPU (Metal)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (Metal 64)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
 
 end
 
 if AMDGPU.functional()
 
     using AMDGPU
-    push!(solvers_to_test, ( "LUdiv + GPU (AMD)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float64}, solver_optargs=()) ) )
+    push!(solvers_to_test, ( "LUdiv + GPU (AMD 64)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float64}, solver_optargs=()) ) )
 
 end
 

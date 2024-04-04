@@ -25,8 +25,10 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
 AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+GeoIO = "f5a160d5-e41d-4189-8b61-d57781c419e3"
 
 [targets]
 test = ["Test", "Printf", "ForwardDiff",
         "CSV", "DataFrames",
-        "CUDA", "Metal", "AMDGPU"]
+        "CUDA", "Metal", "AMDGPU",
+        "GeoIO"]
