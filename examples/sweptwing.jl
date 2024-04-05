@@ -276,10 +276,10 @@ println("CD error:\t$(round(abs(CD-CDexp)/CDexp*100, digits=2))%")
 
 if save_outputs
     str = """
-    |           | Experimental  | FLOWPanel                 | Error |
-    | --------: | :-----------: | :-----------------------: | :---- |
-    | \$C_L\$   | 0.238         | $(round(CL, digits=5))    | $(round(abs(CL-CLexp)/CLexp*100, digits=3))% |
-    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=3))% |
+    |           | Experimental  | FLOWPanel                 | Error | `OPENVSP` |
+    | --------: | :-----------: | :-----------------------: | :---- |  :----: |
+    | \$C_L\$   | 0.238         | $(round(CL, digits=3))    | $(round(abs(CL-CLexp)/CLexp*100, digits=1))% | *`0.257`* |
+    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=1))% | *`0.0033`* |
     """
 
     open(joinpath(outdata_path, run_name*"-CLCD.md"), "w") do f

@@ -187,23 +187,33 @@ nondim = 0.5*rho*magVinf^2*b^2/ar   # Normalization factor
 CLs = sign.(dot.(Ls, Lhats)) .* norm.(Ls) / nondim
 CDs = sign.(dot.(Ds, Dhats)) .* norm.(Ds) / nondim
 
+# VSPAERO CL and CD
+data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
+alphas_vsp = [val for val in data_vsp[1, 2:end]]
+CDi_vsp = [val for val in data_vsp[3, 2:end]]
+CDtot_vsp = [val for val in data_vsp[6, 2:end]]
+CL_vsp = [val for val in data_vsp[11, 2:end]]
+CMy_vsp = [val for val in data_vsp[16, 2:end]]
+
 fig5 = plt.figure(figsize=[7*2, 5*1*0.75]*2/3)
 axs = fig5.subplots(1, 2)
 
 ax = axs[1]
 ax.plot(alphas_web, CLs_web, "-ok", label="Experimental")
-ax.plot(AOAs, CLs, ":^", label="FLOWPanel", color="steelblue", markersize=8)
+ax.plot(alphas_vsp, CL_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+ax.plot(AOAs, CLs, ":^", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
 
 ylims = [0, 0.8]
 ax.set_ylim(ylims)
 ax.set_yticks(ylims[1]:0.2:ylims[end])
 ax.set_ylabel(L"Lift coefficient $C_L$")
 
-ax.legend(loc="lower right", frameon=false, fontsize=10)
+ax.legend(loc="lower right", fontsize=10, frameon=false, reverse=true)
 
 ax = axs[2]
 ax.plot(alphas_web, CDs_web, "-ok", label="Experimental")
-ax.plot(AOAs, CDs, ":^", label="FLOWPanel", color="steelblue", markersize=8)
+ax.plot(alphas_vsp, CDtot_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+ax.plot(AOAs, CDs, ":^", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
 
 ylims = [0, 0.04]
 ax.set_ylim(ylims)
@@ -234,7 +244,8 @@ Cns = sign.(dot.(yaws, nhats)) .* norm.(yaws) / nondim
 fig6 = plt.figure(figsize=[7*1, 5*1*0.75]*2/3)
 ax = fig6.gca()
 
-ax.plot(AOAs, Cms, ":o", label="FLOWPanel", color="steelblue", markersize=8)
+ax.plot(alphas_vsp, CMy_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+ax.plot(AOAs, Cms, ":o", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
 
 xlims = [0, 16]
 xticks = xlims[1]:2:xlims[2]
@@ -251,7 +262,7 @@ ax.set_ylabel(L"Pitching moment $C_m$")
 ax.spines["right"].set_visible(false)
 ax.spines["top"].set_visible(false)
 
-ax.legend(loc="best", frameon=false, fontsize=10)
+ax.legend(loc="best", frameon=false, fontsize=10, reverse=true)
 
 fig6.tight_layout()
 

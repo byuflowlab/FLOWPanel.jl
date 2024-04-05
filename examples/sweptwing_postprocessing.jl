@@ -28,6 +28,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
                         stl=".-", xlims=[-0.1, 1.1], ylims=[1.0, -0.7],
                         plot_optargs=(label="FLOWPanel",),
                         plot_exp=true, lbl_exp="Experimental",
+                        plot_vsp=true, lbl_vsp="VSPAERO",
                         out=[])
 
     npos = length(spanposs)
@@ -56,6 +57,34 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
             end
         end
 
+
+            println(spanpos)
+
+        # Plot VSPAERO
+        if plot_vsp && AOA == 4.2
+
+            rowstart =  spanpos==0.041 ? 1139 :
+                        spanpos==0.163 ? 1169 :
+                        spanpos==0.245 ? 1184 :
+                        spanpos==0.510 ? 1199 :
+                        nothing
+
+            if !isnothing(rowstart)
+
+                data_vsp_cp = CSV.read(vsp_file, DataFrame; skipto=rowstart+7, limit=1)
+                data_vsp_loc = CSV.read(vsp_file, DataFrame; skipto=rowstart+12, limit=3)
+
+                cp_vsp = [val for val in data_vsp_cp[1, 2:end]]
+                x_vsp = [val for val in data_vsp_loc[1, 2:end]]
+                x_vsp .-= minimum(x_vsp)
+                x_vsp ./= maximum(x_vsp) .- minimum(x_vsp)
+
+                ax.plot(x_vsp, cp_vsp, "-",
+                        color=color_vsp, alpha=alpha_vsp, label=lbl_vsp, linewidth=1, )
+
+            end
+        end
+
         # Position of grid columns that are the closest to target
         points, Cps = pnl.slicefield(body, controlpoints, "Cp", spanpos*b/2, spandirection, false)
 
@@ -63,7 +92,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         chordposs .-= minimum(chordposs)
 
         # Plot FLOWPanel
-        ax.plot(chordposs*xscaling, Cps, stl; plot_optargs...)
+        ax.plot(chordposs*xscaling, Cps, stl; clip_on=false, plot_optargs...)
 
         if xlims!=nothing; ax.set_xlim(xlims); end;
         if ylims!=nothing; ax.set_ylim(ylims); end;
@@ -79,7 +108,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         end
 
         if axi==1
-            ax.legend(loc="best", frameon=false)
+            ax.legend(loc="best", fontsize=10, frameon=false, reverse=true)
         end
 
         ax.spines["right"].set_visible(false)
@@ -162,7 +191,7 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
         end
 
         if axi==1
-            ax.legend(loc="best", frameon=false)
+            ax.legend(loc="best", fontsize=10, frameon=false, reverse=true)
         end
 
         ax.spines["right"].set_visible(false)
@@ -191,6 +220,7 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
                         stl=".-", xlims=[-1, 1], ylims=nothing,
                         plot_optargs=(label="FLOWPanel",),
                         plot_exp=true, lbl_exp="Experimental", AOA=nothing,
+                        plot_vsp=true, lbl_vsp="VSPAERO",
                         out=[])
 
     # Calculate sectional force along the span
@@ -225,6 +255,34 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
 
         end
 
+        # Plot VSPAERO
+        if plot_vsp
+
+            rowstart =  AOA==2.1 ? 482 :
+                        AOA==4.2 ? 544 :
+                        AOA==6.3 ? 606 :
+                        AOA==8.4 ? 668 :
+                        nothing
+
+            if !isnothing(rowstart)
+
+                data_vsp = CSV.read(vsp_file, DataFrame; skipto=rowstart+20, limit=24)
+
+                ypos_vsp = [val for val in data_vsp[1, 2:end]]
+                cl_vsp = [val for val in data_vsp[9, 2:end]]
+                cd_vsp = [val for val in data_vsp[7, 2:end]]
+
+                ypos_vsp .-= 0.5
+                ypos_vsp .*= 2.0
+
+                println("RABBIT")
+
+                ax.plot(ypos_vsp, pi==1 ? cl_vsp : cd_vsp, "-",
+                        color=color_vsp, alpha=alpha_vsp*0.75, label=lbl_vsp, linewidth=1)
+
+            end
+        end
+
         # Plot FLOWPanel
         ax.plot(spanpos*2/b, lds[pi, :]*yscalings[pi], stl; plot_optargs...)
 
@@ -238,7 +296,7 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
         ax.set_ylabel("Sectional "*[L"lift $\ell$", L"drag $d$", L"sideslip $s$"][pi]*" (N/m)")
 
         if axi==1
-            ax.legend(loc="best", frameon=false)
+            ax.legend(loc="lower center", fontsize=10, frameon=false, reverse=true)
         end
 
         ax.spines["right"].set_visible(false)
@@ -252,7 +310,8 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
 end
 
 function plot_loading(multibody::pnl.MultiBody, args...; _fig=nothing, _axs=nothing,
-                        plots_optargs=[(label="FLOWPanel",) for i in 1:10], plot_exp=true,
+                        plots_optargs=[(label="FLOWPanel",) for i in 1:10],
+                        plot_exp=true, plot_vsp=true,
                         optargs...)
 
     fig, axs = _fig, _axs
@@ -260,7 +319,8 @@ function plot_loading(multibody::pnl.MultiBody, args...; _fig=nothing, _axs=noth
     for (bi, body) in enumerate(multibody.bodies)
 
         fig, axs = plot_loading(body, args...; optargs..., _fig=fig, _axs=axs,
-                                    plot_optargs=plots_optargs[bi], plot_exp=plot_exp*(bi==1))
+                                    plot_optargs=plots_optargs[bi],
+                                    plot_exp=plot_exp*(bi==1), plot_vsp=plot_vsp*(bi==1))
     end
 
     return fig, axs
@@ -391,3 +451,8 @@ cts_web = mapslices(x-> x .+ cts_web[1, :], cts_web[2:end, :]; dims=2)
 # Integrated coefficients from Table 4B
 CLs_web = [0.121, 0.238, 0.350, 0.456, 0.559]
 CDs_web = [nothing, 0.005, 0.012, 0.022, 0.035]
+
+# File with VSP solution
+vsp_file = joinpath(pnl.examples_path, "data", "weber_vspaero.csv")
+color_vsp = "tab:orange"
+alpha_vsp = 0.3
