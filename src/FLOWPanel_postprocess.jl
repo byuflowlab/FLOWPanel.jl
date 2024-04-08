@@ -657,6 +657,7 @@ function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody,
     e1 = zeros(3)
     e2 = zeros(3)
     grad = zeros(3)
+    vtx = zeros(Int, 3)
 
     # Use CPoffset as a flag to know if the normals are flipped into the
     # body. If that's the case, then it flips the sign of the nodal quantity
@@ -664,9 +665,9 @@ function calcfield_Ugradmu_node!(out::AbstractMatrix, body::AbstractBody,
     gamma_sign = (-1)^(body.CPoffset<0)
 
     # Compute cell-based gradient for each cell
-    for i = 1:prod(body.grid._ndivscells[1:2])
+    for i = 1:body.ncells
         # Convert cell vertices to a local x,y coordinate frame
-        vtx = gt.get_cell(body.grid, i)
+        vtx .= gt.get_cell(body.grid, i)
         gt.project_3d_2d!(t2, t3, e1, e2,
                           nodes[:, vtx[1]],
                           nodes[:, vtx[2]],
