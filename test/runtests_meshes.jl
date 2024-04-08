@@ -17,7 +17,7 @@ end
 v_lvl = 0
 
 
-@testset verbose=verbose "Meshes test" begin
+@testset verbose=verbose "Meshes.jl test" begin
 
     if verbose
         println("\n"*"\t"^(v_lvl)*"Meshes.jl integration test")
@@ -132,7 +132,8 @@ v_lvl = 0
     Us = pnl.calcfield_U(body, body)
 
     # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-    UDeltaGamma = pnl.calcfield_Ugradmu(body)
+    # UDeltaGamma = pnl.calcfield_Ugradmu(body)
+    UDeltaGamma = pnl.calcfield_Ugradmu_cell(body)
 
     # Add both velocities together
     pnl.addfields(body, "Ugradmu", "U")
@@ -151,11 +152,29 @@ v_lvl = 0
     LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
 
 
-    # Save strengths solved on structured grid as source of truth
+    # ----------------- OUTPUTS TO COMPARE -------------------------------------
+    # Panel strengths
     strength_str = [deepcopy(wing.strength) for wing in bodies]
 
+    # Lift and drag
     Lstr = pnl.norm(LDS[:, 1])
     Dstr = pnl.norm(LDS[:, 2])
+
+    # List of every neighbor of every cell (converted to linear index)
+    neighbors_str = [[[ pnl.gt.neighbor(b.grid, ni, ci; preserveEdge=true)
+                                                                for ni in 1:3]
+                                                                for ci in 1:b.ncells]
+                                                                for b in body.bodies]
+
+    lincs = [LinearIndices( Tuple(collect( 1:(d != 0 ? d : 1)   for d in b.grid._ndivscells )) )
+                                                                for b in body.bodies]
+
+    neighbors_str = [[[ prod(ncoor .!= 0) ? linc[ncoor...] : 0  for ncoor in neighbors]
+                                                                for neighbors in cellneigh]
+                                                                for (cellneigh, linc) in zip(neighbors_str, lincs)]
+
+    # Surface velocity from ∇𝜇 scheme
+    Ugradmu_str = deepcopy(collect.(pnl.get_field(body, "Ugradmu")["field_data"]))
 
 
     # --------------------------------------------------------------------------
@@ -173,6 +192,11 @@ v_lvl = 0
     spandir1         = [0, 1, 0]
     spandir2         = [0, -1, 0]
 
+    # Whether to flip the normals of each mesh (the user must check that the
+    # normals that get outputed with `save(body, ...; debug=true)` are pointing
+    # out of the body)
+    flip1            = false
+    flip2            = true
 
     # ----------------- GENERATE BODY ------------------------------------------
     # Read VTK as a Meshes object
@@ -198,7 +222,7 @@ v_lvl = 0
     shedding = pnl.calc_shedding(grid1, trailingedge; tolerance=0.001*span)
 
     # Generate paneled body
-    wing1 = bodytype(grid1, shedding)
+    wing1 = bodytype(grid1, shedding; CPoffset=(-1)^flip1 * 1e-14)
 
     # Repeat the same process for the other side of the wing
     msh2 = GeoIO.load(meshfile2)
@@ -214,7 +238,7 @@ v_lvl = 0
     span = spantips[2] - spantips[1]
     shedding = pnl.calc_shedding(grid2, trailingedge; tolerance=0.001*span)
 
-    wing2 = bodytype(grid2, shedding)
+    wing2 = bodytype(grid2, shedding; CPoffset=(-1)^flip2 * 1e-14)
 
     # Put both sides together to make a wing with symmetric discretization
     bodies = [wing1, wing2]
@@ -225,18 +249,51 @@ v_lvl = 0
     # ----------------- CALL SOLVER --------------------------------------------
     pnl.solve(body, Uinfs, Das, Dbs)
 
-    # Save strengths solved on structured grid as source of truth
+
+    # ----------------- POST PROCESSING ----------------------------------------
+    # Calculate surface velocity U on the body
+    Us = pnl.calcfield_U(body, body)
+
+    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+    # UDeltaGamma = pnl.calcfield_Ugradmu(body)
+    UDeltaGamma = pnl.calcfield_Ugradmu_cell(body)
+
+    # Add both velocities together
+    pnl.addfields(body, "Ugradmu", "U")
+
+    # Calculate pressure coefficient (based on U + U_∇μ)
+    Cps = pnl.calcfield_Cp(body, magVinf)
+
+    # Calculate the force of each panel (based on Cp)
+    Fs = pnl.calcfield_F(body, magVinf, rho)
+
+    # Calculate total force of the vehicle decomposed as lift, drag, and sideslip
+    LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
+
+
+    # ----------------- OUTPUTS TO COMPARE -------------------------------------
+    # Panel strengths
     strength_uns = [deepcopy(wing.strength) for wing in bodies]
 
-    # TODO: Postpprocess to obtain L and D
+    # Lift and drag
     Luns = pnl.norm(LDS[:, 1])
     Duns = pnl.norm(LDS[:, 2])
+
+    # List of every neighbor of every cell
+    neighbors_uns = [[[pnl.gt.neighbor(b.grid, ni, ci; preserveEdge=true)[1] for ni in 1:3]
+                                                                             for ci in 1:b.ncells]
+                                                                             for b in body.bodies]
+
+    # Surface velocity from ∇𝜇 scheme
+    Ugradmu_uns = deepcopy(collect.(pnl.get_field(body, "Ugradmu")["field_data"]))
+
+    bodies_uns = [deepcopy(b) for b in bodies]
 
     # --------------------------------------------------------------------------
     # --------------- COMPARE SOLUTIONS ----------------------------------------
     # --------------------------------------------------------------------------
 
-    # Test error
+    # Test solution error
     for wi in 1:2
 
         str = strength_str[wi]
@@ -248,5 +305,48 @@ v_lvl = 0
 
         @test prod(isapprox.(uns, str, atol=1e-10))
     end
+
+    # Test neighborhood of every cell
+    @test begin
+        prod(
+            prod(
+                prod(
+                    ni in neighbors_str[bi][ci] for ni in neighbors_uns[bi][ci]
+                    ) for ci in 1:body.ncells
+                ) for (bi, body) in enumerate(body.bodies)
+            )
+    end
+
+    #= Uncomment this to debug
+    for (bi, body) in enumerate(body.bodies)
+        for ci in 1:body.ncells
+            res = prod( ni in neighbors_str[bi][ci] for ni in neighbors_uns[bi][ci])
+
+            if !res
+                println("bi = $bi\tci = $ci\t$(neighbors_str[bi][ci]) != $(neighbors_uns[bi][ci])")
+            end
+        end
+    end
+    =#
+
+    # Test ∇𝜇 scheme
+    if verbose
+        println("\t"^(v_lvl+1)*"Maximum ∇𝜇 discrepancy:\t\t\t$(maximum(pnl.norm.(Ugradmu_str - Ugradmu_uns)))")
+    end
+
+    @test prod(isapprox.(pnl.norm.(Ugradmu_str - Ugradmu_uns), 0, atol=1e-9))
+
+    # Test lift and drag
+    Lerr = (Lstr - Luns) / Lstr
+    Derr = (Dstr - Duns) / Dstr
+
+    if verbose
+        println()
+        @printf "%s%19.19s\t%-7s %-7s %-10s\t%-10s\n" "\t"^(v_lvl+1) "Grid" "Lift" "Drag" "L error" "D error"
+        @printf "%s%19.19s\t%-7.1f %-7.1f %-10s\t%-10s\n" "\t"^(v_lvl+1) "GeometricTools" Lstr Dstr "-" "-"
+        @printf "%s%19.19s\t%-7.1f %-7.1f %4.3g﹪\t%4.3g﹪\n" "\t"^(v_lvl+1) "Meshes.jl" Luns Duns Lerr*100 Derr*100
+    end
+
+    @test Lerr <= 1e-9 && Derr <= 1e-9
 
 end
