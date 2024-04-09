@@ -44,7 +44,7 @@ v_lvl = 0
     # Span directions used to orient each trailing edge
     spandir         = [0, 1, 0]
 
-    # Whether to flip normals
+    # Whether to flip control points against the direction of normals
     flip            = true
 
     # Reference dimensions
