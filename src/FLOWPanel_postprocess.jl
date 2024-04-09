@@ -893,7 +893,6 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
     # Iterate over cells identifying edges to use node-centered computation
     for ci in 1:body.ncells             # Iterate over linear indexing
 
-
         this_normal = view(normals, :, ci)  # Normal of this cell
         ccoor = cinc[ci]                # Cartesian indexing of this cell
 
