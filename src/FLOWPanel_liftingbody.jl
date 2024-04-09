@@ -874,7 +874,7 @@ end
 # COMMON FUNCTIONS
 ################################################################################
 """
-    `calc_shedding(grid::GridTriangleSurface{Meshes.SimpleMesh},
+    `calc_shedding(grid::GridTriangleSurface{gt.Meshes.SimpleMesh},
 trailingedge::Matrix; tolerance=1e2*eps())`
 
 Given an unstructured `grid` and a collection of points (line) `trailingedge`,
