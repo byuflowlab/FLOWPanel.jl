@@ -889,7 +889,8 @@ Note: It is important that the points in `trailingedge` have been previously
     vortices.
 """
 function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
-                            tolerance=1e2*eps()) where {G<:gt.Meshes.SimpleMesh}
+                            tolerance=1e2*eps(), debug=false
+                            ) where {G<:gt.Meshes.SimpleMesh}
 
     nodes = grid._nodes
     topology = grid._halfedgetopology
@@ -980,6 +981,19 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
 
         shedding[:, ei] .= (pi, nia, nib, pj, nja, njb)
 
+    end
+
+    if debug
+        display("TEindices")
+        display(TEindices)
+        display("paircandidates")
+        display(collect(paircandidates))
+        display("pairs")
+        display(pairs)
+        display("halfedges")
+        display(halfedges)
+        display("shedding")
+        display(shedding)
     end
 
     return shedding
