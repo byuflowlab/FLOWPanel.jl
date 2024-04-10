@@ -8,10 +8,6 @@ import Printf: @printf
 import CSV
 import DataFrames: DataFrame
 
-import CUDA
-import Metal
-import AMDGPU
-
 import FLOWPanel as pnl
 
 try
@@ -28,26 +24,54 @@ solvers_to_test = Any[
 
 # Add GPU test cases if GPU hardware is available
 # NOTE: Here we test with Float64 instead of Float32 since the later leads to
-#       and error larger than the tolerance
-if CUDA.functional()
+#       an error larger than the tolerance
+try
 
-    using CUDA
-    push!(solvers_to_test, ( "LUdiv + GPU (CUDA 64)", (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float64}, solver_optargs=()) ) )
+    import Pkg; Pkg.add("CUDA")
+    import CUDA
 
+    if CUDA.functional()
+
+        using CUDA
+        push!(solvers_to_test, ( "LUdiv + GPU (CUDA 64)",
+                                (solver=pnl.solve_ludiv!, GPUArray=CuArray{Float64}, solver_optargs=()) ) )
+
+    end
+
+catch e
+    @warn "CUDA device not found: $e"
 end
 
-if Metal.functional()
+try
 
-    using Metal
-    push!(solvers_to_test, ( "LUdiv + GPU (Metal 64)", (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
+    import Pkg; Pkg.add("Metal")
+    import Metal
 
+    if Metal.functional()
+
+        using Metal
+        push!(solvers_to_test, ( "LUdiv + GPU (Metal 64)",
+                                (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
+
+    end
+catch e
+    @warn "Metal device not found: $e"
 end
 
-if AMDGPU.functional()
+try
 
-    using AMDGPU
-    push!(solvers_to_test, ( "LUdiv + GPU (AMD 64)", (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float64}, solver_optargs=()) ) )
+    import Pkg; Pkg.add("AMDGPU")
+    import AMDGPU
 
+    if AMDGPU.functional()
+
+        using AMDGPU
+        push!(solvers_to_test, ( "LUdiv + GPU (AMD 64)",
+                                (solver=pnl.solve_ludiv!, GPUArray=ROCArray{Float64}, solver_optargs=()) ) )
+
+    end
+catch e
+    @warn "AMD device not found: $e"
 end
 
 
