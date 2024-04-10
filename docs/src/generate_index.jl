@@ -32,8 +32,6 @@ open(joinpath(output_path, "index.md"), "w") do fout
 
         for l in eachline(fin)
 
-            println(l)
-
             for (i, triggeron) in enumerate(htmlflags[:, 1])
                 if htmlflags[i, 3]==false && contains(l, triggeron) &&
                     sum(htmlflags[:, 3])==0 && !contains(l, youtubeflag)

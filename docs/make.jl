@@ -58,6 +58,12 @@ makedocs(
                                                                 "examples/duct-fluiddomain.md",
                                                                 "examples/duct-leastsquares.md",
                                                             ],
+                                        "Blended Wing Body" => [
+                                                                "CAD Model" => "examples/blendedwingbody-cad.md",
+                                                                "Unstructured Meshing" => "examples/blendedwingbody-gmsh.md",
+                                                                "examples/blendedwingbody-aero.md",
+                                                                "examples/blendedwingbody-gpucpu.md",
+                                                            ],
                                        ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",
