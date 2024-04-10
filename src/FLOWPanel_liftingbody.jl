@@ -100,7 +100,7 @@ end
 function save(body::RigidWakeBody, args...;
                 out_wake::Bool=true, debug::Bool=false,
                 wake_len::Number=1.0,
-                wake_panel::Bool=true,
+                wake_panel::Bool=false,
                 wake_suffix="_wake",
                 optargs...)
 
