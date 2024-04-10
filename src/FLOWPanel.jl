@@ -69,16 +69,23 @@ end
 
 # Conditionally load monitors if PyPlot is available
 function __init__()
-    @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
-        import .PyPlot as plt
-        import .PyPlot: @L_str
+    try
+        @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
-        for header_name in ["monitor"]
-          include("FLOWPanel_"*header_name*".jl")
+            import .PyPlot as plt
+            import .PyPlot: @L_str
+
+            for header_name in ["monitor"]
+              include("FLOWPanel_"*header_name*".jl")
+            end
+
         end
 
+    catch e
+        @warn "PyPlot is not available; monitors will not be loaded"
     end
+    
 end
 
 end # END OF MODULE
