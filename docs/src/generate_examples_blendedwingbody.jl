@@ -33,10 +33,14 @@ open(joinpath(output_path, output_name*"-cad.md"), "w") do fout
     println(fout, "# CAD Model")
 
     println(fout, """
-    1. Download original SolidWorks CAD file from GrabCAD:
+    1. Download the original SolidWorks CAD file from GrabCAD:
         [grabcad.com/library/airbuszeroe-blended-wing-body-concept-1](https://grabcad.com/library/airbuszeroe-blended-wing-body-concept-1)
+        ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw000.png)
     2. Remove unnecessary parting lines and ducted fan array
-    3. Added a parting line along the leading edge around which to customize refinement
+        ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw002.png)
+    3. Add a parting line along the leading edge around which we will later
+        customize the mesh refinement
+        ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw001.png)
     4. Export as a STEP file
 
     !!! info "STEP File"
@@ -184,7 +188,7 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
             `debug=true` in `pnl.save(body, run_name; path=save_path, debug=true)`
             will output the control points of the body along with the associated
             normal vector of each panel.
-                We recommend opening the body and controls points in ParaView and
+                We recommend opening the body and control points in ParaView and
             visualizing the normals with the Glyph filter.
                 Whenever the normals are pointing into the body, the user needs
             to flip the offset of the
@@ -204,7 +208,7 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
         3. **Choose the right solver for the geometry:**
             Use the least-squares solver with watertight bodies
             (`bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}`), and the direct
-            linear solve with open bodies
+            linear solver with open bodies
             (`bodytype = pnl.RigidWakeBody{pnl.VortexRing}`). The least-squares
             solver runs much faster in GPU
             (`pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})`),
@@ -230,7 +234,7 @@ open(joinpath(output_path, output_name*"-gpucpu.md"), "w") do fout
     in CPU by default.
     However, in order to activate the CPU parallelization, the user needs to
     [launch Julia with multi-threading activated](https://docs.julialang.org/en/v1/manual/multi-threading/#Starting-Julia-with-multiple-threads).
-    For instance, to launch Julia with 4 threads type
+    For instance, to launch Julia with 4 threads:
     ```bash
     \$ julia --threads 4
     ```
@@ -250,7 +254,8 @@ open(joinpath(output_path, output_name*"-gpucpu.md"), "w") do fout
     (NVIDIA CUDA, AMD ROCm, and Mac Metal), however, we have only tested NVIDIA
     GPUs.
 
-    For an NVIDIA GPU, in the previous section import the CUDA package,
+    For an NVIDIA GPU, first import the CUDA package before running the code of
+    the previous section,
     ```julia-repl
     julia> import CUDA
     ```
@@ -286,6 +291,10 @@ open(joinpath(output_path, output_name*"-gpucpu.md"), "w") do fout
     true
     julia> pnl.solve(body, Uinfs, Das, Dbs; GPUArray=Metal.MtlArray{Float32})
     ```
+
+
+    !!! info "GPU"
+        We have only tested NVIDIA GPUs
     """)
 
 end

@@ -21,10 +21,14 @@ Pkg.add(Rotations)
 ```
 
 # CAD Model
-1. Download original SolidWorks CAD file from GrabCAD:
+1. Download the original SolidWorks CAD file from GrabCAD:
     [grabcad.com/library/airbuszeroe-blended-wing-body-concept-1](https://grabcad.com/library/airbuszeroe-blended-wing-body-concept-1)
+    ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw000.png)
 2. Remove unnecessary parting lines and ducted fan array
-3. Added a parting line along the leading edge around which to customize refinement
+    ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw002.png)
+3. Add a parting line along the leading edge around which we will later
+    customize the mesh refinement
+    ![pic](http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb-sw001.png)
 4. Export as a STEP file
 
 !!! info "STEP File"

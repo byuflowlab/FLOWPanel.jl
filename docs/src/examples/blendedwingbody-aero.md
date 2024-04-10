@@ -224,7 +224,7 @@ end
         `debug=true` in `pnl.save(body, run_name; path=save_path, debug=true)`
         will output the control points of the body along with the associated
         normal vector of each panel.
-            We recommend opening the body and controls points in ParaView and
+            We recommend opening the body and control points in ParaView and
         visualizing the normals with the Glyph filter.
             Whenever the normals are pointing into the body, the user needs
         to flip the offset of the
@@ -244,7 +244,7 @@ end
     3. **Choose the right solver for the geometry:**
         Use the least-squares solver with watertight bodies
         (`bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}`), and the direct
-        linear solve with open bodies
+        linear solver with open bodies
         (`bodytype = pnl.RigidWakeBody{pnl.VortexRing}`). The least-squares
         solver runs much faster in GPU
         (`pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})`),

@@ -6,7 +6,7 @@ The kernels and solvers implemented in FLOWPanel are parallelized (threaded)
 in CPU by default.
 However, in order to activate the CPU parallelization, the user needs to
 [launch Julia with multi-threading activated](https://docs.julialang.org/en/v1/manual/multi-threading/#Starting-Julia-with-multiple-threads).
-For instance, to launch Julia with 4 threads type
+For instance, to launch Julia with 4 threads:
 ```bash
 $ julia --threads 4
 ```
@@ -26,7 +26,8 @@ array to be used internally.
 (NVIDIA CUDA, AMD ROCm, and Mac Metal), however, we have only tested NVIDIA
 GPUs.
 
-For an NVIDIA GPU, in the previous section import the CUDA package,
+For an NVIDIA GPU, first import the CUDA package before running the code of
+the previous section,
 ```julia-repl
 julia> import CUDA
 ```
@@ -62,4 +63,8 @@ julia> Metal.functional()
 true
 julia> pnl.solve(body, Uinfs, Das, Dbs; GPUArray=Metal.MtlArray{Float32})
 ```
+
+
+!!! info "GPU"
+    We have only tested NVIDIA GPUs
 
