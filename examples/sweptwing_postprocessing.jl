@@ -275,8 +275,6 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
                 ypos_vsp .-= 0.5
                 ypos_vsp .*= 2.0
 
-                println("RABBIT")
-
                 ax.plot(ypos_vsp, pi==1 ? cl_vsp : cd_vsp, "-",
                         color=color_vsp, alpha=alpha_vsp*0.75, label=lbl_vsp, linewidth=1)
 
