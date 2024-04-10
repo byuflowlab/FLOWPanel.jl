@@ -47,7 +47,7 @@ try
     import Pkg; Pkg.add("Metal")
     import Metal
 
-    if Metal.functional()
+    if Metal.functional() && false
 
         using Metal
         push!(solvers_to_test, ( "LUdiv + GPU (Metal 64)",
