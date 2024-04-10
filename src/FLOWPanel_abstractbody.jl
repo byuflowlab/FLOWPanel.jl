@@ -438,8 +438,16 @@ function addfields(body::AbstractBody,
     srcfield = get_field(body, sourcefieldname)["field_data"]
     trgfield = get_field(body, targetfieldname)["field_data"]
 
-    for (Fsrc, Ftrg) in zip(srcfield, trgfield)
-        Ftrg .+= Fsrc
+    if get_field(body, sourcefieldname)["field_type"]=="vector"
+
+        for (Fsrc, Ftrg) in zip(srcfield, trgfield)
+            Ftrg .+= Fsrc
+        end
+
+    else
+
+        trgfield += srcfield
+
     end
 
 end
@@ -633,7 +641,7 @@ function _calc_controlpoints!(grid::gt.GridTriangleSurface,
     quadcoor = zeros(Int, 3)
     quad_out = zeros(Int, 4)
 
-    nodes = grid.orggrid.nodes
+    nodes = grid._nodes
 
     for pi in 1:grid.ncells
 
@@ -737,9 +745,9 @@ function _calc_normals!(grid::gt.GridTriangleSurface, normals)
     for pi in 1:grid.ncells
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                                 grid, pi, lin, ndivscells, cin)
-        normals[1, pi] = gt._calc_n1(grid.orggrid.nodes, panel)
-        normals[2, pi] = gt._calc_n2(grid.orggrid.nodes, panel)
-        normals[3, pi] = gt._calc_n3(grid.orggrid.nodes, panel)
+        normals[1, pi] = gt._calc_n1(grid._nodes, panel)
+        normals[2, pi] = gt._calc_n2(grid._nodes, panel)
+        normals[3, pi] = gt._calc_n3(grid._nodes, panel)
     end
 end
 function _calc_normals(grid::gt.GridTriangleSurface)
@@ -810,9 +818,9 @@ function _calc_tangents!(grid::gt.GridTriangleSurface, tangents)
     for pi in 1:grid.ncells
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                                 grid, pi, lin, ndivscells, cin)
-        tangents[1, pi] = gt._calc_t1(grid.orggrid.nodes, panel)
-        tangents[2, pi] = gt._calc_t2(grid.orggrid.nodes, panel)
-        tangents[3, pi] = gt._calc_t3(grid.orggrid.nodes, panel)
+        tangents[1, pi] = gt._calc_t1(grid._nodes, panel)
+        tangents[2, pi] = gt._calc_t2(grid._nodes, panel)
+        tangents[3, pi] = gt._calc_t3(grid._nodes, panel)
     end
 end
 function _calc_tangents(grid::gt.GridTriangleSurface)
@@ -857,9 +865,9 @@ function _calc_obliques!(grid::gt.GridTriangleSurface, obliques)
     for pi in 1:grid.ncells
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                                 grid, pi, lin, ndivscells, cin)
-        obliques[1, pi] = gt._calc_o1(grid.orggrid.nodes, panel)
-        obliques[2, pi] = gt._calc_o2(grid.orggrid.nodes, panel)
-        obliques[3, pi] = gt._calc_o3(grid.orggrid.nodes, panel)
+        obliques[1, pi] = gt._calc_o1(grid._nodes, panel)
+        obliques[2, pi] = gt._calc_o2(grid._nodes, panel)
+        obliques[3, pi] = gt._calc_o3(grid._nodes, panel)
     end
 end
 function _calc_obliques(grid::gt.GridTriangleSurface)
@@ -904,7 +912,7 @@ function _calc_areas!(grid::gt.GridTriangleSurface, areas)
     for pi in 1:grid.ncells
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                                 grid, pi, lin, ndivscells, cin)
-        areas[pi] = gt._get_area(grid.orggrid.nodes, panel)
+        areas[pi] = gt._get_area(grid._nodes, panel)
     end
 end
 function _calc_areas(grid::gt.GridTriangleSurface)

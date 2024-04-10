@@ -100,7 +100,7 @@ end
 function save(body::RigidWakeBody, args...;
                 out_wake::Bool=true, debug::Bool=false,
                 wake_len::Number=1.0,
-                wake_panel::Bool=true,
+                wake_panel::Bool=false,
                 wake_suffix="_wake",
                 optargs...)
 
@@ -109,7 +109,7 @@ function save(body::RigidWakeBody, args...;
     str *= save_base(body, args...; debug=debug, optargs...)
 
     # Output the wake
-    if out_wake || debug
+    if out_wake
         str *= _savewake(body, args...; len=wake_len, panel=wake_panel,
                             optargs..., suffix=wake_suffix)
     end
@@ -197,9 +197,10 @@ function solve(self::RigidWakeBody{VortexRing, 2},
                 Das::AbstractMatrix{T2},
                 Dbs::AbstractMatrix{T3};
                 solver=solve_ludiv!, solver_optargs=(),
-                elprescribe::AbstractArray{Tuple{Int, T4}}=[(1, 0.0)],
+                elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
+                GPUArray=Array{promote_type(T1, T2, T3)},
                 optargs...
-                ) where {T1, T2, T3, T4}
+                ) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
@@ -212,7 +213,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
-    T = promote_type(T1, T2, T3, T4)
+    T = promote_type(T1, T2, T3)
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -220,14 +221,22 @@ function solve(self::RigidWakeBody{VortexRing, 2},
 
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
-    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe;
+                                                GPUArray=GPUArray,
+                                                optargs...)
 
     # Solve system of equations
-    Gamma = zeros(T, self.ncells-length(elprescribe))
+    Gamma = GPUArray(undef, self.ncells-length(elprescribe))
     solver(Gamma, G, RHS; solver_optargs...)
+
+    # Port solution back to CPU if solved in GPU
+    if !(GPUArray <: Array)
+        Gamma = Array{T}(Gamma)
+    end
 
     # Save solution
     set_solution(self, nothing, Gamma, elprescribe, Uinfs, Das, Dbs)
+
 end
 
 calc_elprescribe(::RigidWakeBody{VortexRing, 2}) = [(1, 0.0)]
@@ -274,6 +283,7 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
                                 Dbs::AbstractMatrix{T3},
                                 elprescribe::AbstractArray{Tuple{Int, T4}},
                                 args...;
+                                GPUArray=Array{promote_type(T1, T2, T3, T4)},
                                 optargs...
                                 ) where {T1, T2, T3, T4}
 
@@ -284,11 +294,13 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
 
     G = zeros(T, n, n)
     Gred = zeros(T, n, n-npres)
-    Gls = zeros(T, n-npres, n-npres)
+    tGred = zeros(T, n-npres, n)
+    gpuGred = GPUArray(undef, size(Gred))
+    Gls = GPUArray(undef, n-npres, n-npres)
     RHS = zeros(T, n)
-    RHSls = zeros(T, n-npres)
+    RHSls = GPUArray(undef, n-npres)
 
-    _G_U_RHS_leastsquares!(self, G, Gred, Gls, RHS, RHSls,
+    _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                 Uinfs, CPs, normals, Das, Dbs,
                 elprescribe,
                 args...; optargs...)
@@ -297,7 +309,7 @@ function _G_U_RHS_leastsquares(self::AbstractBody,
 end
 
 function _G_U_RHS_leastsquares!(self::AbstractBody,
-                                G, Gred, Gls, RHS, RHSls,
+                                G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                                 Uinfs, CPs, normals,
                                 Das, Dbs,
                                 elprescribe::AbstractArray{Tuple{Int, T}};
@@ -311,6 +323,8 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
     @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
         "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
+    @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
+        "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
     @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
         "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-npres)x$(n-npres)"
 
@@ -351,13 +365,32 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
         prev_eli = eli
     end
 
-    tGred = transpose(Gred)
+    # Produce least-squares matrix
+    if typeof(gpuGred) <: Array   # Case: CPU arrays
 
-    # RHSls = Gred'*RHS
-    LA.mul!(RHSls, tGred, RHS)
+        # tGred = transpose(Gred)               # <- Very slow to multiply later on
+        # tGred = collect(transpose(Gred))      # <- Much faster but allocating memory
+        # tGred = permutedims(Gred)             # <- Ditto
+        permutedims!(tGred, Gred, [2, 1])       # <- No memory allocation
 
-    # Gls = Gred'*Gred
-    LA.mul!(Gls, tGred, Gred)
+        # RHSls = Gred'*RHS
+        LA.mul!(RHSls, tGred, RHS)
+
+        # Gls = Gred'*Gred
+        LA.mul!(Gls, tGred, Gred)
+
+    else                          # Case: GPU arrays
+
+        copyto!(gpuGred, Gred)
+        tGred = transpose(gpuGred)
+
+        # RHSls = Gred'*RHS
+        LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
+
+        # Gls = Gred'*Gred
+        LA.mul!(Gls, tGred, gpuGred)
+
+    end
 
     return Gls, RHSls
 end
@@ -386,114 +419,103 @@ function _G_Uvortexring!(self::RigidWakeBody,
               " got $(size(normals)), expected (3, $M).")
     end
 
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
 
-    # Build geometric matrix: Panels
-    for (pj, Gslice) in enumerate(eachcol(G))
+    # Build geometric matrix from panel contributions
+    panels = 1:self.ncells
+    chunks = collect(Iterators.partition(panels, max(length(panels) ÷ Threads.nthreads(), 3*Threads.nthreads())))
 
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
+    Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
 
-        U_vortexring(
-                          self.grid.orggrid.nodes,           # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                          optargs...
-                         )
+        # Pre-allocate memory for panel calculation
+        tri_out, tricoor, quadcoor, quad_out, lin, ndivscells, cin = gt.generate_getcellt_args!(self.grid)
+
+        # for (pj, Gslice) in enumerate(eachcol(G))
+        for pj in chunk                       # Iterate over panels
+
+            panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                                self.grid, pj, lin, ndivscells, cin)
+
+            U_vortexring(
+                              self.grid._nodes,                  # All nodes
+                              panel,                             # Indices of nodes that make this panel
+                              1.0,                               # Unitary strength
+                              CPs,                               # Targets
+                              view(G, :, pj);                    # Velocity of j-th panel on every CP
+                              # Gslice;
+                              dot_with=normals,                  # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+         end
     end
 
-    #=
-    # Back-diagonal correction to avoid matrix singularity in closed geometries.
-    # Seee Eq. 2.19 in Lewis, R. (1991), "Vortex Element Methods for Fluid
-    # Dynamic Analysis of Engineering Systems"
-
-    println("PROTOTYPE BACK DIAGONAL CORRECTION")
-    # TODO: Remove memory allocation associated with areas
-    areas = calc_areas(self)
-
-    for m in 1:size(G, 2)
-
-        rowi = size(G, 1) + 1 - m
-
-        val = 0
-        for n in 1:size(G, 1)
-            if n != rowi
-
-                val += G[n, m] * areas[n]
-
-            end
-        end
-
-        # G[rowi, m] -= val/areas[rowi]
-        G[rowi, m] = -val/areas[rowi]
-
-    end
-    =#
 
     # Add wake contributions
-    TE = zeros(Int, 2)
-    for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding)) # Iterate over wake-shedding panels
+    sheddings = 1:self.nsheddings
+    chunks = collect(Iterators.partition(sheddings, max(length(sheddings) ÷ Threads.nthreads(), 3*Threads.nthreads())))
 
-        # Fetch nodes of upper wake panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pi, lin, ndivscells, cin)
+    Threads.@threads for chunk in chunks        # Distribute wake panel iteration among all CPU threads
 
-        # Indicate nodes in the upper shedding edge
-        TE[1] = panel[nia]
-        TE[2] = panel[nib]
-        da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
-        db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
+        # Pre-allocate memory for panel calculation
+        TE = zeros(Int, 2)
+        _tri_out, _tricoor, _quadcoor, _quad_out, _lin, _ndivscells, _cin = gt.generate_getcellt_args!(self.grid)
 
-        U_semiinfinite_horseshoe(
-                          self.grid.orggrid.nodes,           # All nodes
-                          TE,                                # Indices of nodes that make the shedding edge
-                          da1, da2, da3,                     # Semi-infinite direction da
-                          db1, db2, db3,                     # Semi-infinite direction db
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          view(G, :, pi);                    # Velocity of upper wake panel on every CP
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                          optargs...
-                         )
+        # for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding))
+        for ei in chunk                          # Iterate over wake-shedding panels
 
-         if pj != -1
-             # Fetch nodes of lower wake panel
-             panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                 self.grid, pj, lin, ndivscells, cin)
+            pi, nia, nib, pj, nja, njb = view(self.shedding, :, ei)
 
-             # Indicate nodes in the lower shedding edge
-             TE[1] = panel[nja]
-             TE[2] = panel[njb]
+            # Fetch nodes of upper wake panel
+            panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
+                                                self.grid, pi, _lin, _ndivscells, _cin)
 
-             U_semiinfinite_horseshoe(
-                               self.grid.orggrid.nodes,           # All nodes
-                               TE,                                # Indices of nodes that make the shedding edge
-                               db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
-                               da1, da2, da3,                     # Semi-infinite direction db
-                               1.0,                               # Unitary strength
-                               CPs,                               # Targets
-                               view(G, :, pj);                    # Velocity of lower wake panel on every CP
-                               dot_with=normals,                  # Normal of every CP
-                               offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                               optargs...
-                              )
-         end
+            # Indicate nodes in the upper shedding edge
+            TE[1] = panel[nia]
+            TE[2] = panel[nib]
+            da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
+            db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
+
+            U_semiinfinite_horseshoe(
+                              self.grid._nodes,                  # All nodes
+                              TE,                                # Indices of nodes that make the shedding edge
+                              da1, da2, da3,                     # Semi-infinite direction da
+                              db1, db2, db3,                     # Semi-infinite direction db
+                              1.0,                               # Unitary strength
+                              CPs,                               # Targets
+                              view(G, :, pi);                    # Velocity of upper wake panel on every CP
+                              dot_with=normals,                  # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+             if pj != -1
+                 # Fetch nodes of lower wake panel
+                 panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
+                                                     self.grid, pj, _lin, _ndivscells, _cin)
+
+                 # Indicate nodes in the lower shedding edge
+                 TE[1] = panel[nja]
+                 TE[2] = panel[njb]
+
+                 U_semiinfinite_horseshoe(
+                                   self.grid._nodes,                  # All nodes
+                                   TE,                                # Indices of nodes that make the shedding edge
+                                   db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
+                                   da1, da2, da3,                     # Semi-infinite direction db
+                                   1.0,                               # Unitary strength
+                                   CPs,                               # Targets
+                                   view(G, :, pj);                    # Velocity of lower wake panel on every CP
+                                   dot_with=normals,                  # Normal of every CP
+                                   offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                                   cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                                   optargs...
+                                  )
+             end
+        end
+
     end
 
 end
@@ -522,7 +544,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
 
         # Velocity of i-th panel on every target
         U_vortexring(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, stri],            # Unitary strength
                             targets,                           # Targets
@@ -550,7 +572,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
         db1, db2, db3 = Dbs[ei]
 
         U_semiinfinite_horseshoe(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -572,7 +594,7 @@ function _Uvortexring!(self::RigidWakeBody, targets, out; stri=1, optargs...)
              TE[2] = panel[njb]
 
              U_semiinfinite_horseshoe(
-                               self.grid.orggrid.nodes,           # All nodes
+                               self.grid._nodes,                  # All nodes
                                TE,                                # Indices of nodes that make the shedding edge
                                db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
                                da1, da2, da3,                     # Semi-infinite direction db
@@ -609,7 +631,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
 
         # Potential of i-th panel on every target
         phi_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -635,7 +657,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
         db1, db2, db3 = Dbs[ei]
 
         phi_semiinfinite_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -655,7 +677,7 @@ function _phi!(self::RigidWakeBody{VortexRing, N}, targets, out; optargs...) whe
              TE[2] = panel[njb]
 
              phi_semiinfinite_doublet(
-                               self.grid.orggrid.nodes,           # All nodes
+                               self.grid._nodes,                  # All nodes
                                TE,                                # Indices of nodes that make the shedding edge
                                db1, db2, db3,                     # Semi-infinite direction da (flipped in lower panel)
                                da1, da2, da3,                     # Semi-infinite direction db
@@ -783,7 +805,7 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}
         s = pj%2==1 ? -1 : 1        # Alternate + and - strengths to get them all aligned
 
         U_constant_vortexsheet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           s*weight_gammat,                   # Tangential strength
                           s*weight_gammao,                   # Oblique strength
@@ -826,7 +848,7 @@ function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
 
         # Velocity of i-th panel on every target
         U_constant_vortexsheet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, strti],           # Tangential strength
                             self.strength[i, stroi],           # Oblique strength
@@ -844,6 +866,141 @@ end
 function _phi!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}, args...; optargs...)
     nothing
 end
+
+
+
+
+################################################################################
+# COMMON FUNCTIONS
+################################################################################
+"""
+    `calc_shedding(grid::GridTriangleSurface{gt.Meshes.SimpleMesh},
+trailingedge::Matrix; tolerance=1e2*eps())`
+
+Given an unstructured `grid` and a collection of points (line) `trailingedge`,
+it finds the points in `grid` that are closer than `tolerance` to the line,
+and automatically builds a `shedding` matrix that can be used to shed the wake
+from this trailing edge.
+
+Note: It is important that the points in `trailingedge` have been previously
+    sorted to be contiguous to each other, otherwise the resulting `shedding`
+    might have panels that are not contiguous to each other, fail to recognize
+    panels that are at the trailing edge, or unphysically large trailing
+    vortices.
+"""
+function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+                            tolerance=1e2*eps(), debug=false
+                            ) where {G<:gt.Meshes.SimpleMesh}
+
+    nodes = grid._nodes
+    topology = grid._halfedgetopology
+    connec = grid.orggrid.topology.connec
+
+    # Identify the nodes that are on the TE line
+    TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
+    TEindices = [nodei for (nodei, pointi) in TEindices]
+
+    # All node pairs that could form an edge at the TE
+    paircandidates = zip(view(TEindices, 1:length(TEindices)-1), view(TEindices, 2:length(TEindices)))
+
+    # All node pairs that actually form an edge at the TE
+    pairs = [pair for pair in paircandidates if haskey(topology.edge4pair, pair)]
+
+    # Fetch all the first halfedge of each edges (node pairs) along the TE
+    halfedges = [gt.Meshes.half4pair(topology, pair) for pair in pairs]
+
+    # Build shedding matrix
+    shedding = zeros(Int, 6, length(halfedges))
+
+    for (ei, halfedge) in enumerate(halfedges)
+
+        pair = pairs[ei]
+
+        # pi is the panel associated with this half edge
+        # pj is the panel associated with the other half
+
+        # Case: Single-sided edge
+        if isnothing(halfedge.elem) || isnothing(halfedge.half.elem)
+
+            if isnothing(halfedge.half.elem)
+                pi = halfedge.elem
+            else
+                pi = halfedge.half.elem
+            end
+
+            # Declare the other half as inexistent
+            pj = -1
+
+        # Case: Two-sided edge
+        else
+
+            # Identify which panel is "on top" and which "bottom" by matching
+            # the order of the node pair
+            inds1 = connec[halfedge.elem].indices
+            inds2 = connec[halfedge.half.elem].indices
+
+            if (
+                    (inds1[1]==pair[1] && inds1[2]==pair[2])
+                    ||
+                    (inds1[2]==pair[1] && inds1[3]==pair[2])
+                    ||
+                    (inds1[3]==pair[1] && inds1[1]==pair[2])
+                )
+
+                pi = halfedge.elem
+                pj = halfedge.half.elem
+
+            elseif (
+                    (inds2[1]==pair[1] && inds2[2]==pair[2])
+                    ||
+                    (inds2[2]==pair[1] && inds2[3]==pair[2])
+                    ||
+                    (inds2[3]==pair[1] && inds2[1]==pair[2])
+                )
+
+                pi = halfedge.half.elem
+                pj = halfedge.elem
+
+            else
+                error("Logic error: Could not match panel to node pair")
+            end
+
+        end
+
+        # Nodes of first half
+        nia = findfirst(globindex -> globindex==pair[2], connec[pi].indices)  # Local-index of the first node
+        nib = findfirst(globindex -> globindex==pair[1], connec[pi].indices)  # Local-index of the second node
+
+        # Nodes of other half
+        if pj != -1
+            nja = findfirst(globindex -> globindex==pair[1], connec[pj].indices)  # Local-index of the second node
+            njb = findfirst(globindex -> globindex==pair[2], connec[pj].indices)  # Local-index of the first node
+        else
+            nja = njb = -1
+        end
+
+        shedding[:, ei] .= (pi, nia, nib, pj, nja, njb)
+
+    end
+
+    if debug
+        display("TEindices")
+        display(TEindices)
+        display("paircandidates")
+        display(collect(paircandidates))
+        display("pairs")
+        display(pairs)
+        display("halfedges")
+        display(halfedges)
+        display("shedding")
+        display(shedding)
+    end
+
+    return shedding
+end
+
+
+
 
 
 ##### INTERNAL FUNCTIONS  ######################################################
@@ -873,7 +1030,7 @@ function _savewake(self::RigidWakeBody, filename::String;
     end
 
 
-    nodes = self.grid.orggrid.nodes
+    nodes = self.grid._nodes
     nedges = size(self.shedding, 2)
     points = zeros(3, 4*nedges)
 

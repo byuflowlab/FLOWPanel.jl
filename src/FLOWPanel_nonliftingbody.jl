@@ -172,7 +172,7 @@ function _G_U!(self::NonLiftingBody{ConstantSource, 1},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_source(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -206,7 +206,7 @@ function _Uind!(self::NonLiftingBody{ConstantSource, 1}, targets, out;
 
         # Velocity of i-th panel on every target
         U_constant_source(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -237,7 +237,7 @@ function _phi!(self::NonLiftingBody{ConstantSource, 1}, targets, out; optargs...
 
         # Potential of i-th panel on every target
         phi_constant_source(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -337,7 +337,7 @@ function _G_U!(self::NonLiftingBody{ConstantDoublet, 1},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -372,7 +372,7 @@ function _Uind!(self::NonLiftingBody{ConstantDoublet, 1}, targets, out;
 
         # Velocity of i-th panel on every target
         U_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -405,7 +405,7 @@ function _phi!(self::NonLiftingBody{ConstantDoublet, 1},
 
         # Potential of i-th panel on every target
         phi_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -478,7 +478,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         phi_constant_source(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           -sgm,                              # Source strength (flipped to move the potential to the RHS)
                           # sgm,
@@ -520,7 +520,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_source(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -536,7 +536,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -555,7 +555,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         phi_constant_source(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -569,7 +569,7 @@ function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         phi_constant_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -649,7 +649,7 @@ function _G_phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}
                                             self.grid, pj, lin, ndivscells, cin)
 
         phi_constant_doublet(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -703,7 +703,7 @@ function _G_U!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
                                             self.grid, pj, lin, ndivscells, cin)
 
         U_constant_source(
-                          self.grid.orggrid.nodes,           # All nodes
+                          self.grid._nodes,                  # All nodes
                           panel,                             # Indices of nodes that make this panel
                           1.0,                               # Unitary strength
                           CPs,                               # Targets
@@ -737,7 +737,7 @@ function _Uind!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
 
         # Velocity of i-th panel on every target
         U_constant_source(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -748,7 +748,7 @@ function _Uind!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
 
         # Velocity of i-th panel on every target
         U_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 2],               # Unitary strength
                             targets,                           # Targets
@@ -780,7 +780,7 @@ function _phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
 
         # Potential of i-th panel on every target
         phi_constant_source(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 1],               # Unitary strength
                             targets,                           # Targets
@@ -791,7 +791,7 @@ function _phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
 
         # Potential of i-th panel on every target
         phi_constant_doublet(
-                            self.grid.orggrid.nodes,           # All nodes
+                            self.grid._nodes,                  # All nodes
                             panel,                             # Indices of nodes that make this panel
                             self.strength[i, 2],               # Unitary strength
                             targets,                           # Targets

@@ -1,6 +1,6 @@
 #=##############################################################################
 # DESCRIPTION
-    Unit tests of solvers
+    Unit tests of linear solvers
 =###############################################################################
 
 using Test
@@ -26,7 +26,7 @@ solvers_to_test = (
 
     # --------------- SWEPT WING TESTS -----------------------------------------
     if verbose
-        println("\n"*"\t"^(v_lvl)*"Swept-wing solver tests")
+        println("\n"*"\t"^(v_lvl)*"Swept-wing test (multibody linear solver)")
     end
 
     CLexp = 0.238
@@ -93,6 +93,8 @@ solvers_to_test = (
                                 rfl_NDIVS=rfl_NDIVS,
                                 delim=",",
                                 span_NDIVS=span_NDIVS_l,
+                                verify_spline=false,
+                                verify_rflspline=false,
                                 b_low=-1.0, b_up=0.0
                                )
 
@@ -104,6 +106,8 @@ solvers_to_test = (
                                 rfl_NDIVS=rfl_NDIVS,
                                 delim=",",
                                 span_NDIVS=span_NDIVS_r,
+                                verify_spline=false,
+                                verify_rflspline=false,
                                 b_low=1.0, b_up=0.0,
                                )
 
@@ -136,6 +140,9 @@ solvers_to_test = (
 
             # ----------------- POST PROCESSING ------------------------------------------------
             # Calculate velocity away from the body
+            # NOTE: Here we use an offset to prove the velocity instead of
+            #       using the ∇μ scheme merely for the sake of reducing the
+            #       scope of this unit test
             Us = pnl.calcfield_U(body, body; fieldname="Uoff",
                                     offset=0.02, characteristiclength=(args...)->b/ar)
 
@@ -143,10 +150,10 @@ solvers_to_test = (
             Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
 
             # Calculate the force of each panel
-            Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
-            # Calculate total force of the vehicle decomposed as lfit, drag, and sideslip
+            Fs = pnl.calcfield_F(body, magVinf, rho)
+            # Calculate total force of the vehicle decomposed as lift, drag, and sideslip
             Dhat = Vinf/pnl.norm(Vinf)        # Drag direction
-            Shat = [0, 1, 0]              # Span direction
+            Shat = [0, 1, 0]                  # Span direction
             Lhat = pnl.cross(Dhat, Shat)      # Lift direction
 
             LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
@@ -164,7 +171,7 @@ solvers_to_test = (
                 @printf "%s%15.15s %-7.4f %-7.4f %4.2f seconds\t%4.3g﹪\n" "\t"^(v_lvl+1) lbl CL CD t err*100
             end
 
-            res = err <= 0.6
+            res = err <= 0.03
 
             # Test result
             res

@@ -2,6 +2,7 @@ using Documenter
 using FLOWPanel
 const pnl = FLOWPanel
 
+include("src/generate_index.jl")
 include("src/generate_examples.jl")
 
 makedocs(
@@ -9,9 +10,10 @@ makedocs(
     format = Documenter.HTML(;
                                 sidebar_sitename = false,
                                 assets = ["assets/favicon.ico"],
+                                collapselevel = 1
                             ),
     pages = [
-                "Home"              => "index.md",
+                "Intro"             => "index.md",
                 "Potential Flow"    => "potentialflow.md",
                 "Elements"          => [
                                         "elements/paneldefinition.md",
@@ -25,6 +27,7 @@ makedocs(
                                         "Grid Generation" => [
                                                                 "geometry/gridgeneration.md",
                                                                 "geometry/gridgeneration-loft.md",
+                                                                "geometry/gridgeneration-pathloft.md",
                                                                 "geometry/gridgeneration-rev.md",
                                                                 "geometry/gridgeneration-transf.md",
                                                                 "geometry/gridgeneration-triang.md",
@@ -38,7 +41,7 @@ makedocs(
                                                                 "geometry/panel-gradient.md"
                                                             ]
                                       ],
-                "Examples"          => [
+                "Tutorials"        => [
                                         "Swept Wing" => [
                                                                 "4.2° Angle of Attack" =>
                                                                             "examples/sweptwing-4p2aoa.md",
@@ -54,6 +57,12 @@ makedocs(
                                                                 "AOA Sweep" => "examples/duct-aoasweep.md",
                                                                 "examples/duct-fluiddomain.md",
                                                                 "examples/duct-leastsquares.md",
+                                                            ],
+                                        "Blended Wing Body" => [
+                                                                "CAD Model" => "examples/blendedwingbody-cad.md",
+                                                                "Unstructured Meshing" => "examples/blendedwingbody-gmsh.md",
+                                                                "examples/blendedwingbody-aero.md",
+                                                                "examples/blendedwingbody-gpucpu.md",
                                                             ],
                                        ],
                 # "API Reference"     => ["api.md",

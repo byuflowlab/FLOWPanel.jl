@@ -181,7 +181,7 @@ Checks correction definition of trailing edge
 """
 function _checkTE(grid, shedding::Array{Int, 2}; tol=1e1*eps())
 
-    nodes = grid.orggrid.nodes
+    nodes = grid._nodes
 
     # Correct number of inputs
     if size(shedding, 1) != 6

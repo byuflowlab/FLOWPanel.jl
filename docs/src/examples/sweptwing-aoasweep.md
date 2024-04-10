@@ -5,7 +5,7 @@ Using the wing defined in the previous section, we now sweep the angle
 
 ```julia
 AOAs = [0, 2.1, 4.2, 6.3, 8.4, 10.5, 12, 14, 16] # (deg) angles of attack
-Xac = [0.25*b/ar, 0, 0]                 # (m) aerodynamic center for moment calculation
+Xac = [0.0*b/ar, 0, 0]                 # (m) aerodynamic center for moment calculation
 
 # Results are stored in these arrays
 Ls, Ds = [], []                         # Lift and drag at each angle of attack
@@ -110,4 +110,15 @@ to see how to postprocess the solution as plotted here below)
     <img src="../../assets/images/sweptwing000-sweep-Cm.png" alt="Pic here" style="width: 50%;"/>
 </center>
 ```
+
+!!! details "Tip"
+    You can also automatically run this example and generate these plots
+    with the following command:
+    ```julia
+    import FLOWPanel as pnl
+
+    include(joinpath(pnl.examples_path, "sweptwing.jl"))
+    include(joinpath(pnl.examples_path, "sweptwing_aoasweep.jl"))
+    
+    ```
 

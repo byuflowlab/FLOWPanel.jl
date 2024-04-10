@@ -129,15 +129,9 @@ for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 
     # ----------------- POST PROCESSING ----------------------------------------
     println("Post processing...")
-    # NOTE: A thick body with only vortex ring elements leads to a surface
-    #       velocity that is inaccurate at the exact surface of the body, but
-    #       that approximates the physical solution away from the surface. For
-    #       this reason, we probe the velocity used to calculate Cp slightly
-    #       away from the body
 
-    # Calculate surface velocity U on the body probed at a distance
-    # offset*characteristiclength away from each panel in the normal direction
-    Us = pnl.calcfield_U(body, body, characteristiclength=(args...)->d*aspectratio)
+    # Calculate surface velocity U on the body
+    Us = pnl.calcfield_U(body, body)
 
     # NOTE: Since the boundary integral equation of the potential flow has a
     #       discontinuity at the boundary, we need to add the gradient of the

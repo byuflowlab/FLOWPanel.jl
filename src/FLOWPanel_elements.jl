@@ -365,6 +365,7 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
 
     # Iterate over targets
     @simd for ti in 1:nt
+    # Threads.@threads for ti in 1:nt
 
         @inbounds begin
             # ri = x - pi
@@ -482,6 +483,7 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
     # Iterate over targets
     @simd for ti in 1:nt
+    # Threads.@threads for ti in 1:nt
 
         # Split vortex into bound and semi-infinite sections
         # p0 = p + [(x-p)⋅d]d

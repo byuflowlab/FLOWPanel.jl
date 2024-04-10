@@ -46,13 +46,13 @@ airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 
 n_rfl           = 8                             # Control number of chordwise panels
 # n_rfl         = 10                            # <-- uncomment this for finer discretization
-#             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
+
+#           # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
             # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
               (0.50, n_rfl,    1.0, true),
             # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
               (0.25, n_rfl, 1/10.0, false)]
-# NDIVS_rfl = [ (1.0, 3*n_rfl,   1.0, false) ]
 
 # NOTE: A geometric expansion of 10 that is not central means that the last
 #       panel is 10 times larger than the first panel. If central, the
@@ -61,6 +61,7 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 # ----- Spanwise discretization
 n_span          = 15                            # Number of spanwise panels on each side of the wing
 # n_span        = 60                            # <-- uncomment this for finer discretization
+
 NDIVS_span_l    = [(1.0, n_span, 10.0, false)]  # Discretization of left side
 NDIVS_span_r    = [(1.0, n_span, 10.0, false)]  # Discretization of right side
 
@@ -80,20 +81,14 @@ println("Generating body...")
 bodytype = pnl.RigidWakeBody{pnl.VortexRing}    # Elements and wake model
 
 # Arguments for lofting the left side of the wing
-bodyoptargs_l = (
-                CPoffset=1e-14,                 # Offset control points slightly in the positive normal direction
-                characteristiclength=(args...)->b/ar,   # Characheristic length for control point offset
-                kerneloffset=1e-8,              # Offset of kernel to avoid singularities
-                kernelcutoff=1e-14              # Cutoff of kernel to avoid singularities
-              )
+bodyoptargs_l = (;
+                    CPoffset=1e-14,                 # Offset control points slightly in the positive normal direction
+                )
 
 # Same arguments but negative CPoffset since the normals are flipped
-bodyoptargs_r = (
-                CPoffset=-bodyoptargs_l.CPoffset,
-                characteristiclength=bodyoptargs_l.characteristiclength,
-                kerneloffset=bodyoptargs_l.kerneloffset,
-                kernelcutoff=bodyoptargs_l.kernelcutoff
-              )
+bodyoptargs_r = (;
+                    CPoffset=-1e-14
+                )
 
 # Loft left side of the wing from left to right
 @time wing_left = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
@@ -147,7 +142,7 @@ Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
 println("Post processing...")
 
 # Calculate surface velocity induced by the body on itself
-@time Us = pnl.calcfield_U(body, body; characteristiclength=(args...)->b/ar)
+@time Us = pnl.calcfield_U(body, body)
 
 # NOTE: Since the boundary integral equation of the potential flow has a
 #       discontinuity at the boundary, we need to add the gradient of the
@@ -171,7 +166,7 @@ if paraview
     str = save_path*"/"
 
     # Save body as a VTK
-    str *= pnl.save(body, "wing"; path=save_path, wake_panel=false, debug=false)
+    str *= pnl.save(body, "wing"; path=save_path)
 
     # Call Paraview
     run(`paraview --data=$(str)`)
@@ -222,7 +217,7 @@ nondim = 0.5*rho*magVinf^2*b/ar   # Normalization factor
 fig3, axs = plot_loading(body, Lhat, Dhat, b;
                         spandirection=Shat, AOA=AOA,
                         to_plot=[1, 2], yscalings=(1/nondim)*ones(3),
-                        ylims=[[0, 0.3, 0.05], [-0.02, 0.06, 0.02]],
+                        ylims=[[0, 0.4, 0.1], [-0.02, 0.06, 0.02]],
                         plots_optargs=[ (label="FLOWPanel", color="steelblue",),
                                         (label="", color="steelblue")]
                         )
@@ -276,10 +271,10 @@ println("CD error:\t$(round(abs(CD-CDexp)/CDexp*100, digits=2))%")
 
 if save_outputs
     str = """
-    |           | Experimental  | FLOWPanel                 | Error |
-    | --------: | :-----------: | :-----------------------: | :---- |
-    | \$C_L\$   | 0.238         | $(round(CL, digits=5))    | $(round(abs(CL-CLexp)/CLexp*100, digits=3))% |
-    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=3))% |
+    |           | Experimental  | FLOWPanel                 | Error | `OPENVSP` |
+    | --------: | :-----------: | :-----------------------: | :---- |  :----: |
+    | \$C_L\$   | 0.238         | $(round(CL, digits=3))    | $(round(abs(CL-CLexp)/CLexp*100, digits=1))% | *`0.257`* |
+    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=1))% | *`0.0033`* |
     """
 
     open(joinpath(outdata_path, run_name*"-CLCD.md"), "w") do f
