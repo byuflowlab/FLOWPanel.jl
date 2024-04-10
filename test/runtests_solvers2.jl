@@ -51,7 +51,7 @@ try
 
         using Metal
         push!(solvers_to_test, ( "LUdiv + GPU (Metal 64)",
-                                (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float64}, solver_optargs=()) ) )
+                                (solver=pnl.solve_ludiv!, GPUArray=MtlArray{Float32}, solver_optargs=()) ) )
 
     end
 catch e
