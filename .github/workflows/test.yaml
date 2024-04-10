@@ -7,24 +7,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        julia-version: ['1.9', '1.10']
+        julia-version: ['1.6', '1.8', '1.10']
         julia-arch: [x64]
         os: [ubuntu-latest, macOS-latest]
 
     steps:
-      - name: Install matplotlib
-        run: if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y python3-matplotlib; fi
-        shell: bash
       - uses: actions/checkout@v2
       - uses: julia-actions/setup-julia@v1
         with:
           version: ${{ matrix.julia-version }}
-      - name: Override Conda Python
-        run: if [ "$RUNNER_OS" = "Linux" ]; then julia -e 'import Pkg; Pkg.add("PyCall"); ENV["PYTHON"]="/usr/bin/python3"; Pkg.build("PyCall")'; fi
-        shell: bash
-      - name: Install dependencies
-        env:
-          PYTHON: ""
-        run: julia -e 'using Pkg; Pkg.add(url="https://github.com/byuflowlab/GeometricTools.jl"); Pkg.instantiate()';
       # - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1

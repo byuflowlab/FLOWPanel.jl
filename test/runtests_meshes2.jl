@@ -5,7 +5,12 @@
 
 using Test
 import Printf: @printf
-import GeoIO
+
+import Pkg; Pkg.add("GeoIO")    # This is here as opposed than in Project.toml
+import GeoIO                    # because GeoIO is only compatible with Julia
+                                # v1.9+, and we don't want to make the whole
+                                # package follow the same compatibility
+                                # constraint only because of this unit test
 
 import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
