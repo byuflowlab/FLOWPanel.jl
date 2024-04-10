@@ -2,6 +2,7 @@ using Documenter
 using FLOWPanel
 const pnl = FLOWPanel
 
+include("src/generate_index.jl")
 include("src/generate_examples.jl")
 
 makedocs(
@@ -11,7 +12,7 @@ makedocs(
                                 assets = ["assets/favicon.ico"],
                             ),
     pages = [
-                "Home"              => "index.md",
+                "Intro"             => "index.md",
                 "Potential Flow"    => "potentialflow.md",
                 "Elements"          => [
                                         "elements/paneldefinition.md",
