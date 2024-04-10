@@ -10,6 +10,7 @@ makedocs(
     format = Documenter.HTML(;
                                 sidebar_sitename = false,
                                 assets = ["assets/favicon.ico"],
+                                collapselevel = 1
                             ),
     pages = [
                 "Intro"             => "index.md",
@@ -40,7 +41,7 @@ makedocs(
                                                                 "geometry/panel-gradient.md"
                                                             ]
                                       ],
-                "Examples"          => [
+                "Tutorials"        => [
                                         "Swept Wing" => [
                                                                 "4.2° Angle of Attack" =>
                                                                             "examples/sweptwing-4p2aoa.md",
