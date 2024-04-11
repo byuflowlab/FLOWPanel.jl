@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Lofting Method · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Intro</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Elements</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/constantvortexsheet/">Constant Vortex Sheet</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox" checked/><label class="tocitem" for="menuitem-4"><span class="docs-label">Geometry Engine</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox" checked/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gridgeneration/">Methods</a></li><li class="is-active"><a class="tocitem" href>Lofting Method</a><ul class="internal"><li><a class="tocitem" href="#Node-and-Cell-Indexing"><span>Node and Cell Indexing</span></a></li><li><a class="tocitem" href="#Example-—-Wing,-uniform-mesh"><span>Example — Wing, uniform mesh</span></a></li><li><a class="tocitem" href="#Example-—-Wing,-localized-refinement-mesh"><span>Example — Wing, localized refinement mesh</span></a></li></ul></li><li><a class="tocitem" href="../gridgeneration-pathloft/">Path-Lofting Method</a></li><li><a class="tocitem" href="../gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../basics-surfacegrid/">Surface Grid</a></li><li><a class="tocitem" href="../panel-gradient/">Panel Gradients</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">Tutorials</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../../examples/sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../../examples/centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../../examples/centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/duct-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../../examples/duct-leastsquares/">Least-Squares Solver</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Blended Wing Body</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/blendedwingbody-cad/">CAD Model</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-gmsh/">Unstructured Meshing</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-aero/">Import Mesh and Solve</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-gpucpu/">GPU and CPU Acceleration</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Geometry Engine</a></li><li><a class="is-disabled">Grid Generation</a></li><li class="is-active"><a href>Lofting Method</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Lofting Method</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/geometry/gridgeneration-loft.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Lofting-Method"><a class="docs-heading-anchor" href="#Lofting-Method">Lofting Method</a><a id="Lofting-Method-1"></a><a class="docs-heading-anchor-permalink" href="#Lofting-Method" title="Permalink"></a></h1><p>The following function in GeometricTools facilitates lofting of a surface geometry through a set of cross sections, doing a first order (linear) interpolation between sections.</p><article class="docstring"><header><a class="docstring-binding" id="GeometricTools.generate_loft" href="#GeometricTools.generate_loft"><code>GeometricTools.generate_loft</code></a> — <span class="docstring-category">Function</span></header><section><div><p><code>generate_loft(crosssections, bscale, b_pos, chords, twists, LE_x, LE_z)</code></p><p>Generates a lofted surface geometry. The name of the arguments are taken from   its initial application to the lofting of an aircraft wing.</p><p><strong>Arguments</strong></p><ul><li><code>bscale::Float64</code>         : Semi-span scale. It will scale the entire                             geometry by this factor.</li><li><code>b_pos::Array{Float64, 1}</code>: Normalized span positions y/bscale of the                             following distributions.</li><li><code>chords::Array{Float64,1}</code>: Chord c/bscale distribution.</li><li><code>twists::Array{Float64,1}</code>: Twist (deg) distribution.</li><li><code>LE_x::Array{Float64,1}</code>  : x-position (chordwise) x/bscale of leading edge                             distribution.</li><li><code>LE_z::Array{Float64,1}</code>  : z-position (dihedral-wise) z/bscale of leading                             edge distribution.</li><li><code>crosssections::Array{Tuple{T,Array{T,2}}, 1}</code>    : cross sections along the                             span in the form [(y/bscale, crosssection)],                             where <code>crosssection</code> is a matrix that contains                             all points of the airfoil contour indexed by                             row. In order to define the resulting normals                             pointing out of the geometry, the points in                             <code>crosssection</code> must start from the trailing                             edge, go around the top side towards the leading                             edge, and back to the trailing edge around the                             bottom side. ALL CROSS SECTIONS MUST HAVE THE                             SAME NUMBER OF POINTS.</li></ul><p><strong>Optional Arguments</strong></p><ul><li><code>tilt_z::Array{Float64,1}</code>: Tilting (deg) about the z-axis of every span                             cross section. This is also a distribution.</li><li><code>symmetric::Bool</code>         : Whether to consider the <code>crosssections</code> to be                             symmetric about the semi-span. If true, only                             positive y/bscale are neeeded.</li></ul><p>NOTE: The resulting geometry will be a structured surface mesh with the first   index going in chordwise direction starting from the TE around the bottom   surface and around back to the TE. The second index is the in the spanwise   direction starting at left end (lowest position along y axis) to right end.</p></div></section><section><div><p><code>generate_loft(crosssections, bscale, b_low, b_up, b_NDIVS, chords, twists, LE_x, LE_z; optargs...)</code></p><p>Generates a lofted surface geometry. The name of the arguments are taken from   its initial application to the lofting of an aircraft wing.</p><p><strong>Arguments</strong></p><ul><li><code>bscale::Float64</code>         : Semi-span scale. It will scale the entire                             geometry by this factor. All y/bscale values in                             the following arguments must go from 0 to 1.</li><li><code>b_low::Float64</code>          : Scaled lower bound of the span.</li><li><code>b_up::Float64</code>           : Scaled upper bound of the span. To generate                             a symmetric wing, give it b<em>low=-1, b</em>up=1 and .                             symmetric=true; for a semi-span, give it                             b<em>low=0, b</em>up=1. If generating a prop blade,                             give it b<em>low=Rhub/Rtip, b</em>up=1.</li><li><code>b_NDIVS</code>                 : Number of divisions (cells) along span. This                             if either an Int or an array of sections in the                             format of <code>multidiscretize()</code>.</li><li><code>chords::Array{Float64,2}</code>: Chord distribution along the span in the form                             [y/bscale c/bscale].</li><li><code>twists::Array{Float64,2}</code>: Twist distribution along the span in the form                             [y/bscale deg].</li><li><code>LE_x::Array{Float64,2}</code>  : x-position (chordwise) of leading edge along the                             span in the form [y/bscale x/bscale].</li><li><code>LE_z::Array{Float64,2}</code>  : z-position (dihedral-wise) of leading edge along                             the span in the form [y/bscale z/bscale].</li><li><code>crosssections::Array{Tuple{T,Array{T,2}}, 1}</code>    : cross sections along the                             span in the form [(y/bscale, crosssection)],                             where <code>crosssection</code> is a matrix that contains                             all points of the airfoil contour indexed by                             row. In order to define the resulting normals                             pointing out of the geometry, the points in                             <code>crosssection</code> must start from the trailing                             edge, go around the top side towards the leading                             edge, and back to the trailing edge around the                             bottom side. ALL CROSS SECTIONS MUST HAVE THE                             SAME NUMBER OF POINTS.</li></ul><p><strong>Optional Arguments</strong></p><ul><li><code>tilt_z::Array{Float64,2}</code>: Tilting about the z-axis of every span cross                             section in the form [(y/bscale, deg)].</li><li><code>spl_k</code>, <code>spl_bc</code>, <code>spl_s</code>: Spline parameters with k the degree of the                             spline, bc the boundary condition, and s the                             smoothing or error of the spline.</li></ul><p>NOTE: The resulting geometry will be a structured surface mesh with the first   index going in chordwise direction starting from the TE around the bottom   surface and around back to the TE. The second index is the in the spanwise   direction starting at left end (lowest position along y axis) to right end.</p></div></section><section><div><p><code>generate_loft(crosssections, upper_rfl_NDIVS, lower_rfl_NDIVS, args...; rflspl_k::Int64=5, rflspl_s::Real=0.001, verify_rflspline::Bool=true, rfloptargs=[], optargs...)</code></p><p>This function also rediscretizes the cross sections as indicated by   <code>upper_rfl_NDIVS</code>, and <code>lower_rfl_NDIVS</code> (upper and lower surface sections,   respectively). Hence, the original cross sections need not to have the same   number of points.</p></div></section><section><div><p><code>generate_loft(crosssections::Array{Tuple{T,String}, 1},                         data_path::String, args...; header_len::Int64=1,                         delim::String=&quot; &quot;, optargs...) where{T&lt;:Real}</code></p><p>Loft a geometry where the cross sections are read from the files indicated by <code>crosssections</code> found in <code>data_path</code>.</p></div></section></article><h2 id="Node-and-Cell-Indexing"><a class="docs-heading-anchor" href="#Node-and-Cell-Indexing">Node and Cell Indexing</a><a id="Node-and-Cell-Indexing-1"></a><a class="docs-heading-anchor-permalink" href="#Node-and-Cell-Indexing" title="Permalink"></a></h2><p>It is recommended that wings follow conventional aerodynamic coordinates, building the wing from left tip (<span>$-y$</span>) to right tip (<span>$+y$</span>), leading edge pointing in the direction of <span>$-x$</span> and trailing edge in the direction of <span>$+x$</span>, and top side of the airfoil in the direction of <span>$+z$</span>. However, the user is free to define wings in any arbitrary convention since the solvers are indifferent to orientation. Unless otherwise indicated, the solvers are indifferent to whether normals point inside or outside the geometry, but for consistency, it is good practice to define the geometry such as to have the normals pointing outside. This is done by building every airfoil <strong>starting at the trailing edge first going around the bottom side towards the leading edge, and going back to the trailing edge around the top side</strong>, while using <code>b_low &lt; b_up</code>.</p><p>Following these guidelines, <code>GeometricTools.generate_loft</code> returns a lofted <strong>quadrilateral</strong> surface with the following node and cell indexing pattern:</p>
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>First Coordinate</center>
+          </th>
+          <th>
+              <center>Second Coordinate</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/loft-quad-cellcoordinate03.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/loft-quad-cellcoordinate02.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Node Index</center>
+          </th>
+          <th>
+              <center>Cell Index</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/loft-quad-nodeindex00.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/loft-quad-cellindex01.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center>
+
+<br><br>
+
+<center>
+  <table>
+      <tr>
+          <th>
+              <center>Cell (1, 1)</center>
+          </th>
+          <th>
+              <center>Cell (16, 1)</center>
+          </th>
+          <th>
+              <center>Cell (15, 2)</center>
+          </th>
+      </tr>
+      <tr>
+          <td>
+              <img src="../../assets/images/loft-quad-cellnodes00.0000.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/loft-quad-cellnodes00.0001.png" alt="Pic here" width="450px">
+          </td>
+          <td>
+              <img src="../../assets/images/loft-quad-cellnodes00.0002.png" alt="Pic here" width="450px">
+          </td>
+      </tr>
+  </table>
+</center><h2 id="Example-—-Wing,-uniform-mesh"><a class="docs-heading-anchor" href="#Example-—-Wing,-uniform-mesh">Example — Wing, uniform mesh</a><a id="Example-—-Wing,-uniform-mesh-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Wing,-uniform-mesh" title="Permalink"></a></h2><p>Here is a wing with a 5-th order spline. Since I&#39;m giving it data points to spline that are quite sparse along the span, the splined values end up curving the chord distribution.</p><pre><code class="language-julia hljs">import FLOWPanel as pnl
+import GeometricTools as gt
+                                # Airfoil data path
+airfoil_path = joinpath(pnl.def_data_path, &quot;airfoils&quot;);
+
+file_name = &quot;paneledwing01&quot;     # Output file name
+save_path = &quot;./&quot;                # Save path
+
+# ----------------- GEOMETRY DESCRIPTION -------------------------------------------
+semispan = 10                       # (m) semi-span length
+
+chords = [0.00 0.25;                # (semi-span position, chord c/semib)
+          0.25 0.20;
+          1.00 0.10]
+
+twists = [0.0 5;                    # (semi-span position, twist (deg))
+          1.0 0]
+
+x_pos = [0.00 0;                    # (semi-span position, LE x-position x/semib)
+         0.25 1/40;
+         1.00 1/8;]
+
+z_pos = [0.00 0;                    # (semi-span position, LE x-position x/semib)
+         0.25 1/100;
+         1.00 1/50]
+
+
+airfoil_files = [(0.0, &quot;naca6412.dat&quot;), # (semi-span position, airfoil file)
+                 (1.0, &quot;naca6412.dat&quot;)]
+
+
+# ----------------- MESHING PARAMETERS ---------------------------------------------
+urfl_NDIVS = 25                     # Cells on upper side of airfoils
+lrfl_NDIVS = 25                     # Cells on lower side of airfoils
+b_NDIVS = 76                        # Span cells
+
+
+# ----------------- LOFTING PARAMETERS ---------------------------------------------
+b_low = -1.0                        # Lower bound of span lofting
+b_up = 1.0                          # Upper bound of span lofting
+symmetric = true                    # Lofting symmetric about b=0
+spl_k = 5                           # Spline order of distributions along span
+spl_s = 0.001                       # Spline smoothing of distribution along span
+verify_spline = true                # Plots the splined distributions
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing00.gif" alt="Vid here" style="width: 900px;"/><p>In order to avoid the curving, we reduce the splining degree to only first order—which becomes a linear interpolation—however, the smoothing makes everything just a simple line from root to tip:</p><pre><code class="language-julia hljs">spl_k = 1                           # Spline order of distributions along span
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing02.gif" alt="Vid here" style="width: 900px;"/><p>Decreasing the smoothing forces the spline to intersect every data point, finally obtaining the desired geometry:</p><pre><code class="language-julia hljs">spl_k = 1                           # Spline order of distributions along span
+spl_s = 0.0000001                   # Spline smoothing of distribution along span
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`);</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing01.gif" alt="Vid here" style="width: 900px;"/><h2 id="Example-—-Wing,-localized-refinement-mesh"><a class="docs-heading-anchor" href="#Example-—-Wing,-localized-refinement-mesh">Example — Wing, localized refinement mesh</a><a id="Example-—-Wing,-localized-refinement-mesh-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Wing,-localized-refinement-mesh" title="Permalink"></a></h2><p>Here is an example of how to defined a localized refinement. Instead of defining the a uniform discretization around the airfoil cross sections as</p><pre><code class="language-julia hljs">urfl_NDIVS = 25                     # Cells on upper side of airfoils
+lrfl_NDIVS = 25                     # Cells on lower side of airfoils</code></pre><p>we define the divisions as sections of discretization as follows:</p><pre><code class="language-julia hljs">urfl_NDIVS = [(0.25, 10,   10.0, false),       # Cells on upper side of airfoils
+              (0.50,  7,    1.0, true),
+              (0.25,  8, 1/10.0, false)]                    
+lrfl_NDIVS = urfl_NDIVS                        # Cells on lower side of airfoils</code></pre><p>The first section starts at the leading edge, with a length of 0.25 and 10 divisions with a geometric expansion of 10.0. The second section is the center of airfoil, and the last one is the trailing edge:</p><pre><code class="language-julia hljs">import FLOWPanel as pnl
+import GeometricTools as gt
+                                # Airfoil data path
+airfoil_path = joinpath(pnl.def_data_path, &quot;airfoils&quot;);
+
+file_name = &quot;paneledwing02&quot;     # Output file name
+save_path = &quot;./&quot;                # Save path
+
+# ----------------- GEOMETRY DESCRIPTION -------------------------------------------
+semispan = 10                       # (m) semi-span length
+
+chords = [0.00 0.25;                # (semi-span position, chord c/semib)
+          0.25 0.20;
+          1.00 0.10]
+
+twists = [0.0 5;                    # (semi-span position, twist (deg))
+          1.0 0]
+
+x_pos = [0.00 0;                    # (semi-span position, LE x-position x/semib)
+         0.25 1/40;
+         1.00 1/8;]
+
+z_pos = [0.00 0;                    # (semi-span position, LE x-position x/semib)
+         0.25 1/100;
+         1.00 1/50]
+
+
+airfoil_files = [(0.0, &quot;naca6412.dat&quot;), # (semi-span position, airfoil file)
+                 (1.0, &quot;naca6412.dat&quot;)]
+
+
+# ----------------- MESHING PARAMETERS ---------------------------------------------
+urfl_NDIVS = [(0.25, 10,   10.0, false),       # Cells on upper side of airfoils
+              (0.50,  7,    1.0, true),
+              (0.25,  8, 1/10.0, false)]                    
+lrfl_NDIVS = urfl_NDIVS             # Cells on lower side of airfoils
+b_NDIVS = 76                        # Span cells
+
+
+# ----------------- LOFTING PARAMETERS ---------------------------------------------
+b_low = -1.0                        # Lower bound of span lofting
+b_up = 1.0                          # Upper bound of span lofting
+symmetric = true                    # Lofting symmetric about b=0
+spl_k = 1                           # Spline order of distributions along span
+spl_s = 0.0000001                   # Spline smoothing of distribution along span
+verify_spline = false               # Plots the splined distributions
+verify_rflspline = true             # Plots the splined airfoil cross sections
+
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline,
+                                        verify_rflspline=verify_rflspline
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing03_2.gif" alt="Vid here" style="width: 900px;"/><p>It works great, however, zooming in we realize that the leading edge of the wing is blunt, in spite of refinement. This is due to the splining of the airfoil cross sections smoothing out the high curvature at the leading edge (see below, top image) and failing to actually reconnect bottom and top surfaces. We fix this by decreasing the smoothness of the airfoil splines (see below, bottom image).</p><pre><code class="language-julia hljs">rflspl_s = 0.00000001               # Spline smoothing of airfoil cross sections.
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline,
+                                        verify_rflspline=verify_rflspline,
+                                        rflspl_s=rflspl_s
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="../../assets/images/wing05_2.png" alt="Pic here" style="width: 900px;"/><p>Finally, we can also refine the mesh towards both tips as shown below.</p><pre><code class="language-julia hljs">b_NDIVS = [(1.0, 49, 20.0, true)]   # Span cell sections
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoil_files, airfoil_path, urfl_NDIVS, lrfl_NDIVS,
+                                        semispan, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        verify_spline=verify_spline,
+                                        verify_rflspline=false,
+                                        rflspl_s=rflspl_s
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/wing05.gif" alt="Vid here" style="width: 900px;"/><h3 id="Example-—-Propeller,-nonsymmetric-loft"><a class="docs-heading-anchor" href="#Example-—-Propeller,-nonsymmetric-loft">Example — Propeller, nonsymmetric loft</a><a id="Example-—-Propeller,-nonsymmetric-loft-1"></a><a class="docs-heading-anchor-permalink" href="#Example-—-Propeller,-nonsymmetric-loft" title="Permalink"></a></h3><p>Here we examplify the versatility of the lofting capabilities of our geometric engine by generating a two-bladed rotor that is lofted from tip to tip:</p><pre><code class="language-julia hljs">import FLOWPanel as pnl
+import GeometricTools as gt
+                                # Airfoil data path
+airfoil_path = joinpath(pnl.def_data_path, &quot;airfoils&quot;);
+
+file_name = &quot;prop00&quot;     # Output file name
+save_path = &quot;./&quot;                # Save path
+
+# ----------------- GEOMETRY DESCRIPTION -------------------------------------------
+Rtip = 10*0.0254/2                   # (m) Radius of propeller
+
+chords = [0.0 0.134*2/3;                # (blade position, chord c/Rtip)
+#             0.086 0.137106*5/6;
+#             0.86 0.141*2/3;
+#             0.16 0.144606;
+            0.2 0.154291;
+            0.25 0.175;
+            0.3 0.19;
+            0.35 0.198;
+            0.4 0.202;
+            0.45 0.2;
+            0.5 0.195;
+            0.55 0.186;
+            0.6 0.174;
+            0.65 0.161;
+            0.7 0.145;
+            0.75 0.129;
+            0.8 0.112;
+            0.85 0.096;
+            0.9 0.081;
+            0.9245 0.071125;
+            0.954 0.066125;
+            1.0 0.0233333]
+
+twists = [                     # (blade position, twist (deg))
+#             0.01 0;                
+#             0.04715 22.0;
+#             0.088145 30.0;
+#             0.15 37.86;
+#             0.2 45.82;
+            0.25 44.19;
+            0.3 38.35;
+            0.35 33.64;
+            0.4 29.9;
+            0.45 27.02;
+            0.5 24.67;
+            0.55 22.62;
+            0.6 20.88;
+            0.65 19.36;
+            0.7 17.98;
+            0.75 16.74;
+            0.8 15.79;
+            0.85 14.64;
+            0.9 13.86;
+            0.95 12.72;
+            1.0 11.53]
+
+x_pos = [                        # (blade position, LE x-position x/Rtip)
+#             0.0 0.0;
+#             0.0266906 -0.0675531*0;      
+#             0.0993744 -0.0781078*0;
+            0.16992 -0.0810668;
+            0.209422 -0.0860351;
+            0.260681 -0.0914966;
+            0.310887 -0.0958101;
+            0.352557 -0.0986618;
+            0.39209 -0.101424;
+            0.430601 -0.100831;
+            0.473388 -0.100419;
+            0.521551 -0.0980235;
+            0.574004 -0.0947046;
+            0.632903 -0.0894484;
+            0.69823 -0.083358;
+            0.7518 -0.0767745;
+            0.801094 -0.0700117;
+            0.865384 -0.0616702;
+            0.94041 -0.0504677;
+            0.973671 -0.0430323;
+            0.986802 -0.030395]
+
+z_pos = [0.0 0.0;                  # (blade position, LE x-position x/Rtip)
+#             0.075 -0.003*0;
+            0.12 0.016;
+            0.2 0.044;
+            0.4 0.024;
+            0.6 0.00278494;
+            0.8 -0.02;
+            0.95 -0.0388821;
+            1.0 -0.056]
+
+
+airfoil_files = [                    # (blade position, airfoil file)
+            (0.0, &quot;Cyl2.csv&quot;),  
+            (0.02, &quot;Cyl2.csv&quot;),  
+#             (0.075, &quot;rflsec7.csv&quot;),
+#             (0.12, &quot;rflsec6.csv&quot;),
+            (0.2, &quot;naca5521.csv&quot;),
+            (0.3, &quot;naca4515.csv&quot;),
+            (0.4, &quot;naca5513.csv&quot;),
+            (0.5, &quot;naca5513.csv&quot;),
+            (0.6, &quot;naca4512.csv&quot;),
+            (0.7, &quot;naca4511.csv&quot;),
+            (0.8, &quot;naca4410.csv&quot;),
+            (0.9, &quot;naca4309.csv&quot;),
+            (1.0, &quot;naca4309.csv&quot;)
+                ]
+
+# Mirrors distribution for opposite blade
+auxM = [chords[i,j] for i in size(chords,1):-1:1, j in 1:2]
+chords = vcat(auxM.*[[-1, 1][j] for i in 1:size(auxM,1), j in 1:2], chords)
+
+auxM = [twists[i,j] for i in size(twists,1):-1:1, j in 1:2]
+auxM[:,2] .+= 180
+twists = vcat(auxM.*[[-1, -1][j] for i in 1:size(auxM,1), j in 1:2], twists)
+
+auxM = [x_pos[i,j] for i in size(x_pos,1):-1:1, j in 1:2]
+x_pos = vcat(auxM.*[[-1, -1][j] for i in 1:size(auxM,1), j in 1:2], x_pos)
+
+auxM = [z_pos[i,j] for i in size(z_pos,1):-1:1, j in 1:2]
+z_pos = vcat(auxM.*[[-1, 1][j] for i in 1:size(auxM,1), j in 1:2], z_pos)
+
+# auxM = reverse([(-pos, afile) for (pos, afile) in airfoil_files])
+# airfoil_files = vcat(auxM, airfoil_files)
+
+# Some parameters regarding the format of the airfoil files
+header_len = 0
+delim = &quot;,&quot;
+
+# Reads and reflect the airfoils of opposite blade
+airfoils = [(pos, pnl.gt.readcontour(f_name; path=airfoil_path,
+                                      header_len=header_len, delim=delim,
+                                      output=&quot;matrix&quot;))
+                              for (pos, f_name) in airfoil_files]
+
+auxM = [(-pos, M .* [[1, -1][j] for i in 1:size(M,1), j in 1:2]) for (pos, M) in airfoils]
+airfoils = vcat(reverse(auxM), airfoils)
+
+
+# ----------------- MESHING PARAMETERS ---------------------------------------------
+N=4                                         # Scaling of number of cells
+urfl_NDIVS = [(0.10, 3*N, 5.0, false),      # Cells on upper side of airfoils
+              (0.30, 3*N, 2.0, true),
+              (0.10, 3*N, 1/5, false)]                   
+lrfl_NDIVS = urfl_NDIVS                     # Cells on lower side of airfoils
+b_NDIVS = [(1.0, 50*N, 5.0, true)]          # Span cells
+
+
+# ----------------- LOFTING PARAMETERS ---------------------------------------------
+b_low = -1.0                        # Lower bound of span lofting
+b_up = 1.0                          # Upper bound of span lofting
+symmetric = false                   # Lofting symmetric about b=0
+spl_k = 5                           # Spline order of distributions along span
+spl_s = 0.0001                      # Spline smoothing of distribution along span
+rflspl_s = 0.00001                  # Spline smoothing of airfoil cross sections.
+verify_spline = true                # Plots the splined distributions
+verify_rflspline = true             # Plots the splined airfoil cross sections
+
+
+# ----------------- GENERATE WING --------------------------------------------------
+wing = pnl.gt.generate_loft(airfoils, urfl_NDIVS, lrfl_NDIVS,
+                                        Rtip, b_low, b_up, b_NDIVS,
+                                        chords, twists, x_pos, z_pos;
+                                        symmetric=symmetric,
+                                        spl_k=spl_k, spl_s=spl_s,
+                                        rflspl_s=rflspl_s,
+                                        verify_spline=verify_spline,
+                                        verify_rflspline=verify_rflspline
+                                    )
+
+# Save vtk and call paraview
+pnl.gt.save(wing, file_name; path=save_path, format=&quot;vtk&quot;)
+
+run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)</code></pre><img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/prop07.gif" alt="Vid here" style="width: 900px;"/></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../gridgeneration/">« Methods</a><a class="docs-footer-nextpage" href="../gridgeneration-pathloft/">Path-Lofting Method »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Thursday 11 April 2024 17:44">Thursday 11 April 2024</span>. Using Julia version 1.10.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
