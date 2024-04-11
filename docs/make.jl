@@ -83,5 +83,5 @@ deploydocs(
     deps = nothing,
     make = nothing,
     # devbranch = "master"
-    devbranch = "dev"
+    # devbranch = "dev"
 )
