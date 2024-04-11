@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Import Mesh and Solve · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Intro</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Elements</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../elements/paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../../elements/constantsource/">Constant Source</a></li><li><a class="tocitem" href="../../elements/constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../../elements/constantvortexsheet/">Constant Vortex Sheet</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">Geometry Engine</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/gridgeneration/">Methods</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-pathloft/">Path-Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../../geometry/basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../../geometry/basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../../geometry/basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../../geometry/basics-surfacegrid/">Surface Grid</a></li><li><a class="tocitem" href="../../geometry/panel-gradient/">Panel Gradients</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox" checked/><label class="tocitem" for="menuitem-5"><span class="docs-label">Tutorials</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../duct-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../duct-leastsquares/">Least-Squares Solver</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox" checked/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Blended Wing Body</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../blendedwingbody-cad/">CAD Model</a></li><li><a class="tocitem" href="../blendedwingbody-gmsh/">Unstructured Meshing</a></li><li class="is-active"><a class="tocitem" href>Import Mesh and Solve</a></li><li><a class="tocitem" href="../blendedwingbody-gpucpu/">GPU and CPU Acceleration</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li><a class="is-disabled">Blended Wing Body</a></li><li class="is-active"><a href>Import Mesh and Solve</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Import Mesh and Solve</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/examples/blendedwingbody-aero.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><center>
+  <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb005.jpg" alt="Pic here" style="width: 100%;"/>
+</center><h1 id="Import-Mesh-and-Solve"><a class="docs-heading-anchor" href="#Import-Mesh-and-Solve">Import Mesh and Solve</a><a id="Import-Mesh-and-Solve-1"></a><a class="docs-heading-anchor-permalink" href="#Import-Mesh-and-Solve" title="Permalink"></a></h1><p>Here we import the mesh into FLOWPanel using <a href="https://juliageometry.github.io/MeshesDocs">Meshes.jl</a>, identify the trailing edge, and run the watertight solver.</p><div class="admonition is-info"><header class="admonition-header">Default Gmsh files</header><div class="admonition-body"><p>We have pre-generated and uploaded a Gmsh mesh to this example so that you can run this section without needing to complete the previous sections. However, if you would like to use your own mesh, simply change <code>read_path</code>, <code>meshfile</code>, and <code>trailingedgefile</code> to point to your files.</p></div></div><pre><code class="language-julia hljs">#=##############################################################################
+# DESCRIPTION
+    Blended wing body resembling the Airbus ZEROe BWB twin-engine subscale
+    model.
+
+# AUTHORSHIP
+  * Author    : Eduardo J. Alvarez
+  * Email     : Edo.AlvarezR@gmail.com
+  * Created   : Apri 2024
+  * License   : MIT License
+=###############################################################################
+
+import FLOWPanel as pnl
+import FLOWPanel: norm, dot, cross
+
+import Meshes
+import GeoIO
+import Rotations: RotX, RotY, RotZ
+
+# import CUDA                               # Uncomment this to use GPU (if available)
+
+
+run_name        = &quot;blendedwing&quot;             # Name of this run
+
+save_path       = run_name                  # Where to save outputs
+paraview        = true                      # Whether to visualize with Paraview
+read_path       = joinpath(pnl.examples_path, &quot;data&quot;) # Where to read Gmsh files from
+
+# ----------------- SIMULATION PARAMETERS --------------------------------------
+AOA             = 10.0                      # (deg) freestream angle of attack
+magVinf         = 30.0                      # (m/s) freestream velocity
+rho             = 1.225                     # (kg/m^3) air density
+
+
+# ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+meshfile        = joinpath(read_path, &quot;zeroebwb.msh&quot;)    # Gmsh file to read
+trailingedgefile= joinpath(read_path, &quot;zeroebwb-TE.msh&quot;) # Gmsh file with trailing edge
+
+offset          = [0, 0, 0]                 # Offset to center the mesh
+rotation        = RotZ(-90*pi/180)*RotX(90*pi/180) # Rotation to align mesh
+scaling         = 2e-3                      # Factor to scale original mesh to
+                                            # the approximate dimensions of the
+                                            # ZEROEe BWB subscale model
+
+spandir         = [0, 1, 0]                 # Span direction used to orient the trailing edge
+flip            = false                     # Whether to flip control points against the direction of normals
+                                            # NOTE: use `flip=true` if the normals
+                                            #       point inside the body
+
+Sref            = 3.23^2 / 8.0             # (m^2) reference area
+
+# ----------------- SOLVER SETTINGS -------------------------------------------
+
+# Solver: direct linear solver for open bodies
+# bodytype = pnl.RigidWakeBody{pnl.VortexRing} # Wake model and element type
+
+# Solver: least-squares solver for watertight bodies
+bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
+
+
+# ----------------- GENERATE BODY ----------------------------------------------
+# Read Gmsh mesh
+msh = GeoIO.load(meshfile)
+msh = msh.geometry
+
+# Read Gmsh line of trailing edge
+TEmsh = GeoIO.load(trailingedgefile)
+TEmsh = TEmsh.geometry
+
+# Transform the original mesh: Translate, rotate, and scale
+msh = msh |&gt; Meshes.Translate(offset...) |&gt; Meshes.Rotate(rotation) |&gt; Meshes.Scale(scaling)
+
+# Apply the same transformations to the trailing edge
+TEmsh = TEmsh |&gt; Meshes.Translate(offset...) |&gt; Meshes.Rotate(rotation) |&gt; Meshes.Scale(scaling)
+
+# Wrap Meshes object into a Grid object from GeometricTools
+grid = pnl.gt.GridTriangleSurface(msh)
+
+# Convert TE Meshes object into a matrix of points used to identify the trailing edge
+trailingedge = pnl.gt.vertices2nodes(TEmsh.vertices)
+
+# Sort TE points from left to right
+trailingedge = sortslices(trailingedge; dims=2, by = X -&gt; pnl.dot(X, spandir))
+
+# Estimate span length (used as a reference length)
+spantips = extrema(X -&gt; pnl.dot(X, spandir), eachcol(trailingedge))
+span = spantips[2] - spantips[1]
+
+# Generate TE shedding matrix
+shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
+
+# Generate paneled body
+body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
+
+println(&quot;Number of panels:\t$(body.ncells)&quot;)
+
+
+# ----------------- CALL SOLVER ------------------------------------------------
+println(&quot;Solving body...&quot;)
+
+# Freestream vector
+Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
+
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body.ncells)
+
+# Unitary direction of semi-infinite vortex at points `a` and `b` of each
+# trailing edge panel
+Das = repeat(Vinf/magVinf, 1, body.nsheddings)
+Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
+
+# Solve body (panel strengths) giving `Uinfs` as boundary conditions and
+# `Das` and `Dbs` as trailing edge rigid wake direction
+@time pnl.solve(body, Uinfs, Das, Dbs)
+
+# Uncomment this to use GPU instead (if available)
+# @time pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})
+
+# ----------------- POST PROCESSING ----------------------------------------
+println(&quot;Post processing...&quot;)
+
+# Calculate surface velocity U on the body
+Us = pnl.calcfield_U(body, body)
+
+# NOTE: Since the boundary integral equation of the potential flow has a
+#       discontinuity at the boundary, we need to add the gradient of the
+#       doublet strength to get an accurate surface velocity
+
+# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
+UDeltaGamma = pnl.calcfield_Ugradmu(body)
+# UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true, force_cellTE=false)
+
+# Add both velocities together
+pnl.addfields(body, &quot;Ugradmu&quot;, &quot;U&quot;)
+
+# Calculate pressure coefficient (based on U + U_∇μ)
+@time Cps = pnl.calcfield_Cp(body, magVinf)
+
+# Calculate the force of each panel (based on Cp)
+@time Fs = pnl.calcfield_F(body, magVinf, rho)
+
+# Calculate total force of the vehicle decomposed as lift, drag, and sideslip
+Dhat = Vinf/norm(Vinf)                      # Drag direction
+Shat = [0, 1, 0]                            # Span direction
+Lhat = cross(Dhat, Shat)                    # Lift direction
+
+LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
+
+L = LDS[:, 1]
+D = LDS[:, 2]
+
+# Force coefficients
+nondim = 0.5*rho*magVinf^2*Sref             # Normalization factor
+CL = sign(dot(L, Lhat)) * norm(L) / nondim
+CD = sign(dot(D, Dhat)) * norm(D) / nondim
+
+@show L
+@show D
+@show CL
+@show CD
+
+# ----------------- VISUALIZATION ------------------------------------------
+
+# Save body as VTK
+vtks = save_path*&quot;/&quot;                        # String with VTK output files
+vtks *= pnl.save(body, run_name; path=save_path)
+
+# Call Paraview
+if paraview
+    run(`paraview --data=$(vtks)`)
+end</code></pre><span style="font-size: 0.9em; color:gray;"><i>
+    Run time: ~90 seconds on a Dell Precision 7760 laptop (no GPU). <br>
+</i></span>
+<br><br><center>
+  <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb009.jpg" alt="Pic here" style="width: 100%;"/>
+  <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb004.jpg" alt="Pic here" style="width: 100%;"/>
+</center>
+<br><br>
+<br><br><div class="admonition is-category-details"><header class="admonition-header">Tip</header><div class="admonition-body"><p>You can also automatically run this example and generate these plots with the following command:</p><pre><code class="language-julia hljs">import FLOWPanel as pnl
+
+include(joinpath(pnl.examples_path, &quot;blendedwingbody.jl&quot;))</code></pre></div></div><div class="admonition is-success"><header class="admonition-header">Checklist for importing meshes</header><div class="admonition-body"><ol><li><strong>Check whether normals point into the body:</strong> Using the flag  <code>debug=true</code> in <code>pnl.save(body, run_name; path=save_path, debug=true)</code>  will output the control points of the body along with the associated  normal vector of each panel.      We recommend opening the body and control points in ParaView and  visualizing the normals with the Glyph filter.      Whenever the normals are pointing into the body, the user needs  to flip the offset of the  control points with <code>CPoffset=-1e-14</code> or any other negligibly small  negative number. This won&#39;t flip the normals outwards, but it will flip  the zero-potential domain from outwards back to inside the body  (achieved by shifting the control points slightly into the body).</li><li><strong>Check that the trailing edge was correctly identified:</strong>  <code>pnl.save(body, run_name; path=save_path)</code> automatically outputes the  wake.      We recommend opening the body and wake in ParaView and visually  inspecting that the wake runs along the trailing edge line that you  defined under <code>trailingedge</code>.      If not successful, increase the resolution of <code>trailingedge</code> and tighten  the tolerance to something small like  <code>pnl.calc_shedding(grid, trailingedge; tolerance=0.0001*span)</code>.</li><li><strong>Choose the right solver for the geometry:</strong>  Use the least-squares solver with watertight bodies  (<code>bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}</code>), and the direct  linear solver with open bodies  (<code>bodytype = pnl.RigidWakeBody{pnl.VortexRing}</code>). The least-squares  solver runs much faster in GPU  (<code>pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})</code>),  but it comes at the price of sacrificing accuracy (single precision  numbers as opposed to double).</li></ol></div></div></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../blendedwingbody-gmsh/">« Unstructured Meshing</a><a class="docs-footer-nextpage" href="../blendedwingbody-gpucpu/">GPU and CPU Acceleration »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Thursday 11 April 2024 03:18">Thursday 11 April 2024</span>. Using Julia version 1.10.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

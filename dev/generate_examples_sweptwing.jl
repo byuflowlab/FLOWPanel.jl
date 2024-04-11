@@ -57,6 +57,7 @@ open(joinpath(output_path, output_name*"-4p2aoa.md"), "w") do fout
         <img src="../../assets/images/sweptwing000-loading.png" alt="Pic here" style="width: 100%;"/>
     </center>
     ```
+
     """)
 
     open(joinpath(data_path, "sweptwing000-CLCD.md"), "r") do fin
@@ -68,6 +69,19 @@ open(joinpath(output_path, output_name*"-4p2aoa.md"), "w") do fout
             println(fout, l)
         end
     end
+
+    println(fout, """
+
+    !!! details "Tip"
+        You can also automatically run this example and generate these plots
+        with the following command:
+        ```julia
+        import FLOWPanel as pnl
+
+        include(joinpath(pnl.examples_path, "sweptwing.jl"))
+        ```
+    """
+    )
 
 end
 
@@ -120,6 +134,17 @@ open(joinpath(output_path, output_name*"-aoasweep.md"), "w") do fout
         <img src="../../assets/images/sweptwing000-sweep-Cm.png" alt="Pic here" style="width: 50%;"/>
     </center>
     ```
+
+    !!! details "Tip"
+        You can also automatically run this example and generate these plots
+        with the following command:
+        ```julia
+        import FLOWPanel as pnl
+
+        include(joinpath(pnl.examples_path, "sweptwing.jl"))
+        include(joinpath(pnl.examples_path, "sweptwing_aoasweep.jl"))
+        
+        ```
     """)
 end
 
