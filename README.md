@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/code-open%20source-brightgreen.svg">
   </a>
 
-  <a href="https://flow.byu.edu/FLOWPanel.jl/dev/">
+  <a href="https://flow.byu.edu/FLOWPanel.jl">
     <img src="https://img.shields.io/badge/docs-stable-blue.svg">
   </a>
 </p>
@@ -67,7 +67,7 @@ Tested in Julia v1.10
 
 <p><br></p>
 
-* *Documentation:* [flow.byu.edu/FLOWPanel.jl](https://flow.byu.edu/FLOWPanel.jl/dev/)
+* *Documentation:* [flow.byu.edu/FLOWPanel.jl](https://flow.byu.edu/FLOWPanel.jl)
 * *Code:* [github.com/byuflowlab/FLOWPanel.jl](https://github.com/byuflowlab/FLOWPanel.jl)
 
 <p><br></p>
