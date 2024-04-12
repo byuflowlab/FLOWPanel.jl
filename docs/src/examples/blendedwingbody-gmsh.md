@@ -7,7 +7,7 @@ the wing.
 
 
 > **NOTE:** *the `CurveList`s described below are valid for the file
-> [`zeroebwb.STEP`](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb.STEP)
+> [`zeroebwb.STEP`](https://github.com/byuflowlab/FLOWPanel.jl/raw/master/examples/data/zeroebwb.STEP)
 > and Gmsh v4.8.4*
 
 0. Import STEP file
@@ -41,5 +41,8 @@ the wing.
 
 5. Export mesh as `.msh` in ASCII format v4: `File > Export` and select `Mesh - Gmsh MSH (*.msh)` in the dropdown menu
 
-
+!!! info "`.msh` File"
+    The resulting `.msh` file is available here:
+    [LINK](https://github.com/byuflowlab/FLOWPanel.jl/raw/master/examples/data/zeroebwb.msh)
+    (`right click → save as...`).
 

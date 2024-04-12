@@ -33,6 +33,6 @@ Pkg.add(Rotations)
 
 !!! info "STEP File"
     The resulting `.STEP` file is available here:
-    [LINK](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb.STEP)
+    [LINK](https://github.com/byuflowlab/FLOWPanel.jl/raw/master/examples/data/zeroebwb.STEP)
     (`right click → save as...`).
 

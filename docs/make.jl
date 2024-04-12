@@ -61,6 +61,7 @@ makedocs(
                                         "Blended Wing Body" => [
                                                                 "CAD Model" => "examples/blendedwingbody-cad.md",
                                                                 "Unstructured Meshing" => "examples/blendedwingbody-gmsh.md",
+                                                                "examples/blendedwingbody-TE.md",
                                                                 "examples/blendedwingbody-aero.md",
                                                                 "examples/blendedwingbody-gpucpu.md",
                                                             ],
