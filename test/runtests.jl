@@ -11,7 +11,7 @@ using LinearAlgebra: norm, cross, dot
 Random.seed!(123)
 
 include("auxiliary_functions.jl")
-# include("kernel_test.jl")
-# include("grid_test.jl")
+include("kernel_test.jl")
+include("grid_test.jl")
 include("fmm_test.jl")
 # include("solver_test.jl")

@@ -64,7 +64,15 @@ FastMultipole.B2M!(system::AbstractPanels{ConstantNormalDoublet(),<:Any,1,3}, br
     for i_target in target_index
         potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, Rprime, Rxprime, Ryprime, Rzprime, derivatives_switch)
         if PS
+            if FastMultipole.DEBUG_TOGGLE[]
+                println("before:")
+                @show target_system[i_target, FastMultipole.SCALAR_POTENTIAL]
+            end
             target_system[i_target, FastMultipole.SCALAR_POTENTIAL] += potential
+            if FastMultipole.DEBUG_TOGGLE[]
+                println("after:")
+                @show target_system[i_target, FastMultipole.SCALAR_POTENTIAL]
+            end
         end
         # target_system[i_target, FastMultipole.SCALAR_POTENTIAL] = target_system[i_target, FastMultipole.SCALAR_POTENTIAL] + potential
         if VS
@@ -75,6 +83,11 @@ FastMultipole.B2M!(system::AbstractPanels{ConstantNormalDoublet(),<:Any,1,3}, br
             target_system[i_target, FastMultipole.VELOCITY_GRADIENT] += gradient
         end
         # target_system[i_target, FastMultipole.VELOCITY_GRADIENT] = target_system[i_target, FastMultipole.VELOCITY_GRADIENT] + gradient
+    end
+    
+    if FastMultipole.DEBUG_TOGGLE[]
+        println("after after:")
+        @show target_system[1, FastMultipole.SCALAR_POTENTIAL]
     end
 end
 
@@ -95,8 +108,11 @@ end
 end
 
 @inline function FastMultipole.direct!(target_system, target_index, derivatives_switch, source_system::AbstractPanels{kernel,<:Any,<:Any,<:Any}, source_index) where kernel
-    for panel in source_system.panels
-        convolve_kernel!(target_system, target_index, panel, kernel, derivatives_switch)
+    if FastMultipole.DEBUG_TOGGLE[]
+        @show source_index target_index
+    end
+    for i_panel in source_index
+        convolve_kernel!(target_system, target_index, source_system.panels[i_panel], kernel, derivatives_switch)
     end
     return nothing
 end
