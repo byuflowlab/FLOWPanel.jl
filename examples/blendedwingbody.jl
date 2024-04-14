@@ -1,7 +1,7 @@
 #=##############################################################################
 # DESCRIPTION
     Blended wing body resembling the Airbus ZEROe BWB twin-engine subscale
-    model.
+    model. The mesh used in this analysis was created using SolidWorks + Gmsh.
 
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez

@@ -61,8 +61,15 @@ makedocs(
                                         "Blended Wing Body" => [
                                                                 "CAD Model" => "examples/blendedwingbody-cad.md",
                                                                 "Unstructured Meshing" => "examples/blendedwingbody-gmsh.md",
+                                                                "examples/blendedwingbody-TE.md",
                                                                 "examples/blendedwingbody-aero.md",
                                                                 "examples/blendedwingbody-gpucpu.md",
+                                                            ],
+                                        "Cessna 210" => [
+                                                                "examples/cessna-openvsp.md",
+                                                                "examples/cessna-TE.md",
+                                                                "examples/cessna-aero.md",
+                                                                "examples/cessna-vspgeom.md",
                                                             ],
                                        ],
                 # "API Reference"     => ["api.md",

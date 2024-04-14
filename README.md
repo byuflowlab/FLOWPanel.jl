@@ -77,7 +77,7 @@ Tested in Julia v1.10
 2. Type in the Julia REPL: `] add FLOWPanel`
 3. *(optional)* For visualization, install [ParaView](https://www.paraview.org/) and make sure that [it is callable from the terminal](https://flow.byu.edu/FLOWUnsteady/installation/general/#paraview) typing `paraview`
 
-Copy and paste any of [the examples](https://flow.byu.edu/FLOWPanel.jl/stable/examples/sweptwing-4p2aoa/) directly in the Julia REPL to run your first simulation
+Copy and paste any of [the examples](https://flow.byu.edu/FLOWPanel.jl/dev/examples/sweptwing-4p2aoa/) directly in the Julia REPL to run your first simulation
 
 <p><br></p>
 
@@ -110,6 +110,7 @@ All contributions are welcome.
 
 
 <p align="center">
+  <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna002.jpg" alt="img" style="width:75%">
   <img src="http://edoalvar2.groups.et.byu.net/public/FLOWPanel/zeroebwb000.jpg" alt="img" style="width:75%">
 </p>
 
