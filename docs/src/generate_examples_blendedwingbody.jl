@@ -195,6 +195,7 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
     println(fout, """
     ```@raw html
     <span style="font-size: 0.9em; color:gray;"><i>
+        Number of panels: 22,000. <br>
         Run time: ~90 seconds on a Dell Precision 7760 laptop (no GPU). <br>
     </i></span>
     <br><br>
@@ -216,7 +217,7 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
     println(fout, """
 
     !!! details "Tip"
-        You can also automatically run this example and generate these plots
+        You can also automatically run this example
         with the following command:
         ```julia
         import FLOWPanel as pnl
@@ -241,6 +242,10 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
             negative number. This won't flip the normals outwards, but it will flip
             the zero-potential domain from outwards back to inside the body
             (achieved by shifting the control points slightly into the body).
+            If you pull up the solution in ParaView and realize that the surface
+            velocity is much smaller than the freestream everywhere along the
+            aircraft, that's an indication that the normals are point inwards
+            and you need to set `CPoffset` to be negative.
         2. **Check that the trailing edge was correctly identified:**
             `pnl.save(body, run_name; path=save_path)` automatically outputes the
             wake.

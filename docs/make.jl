@@ -65,6 +65,12 @@ makedocs(
                                                                 "examples/blendedwingbody-aero.md",
                                                                 "examples/blendedwingbody-gpucpu.md",
                                                             ],
+                                        "Cessna 210" => [
+                                                                "examples/cessna-openvsp.md",
+                                                                "examples/cessna-TE.md",
+                                                                "examples/cessna-aero.md",
+                                                                "examples/cessna-vspgeom.md",
+                                                            ],
                                        ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",
