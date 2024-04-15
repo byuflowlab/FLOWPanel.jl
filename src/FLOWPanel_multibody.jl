@@ -352,7 +352,7 @@ function solve(self::MultiBody{VortexRing, 2},
     CPs = _calc_controlpoints(self, normals)
 
     # Allocate solver memory
-    Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls = allocate_solver(self, _elprescribe, T)
+    (; Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls) = allocate_solver(self, _elprescribe, T)
 
     # Solve the least-squares problem to calculate strengths
     solve!(self, Gamma, Gammals,
@@ -377,7 +377,7 @@ function allocate_solver(self::Union{MultiBody{VortexRing, 2}, RigidWakeBody{Vor
     RHS = zeros(T, n)
     RHSls = zeros(T, n-npres)
 
-    return Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls
+    return (; Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls)
 end
 
 function solve!(self::MultiBody{VortexRing, 2},
