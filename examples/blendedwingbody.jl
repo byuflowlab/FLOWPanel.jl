@@ -6,7 +6,7 @@
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Apri 2024
+  * Created   : April 2024
   * License   : MIT License
 =###############################################################################
 
