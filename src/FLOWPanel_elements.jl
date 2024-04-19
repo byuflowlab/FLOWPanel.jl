@@ -390,12 +390,29 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
         # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
         normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
         normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+        # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
+        # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
         rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
 
         if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
-            # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+            # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
             aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+
+            #=
+            # Singular kernel
+            aux = strength * rijdothat / (4*π*dotrixrj)
+
+            # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+            r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
+            di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
+            dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
+            # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
+            h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
+            modh = h + ( (di - dj) - r0 )               # h + projected edge distance
+
+            aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+            =#
 
             # NOTE: Negative sign is not needed since we defined rij = rj - ri
             if dot_with!=nothing
@@ -523,12 +540,29 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
             # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
             normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
             normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+            # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
+            # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
             rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
 
             if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
-                # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+                # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
                 aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+
+                #=
+                # Singular kernel
+                aux = strength * rijdothat / (4*π*dotrixrj)
+
+                # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+                r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
+                di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
+                dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
+                # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
+                h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
+                modh = h + ( (di - dj) - r0 )               # h + projected edge distance
+
+                aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+                =#
 
                 # NOTE: Negative sign is not needed since we defined rij = rj - ri
                 if dot_with!=nothing
@@ -564,8 +598,20 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
         if hsqr > cutoff^2
 
             # aux = strength / (4*π*(h + offset))
-            # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is correct expression, but it adds an extra sqrt
+            # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
             aux = strength / (4*π*(hsqr + offset^2))
+
+            #=
+            # Singular kernel
+            aux = strength / (4*π*hsqr)
+
+            # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+            dp = d1*h1 + d2*h2 + d3*h3                  # dp = hat{d}⋅(x - p0)
+            h = sqrt(n1^2 + n2^2 + n3^2)                # h = | d × (x - p0) |
+            modh = h + max(0, -dp)                     # h + projected edge distance
+
+            aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+            =#
 
             if dot_with!=nothing
                 @inbounds out[ti] += aux * (n1*dot_with[1,ti] + n2*dot_with[2,ti] + n3*dot_with[3,ti])
