@@ -98,8 +98,8 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
 
             (minw, maxw) = calc_minmax_winding(mesh, controlpoints)
 
-            if abs(minw) > 1e2*eps() || abs(maxw) >= 1e2*eps()
-                @warn "Found winding numbers other than 0, which indicates"*
+            if abs(minw) > eps()^0.75 || abs(maxw) >= eps()^0.75
+                @warn "Found winding numbers other than 0, which might indicate"*
                 " that control points are inside the geometry; flipping the"*
                 " sign of `CPoffset` is recommended; (minw, maxw) ="*
                 " $((minw, maxw))"
