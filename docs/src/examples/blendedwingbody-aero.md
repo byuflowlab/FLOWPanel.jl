@@ -26,7 +26,7 @@ trailing edge, and run the watertight solver.
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
   * Email     : Edo.AlvarezR@gmail.com
-  * Created   : Apri 2024
+  * Created   : April 2024
   * License   : MIT License
 =###############################################################################
 
@@ -56,6 +56,7 @@ rho             = 1.225                     # (kg/m^3) air density
 meshfile        = joinpath(read_path, "zeroebwb.msh")    # Gmsh file to read
 trailingedgefile= joinpath(read_path, "zeroebwb-TE.msh") # Gmsh file with trailing edge
 
+symcoordinate   = 2                         # Symmetric coordinate to reflect the body (`nothing` to omit)
 offset          = [0, 0, 0]                 # Offset to center the mesh
 rotation        = RotZ(-90*pi/180)*RotX(90*pi/180) # Rotation to align mesh
 scaling         = 2e-3                      # Factor to scale original mesh to
@@ -77,6 +78,9 @@ Sref            = 3.23^2 / 8.0             # (m^2) reference area
 # Solver: least-squares solver for watertight bodies
 bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
 
+# Processing
+clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
+
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Read Gmsh mesh
@@ -92,6 +96,14 @@ msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Sc
 
 # Apply the same transformations to the trailing edge
 TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+
+# Mirror the original mesh to obtain a symmetric mesh of the airframe
+if !isnothing(symcoordinate)
+    msh = pnl.gt.mirror(msh, symcoordinate)
+end
+
+# Uncomment this to do 10 smoothing iterations on the mesh
+# msh = msh |> Meshes.TaubinSmoothing(10)
 
 # Wrap Meshes object into a Grid object from GeometricTools
 grid = pnl.gt.GridTriangleSurface(msh)
@@ -154,7 +166,7 @@ UDeltaGamma = pnl.calcfield_Ugradmu(body)
 pnl.addfields(body, "Ugradmu", "U")
 
 # Calculate pressure coefficient (based on U + U_∇μ)
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+@time Cps = pnl.calcfield_Cp(body, magVinf; clip = Cp -> max(clip_Cp, Cp))
 
 # Calculate the force of each panel (based on Cp)
 @time Fs = pnl.calcfield_F(body, magVinf, rho)
@@ -193,7 +205,7 @@ end
 ```@raw html
 <span style="font-size: 0.9em; color:gray;"><i>
     Number of panels: 22,000. <br>
-    Run time: ~90 seconds on a Dell Precision 7760 laptop (no GPU). <br>
+    Run time: ~90 seconds on a Dell Precision 7760 laptop, no GPU (~10 seconds with GPU). <br>
 </i></span>
 <br><br>
 ```
