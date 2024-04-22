@@ -1060,6 +1060,7 @@ function calcfield_Cp!(out::Arr1,
                         body::Union{NonLiftingBody, AbstractLiftingBody},
                         Us::Arr2, Uref::Number;
                         correct_kuttacondition=true,
+                        clip::Union{Nothing, Function}=nothing,
                         fieldname="Cp", addfield=true
                         ) where {Arr1<:AbstractArray{<:Number,1},
                                  Arr2<:AbstractArray{<:Number,2}}
@@ -1088,6 +1089,13 @@ function calcfield_Cp!(out::Arr1,
             end
         end
 
+    end
+
+    # Clip values if requested
+    if !isnothing(clip)
+        for (i, Cp) in enumerate(out)
+            out[i] = clip(Cp)
+        end
     end
 
     # Save field in body
