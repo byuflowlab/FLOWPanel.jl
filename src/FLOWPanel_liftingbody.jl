@@ -61,18 +61,53 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
     kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
     characteristiclength::Function            # Characteristic length of each panel
 
-    RigidWakeBody{E, N}(
-                    grid, shedding;
-                    nnodes=grid.nnodes, ncells=grid.ncells,
-                    nsheddings=size(shedding,2),
-                    fields=Array{String,1}(),
-                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                    strength=zeros(grid.ncells, N),
-                    CPoffset=1e-14,
-                    kerneloffset=1e-8,
-                    kernelcutoff=1e-14,
-                    characteristiclength=characteristiclength_unitary
-                  ) where {E, N} = _checkTE(grid, shedding) ? new(
+    function RigidWakeBody{E, N}(
+                                grid, shedding;
+                                nnodes=grid.nnodes, ncells=grid.ncells,
+                                nsheddings=size(shedding,2),
+                                fields=Array{String,1}(),
+                                Oaxis=Array(1.0I, 3, 3), O=zeros(3),
+                                strength=zeros(grid.ncells, N),
+                                CPoffset=1e-14,
+                                kerneloffset=1e-8,
+                                kernelcutoff=1e-14,
+                                characteristiclength=characteristiclength_unitary,
+                                check_mesh=true,
+                                ) where {E, N}
+
+        @assert _checkTE(grid, shedding) "Got invalid trailing edge"
+
+        # Automated sanity checks for Meshes.jl mesh
+        if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
+
+            mesh = grid.orggrid
+
+            # Check that topology is consistent with the solver
+            if gt.isclosed(mesh) && E<:VortexRing && N==1
+                @warn "Requested direct vortex ring solver on an closed mesh;"*
+                " least-squares solver is recommended instead"*
+                " (use `RigidWakeBody{VortexRing, 2}`)"
+            end
+
+            # Check that control points lay outside the geometry (based on
+            # winding number)
+            normals = _calc_normals(grid)
+            controlpoints = _calc_controlpoints(grid, normals;
+                                                off=CPoffset,
+                                                characteristiclength=characteristiclength)
+
+            (minw, maxw) = calc_minmax_winding(mesh, controlpoints)
+
+            if abs(minw) > 1e2*eps() || abs(maxw) >= 1e2*eps()
+                @warn "Found winding numbers other than 0, which indicates"*
+                " that control points are inside the geometry; flipping the"*
+                " sign of `CPoffset` is recommended; (minw, maxw) ="*
+                " $((minw, maxw))"
+            end
+
+        end
+
+        return new(
                     grid, shedding,
                     nnodes, ncells,
                     nsheddings,
@@ -83,7 +118,9 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
                     kerneloffset,
                     kernelcutoff,
                     characteristiclength
-                  ) : error("Got invalid trailing edge.")
+                    )
+
+        end
 
 end
 
