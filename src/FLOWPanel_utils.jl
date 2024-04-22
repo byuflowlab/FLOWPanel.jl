@@ -321,7 +321,7 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
     gdim = row ? 1 : 2                          # Dimension to slice
     islice, pos, errmin, lin = find_i(body, controlpoints, position, gdim, -1;
                                                 xdir=direction, filter=filter)
-                                                
+
     # Slice field
     ncell = get_ndivscells(body)[row ? 2 : 1]   # Number of cells in the slice
     indices = collect(row==1 ? lin[islice, j] : lin[j, islice] for j in 1:ncell)
@@ -338,4 +338,52 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
     end
 
     return slicepoints, slice
+end
+
+"""
+    `calcfield_winding(body::Union{NonLiftingBody, AbstractLiftingBody})`
+
+Calculate the winding number of a body with a Meshes.jl mesh object. It adds
+the winding number of each cell (associated to its corresponding control point)
+as the field `"winding"`.
+"""
+function calcfield_winding(body::Union{NonLiftingBody, AbstractLiftingBody};
+                            fieldname="winding", addfield=true)
+
+    # Precalculations
+    normals = pnl._calc_normals(body)
+    controlpoints = pnl._calc_controlpoints(body, normals)
+
+    # Calculate winding number associated to control points
+    windings = calcfield_winding(body.grid.orggrid, controlpoints)
+
+    # Save field in body
+    if addfield
+        add_field(body, fieldname, "scalar", windings, "cell")
+    end
+
+    return windings
+end
+
+function calcfield_winding(mesh::gt.Meshes.Mesh, controlpoints::AbstractMatrix)
+
+    points = ( gt.Meshes.Point(gt.Meshes.Vec(p...)) for p in eachcol(controlpoints) )
+    windings = gt.Meshes.winding(points, mesh)
+
+    return windings
+end
+
+
+"""
+    `calc_minmax_winding(body::Union{NonLiftingBody, AbstractLiftingBody}) ->
+(minw, maxw)`
+
+Calculates the winding number of each cell (associated to its corresponding
+control point) in a body with a Meshes.jl mesh object, and returns both minimum
+and maximum values.
+"""
+function calc_minmax_winding(args...; optargs...)
+    windings = calcfield_winding(args...; optargs...)
+
+    return minimum(windings), maximum(windings)
 end
