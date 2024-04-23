@@ -17,7 +17,7 @@
     <img src="https://img.shields.io/badge/code-open%20source-brightgreen.svg">
   </a>
 
-  <a href="https://flow.byu.edu/FLOWPanel.jl">
+  <a href="https://flow.byu.edu/FLOWPanel.jl/dev/">
     <img src="https://img.shields.io/badge/docs-stable-blue.svg">
   </a>
 </p>
@@ -81,7 +81,7 @@ Tested in Julia v1.10
 <p><br></p>
 ```
 
-* *Documentation:* [flow.byu.edu/FLOWPanel.jl](https://flow.byu.edu/FLOWPanel.jl)
+* *Documentation:* [flow.byu.edu/FLOWPanel.jl](https://flow.byu.edu/FLOWPanel.jl/dev/)
 * *Code:* [github.com/byuflowlab/FLOWPanel.jl](https://github.com/byuflowlab/FLOWPanel.jl)
 
 ```@raw html
@@ -93,7 +93,7 @@ Tested in Julia v1.10
 2. Type in the Julia REPL: `] add FLOWPanel`
 3. *(optional)* For visualization, install [ParaView](https://www.paraview.org/) and make sure that [it is callable from the terminal](https://flow.byu.edu/FLOWUnsteady/installation/general/#paraview) typing `paraview`
 
-Copy and paste any of [the examples](https://flow.byu.edu/FLOWPanel.jl/stable/examples/sweptwing-4p2aoa/) directly in the Julia REPL to run your first simulation
+Copy and paste any of [the examples](https://flow.byu.edu/FLOWPanel.jl/dev/examples/sweptwing-4p2aoa/) directly in the Julia REPL to run your first simulation
 
 ```@raw html
 <p><br></p>
