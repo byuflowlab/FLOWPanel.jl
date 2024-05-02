@@ -1074,7 +1074,7 @@ function calcfield_Cp!(out::Arr1,
     # to be equal (average between upper and lower)
     if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
 
-        if typeof(body.grid) <: GridTriangleSurface{Meshes.SimpleMesh}
+        if typeof(body.grid) <: gt.GridTriangleSurface{Meshes.SimpleMesh}
             @warn "Kutta correction requested in calcfield_Cp, but"*
                     " current implementation is wrong for unstructured meshes!"
         end
@@ -1241,7 +1241,7 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
     # NOTE: This overwrites any previous force value instead of accumulating it
     if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
 
-        if typeof(body.grid) <: GridTriangleSurface{Meshes.SimpleMesh}
+        if typeof(body.grid) <: gt.GridTriangleSurface{Meshes.SimpleMesh}
             @warn "Kutta correction requested in calcfield_F, but"*
                     " current implementation is wrong for unstructured meshes!"
         end
