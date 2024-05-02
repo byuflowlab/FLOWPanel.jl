@@ -81,9 +81,10 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
         if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
 
             mesh = grid.orggrid
+            watertight = gt.isclosed(mesh)
 
             # Check that topology is consistent with the solver
-            if gt.isclosed(mesh) && E<:VortexRing && N==1
+            if watertight && E<:VortexRing && N==1
                 @warn "Requested direct vortex ring solver on an closed mesh;"*
                 " least-squares solver is recommended instead"*
                 " (use `RigidWakeBody{VortexRing, 2}`)"
@@ -99,10 +100,18 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
             (minw, maxw) = calc_minmax_winding(mesh, controlpoints)
 
             if abs(minw) > eps()^0.75 || abs(maxw) >= eps()^0.75
-                @warn "Found winding numbers other than 0, which might indicate"*
-                " that control points are inside the geometry; flipping the"*
-                " sign of `CPoffset` is recommended; (minw, maxw) ="*
-                " $((minw, maxw))"
+
+                if watertight
+                    @warn "Found winding numbers other than 0, which might indicate"*
+                    " that control points are inside the geometry; flipping the"*
+                    " sign of `CPoffset` is recommended; (minw, maxw) ="*
+                    " $((minw, maxw))"
+                else
+                    @warn "Found winding numbers other than 0, which might indicate"*
+                    " that control points are inside the geometry; however,"*
+                    " geometry is not watertight, so it might be ok."*
+                    " (minw, maxw) = $((minw, maxw))"
+                end
             end
 
         end
@@ -926,6 +935,7 @@ Note: It is important that the points in `trailingedge` have been previously
     vortices.
 """
 function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+                            periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             ) where {G<:gt.Meshes.SimpleMesh}
 
@@ -936,6 +946,11 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
     # Identify the nodes that are on the TE line
     TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
     TEindices = [nodei for (nodei, pointi) in TEindices]
+
+    # Append first node at end if expected to be periodic
+    if periodic
+        push!(TEindices, TEindices[1])
+    end
 
     # All node pairs that could form an edge at the TE
     paircandidates = zip(view(TEindices, 1:length(TEindices)-1), view(TEindices, 2:length(TEindices)))
