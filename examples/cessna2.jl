@@ -17,8 +17,6 @@ import Meshes
 import GeoIO
 import Rotations: RotX, RotY, RotZ
 
-# import CUDA                               # Uncomment this to use GPU (if available)
-
 
 run_name        = "cessna"                  # Name of this run
 
@@ -98,9 +96,6 @@ Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 # `Das` and `Dbs` as trailing edge rigid wake direction
 @time pnl.solve(body, Uinfs, Das, Dbs; elprescribe=elsprescribe)
-
-# Uncomment this to use GPU instead (if available)
-# @time pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32}; elprescribe=elsprescribe)
 
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")
