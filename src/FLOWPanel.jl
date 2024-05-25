@@ -30,6 +30,7 @@ import Requires: @require
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
 import GeometricTools
 const gt = GeometricTools
+import GeometricTools: Meshes
 import ImplicitAD as IAD
 import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
 
@@ -85,7 +86,7 @@ function __init__()
     catch e
         @warn "PyPlot is not available; monitors will not be loaded"
     end
-    
+
 end
 
 end # END OF MODULE

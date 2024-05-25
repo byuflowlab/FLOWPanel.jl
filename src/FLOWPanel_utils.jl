@@ -137,6 +137,302 @@ end
 
 
 """
+    `generate_multibody(bodytype::Type{<:AbstractLiftingBody},
+                                meshfiles::AbstractVector{Tuple{String, String, Bool}},
+                                trailingedges::AbstractVector{Tuple{String, Function, Function, Bool}},
+                                reader::Function;
+                                read_path=pwd(),
+                                offset=zeros(3),
+                                rotation::Meshes.Rotation=one(Meshes.QuatRotation),
+                                scaling=1.0,
+                                tolerance=1e-6,
+                                panel_omit_shedding=Dict(),
+                                verbose=true,
+                                v_lvl=0
+                                )`
+
+Reads a collection of mesh files and stitches them together into a MultiBody.
+
+Returns `(multibody, elsprescribe)` where `multibody` is the MultiBody that
+was generated and `elsprescribe` is the array of elements to prescribe in
+least-squares solver (`solve(multibody, ...; elprescribe=elsprescribe, ...)`).
+
+# Arguments
+* `bodytype`:               Converts all meshes into this body type
+* `meshfiles`:              Array with all mesh files to read, defined as
+                                `meshfiles[i] = (name, meshfile, flip)` where
+                                `name` is the name body name to give to this
+                                mesh, `meshfile` is the file name, and
+                                `flip=true` indicates that the mesh has normals
+                                pointing inside and control points need to be
+                                flipped to end up outside of the geometry.
+* `trailingedges`:          Array with trailing edges that can be identified in
+                                `meshfiles`, defined as `trailingedges[i] =
+                                (trailingedge_meshfile, sorting_function,
+                                junction_criterion, closed)` where
+                                `trailingedge_meshfile` is a mesh file with the
+                                line along the trailing edge,
+                                `sorting_function = X::Vector -> val::Number` is
+                                a function used for sorting the mesh points that
+                                are identified to be along this trailing edge,
+                                `junction_criterion = X::Vector ->
+                                val::Number` is a function used for identifying
+                                any wing-body junction along the trailing edge
+                                that needs to be ignored (meaning, the point at
+                                that junction is not flagged as a TE point), and
+                                `closed=true` indicates that the trailing edge
+                                is a closed contour (like in the case of a duct
+                                , otherwise use `closed=false`)
+* `reader`:                 A function for reading mesh files and return a
+                                Meshes.jl object.
+* `read_path`:              Path where to read files from.
+* `offset`, `rotation`, `scaling`: Translates, rotates, and scales each mesh by
+                                these inputs.
+* `tolerance`:              Tolerance used to identify trailing edge points.
+                                Any mesh points read from `meshfiles` that are
+                                between a radius `tolerance` from any points read
+                                from `trailingedges` will be flagged as
+                                trailing edge nodes, so make sure that the
+                                lines in `trailingedges` are finely discretized
+                                and so you can use a tight (small value)
+                                tolerance.
+
+`sorting_function` in `trailingedges[i] = (trailingedge_meshfile,
+sorting_function, junction_criterion, closed)` receives a point `X` and needs to
+return a scalar value.
+This value is used to sort TE points and to identify contiguous TE cells.
+For a wing with its span direction aligned along the y-axis, we recommend
+defining this function as
+```julia
+import LinearAlgebra: dot
+
+Xcg = [0, 0, 0]                 # Aircraft center of gravity for reference
+spandirection = [0, 1, 0]       # Span direction can be any arbitrary direction
+
+sorting_function(X) = dot(X - Xcg, spandirection)
+```
+For the trailing edge of a circular duct (or any closed cross section) with
+its centerline aligned along the x-axis, we recommend defining this function as
+```julia
+Xc = [0, 0, 0]                  # Section centroid
+
+sorting_function(X) = -atand(X[2] - Xc[2], X[3] - Xc[3])
+```
+`junction_criterion` also receives a point `X` and needs to return a scalar
+value. A negative or zero value means that this point is at a wing-body junction
+and should not be considered a trailing edge point.
+For example, for an aircraft where the wing meets the fuselage at y=±0.3, this
+function should be defined as follows
+```julia
+y_junction = 0.3
+
+junction_criterion(X) = abs(X[2]) - (y_junction + 1e-6) # Offset y by a small
+                                                        # value to account for
+                                                        # discretization error
+```
+If there are no junctions, simply define this as `junction_criterion(X) = Inf`
+
+`reader` must be a user-defined function to read the mesh files and return a
+Meshes.jl object. We recommend the following function:
+```julia
+import GeoIO
+
+function reader(file)
+    msh = GeoIO.load(file)
+    return msh.geometry
+end
+```
+"""
+function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
+                            meshfiles::AbstractVector{Tuple{String, String, Bool}},
+                            trailingedges::AbstractVector{Tuple{String, Function, Function, Bool}},
+                            reader::Function;
+                            read_path=pwd(),
+                            offset=zeros(3),
+                            rotation::Meshes.Rotation=one(Meshes.QuatRotation),
+                            scaling=1.0,
+                            tolerance=1e-6,
+                            panel_omit_shedding=nothing,
+                            verbose=true,
+                            v_lvl=0
+                            )
+
+
+    bodies = bodytype[]
+    names = String[]
+    elsprescribe = Tuple{Int64, Float64}[]
+
+    # Dictionary flagging particle to omit shedding at the junctions between wing
+    # and fuselage. This has the form
+    # `panel_omit_shedding[body][ei] = (shed incoming, shed outgoing, shed unsteady)`
+    # panel_omit_shedding = Dict()
+
+    # Generate each body
+    for (name, meshfile, flip) in meshfiles
+
+        if verbose; println("\t"^(v_lvl)*"Reading $(meshfile)"); end
+
+        # Read Gmsh mesh
+        msh = reader(joinpath(read_path, meshfile))
+
+        # Transform the original mesh: Translate, rotate, and scale
+        msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+
+        # Wrap Meshes object into a Grid object from GeometricTools
+        grid = gt.GridTriangleSurface(msh)
+
+        this_panel_omit_shedding = Dict()
+
+        # All shedding points (trailing edge) are agglomerated here
+        sheddings = [noshedding]
+
+        # Read all trailing edges
+        for (trailingedgefile, sortingfunction, junctioncriterion, closed) in trailingedges
+
+            # Read Gmsh line of trailing edge
+            TEmsh = reader(joinpath(read_path, trailingedgefile))
+
+            # Apply the same transformations of the mesh to the trailing edge
+            TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+
+            # Convert TE Meshes object into a matrix of points used to identify the trailing edge
+            trailingedge = gt.vertices2nodes(TEmsh.vertices)
+
+            # Sort TE points from "left" to "right" according to span direction
+            trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
+
+            # Filter out any points that are close to junctions
+            tokeep = filter( i -> !(junctioncriterion(view(trailingedge, :, i)) <= 0.0), 1:size(trailingedge, 2) )
+            trailingedge = trailingedge[:, tokeep]
+
+            # Generate TE shedding matrix
+            shedding = calc_shedding(grid, trailingedge;
+                                            tolerance=tolerance,
+                                            periodic=closed)
+
+            # Flag nodes closest to the wing-body junction to not shed particles
+            if !isnothing(panel_omit_shedding) && size(shedding, 2)!=0
+
+                nodes = grid._nodes
+                prevnshedding = sum(size.(sheddings, 2); init=0)
+
+                tricoor, quadcoor, lin, ndivscells, cin = gt.generate_getcellt_args(grid)
+
+                minval = Inf
+                mincell = nothing
+                minflags = nothing
+                maxval = -Inf
+                maxcell = nothing
+                maxflags = nothing
+
+                # Find closest shedding node to the fuselage
+                for (ei, (pi, nia, nib)) in enumerate(eachcol(shedding))
+
+                    # Convert node indices from panel-local to global
+                    pia = gt.get_cell_t(tricoor, quadcoor, grid, pi, nia, lin, ndivscells, cin)
+                    pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
+
+                    # Check incoming node
+                    val = junctioncriterion(nodes[:, pia])
+
+                    if val < minval && isfinite(val)
+                        minval = val
+                        mincell = ei
+                        minflags = (true, false, false)
+                    end
+
+                    if val > maxval && isfinite(val)
+                        maxval = val
+                        maxcell = ei
+                        maxflags = (true, false, false)
+                    end
+
+                    # Check outgoing node
+                    val = junctioncriterion(nodes[:, pib])
+
+                    if val < minval && isfinite(val)
+                        minval = val
+                        mincell = ei
+                        minflags = (false, true, false)
+                    end
+
+                    if val > maxval && isfinite(val)
+                        maxval = val
+                        maxcell = ei
+                        maxflags = (false, true, false)
+                    end
+
+                end
+
+                # Offset the cell index by the running total of shedding cells
+                mincell += prevnshedding
+                maxcell += prevnshedding
+
+                # Save the information of the node to ignore
+                @assert mincell!=maxcell || isnothing(mincell) || minflags==maxflags ""*
+                    "Min and max cell to ignore are the same; there is"*
+                    " currently no implementation for this case."*
+                    " (mincell, maxcell) = $((mincell, maxcell)),"*
+                    " minflags=$(minflags), maxflags=$(maxflags)"
+
+                if !isnothing(minflags)
+                    this_panel_omit_shedding[mincell] = minflags
+                end
+                if !isnothing(maxflags)
+                    this_panel_omit_shedding[maxcell] = maxflags
+                end
+
+            end
+
+            push!(sheddings, shedding)
+
+        end
+
+        # Combine all TE shedding matrices into one
+        shedding = hcat(sheddings...)
+
+        # Generate paneled body
+        body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
+
+        # Check if watertight
+        watertight = gt.isclosed(msh)
+
+        # Function for calculating elements to prescribe in least-square solver
+        # (none if open mesh, arbitrary if watertight)
+        elprescribe = watertight ? calc_elprescribe(body) : Tuple{Int, Float64}[]
+
+        # Offset the element number by the running total of panels in the multibody
+        for (eli, val) in elprescribe
+            neweli = eli + sum(getproperty.(bodies, :ncells); init=0)
+            push!(elsprescribe, (neweli, val))
+        end
+
+        # Store TE nodes to avoid shedding
+        if !isnothing(panel_omit_shedding)
+            panel_omit_shedding[body] = this_panel_omit_shedding
+        end
+
+        # Store all the bodies of the multibody
+        push!(bodies, body)
+        push!(names, name)
+
+
+        if verbose; println("\t"^(v_lvl+1)*"Is $(name) mesh wateright?\t$(watertight)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of panels in $(name):\t$(body.ncells)"); end
+
+    end
+
+    # Build multibody
+    multibody = MultiBody(bodies, names)
+
+    if verbose; println("\t"^(v_lvl)*"Total number of panels:\t$(multibody.ncells)"); end
+
+    return multibody, elsprescribe
+
+end
+
+
+"""
     `find_i(body, xtarget::Number, gdim::Int, xdim::Int; xdir=nothing)`
 
 Find the row or column of cells in structured grid `body` that is the
@@ -351,8 +647,8 @@ function calcfield_winding(body::Union{NonLiftingBody, AbstractLiftingBody};
                             fieldname="winding", addfield=true)
 
     # Precalculations
-    normals = pnl._calc_normals(body)
-    controlpoints = pnl._calc_controlpoints(body, normals)
+    normals = _calc_normals(body)
+    controlpoints = _calc_controlpoints(body, normals)
 
     # Calculate winding number associated to control points
     windings = calcfield_winding(body.grid.orggrid, controlpoints)
