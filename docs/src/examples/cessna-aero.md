@@ -37,8 +37,6 @@ import Meshes
 import GeoIO
 import Rotations: RotX, RotY, RotZ
 
-# import CUDA                               # Uncomment this to use GPU (if available)
-
 
 run_name        = "cessna"                  # Name of this run
 
@@ -53,20 +51,20 @@ rho             = 0.71461                   # (kg/m^3) air density at 17300 ft
 
 
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-meshfile        = joinpath(read_path, "cessna.msh")    # Gmsh file to read
+meshfile        = "cessna.msh"              # Gmsh file to read
 
 offset          = [0, 0, 0]                 # Offset to center the mesh
 rotation        = RotX(0*pi/180) * RotY(0*pi/180) * RotX(0*pi/180) # Rotation to align mesh
 scaling         = 0.3048                    # Factor to scale mesh dimensions (ft -> m)
 
-                                            # Gmsh files with trailing edges
-trailingedges   = [ #   ( Gmsh file,                 span direction )
-                        ("cessna-TE-leftwing.msh",      [0, 1, 0]),
-                        ("cessna-TE-rightwing.msh",     [0, 1, 0]),
-                        ("cessna-TE-leftelevator.msh",  [0, 1, 0]),
-                        ("cessna-TE-rightelevator.msh", [0, 1, 0]),
-                        ("cessna-TE-rudder.msh",        [0, 0, 1]),
-                    ]
+trailingedges   = [                         # Gmsh files with trailing edges
+#   (  Gmsh file,                    span sorting function,   junction criterion,     closed )
+    ( "cessna-TE-leftwing.msh",      X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
+    ( "cessna-TE-rightwing.msh",     X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
+    ( "cessna-TE-leftelevator.msh",  X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.23, false  ),
+    ( "cessna-TE-rightelevator.msh", X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.23, false  ),
+    ( "cessna-TE-rudder.msh",        X -> dot(X, [0, 0, 1]),  X -> X[3] - 0.65,      false  ),
+]
 
 flip            = true                      # Whether to flip control points against the direction of normals
                                             # NOTE: use `flip=true` if the normals
@@ -78,6 +76,12 @@ Sref            = 16.2344                   # (m^2) reference area
 Xac             = [2.815, 0, 0.4142]        # (m) aerodynamic center for
                                             # calculation of moments
 
+# Define function used for reading Gmsh files
+meshreader(file) = GeoIO.load(file).geometry
+
+# Format input for `generate_multibody(...)`
+meshfiles       = [ ("Airframe", meshfile, flip) ]
+
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
 # Solver: direct linear solver for open bodies
@@ -88,71 +92,11 @@ bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
 
 
 # ----------------- GENERATE BODY ----------------------------------------------
-# Read Gmsh mesh
-msh = GeoIO.load(meshfile)
-msh = msh.geometry
-
-# Transform the original mesh: Translate, rotate, and scale
-msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
-
-# Wrap Meshes object into a Grid object from GeometricTools
-grid = pnl.gt.GridTriangleSurface(msh)
-
-# Read all trailing edges
-sheddings = []
-
-for (trailingedgefile, spandir) in trailingedges
-
-    # Read Gmsh line of trailing edge
-    TEmsh = GeoIO.load(joinpath(read_path, trailingedgefile))
-    TEmsh = TEmsh.geometry
-
-    # Apply the same transformations of the mesh to the trailing edge
-    TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
-
-    # Convert TE Meshes object into a matrix of points used to identify the trailing edge
-    trailingedge = pnl.gt.vertices2nodes(TEmsh.vertices)
-
-    # Sort TE points from "left" to "right" according to span direction
-    trailingedge = sortslices(trailingedge; dims=2, by = X -> pnl.dot(X, spandir))
-
-    # Function for identifying if a point is close to a junction
-    if trailingedgefile in ["cessna-TE-leftwing.msh", "cessna-TE-rightwing.msh"]
-
-        criterion = X -> abs(X[2]) <= 0.67
-
-    elseif trailingedgefile in ["cessna-TE-leftelevator.msh", "cessna-TE-rightelevator.msh"]
-
-        criterion = X -> abs(X[2]) <= 0.23
-
-    elseif trailingedgefile in ["cessna-TE-rudder.msh"]
-
-        criterion = X -> X[3] <= 0.65
-
-    else
-
-        criterion = X -> false
-
-    end
-
-    # Filter out any points that are close to junctions
-    tokeep = filter( i -> !criterion(trailingedge[:, i]), 1:size(trailingedge, 2) )
-    trailingedge = trailingedge[:, tokeep]
-
-    # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*bref)
-
-    push!(sheddings, shedding)
-
-end
-
-# Combine all TE shedding matrices into one
-shedding = hcat(sheddings...)
-
-# Generate paneled body
-body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
-
-println("Number of panels:\t$(body.ncells)")
+body, elsprescribe = pnl.generate_multibody(bodytype, meshfiles, trailingedges, meshreader;
+                                tolerance=0.001*bref,
+                                read_path=read_path,
+                                offset=offset, rotation=rotation, scaling=scaling,
+                                )
 
 
 # ----------------- CALL SOLVER ------------------------------------------------
@@ -171,10 +115,7 @@ Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 # `Das` and `Dbs` as trailing edge rigid wake direction
-@time pnl.solve(body, Uinfs, Das, Dbs)
-
-# Uncomment this to use GPU instead (if available)
-# @time pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})
+@time pnl.solve(body, Uinfs, Das, Dbs; elprescribe=elsprescribe)
 
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")

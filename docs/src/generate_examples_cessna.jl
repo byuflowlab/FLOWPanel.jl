@@ -203,7 +203,7 @@ open(joinpath(output_path, output_name*"-aero.md"), "w") do fout
 
     println(fout, "```julia")
 
-    open(joinpath(pnl.examples_path, "cessna.jl"), "r") do fin
+    open(joinpath(pnl.examples_path, "cessna2.jl"), "r") do fin
         for l in eachline(fin)
             # if contains(l, "COMPARISON TO EXPERIMENTAL DATA")
             #     break
