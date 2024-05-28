@@ -947,6 +947,11 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
     TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
     TEindices = [nodei for (nodei, pointi) in TEindices]
 
+    # Return if no TE nodes were identified
+    if length(TEindices)==0
+        return noshedding
+    end
+
     # Append first node at end if expected to be periodic
     if periodic
         push!(TEindices, TEindices[1])
