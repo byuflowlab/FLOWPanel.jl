@@ -245,7 +245,7 @@ end
 """
 function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             meshfiles::AbstractVector{Tuple{String, String, Bool}},
-                            trailingedges::AbstractVector{Tuple{String, Function, Function, Bool}},
+                            trailingedges::AbstractVector{Tuple{String, F1, F2, Bool}},
                             reader::Function;
                             read_path=pwd(),
                             offset=zeros(3),
@@ -255,7 +255,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             panel_omit_shedding=nothing,
                             verbose=true,
                             v_lvl=0
-                            )
+                            ) where {F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
 
     bodies = bodytype[]
@@ -270,7 +270,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
     # Generate each body
     for (name, meshfile, flip) in meshfiles
 
-        if verbose; println("\t"^(v_lvl)*"Reading $(meshfile)"); end
+        if verbose; println("\t"^(v_lvl)*"Reading $(name) ($(meshfile))"); end
 
         # Read Gmsh mesh
         msh = reader(joinpath(read_path, meshfile))
@@ -302,7 +302,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
             trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
 
             # Filter out any points that are close to junctions
-            tokeep = filter( i -> !(junctioncriterion(view(trailingedge, :, i)) <= 0.0), 1:size(trailingedge, 2) )
+            tokeep = filter( i -> junctioncriterion(view(trailingedge, :, i)) > 0.0, 1:size(trailingedge, 2) )
             trailingedge = trailingedge[:, tokeep]
 
             # Generate TE shedding matrix
@@ -364,21 +364,21 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
                 end
 
-                # Offset the cell index by the running total of shedding cells
-                mincell += prevnshedding
-                maxcell += prevnshedding
-
-                # Save the information of the node to ignore
                 @assert mincell!=maxcell || isnothing(mincell) || minflags==maxflags ""*
                     "Min and max cell to ignore are the same; there is"*
                     " currently no implementation for this case."*
                     " (mincell, maxcell) = $((mincell, maxcell)),"*
                     " minflags=$(minflags), maxflags=$(maxflags)"
 
-                if !isnothing(minflags)
+                # Save the information of the node to ignore
+                if !isnothing(mincell)
+                    # Offset the cell index by the running total of shedding cells
+                    mincell += prevnshedding
+                    # Save the cell and node to omit
                     this_panel_omit_shedding[mincell] = minflags
                 end
-                if !isnothing(maxflags)
+                if !isnothing(maxcell)
+                    maxcell += prevnshedding
                     this_panel_omit_shedding[maxcell] = maxflags
                 end
 
@@ -416,9 +416,10 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         push!(bodies, body)
         push!(names, name)
 
-
-        if verbose; println("\t"^(v_lvl+1)*"Is $(name) mesh wateright?\t$(watertight)"); end
-        if verbose; println("\t"^(v_lvl+1)*"Number of panels in $(name):\t$(body.ncells)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Is mesh wateright?\t$(watertight)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of panels:\t$(body.ncells)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of sheddings:\t$(body.nsheddings)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of shed omits:\t$(length(this_panel_omit_shedding))"); end
 
     end
 
@@ -430,6 +431,10 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
     return multibody, elsprescribe
 
 end
+
+direction(dir; X0=zeros(3)) = X -> dot(X - X0, dir)
+loop(; Oaxis=Matrix(1.0I, 3, 3), X0=zeros(3)) = X -> -atand(dot(X - X0, Oaxis[:, 2]), dot(X - X0, Oaxis[:, 3]))
+nojunction(X) = Inf
 
 
 """
