@@ -290,6 +290,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         # Wrap Meshes object into a Grid object from GeometricTools
         grid = gt.GridTriangleSurface(msh)
 
+        nodes = grid._nodes
+        tricoor, quadcoor, lin, ndivscells, cin = gt.generate_getcellt_args(grid)
         this_panel_omit_shedding = Dict()
 
         # All shedding points (trailing edge) are agglomerated here
@@ -319,32 +321,43 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                                                     parameterization=sortingfunction)
             end
 
-            # Filter out any points that are close to junctions
-            toremove = filter( i -> junctioncriterion(view(trailingedge, :, i)) <= 0.0, 1:size(trailingedge, 2) )
-            removedtrailingedge = trailingedge[:, toremove]
-
-            tokeep = filter( i -> junctioncriterion(view(trailingedge, :, i)) > 0.0, 1:size(trailingedge, 2) )
-            trailingedge = trailingedge[:, tokeep]
-
-            # Generate TE shedding matrix
-            shedding = calc_shedding(grid, trailingedge;
+            # Generate full TE shedding matrix
+            fullshedding = calc_shedding(grid, trailingedge;
                                             tolerance=lengthscale*tolerance,
                                             periodic=closed)
 
-            # Generate TE shedding matrix of nodes that got filtered out
-            removedshedding = calc_shedding(grid, removedtrailingedge;
-                                            tolerance=lengthscale*tolerance,
-                                            periodic=false)
+            # Categorize TE cells with points close to junctions
+            tokeep = []
+            toremove = []
+            for (ei, (pi, nia, nib)) in enumerate(eachcol(fullshedding)) # Iterate over TE cells
+
+                # Convert node indices from panel-local to global
+                pia = gt.get_cell_t(tricoor, quadcoor, grid, pi, nia, lin, ndivscells, cin)
+                pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
+
+                keep = junctioncriterion(view(nodes, :, pia)) > 0.0 && junctioncriterion(view(nodes, :, pib)) > 0.0
+
+                if keep
+                    push!(tokeep, ei)
+                else
+                    push!(toremove, ei)
+                end
+
+            end
+
+            # Filter out TE cells with points close to junctions
+            shedding = fullshedding[:, tokeep]
+
+            # Fetch TE cells that were filtered out to further identify
+            # sheddings to omit
+            removedshedding = fullshedding[:, toremove]
 
             nremoved += size(removedshedding, 2)
 
             # Flag nodes closest to the wing-body junction to not shed particles
             if !isnothing(panel_omit_shedding) && size(shedding, 2)!=0
 
-                nodes = grid._nodes
                 prevnshedding = sum(size.(sheddings, 2); init=0)
-
-                tricoor, quadcoor, lin, ndivscells, cin = gt.generate_getcellt_args(grid)
 
                 # Find shedding nodes that are next to the junctions
                 for (rpi, rnia, rnib) in eachcol(removedshedding) # Iterate over junction-removed cells
@@ -382,7 +395,9 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             omitflags = (omit_a, omit_b, false)
 
                             if debug
-                                println("\t"^(v_lvl+3), "ei=$ei", "\t", "pi=$pi", "\t", omitflags, "\t", "pia=$pia", "\t", "pib=$pib")
+                                println("\t"^(v_lvl+3), "ei=$ei", "\t",
+                                        "pi=$pi", "\t", omitflags, "\t",
+                                        "pia=$pia", "\t", "pib=$pib")
                             end
 
                             # Save the cell and node to omit
@@ -431,7 +446,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         if verbose; println("\t"^(v_lvl+1)*"Is mesh wateright?\t$(watertight)"); end
         if verbose; println("\t"^(v_lvl+1)*"Number of panels:\t$(body.ncells)"); end
         if verbose; println("\t"^(v_lvl+1)*"Number of sheddings:\t$(body.nsheddings) ($(nremoved) removed)"); end
-        if verbose; println("\t"^(v_lvl+1)*"Number of shed omits:\t$(length(this_panel_omit_shedding))"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of sheds to omit:$(length(this_panel_omit_shedding))"); end
 
     end
 
