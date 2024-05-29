@@ -299,8 +299,12 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
         nremoved = 0
 
+        if verbose; println("\t"^(v_lvl+1)*"Identifying trailing edges"); end
+
         # Read all trailing edges
         for (trailingedgefile, sortingfunction, junctioncriterion, closed) in trailingedges
+
+            if verbose; println("\t"^(v_lvl+2)*"$(trailingedgefile)"); end
 
             # Read Gmsh line of trailing edge
             TEmsh = reader(joinpath(read_path, trailingedgefile))
@@ -367,7 +371,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                     rpib = gt.get_cell_t(tricoor, quadcoor, grid, rpi, rnib, lin, ndivscells, cin)
 
                     if debug
-                        println("\t"^(v_lvl+2), "rpi=$rpi\trpia=$rpia\trpib=$rpib")
+                        println("\t"^(v_lvl+3), "rpi=$rpi, rpia=$rpia, rpib=$rpib")
                     end
 
                     for (ei, (pi, nia, nib)) in enumerate(eachcol(shedding)) # Iterate over shedding cells
@@ -377,16 +381,10 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                         pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
 
                         # Check if incoming node is also a node in the removed cell
-                        omit_a = ( pia==rpia || pia==rpib
-                                    # || norm(nodes[:, pia] - nodes[:, rpia]) <= 1e2*eps()
-                                    # || norm(nodes[:, pia] - nodes[:, rpib]) <= 1e2*eps()
-                                    )
+                        omit_a = ( pia==rpia || pia==rpib )
 
                         # Check if outgoing node is also a node in the removed cell
-                        omit_b = ( pib==rpia || pib==rpib
-                                    # || norm(nodes[:, pib] - nodes[:, rpia]) <= 1e2*eps()
-                                    # || norm(nodes[:, pib] - nodes[:, rpib]) <= 1e2*eps()
-                                    )
+                        omit_b = ( pib==rpia || pib==rpib )
 
                         # Case that the cell shared a node with a junction-removed cell
                         if omit_a || omit_b
@@ -395,9 +393,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             omitflags = (omit_a, omit_b, false)
 
                             if debug
-                                println("\t"^(v_lvl+3), "ei=$ei", "\t",
-                                        "pi=$pi", "\t", omitflags, "\t",
-                                        "pia=$pia", "\t", "pib=$pib")
+                                println("\t"^(v_lvl+4), "ei=$ei, pi=$pi, pia=$pia, pib=$pib, $(omitflags)")
                             end
 
                             # Save the cell and node to omit
