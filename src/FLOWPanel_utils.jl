@@ -146,6 +146,7 @@ end
                                 rotation::Meshes.Rotation=one(Meshes.QuatRotation),
                                 scaling=1.0,
                                 tolerance=1e-6,
+                                lengthscale=nothing,
                                 panel_omit_shedding=Dict(),
                                 verbose=true,
                                 v_lvl=0
@@ -190,12 +191,12 @@ least-squares solver (`solve(multibody, ...; elprescribe=elsprescribe, ...)`).
                                 these inputs.
 * `tolerance`:              Tolerance used to identify trailing edge points.
                                 Any mesh points read from `meshfiles` that are
-                                between a radius `tolerance` from any points read
-                                from `trailingedges` will be flagged as
-                                trailing edge nodes, so make sure that the
-                                lines in `trailingedges` are finely discretized
-                                and so you can use a tight (small value)
-                                tolerance.
+                                between a radius `tolerance*lengthscale` from
+                                any points read from `trailingedges` will be
+                                flagged as trailing edge nodes, so make sure
+                                that the lines in `trailingedges` are finely
+                                discretized and so you can use a tight (small
+                                value) tolerance.
 
 `sorting_function` in `trailingedges[i] = (trailingedge_meshfile,
 sorting_function, junction_criterion, closed)` receives a point `X` and needs to
@@ -252,20 +253,28 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             rotation::Meshes.Rotation=one(Meshes.QuatRotation),
                             scaling=1.0,
                             tolerance=1e-6,
+                            lengthscale=nothing,
+                            rediscretize_trailingedge=true,
                             panel_omit_shedding=nothing,
+                            debug=false,
                             verbose=true,
                             v_lvl=0
                             ) where {F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
+    @assert 0 < tolerance <= 1 ""*
+        "Received invalid tolerance $(tolerance); it needs to be between 0 and 1."
+
+    @assert !isnothing(lengthscale) && lengthscale > 0 ""*
+        "Received invalid length scale $(lengthscale)"
 
     bodies = bodytype[]
     names = String[]
     elsprescribe = Tuple{Int64, Float64}[]
 
+    # panel_omit_shedding = Dict()
     # Dictionary flagging particle to omit shedding at the junctions between wing
     # and fuselage. This has the form
     # `panel_omit_shedding[body][ei] = (shed incoming, shed outgoing, shed unsteady)`
-    # panel_omit_shedding = Dict()
 
     # Generate each body
     for (name, meshfile, flip) in meshfiles
@@ -286,6 +295,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         # All shedding points (trailing edge) are agglomerated here
         sheddings = [noshedding]
 
+        nremoved = 0
+
         # Read all trailing edges
         for (trailingedgefile, sortingfunction, junctioncriterion, closed) in trailingedges
 
@@ -301,14 +312,31 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
             # Sort TE points from "left" to "right" according to span direction
             trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
 
+            # Rediscretize the TE line with enough resolution to meet tolerance
+            if rediscretize_trailingedge
+                ndiscretize = ceil(Int, 1/(0.5*tolerance))
+                trailingedge = gt.rediscretize_line(trailingedge, ndiscretize;
+                                                    parameterization=sortingfunction)
+            end
+
             # Filter out any points that are close to junctions
+            toremove = filter( i -> junctioncriterion(view(trailingedge, :, i)) <= 0.0, 1:size(trailingedge, 2) )
+            removedtrailingedge = trailingedge[:, toremove]
+
             tokeep = filter( i -> junctioncriterion(view(trailingedge, :, i)) > 0.0, 1:size(trailingedge, 2) )
             trailingedge = trailingedge[:, tokeep]
 
             # Generate TE shedding matrix
             shedding = calc_shedding(grid, trailingedge;
-                                            tolerance=tolerance,
+                                            tolerance=lengthscale*tolerance,
                                             periodic=closed)
+
+            # Generate TE shedding matrix of nodes that got filtered out
+            removedshedding = calc_shedding(grid, removedtrailingedge;
+                                            tolerance=lengthscale*tolerance,
+                                            periodic=false)
+
+            nremoved += size(removedshedding, 2)
 
             # Flag nodes closest to the wing-body junction to not shed particles
             if !isnothing(panel_omit_shedding) && size(shedding, 2)!=0
@@ -318,68 +346,52 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
                 tricoor, quadcoor, lin, ndivscells, cin = gt.generate_getcellt_args(grid)
 
-                minval = Inf
-                mincell = nothing
-                minflags = nothing
-                maxval = -Inf
-                maxcell = nothing
-                maxflags = nothing
+                # Find shedding nodes that are next to the junctions
+                for (rpi, rnia, rnib) in eachcol(removedshedding) # Iterate over junction-removed cells
 
-                # Find closest shedding node to the fuselage
-                for (ei, (pi, nia, nib)) in enumerate(eachcol(shedding))
+                    # Convert node indices of removed cell from panel-local to global
+                    rpia = gt.get_cell_t(tricoor, quadcoor, grid, rpi, rnia, lin, ndivscells, cin)
+                    rpib = gt.get_cell_t(tricoor, quadcoor, grid, rpi, rnib, lin, ndivscells, cin)
 
-                    # Convert node indices from panel-local to global
-                    pia = gt.get_cell_t(tricoor, quadcoor, grid, pi, nia, lin, ndivscells, cin)
-                    pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
-
-                    # Check incoming node
-                    val = junctioncriterion(nodes[:, pia])
-
-                    if val < minval && isfinite(val)
-                        minval = val
-                        mincell = ei
-                        minflags = (true, false, false)
+                    if debug
+                        println("\t"^(v_lvl+2), "rpi=$rpi\trpia=$rpia\trpib=$rpib")
                     end
 
-                    if val > maxval && isfinite(val)
-                        maxval = val
-                        maxcell = ei
-                        maxflags = (true, false, false)
+                    for (ei, (pi, nia, nib)) in enumerate(eachcol(shedding)) # Iterate over shedding cells
+
+                        # Convert node indices from panel-local to global
+                        pia = gt.get_cell_t(tricoor, quadcoor, grid, pi, nia, lin, ndivscells, cin)
+                        pib = gt.get_cell_t(tricoor, quadcoor, grid, pi, nib, lin, ndivscells, cin)
+
+                        # Check if incoming node is also a node in the removed cell
+                        omit_a = ( pia==rpia || pia==rpib
+                                    # || norm(nodes[:, pia] - nodes[:, rpia]) <= 1e2*eps()
+                                    # || norm(nodes[:, pia] - nodes[:, rpib]) <= 1e2*eps()
+                                    )
+
+                        # Check if outgoing node is also a node in the removed cell
+                        omit_b = ( pib==rpia || pib==rpib
+                                    # || norm(nodes[:, pib] - nodes[:, rpia]) <= 1e2*eps()
+                                    # || norm(nodes[:, pib] - nodes[:, rpib]) <= 1e2*eps()
+                                    )
+
+                        # Case that the cell shared a node with a junction-removed cell
+                        if omit_a || omit_b
+
+                            # Flags for FLOWUnsteady to omit shedding or not
+                            omitflags = (omit_a, omit_b, false)
+
+                            if debug
+                                println("\t"^(v_lvl+3), "ei=$ei", "\t", "pi=$pi", "\t", omitflags, "\t", "pia=$pia", "\t", "pib=$pib")
+                            end
+
+                            # Save the cell and node to omit
+                            this_panel_omit_shedding[ei+prevnshedding] = omitflags
+
+                        end
+
                     end
 
-                    # Check outgoing node
-                    val = junctioncriterion(nodes[:, pib])
-
-                    if val < minval && isfinite(val)
-                        minval = val
-                        mincell = ei
-                        minflags = (false, true, false)
-                    end
-
-                    if val > maxval && isfinite(val)
-                        maxval = val
-                        maxcell = ei
-                        maxflags = (false, true, false)
-                    end
-
-                end
-
-                @assert mincell!=maxcell || isnothing(mincell) || minflags==maxflags ""*
-                    "Min and max cell to ignore are the same; there is"*
-                    " currently no implementation for this case."*
-                    " (mincell, maxcell) = $((mincell, maxcell)),"*
-                    " minflags=$(minflags), maxflags=$(maxflags)"
-
-                # Save the information of the node to ignore
-                if !isnothing(mincell)
-                    # Offset the cell index by the running total of shedding cells
-                    mincell += prevnshedding
-                    # Save the cell and node to omit
-                    this_panel_omit_shedding[mincell] = minflags
-                end
-                if !isnothing(maxcell)
-                    maxcell += prevnshedding
-                    this_panel_omit_shedding[maxcell] = maxflags
                 end
 
             end
@@ -418,7 +430,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
         if verbose; println("\t"^(v_lvl+1)*"Is mesh wateright?\t$(watertight)"); end
         if verbose; println("\t"^(v_lvl+1)*"Number of panels:\t$(body.ncells)"); end
-        if verbose; println("\t"^(v_lvl+1)*"Number of sheddings:\t$(body.nsheddings)"); end
+        if verbose; println("\t"^(v_lvl+1)*"Number of sheddings:\t$(body.nsheddings) ($(nremoved) removed)"); end
         if verbose; println("\t"^(v_lvl+1)*"Number of shed omits:\t$(length(this_panel_omit_shedding))"); end
 
     end

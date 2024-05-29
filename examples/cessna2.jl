@@ -73,7 +73,8 @@ bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
 
 # ----------------- GENERATE BODY ----------------------------------------------
 body, elsprescribe = pnl.generate_multibody(bodytype, meshfiles, trailingedges, meshreader;
-                                tolerance=0.001*bref,
+                                tolerance=0.001,
+                                lengthscale=bref,
                                 read_path=read_path,
                                 offset=offset, rotation=rotation, scaling=scaling,
                                 )
