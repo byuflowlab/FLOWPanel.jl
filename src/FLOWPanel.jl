@@ -8,14 +8,6 @@ import Krylov
 import LinearOperators
 
 const ONE_OVER_4PI = 1/4/pi
-const TEST_FLAG = true
-
-
-if TEST_FLAG
-    FastMultipole.direct!(stuff::String) = "hello"
-else
-    FastMultipole.direct!(stuff::String) = "world"
-end
 
 include("types.jl")
 include("panel.jl")
