@@ -3,13 +3,17 @@
 *.jl.*.cov
 *.jl.mem
 build
+Manifest.toml
 
 # FLOWPanel temps
 *.gif
 temps
 temp*
 *.vtk
+*.vts
+*.vtu
 *.jld
+*.bson
 
 # Jupyter notebook temps
 .ipynb_checkpoints
