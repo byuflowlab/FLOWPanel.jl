@@ -15,9 +15,10 @@ apply_freestream!(sphere_unstructured, SVector{3}(1.0,0,0))
 
 # solve panels
 solver_structured = LUDecomposition(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
+@show typeof(solver_structured)
 solve!(sphere_structured, solver_structured)
 grid_2_panels_strength!(sphere_structured)
-tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
+tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
 # vtk("structured_source_sphere_solved", sphere_structured)
 
 for (velocity,panel) in zip(sphere_structured.velocity, sphere_structured.panels)
@@ -27,7 +28,7 @@ end
 solver_unstructured = LUDecomposition(sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
 solve!(sphere_unstructured, solver_unstructured)
 grid_2_panels_strength!(sphere_unstructured)
-tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
+tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
 # vtk("unstructured_source_sphere_solved", sphere_unstructured)
 
 for (velocity,panel) in zip(sphere_unstructured.velocity, sphere_unstructured.panels)
@@ -50,13 +51,13 @@ end
 # dipole_solver_structured = LUDecomposition(dipole_sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
 # solve!(dipole_sphere_structured, dipole_solver_structured, SVector{3,Float64}(0,0,0))
 # grid_2_panels_strength!(dipole_sphere_structured)
-# tree_structured = FastMultipole.fmm!(dipole_sphere_structured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
+# tree_structured = FastMultipole.fmm!(dipole_sphere_structured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
 # vtk("structured_dipole_sphere_solved", dipole_sphere_structured)
 
 # dipole_solver_unstructured = LUDecomposition(dipole_sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
 # solve!(dipole_sphere_unstructured, dipole_solver_unstructured, SVector{3,Float64}(0,0,0))
 # grid_2_panels_strength!(dipole_sphere_unstructured)
-# tree_unstructured = FastMultipole.fmm!(dipole_sphere_unstructured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
+# tree_unstructured = FastMultipole.fmm!(dipole_sphere_unstructured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
 # vtk("unstructured_dipole_sphere_solved", dipole_sphere_unstructured)
 
 # errs = Float64[]
@@ -107,7 +108,7 @@ end
 # apply_freestream!(sphere_unstructured, SVector{3}(1.0,0,0))
 
 # # solve panels
-# solver_structured = FastJacobi(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; n_per_branch=16, max_iter=200, epsilon=1e-6)
+# solver_structured = FastJacobi(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; leaf_size=16, max_iter=200, epsilon=1e-6)
 # solve!(sphere_structured, solver_structured; verbose=true, update_influence_matrices=false)
 # vtk("structured_source_sphere_solved_fastjacobi", sphere_structured)
 
@@ -134,7 +135,7 @@ end
 #     @test isapprox(dot(panel.normal, velocity), 0.0; atol=1e-6)
 # end
 
-# solver_unstructured = FastJacobi(sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; n_per_branch=15, max_iter=200, epsilon=1e-6)
+# solver_unstructured = FastJacobi(sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; leaf_size=15, max_iter=200, epsilon=1e-6)
 # solve!(sphere_unstructured, solver_unstructured; verbose=false)
 # vtk("unstructured_source_sphere_solved_fastjacobi", sphere_unstructured)
 
@@ -192,7 +193,7 @@ end
 # sphere_structured = create_sphere_structured(ConstantSource(); n_phi=40, n_theta=30, d_theta=5*pi/180)
 
 # # instantiate solver
-# solver_structured = FastJacobi(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; n_per_branch=16, max_iter=200, epsilon=1e-7, fit_order=1, n_previous_steps=2)
+# solver_structured = FastJacobi(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; leaf_size=16, max_iter=200, epsilon=1e-7, fit_order=1, n_previous_steps=2)
 
 # # unsteady simulation
 # nsteps = 20
@@ -202,7 +203,7 @@ end
 
 #     # apply freestream
 #     apply_freestream!(sphere_structured, SVector{3}(fs,0,0))
-    
+
 #     # solve panels
 #     tsolve = @elapsed solve!(sphere_structured, solver_structured, 0.001; verbose=true, update_influence_matrices=false)
 #     ts_solve[i] = tsolve
@@ -234,33 +235,33 @@ end
 # @testset "solver: fast gauss-seidel" begin
 
 # create panels
-sphere_structured = create_sphere_structured(ConstantSource(); n_phi=3, n_theta=3, d_theta=5*pi/180)
-sphere_structured_lu = create_sphere_structured(ConstantSource(); n_phi=3, n_theta=3, d_theta=5*pi/180)
-sphere_unstructured = create_sphere_unstructured(ConstantSource(); n_phi=30, n_theta=27)
-
-# apply freestream
-apply_freestream!(sphere_structured, SVector{3}(1.0,0,0))
-apply_freestream!(sphere_structured_lu, SVector{3}(1.0,0,0))
-apply_freestream!(sphere_unstructured, SVector{3}(1.0,0,0))
-
-# sort lu sphere
-theta, expansion_order, n_per_branch = 0.5, 20, 1
-tree_lu = FastMultipole.Tree(sphere_structured_lu; expansion_order, n_per_branch, shrink_recenter=false)
-# m2l_list, direct_list = FastMultipole.build_interaction_lists(tree_lu.branches, tree_lu.branches, theta, true, true, true)
-
-# create solvers
-solver_structured, tree = FastGaussSeidel(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; expansion_order=20, n_per_branch=1, multipole_acceptance_criterion=0.5, max_iter=5, epsilon=1e-10, shrink_recenter=false)
-m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, theta, true, true, true)
-solver_lu = LUDecomposition(sphere_structured_lu, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
-
-# solve
-solve!(sphere_structured_lu, solver_lu)
-solve!(sphere_structured, solver_structured; verbose=true, update_influence_matrices=false)
-FastMultipole.direct!(sphere_structured_lu)
-
-# check solved strengths
-vtk("structured_source_sphere_solved_ludebug", sphere_structured_lu)
-vtk("structured_source_sphere_solved_fastgaussseidel", sphere_structured)
+# sphere_structured = create_sphere_structured(ConstantSource(); n_phi=3, n_theta=3, d_theta=5*pi/180)
+# sphere_structured_lu = create_sphere_structured(ConstantSource(); n_phi=3, n_theta=3, d_theta=5*pi/180)
+# sphere_unstructured = create_sphere_unstructured(ConstantSource(); n_phi=30, n_theta=27)
+#
+# # apply freestream
+# apply_freestream!(sphere_structured, SVector{3}(1.0,0,0))
+# apply_freestream!(sphere_structured_lu, SVector{3}(1.0,0,0))
+# apply_freestream!(sphere_unstructured, SVector{3}(1.0,0,0))
+#
+# # sort lu sphere
+# theta, expansion_order, leaf_size = 0.5, 20, 1
+# tree_lu = FastMultipole.Tree(sphere_structured_lu; expansion_order, leaf_size, shrink_recenter=false)
+# # m2l_list, direct_list = FastMultipole.build_interaction_lists(tree_lu.branches, tree_lu.branches, theta, true, true, true)
+#
+# # create solvers
+# solver_structured, tree = FastGaussSeidel(sphere_structured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; expansion_order=20, leaf_size=1, multipole_threshold=0.5, max_iter=5, epsilon=1e-10, shrink_recenter=false)
+# m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, theta, true, true, true)
+# solver_lu = LUDecomposition(sphere_structured_lu, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency})
+#
+# # solve
+# solve!(sphere_structured_lu, solver_lu)
+# solve!(sphere_structured, solver_structured; verbose=true, update_influence_matrices=false)
+# FastMultipole.direct!(sphere_structured_lu)
+#
+# # check solved strengths
+# vtk("structured_source_sphere_solved_ludebug", sphere_structured_lu)
+# vtk("structured_source_sphere_solved_fastgaussseidel", sphere_structured)
 
 # # solve panels
 # solve!(sphere_structured_lu, solver_lu)
@@ -296,7 +297,7 @@ for (velocity,panel) in zip(sphere_structured.velocity, sphere_structured.panels
     @test isapprox(dot(panel.normal, velocity), 0.0; atol=1e-6)
 end
 
-solver_unstructured = FastJacobi(sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; n_per_branch=15, max_iter=200, epsilon=1e-6)
+solver_unstructured = FastJacobi(sphere_unstructured, FLOWPanel.Scheme{FLOWPanel.DirectNeumann,FlowTangency}; leaf_size=15, max_iter=200, epsilon=1e-6)
 solve!(sphere_unstructured, solver_unstructured; verbose=false)
 vtk("unstructured_source_sphere_solved_fastgaussseidel", sphere_unstructured)
 

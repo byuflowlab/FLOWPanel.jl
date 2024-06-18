@@ -29,7 +29,7 @@ gradient_doublet_check = deepcopy(probe.velocity_gradient[1])
 reset!(probe)
 
 # doublet panel: fmm
-st_now, tt_now = fmm!(probe, tri_doublet; expansion_order=20, n_per_branch_source=1, n_per_branch_target=1, multipole_acceptance_criterion=1.0)
+st_now, tt_now = fmm!(probe, tri_doublet; expansion_order=20, leaf_size_source=1, leaf_size_target=1, multipole_threshold=1.0)
 potential_doublet_fmm = deepcopy(probe.scalar_potential[1])
 velocity_doublet_fmm = deepcopy(probe.velocity[1])
 gradient_doublet_fmm = deepcopy(probe.velocity_gradient[1])
@@ -48,7 +48,7 @@ pcheck, vcheck, gcheck = induced(probe.position[1], tri_source.panels[1], Consta
 gcheck2 = ForwardDiff.jacobian((x) -> induced(x, tri_source.panels[1], ConstantSource())[2], probe.position[1])
 
 # source panel: fmm
-source_tree, target_tree = fmm!(probe, tri_source; expansion_order=20, n_per_branch_source=2, n_per_branch_target=2, multipole_acceptance_criterion=1.0)
+source_tree, target_tree = fmm!(probe, tri_source; expansion_order=20, leaf_size_source=2, leaf_size_target=2, multipole_threshold=1.0)
 potential_source_fmm = deepcopy(probe.scalar_potential[1])
 velocity_source_fmm = deepcopy(probe.velocity[1])
 gradient_source_fmm = deepcopy(probe.velocity_gradient[1])
@@ -88,7 +88,7 @@ gradient_doublet_check = deepcopy(probe.velocity_gradient[1])
 reset!(probe)
 
 # doublet panel: fmm
-fmm!(probe, quad_doublet; expansion_order=20, n_per_branch_source=1, n_per_branch_target=1, multipole_acceptance_criterion=1.0)
+fmm!(probe, quad_doublet; expansion_order=20, leaf_size_source=1, leaf_size_target=1, multipole_threshold=1.0)
 potential_doublet_fmm = probe.scalar_potential[1]
 velocity_doublet_fmm = deepcopy(probe.velocity[1])
 gradient_doublet_fmm = deepcopy(probe.velocity_gradient[1])
@@ -118,6 +118,37 @@ reset!(probe)
 
 end
 
+#####
+##### debug VortexLattice
+#####
+
+points = [
+    SVector{3}(0.25,0,0),
+    SVector{3}(1.0,0,0),
+    SVector{3}(1.0,1.0,0),
+    SVector{3}(0.25,1.0,0)
+]
+meshcells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD, SVector{4}(1,2,3,4))]
+quad_doublet = PanelArray(points, meshcells, ConstantNormalDoublet())
+probe = ProbeSystem([SVector{3}(0.5, 0.5, 2.0)]; scalar_potential=true, velocity=true, velocity_gradient=true)
+
+# doublet panel: direct
+direct!(probe, quad_doublet)
+potential_doublet_check = probe.scalar_potential[1]
+velocity_doublet_check = deepcopy(probe.velocity[1])
+gradient_doublet_check = deepcopy(probe.velocity_gradient[1])
+reset!(probe)
+
+# doublet panel: fmm
+fmm!(probe, quad_doublet; expansion_order=20, leaf_size_source=1, leaf_size_target=1, multipole_threshold=1.0)
+potential_doublet_fmm = probe.scalar_potential[1]
+velocity_doublet_fmm = deepcopy(probe.velocity[1])
+gradient_doublet_fmm = deepcopy(probe.velocity_gradient[1])
+reset!(probe)
+
+@show velocity_doublet_fmm velocity_doublet_check
+
+
 @testset "fmm sphere" begin
 
 #####
@@ -140,8 +171,8 @@ sphere_unstructured.potential .= 0.0
 sphere_structured.potential .= 0.0
 
 # compute potential using the FMM
-tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
-tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=14, n_per_branch=50, multipole_acceptance_criterion=0.4)
+tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
+tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=14, leaf_size=50, multipole_threshold=0.4)
 
 vtk("unstructured_sphere_source_fmm", sphere_unstructured)
 vtk("structured_sphere_source_fmm", sphere_structured)
@@ -177,8 +208,8 @@ sphere_unstructured.potential .= 0.0
 sphere_structured.potential .= 0.0
 
 # compute potential using the FMM
-tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=15, n_per_branch=50, multipole_acceptance_criterion=0.4)
-tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=15, n_per_branch=50, multipole_acceptance_criterion=0.4)
+tree_unstructured = FastMultipole.fmm!(sphere_unstructured; expansion_order=15, leaf_size=50, multipole_threshold=0.4)
+tree_structured = FastMultipole.fmm!(sphere_structured; expansion_order=15, leaf_size=50, multipole_threshold=0.4)
 
 vtk("unstructured_sphere_dipole_fmm", sphere_unstructured)
 vtk("structured_sphere_dipole_fmm", sphere_structured)

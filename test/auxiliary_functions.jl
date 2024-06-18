@@ -45,7 +45,7 @@ function create_panel(;
     )
 
     radius = FLOWPanel.get_radius(control_point, vertices...)
-    
+
     if invert_normals
         vertices = reverse(vertices)
         normal = -1 * normal
@@ -68,7 +68,7 @@ function create_random_panel(seed=123;
     normal /= norm(normal)
 
     radius = FLOWPanel.get_radius(control_point, vertices...)
-    
+
     if invert_normals
         vertices = reverse(vertices)
         normal = -1 * normal
@@ -93,7 +93,7 @@ function create_tripanel(;
     normal /= norm(normal)
 
     radius = FLOWPanel.get_radius(control_point, vertices...)
-    
+
     if invert_normals
         vertices = reverse(vertices)
         normal = -1 * normal
@@ -198,4 +198,30 @@ function create_sphere_unstructured(kernel, center=SVector{3}(0.0,0.0,0.0);
     # create panels
     sphere = PanelArray(points, meshcells, kernel)
     return sphere
+end
+
+function naca(x)
+    return 0.594689181*(0.298222773*sqrt(x) - 0.127125232*x - 0.357907906*x^2 + 0.291984971*x^3 - 0.105174606*x^4)
+end
+
+function create_wing_structured(kernel, center=SVector{3}(0.0,0.0,0.0);
+        span=1.0, AR=10, nc=10, ns=20,
+        invert_normals=true,
+    )
+    chord = span / AR
+    corner_grid = zeros(SVector{3,Float64},2*nc+3,ns+1,1)
+    for i_s in 1:ns+1
+        for i_c in nc+1:-1:-nc-1
+            x = i_c / (nc+1)
+            θ = (x+1) * pi
+            xcos = (cos(θ)+1)/2
+            isapprox(xcos, 0.0; atol=1e-14) && (xcos=0.0)
+            corner_grid[-i_c+nc+2,i_s] = SVector{3}(
+                xcos*chord,
+                (i_s-1) / ns * span,
+                naca(xcos) * sign(i_c) * chord
+            ) + center
+        end
+    end
+    return PanelArray(corner_grid, kernel; invert_normals)
 end
