@@ -14,3 +14,5 @@ temp*
 # Jupyter notebook temps
 .ipynb_checkpoints
 
+# vim
+*.swp
