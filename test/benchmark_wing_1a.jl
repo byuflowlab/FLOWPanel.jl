@@ -65,7 +65,7 @@ function benchmark_wing_iterative(vtk_base_name::String;
             multipliers = range(1,8),
             tols = [1e-3, 1e-6, 1e-9],
             nc0=5, ns0=50,
-            solver_kwargs...
+            solve_kwargs...
        )
 
     ts_pre = zeros(length(multipliers))
@@ -81,7 +81,7 @@ function benchmark_wing_iterative(vtk_base_name::String;
 
         for (j,tol) in enumerate(tols)
             println("\ntol = $tol")
-            t_solve = @elapsed solve!(wing, solver; tolerance=tol, max_iterations=200, solver_kwargs...)
+            t_solve = @elapsed solve!(wing, solver; tolerance=tol, max_iterations=200, solve_kwargs...)
             @show t_solve
             ts_solve[i,j] = t_solve
             # save vtk file

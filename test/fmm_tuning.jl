@@ -5,6 +5,7 @@ using FLOWPanel.StaticArrays
 import FLOWPanel.FastMultipole as fmm
 using LinearAlgebra
 using BSON
+using PythonPlot
 include("auxiliary_functions.jl")
 include("benchmark_wing.jl")
 
@@ -83,6 +84,57 @@ function get_results(;
     return results
 end
 
+function clabel_fmt(x)
+    str = "\$\\varepsilon = 10^{" * string(Int(round(x))) * "}\$"
+    return LaTeXString(str)
+end
+
+function plot_results(results_bson::String)
+    BSON.@load results_bson results n_panels expansion_orders leaf_sizes multipole_thresholds
+
+    log10_leaf_sizes = log10.(leaf_sizes)
+    cbar_labels = (L"\log_{10} \varepsilon_\phi", L"\log_{10} \varepsilon_v", "", L"\log_{10} t_{\text{fmm}}")
+
+    # plot types
+    for (i_type, type_name) in enumerate(("potential_error", "velocity_error", "t_direct", "t_fmm"))
+        if i_type != 3
+            for (i_n, n) in enumerate(n_panels)
+                vmin = minimum(log10.(results[i_n][i_type]))
+                vmax = maximum(log10.(results[i_n][i_type]))
+                vmin_contour = minimum(log10.(results[i_n][2]))
+                vmax_contour = maximum(log10.(results[i_n][2]))
+                for (i_p,expansion_order) in enumerate(expansion_orders)
+                    fig = figure("cost")
+                    fig.clear()
+                    # n == n_panels[1] && (fig.suptitle("expansion order: $expansion_order"))
+                    fig.add_subplot(111, xlabel="leaf size", ylabel="multipole threshold")
+                    ax = fig.get_axes()[0]
+                    # expansion_order == expansion_orders[1] && ax.annotate(L"N"*" panels: $n", (-0.65,0.5), xycoords = "axes fraction", rotation=90, va="center", fontweight="bold", fontsize=10)
+                    # ax.set_xscale("log")
+
+                    data = transpose(log10.(results[i_n][i_type][i_p,:,:]))
+                    cs = ax.contourf(log10_leaf_sizes, multipole_thresholds, data, levels=range(vmin,vmax,100))
+                    ax.set_xticks(1.0:0.5:2.5)
+                    ax.set_xticklabels([10,32,100,316])
+                    fig.colorbar(cs, label=cbar_labels[i_type], ticks=range(round(vmin),round(vmax)))
+                    fig.tight_layout()
+                    fig.savefig("/Users/ryan/Dropbox/research/notebooks/img/20240618_fmm_tuning_wing/$(type_name)_n$(n)_p$(expansion_order).png")
+
+                    if i_type == 4 # add error contours
+                        data_contour = transpose(log10.(results[i_n][2][i_p,:,:]))
+                        cs_levels = [-16,-14,-12,-10,-8,-6,-4,-3,-2,-1,0,1]
+                        cs_contour = ax.contour(log10_leaf_sizes, multipole_thresholds, data_contour, colors="black", linewidths=1.0, linestyles="dashed", levels=cs_levels)
+                        ax.clabel(cs_contour, levels=cs_levels, fmt=clabel_fmt)
+                        fig.savefig("/Users/ryan/Dropbox/research/notebooks/img/20240618_fmm_tuning_wing/$(type_name)_error_contour__n$(n)_p$(expansion_order).png")
+                    end
+
+                end
+            end
+        end
+    end
+
+end
+
 function optimize_results(results_bson::String; tolerances=[1e-3, 1e-6, 1e-9])
     BSON.@load results_bson results n_panels expansion_orders leaf_sizes multipole_thresholds
     return optimize_results(results, tolerances, expansion_orders, leaf_sizes, multipole_thresholds)
@@ -132,5 +184,8 @@ end
 results_bson = "fmm_tuning.bson"
 # results = get_results(; file=results_bson)
 
+# plot_results(results_bson)
+
 tolerances = [1e-3, 1e-6, 1e-9]
 p_stars_ϕ, theta_stars_ϕ, n_stars_ϕ, p_stars_v, theta_stars_v, n_stars_v = optimize_results(results_bson; tolerances)
+

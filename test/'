@@ -1,0 +1,139 @@
+using Pkg
+Pkg.activate("/Users/ryan/Dropbox/research/projects/FLOWPanel.jl/")
+using FLOWPanel
+using FLOWPanel.StaticArrays
+include("auxiliary_functions.jl")
+
+function prepare_wing(;
+        kernel=ConstantSource(),
+        AR=10, span=1.0,
+        nc=10, ns=30,
+        freestream=SVector{3}(1.0,0,0),
+    )
+    # create wing
+    wing = create_wing_structured(kernel; span, AR, nc, ns)
+
+    # apply freestream
+    apply_freestream!(wing, freestream)
+
+    return wing
+end
+
+function benchmark_wing_lu(wing, freestream=SVector{3}(1.0,0,0))
+
+    # reset wing
+    reset_potential_velocity!(wing)
+    FLOWPanel.set_unit_strength!(wing)
+
+    # create solver
+    scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FlowTangency}
+    solver, t_aic, t_lu, t_alloc = LUDecomposition_benchmark(wing, scheme)
+
+    # solve
+    t_solve = solve!(wing, solver)
+
+    return t_solve, t_aic, t_lu, t_alloc
+end
+
+function benchmark_wing_gmres(wing, tolerance, max_iterations, freestream=SVector{3}(1.0,0,0))
+
+    # reset wing
+    reset_potential_velocity!(wing)
+    FLOWPanel.set_unit_strength!(wing)
+
+    # create solver
+    scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FlowTangency}
+    solver, t_aic, t_alloc = IterativeSolver_benchmark(wing, scheme)
+
+    # solve
+    t_solve = solve!(wing, solver; verbose=false, tolerance, max_iterations)
+
+    return t_solve, t_aic, t_alloc
+end
+
+function benchmark_wing_gmres_mf(wing, tolerance, max_iterations, expansion_order, leaf_size, multipole_threshold, freestream=SVector{3}(1.0,0,0))
+
+    # reset wing
+    reset_potential_velocity!(wing)
+    FLOWPanel.set_unit_strength!(wing)
+
+    # create solver
+    scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FlowTangency}
+    solver, t_alloc = MatrixFreeSolver_benchmark(wing, scheme; expansion_order, leaf_size, multipole_threshold)
+
+    # solve
+    t_solve = solve!(wing, solver; verbose=false, tolerance, max_iterations)
+
+    return t_solve, t_alloc
+end
+
+function benchmark_wing_fgs(wing, tolerance, max_iterations, expansion_order, leaf_size, multipole_threshold, relaxation, freestream=SVector{3}(1.0,0,0))
+
+    # reset wing
+    reset_potential_velocity!(wing)
+    FLOWPanel.set_unit_strength!(wing)
+
+    # create solver
+    scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FlowTangency}
+    solver, t_aic, t_alloc = FastGaussSeidel_benchmark(wing, scheme; expansion_order, leaf_size)
+
+    # solve
+    t_solve = solve!(wing, solver; verbose=false, tolerance, max_iterations, multipole_threshold, relaxation)
+
+    return t_solve, t_aic, t_alloc
+end
+
+function benchmark_wing(nc, ns, tolerance, expansion_order, leaf_size, multipole_threshold;
+        kernel=ConstantSource(),
+        AR=10, span=1.0,
+        freestream=SVector{3}(1.0,0,0),
+    )
+
+    # create wing
+    wing = prepare_wing(; kernel, span, AR, nc, ns, freestream)
+
+    # benchmark LU
+    t_solve_lu, t_aic_lu, t_lu_lu, t_alloc_lu = benchmark_wing_lu(wing, freestream)
+    vtk("benchmark_lu/benchmark_lu_nc$(nc)_ns$(ns).vts", wing)
+
+    # benchmark GMRES
+    max_iterations = 100
+    t_solve_gmres, t_aic_gmres, t_alloc_gmres = benchmark_wing_gmres(wing, tolerance, max_iterations, freestream=SVector{3}(1.0,0,0))
+    vtk("benchmark_gmres/benchmark_gmres_nc$(nc)_ns$(ns)_atol$(tolerance).vts", wing)
+
+    # benchmark MF-GMRES
+    t_solve_gmres_mf, t_alloc_gmres_mf = benchmark_wing_gmres_mf(wing, tolerance, max_iterations, expansion_order, leaf_size, multipole_threshold, freestream)
+    vtk("benchmark_gmres_mf/benchmark_gmres_mf_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order)_l$(leaf_size)_$(multipole_threshold).vts", wing)
+
+    # benchmark FGS
+    max_iterations=500
+    t_solve_fgs, t_aic_fgs, t_alloc_fgs = benchmark_wing_fgs(wing, tolerance, max_iterations, expansion_order, leaf_size, multipole_threshold, relaxation, freestream)
+    vtk("benchmark_fgs/benchmark_fgs_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order)_l$(leaf_size)_$(multipole_threshold)_relax$(relaxation).vts", wing)
+
+    return (t_solve_lu, t_aic_lu, t_lu_lu, t_alloc_lu), (t_solve_gmres, t_aic_gmres, t_alloc_gmres), (t_solve_gmres_mf, t_alloc_gmres_mf), (t_solve_fgs, t_aic_fgs, t_alloc_fgs)
+end
+
+function benchmark_wing(ms;
+        nc0=5, ns0=50,
+        tolerances = [1e-3, 1e-6, 1e-9],
+        expansion_orders = [5,7,12],
+        leaf_sizes = [20, 30, 100],
+        multipole_thresholds = [0.65, 0.4, 0.4],
+        relaxations = [0.0,0.0,0.0],
+    )
+
+    top_benchmarks = []
+    for (tolerance, p, l, m) in zip(tolerances, expansion_orders, leaf_sizes, multipole_thresholds)
+        benchmarks = []
+        for m in ms
+            push!(benchmarks, benchmark_wing(nc0*m, ns0*m, tolerance, p, l, m))
+        end
+        push!(top_benchmarks, benchmarks)
+        BSON.@save "benchmark_wing_20240619_1.bson" top_benchmarks
+    end
+
+    return top_benchmarks
+end
+
+top_benchmarks = benchmark_wing(1:8)
+

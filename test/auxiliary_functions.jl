@@ -225,3 +225,45 @@ function create_wing_structured(kernel, center=SVector{3}(0.0,0.0,0.0);
     end
     return PanelArray(corner_grid, kernel; invert_normals)
 end
+
+function get_residual(velocity, panels::FLOWPanel.AbstractPanels, freestream=SVector{3}(1.0,0,0); apply_induced=true)
+    if apply_induced
+        # store velocity
+        for i in eachindex(panels.velocity)
+            velocity[i] = panels.velocity[i]
+        end
+
+        # clear and apply freestream
+        reset_potential_velocity!(panels)
+        apply_freestream!(panels, freestream)
+
+        # calculate induced velocity
+        fmm.fmm!(panels; expansion_order=16, multipole_threshold=0.0, leaf_size=100)
+    end
+
+    # get residual
+    resid_max = 0.0
+    resid_mean = 0.0
+    for (v,n) in zip(panels.velocity, panels.normals)
+        dot_prod = abs(dot(v,n))
+        resid_max = max(resid_max, dot_prod)
+        resid_mean += dot_prod
+    end
+    resid_mean /= length(panels.velocity)
+
+    if apply_induced
+        # restore velocity
+        for i in eachindex(panels.velocity)
+            panels.velocity[i] = velocity[i]
+        end
+    end
+
+    return resid_max, resid_mean
+end
+
+function get_residual(panels::FLOWPanel.AbstractPanels{<:Any,TF,<:Any,<:Any}, freestream=SVector{3}(1.0,0,0); apply_induced=true) where TF
+    velocity = Vector{FLOWPanel.StaticArrays.SVector{3,TF}}(undef, length(panels.velocity))
+    resid_max, resid_mean = get_residual(velocity, panels, freestream; apply_induced)
+    return resid_max, resid_mean, velocity
+end
+

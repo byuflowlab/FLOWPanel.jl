@@ -196,7 +196,7 @@ function vector_2_panels_strengths!(panels::AbstractVector{Panel{TF,NK,NS}}, str
         radius = panels[i].radius
         old_strength = panels[i].strength
         new_strength = SVector{NK,TF}(strengths_reshaped[j,i] for j in 1:NK)
-        panels[i] = Panel(vertices, control_point, normal, new_strength*(1-relaxation) + old_strength*relaxation, radius)
+        panels[i] = Panel(vertices, control_point, normal, new_strength*relaxation + old_strength*(1-relaxation), radius)
     end
     return nothing
 end

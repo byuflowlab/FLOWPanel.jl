@@ -1,7 +1,7 @@
 module FLOWPanel
 
 using StaticArrays
-using LinearAlgebra: cross, norm, dot, mul!
+using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
 using WriteVTK
 using FastMultipole
 import Krylov
@@ -21,7 +21,7 @@ include("vtk.jl")
 export Panel, PanelArray
 export ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet, VortexRing
 export induced, apply_freestream!, reset_potential_velocity!
-export FlowTangency, LUDecomposition, FastGaussSeidel, solve!, grid_2_panels_strength!
+export FlowTangency, LUDecomposition, FastLinearOperator, MatrixFreeSolver, IterativeSolver, FastGaussSeidel, solve!, grid_2_panels_strength!
 export vtk
 
 end # END OF MODULE

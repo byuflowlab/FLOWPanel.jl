@@ -94,16 +94,16 @@ end
 ##### LU Decomposition
 #####
 
-struct LUDecomposition{TF,S<:Scheme} <: AbstractSolver
-    influence_matrix::Array{TF,2}
+struct LUDecomposition{TA,TF,S<:Scheme} <: AbstractSolver
+    influence_matrix::TA
     right_hand_side::Vector{TF}
     strengths::Vector{TF}
 end
 
 LUDecomposition(influence_matrix, right_hand_side, strengths, scheme) =
-LUDecomposition{eltype(influence_matrix), scheme}(influence_matrix, right_hand_side, strengths)
+LUDecomposition{typeof(influence_matrix), eltype(right_hand_side), scheme}(influence_matrix, right_hand_side, strengths)
 
-function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme) where {TF}
+function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
     # preallocate memory
     n_panels = length(panels.panels)
     influence_matrix = zeros(TF,n_panels,n_panels)
@@ -114,6 +114,7 @@ function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}
 
     # get LU decomposition
     lu_decomposition = nothing#lu(influence_matrix)
+    save_lu && (influence_matrix = lu!(influence_matrix))
 
     # initialize strengths
     strengths = zeros(TF,n_panels)
@@ -121,7 +122,7 @@ function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}
     return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
 end
 
-function LUDecomposition_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme) where {TF}
+function LUDecomposition_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
     # preallocate memory
     t_alloc = @elapsed begin
         n_panels = length(panels.panels)
@@ -130,18 +131,16 @@ function LUDecomposition_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:
     end
 
     # update influence matrix
-    t_pre = @elapsed update_influence_matrix!(influence_matrix, panels, scheme)
-
-    # get LU decomposition
-    lu_decomposition = nothing#lu(influence_matrix)
+    t_aic = @elapsed update_influence_matrix!(influence_matrix, panels, scheme)
+    t_lu = @elapsed save_lu && (influence_matrix = lu!(influence_matrix))
 
     # initialize strengths
     t_alloc += @elapsed strengths = zeros(TF,n_panels)
 
-    return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme), t_pre, t_alloc
+    return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme), t_aic, t_lu, t_alloc
 end
 
-function LUDecomposition(panels::AbstractPanels{ConstantNormalDoublet(),TF,<:Any,<:Any}, scheme) where {TF}
+function LUDecomposition(panels::AbstractPanels{ConstantNormalDoublet(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
     # preallocate memory, assuming strength of the first panel is zero
     n_panels = length(panels.panels)
     influence_matrix = zeros(TF,n_panels,n_panels)
@@ -149,9 +148,7 @@ function LUDecomposition(panels::AbstractPanels{ConstantNormalDoublet(),TF,<:Any
 
     # update influence matrix
     update_influence_matrix!(influence_matrix, panels, scheme)
-
-    # get LU decomposition
-    lu_decomposition = nothing#lu(influence_matrix)
+    save_lu && (influence_matrix = lu!(influence_matrix))
 
     # initialize strengths
     strengths = zeros(TF,n_panels)
@@ -163,7 +160,7 @@ end
     return SVector{1}(strengths[i])
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,S}, dt=0.0) where S
+function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,<:Any,S}, dt=0.0) where S
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     influence_matrix = solver.influence_matrix
@@ -191,7 +188,7 @@ function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solv
     end
 end
 
-function solve!(panels::AbstractPanels{ConstantNormalDoublet(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,S}, dt=nothing) where S
+function solve!(panels::AbstractPanels{ConstantNormalDoublet(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,<:Any,S}, dt=nothing) where S
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     influence_matrix = solver.influence_matrix
@@ -229,34 +226,88 @@ end
 IterativeSolver(solver, A, right_hand_side, scheme) =
     IterativeSolver{eltype(right_hand_side), typeof(solver), typeof(A), scheme}(solver, A, right_hand_side)
 
-function IterativeSolver(panels, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver)
-    lu = LUDecomposition(panels, scheme)
-    solver = krylov_solver(lu.influence_matrix, lu.right_hand_side)
-    return IterativeSolver(solver, lu.influence_matrix, lu.right_hand_side, scheme)
+function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
+
+    # preallocate memory
+    n_panels = length(panels.panels)
+    influence_matrix = zeros(TF,n_panels,n_panels)
+    right_hand_side = zeros(TF,n_panels)
+
+    # update influence matrix
+    update_influence_matrix!(influence_matrix, panels, scheme)
+
+    # create krylov solver
+    solver = krylov_solver(influence_matrix, right_hand_side)
+
+    return IterativeSolver(solver, influence_matrix, right_hand_side, scheme)
 end
 
-function IterativeSolver_benchmark(panels, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver)
-    lu, t_pre, t_alloc = LUDecomposition_benchmark(panels, scheme)
-    t_alloc += @elapsed solver = krylov_solver(lu.influence_matrix, lu.right_hand_side)
-    return IterativeSolver(solver, lu.influence_matrix, lu.right_hand_side, scheme), t_pre, t_alloc
+function IterativeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
+
+    # preallocate memory
+    t_alloc = @elapsed begin
+        n_panels = length(panels.panels)
+        influence_matrix = zeros(TF,n_panels,n_panels)
+        right_hand_side = zeros(TF,n_panels)
+    end
+
+    # update influence matrix
+    t_aic = @elapsed update_influence_matrix!(influence_matrix, panels, scheme)
+
+    # create krylov solver
+    t_alloc += @elapsed solver = krylov_solver(influence_matrix, right_hand_side)
+
+    return IterativeSolver(solver, influence_matrix, right_hand_side, scheme), t_aic, t_alloc
 end
 
-struct FastLinearOperator{TP,scheme}
+struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
     panels::TP
     fmm_toggle::Bool
+    reuse_tree::Bool
+    save_residual::Bool
+    tree::TT
+    m2l_list::Vector{SVector{2,Int32}}
+    direct_list::TDL
+    derivatives_switch::TDS
     expansion_order::Int64
     leaf_size::Int64
     multipole_threshold::Float64
 end
 
-function FastLinearOperator(panels, scheme; fmm_toggle=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3)
-    return FastLinearOperator{typeof(panels), scheme}(panels, fmm_toggle, expansion_order, leaf_size, multipole_threshold)
+function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree) where TF
+    switch = FastMultipole.DerivativesSwitch(false, false, true, false, panels)
+    if reuse_tree
+        tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
+        farfield, nearfield = true, true
+        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_threshold, farfield, nearfield, self_induced)
+        direct_list = FastMultipole.InteractionList(direct_list, panels, tree, panels, tree, switch)
+    else
+        tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
+        m2l_list = Vector{SVector{2,Int32}}(undef,0)
+        direct_list = FastMultipole.InteractionList(Matrix{TF}[], TF[], TF[], m2l_list)
+    end
+
+    return switch, tree, m2l_list, direct_list
 end
 
-function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
+function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme; fmm_toggle=true, reuse_tree=true, save_residual=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3) where TF
+
+    self_induced = true
+    switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
+    FastMultipole.unsort!(panels, tree)
+
+    return FastLinearOperator{typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold)
+end
+
+function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
     # unpack operator
     panels = flo.panels
     fmm_toggle = flo.fmm_toggle
+    reuse_tree = flo.reuse_tree
+    tree = flo.tree
+    m2l_list = flo.m2l_list
+    direct_list = flo.direct_list
+    switch = flo.derivatives_switch
     expansion_order = flo.expansion_order
     leaf_size = flo.leaf_size
     multipole_threshold = flo.multipole_threshold
@@ -281,7 +332,12 @@ function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,
 
     # solve N-body problem
     if fmm_toggle
-        fmm!(panels; velocity_gradient=false, expansion_order, leaf_size, multipole_threshold, fmm_args...)
+        if reuse_tree
+            FastMultipole.resort!(panels, tree)
+            fmm!(tree, panels, m2l_list, direct_list, switch; unsort_bodies=true)
+        else
+            fmm!(panels; velocity_gradient=false, expansion_order, leaf_size, multipole_threshold, fmm_args...)
+        end
     else
         direct!(panels; velocity_gradient=false)
     end
@@ -295,11 +351,11 @@ function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,
 end
 
 function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
+        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
     # define fast linear operator functor (for use with FMM) (avoids closure)
-    flo = FastLinearOperator(panels, scheme)
+    flo = FastLinearOperator(panels, scheme; fmm_toggle, reuse_tree, expansion_order, leaf_size, multipole_threshold)
 
     # define linear operator object for use with Krylov.jl
     n_panels = length(panels.panels)
@@ -314,12 +370,12 @@ function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any
 end
 
 function MatrixFreeSolver_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
+        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
     t_alloc = @elapsed begin
         # define fast linear operator functor (for use with FMM) (avoids closure)
-        flo = FastLinearOperator(panels, scheme)
+        flo = FastLinearOperator(panels, scheme; fmm_toggle, reuse_tree, expansion_order, leaf_size, multipole_threshold)
 
         # define linear operator object for use with Krylov.jl
         n_panels = length(panels.panels)
@@ -328,26 +384,25 @@ function MatrixFreeSolver_benchmark(panels::AbstractPanels{ConstantSource(),TF,<
         # construct ::KrylovSolver
         right_hand_side = zeros(TF,n_panels)
         solver = krylov_solver(A, right_hand_side)
+
     end
 
-    t_pre = 0.0
-
     # construct solver
-    return IterativeSolver(solver, A, right_hand_side, scheme), t_pre, t_alloc
+    return IterativeSolver(solver, A, right_hand_side, scheme), t_alloc
 end
 
 function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b; solver_kwargs...)
     Krylov.gmres!(solver.solver, A, b; solver_kwargs...)
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,S}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where S
+function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where scheme
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     A = solver.A
     right_hand_side = solver.right_hand_side
 
     # apply freestream/panel velocity
-    update_right_hand_side!(right_hand_side, panels, S)
+    update_right_hand_side!(right_hand_side, panels, scheme)
 
     # solver for strengths
     solver(A, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
@@ -380,32 +435,104 @@ end
 
 #------- Fast Gauss-Seidel Iterations -------#
 
-struct FastGaussSeidel{TF,TP,TT,S} <: AbstractSolver
+struct FastGaussSeidel{TF,TP,TT,TDL,TDS,S} <: AbstractSolver
     panels::TP
     external_velocity::Vector{SVector{3,TF}}
+    reuse_tree::Bool
     tree::TT
-    influence_matrices::Vector{Matrix{TF}}
+    m2l_list::Vector{SVector{2,Int32}}
+    direct_list::TDL
+    self_direct_list::Vector{SVector{2,Int32}}
+    fmm_matrix_maps::Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}
+    derivatives_switch::TDS
+    influence_matrices::Vector{LU{TF,Matrix{TF},Vector{Int32}}}
     strengths::Vector{TF}
     external_right_hand_side::Vector{TF}
     internal_right_hand_side::Vector{TF}
     expansion_order::Int
+    multipole_threshold::Float64
     leaf_size::Int
+    convergence_history::Vector{Float64}
 end
 
-function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; expansion_order=5, leaf_size=15) where {TK,TF}
+function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; reuse_tree=false, expansion_order=5, multipole_threshold=0.5, leaf_size=20) where {TK,TF}
     external_velocity = zeros(SVector{3,TF}, length(panels.panels))
-    tree = FastMultipole.Tree(panels; expansion_order, leaf_size, n_divisions=20, shrink_recenter=true)
 
-    # create influence matrices
+    # fmm objects
+    println("fmm objects...")
+    @time begin
+    self_induced = false
+
+    # note this function sorts the panels into the resulting tree
+    switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
+    self_direct_list = Vector{SVector{2,Int32}}(undef,length(tree.leaf_index))
+    for (i,i_leaf) in enumerate(tree.leaf_index)
+        self_direct_list[i] = SVector{2,Int32}(Int32(i_leaf),Int32(i_leaf))
+    end
+    end # @time
+
+    # compile fmm matrix maps
+    println("fmm matrix maps...")
+    @time begin
+
+    if reuse_tree
+
+        fmm_matrix_maps = Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}(undef, length(tree.leaf_index))
+
+        for (i_map,i_leaf) in enumerate(tree.leaf_index)
+            fmm_matrix_map = Tuple{Int32,Int32,UnitRange{Int64}}[]
+
+            for (i_target, j_source) in direct_list.direct_list
+                if i_target == i_leaf # found a source
+                    # determine row range of corresponding influence matrix
+                    i_row_start = Int32(1)
+                    n_rows = Int32(0)
+
+                    # get row indices of the influence matrix corresponding to this target
+                    for (ii_target, jj_source) in direct_list.direct_list
+                        if jj_source == j_source # found this source
+                            n_rows = Int32(3)*Int32(length(tree.branches[ii_target].bodies_index)) # hard-coded to only calculate velocity
+                            if ii_target == i_target # no need to keep searching
+                                break
+                            else # otherwise, increment the row start to skip this target leaf
+                                i_row_start += n_rows
+                            end
+                        end
+                    end
+
+                    # determine the index of the source leaf (to obtain its influence matrix)
+                    j_matrix = Int32(-1)
+                    for (source_matrix_index, source_leaf_index) in enumerate(tree.leaf_index)
+                        if source_leaf_index == j_source
+                            j_matrix = Int32(source_matrix_index)
+                            break
+                        end
+                    end
+
+                    # add fmm_matrix_map entry
+                    push!(fmm_matrix_map, (j_source, j_matrix, i_row_start:i_row_start+n_rows-1))
+                end
+            end
+
+            fmm_matrix_maps[i_map] = fmm_matrix_map
+        end
+    else
+        fmm_matrix_maps = Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}(undef, 0)
+    end
+    end # @time
+
+    # create influence matrices to solve for each leaf's strengths
     panels_2_grid_strength!(panels) # store current strengths so they aren't lost
     set_unit_strength!(panels.panels)
-    influence_matrices = Vector{Matrix{TF}}(undef, length(tree.leaf_index))
+
+    # influence_matrices = Vector{Matrix{TF}}(undef, length(tree.leaf_index))
+    influence_matrices = Vector{LU{TF,Matrix{TF},Vector{Int32}}}(undef, length(tree.leaf_index))
     for (i_A, i_leaf) in enumerate(tree.leaf_index)
         leaf = tree.branches[i_leaf]
         n_panels = length(leaf.bodies_index)
         A = Matrix{TF}(undef, n_panels, n_panels)
         update_influence_matrix!(A, panels, scheme; panel_indices=leaf.bodies_index, set_unit_strength=true)
-        influence_matrices[i_A] = A
+        influence_matrices[i_A] = lu!(A)
     end
 
     # restore strengths
@@ -421,25 +548,137 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     external_right_hand_side = zeros(TF,length(panels.panels))
     internal_right_hand_side = zeros(TF,length(panels.panels))
 
-    return FastGaussSeidel{TF,typeof(panels),typeof(tree),scheme}(panels, external_velocity, tree, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, leaf_size)
+    # convergence history
+    convergence_history = Float64[]
+
+    return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history)
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver::FastGaussSeidel{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, multipole_threshold=0.5, relaxation=0.0) where {TF,scheme}
+function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; expansion_order=5, multipole_threshold=0.5, leaf_size=20, reuse_tree=false) where {TK,TF}
+    t_solve, t_fmm = 0.0, 0.0
+
+    t_solve += @elapsed external_velocity = zeros(SVector{3,TF}, length(panels.panels))
+
+    # fmm objects
+    t_fmm += @elapsed begin
+        switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
+        self_direct_list = Vector{SVector{2,Int32}}(undef,length(tree.leaf_index))
+        for (i,i_leaf) in enumerate(tree.leaf_index)
+            self_direct_list[i] = SVector{2,Int32}(Int32(i_leaf),Int32(i_leaf))
+        end
+    end
+
+    # compile fmm matrix maps
+    t_fmm += @elapsed begin
+
+    fmm_matrix_maps = Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}(undef, length(tree.leaf_index))
+
+    if reuse_tree
+
+        for (i_map,i_leaf) in enumerate(tree.leaf_index)
+            fmm_matrix_map = Tuple{Int32,Int32,UnitRange{Int64}}[]
+
+            for (i_target, j_source) in direct_list.direct_list
+                if i_target == i_leaf # found a source
+                    # determine row range of corresponding influence matrix
+                    i_row_start = Int32(1)
+                    n_rows = Int32(0)
+
+                    # get row indices of the influence matrix corresponding to this target
+                    for (ii_target, jj_source) in direct_list.direct_list
+                        if jj_source == j_source # found this source
+                            n_rows = Int32(3)*Int32(length(tree.branches[ii_target].bodies_index)) # hard-coded to only calculate velocity
+                            if ii_target == i_target # no need to keep searching
+                                break
+                            else # otherwise, increment the row start to skip this target leaf
+                                i_row_start += n_rows
+                            end
+                        end
+                    end
+
+                    # determine the index of the source leaf (to obtain its influence matrix)
+                    j_matrix = Int32(-1)
+                    for (source_matrix_index, source_leaf_index) in enumerate(tree.leaf_index)
+                        if source_leaf_index == j_source
+                            j_matrix = Int32(source_matrix_index)
+                            break
+                        end
+                    end
+
+                    # add fmm_matrix_map entry
+                    push!(fmm_matrix_map, (j_source, j_matrix, i_row_start:i_row_start+n_rows-1))
+                end
+            end
+
+            fmm_matrix_maps[i_map] = fmm_matrix_map
+        end
+
+    end
+
+    end # @elapsed
+
+    # create influence matrices to solve for each leaf's strengths
+    t_solve += @elapsed panels_2_grid_strength!(panels) # store current strengths so they aren't lost
+    t_solve += @elapsed set_unit_strength!(panels.panels)
+    # influence_matrices = Vector{Matrix{TF}}(undef, length(tree.leaf_index))
+    t_solve += @elapsed influence_matrices = Vector{LU{TF,Matrix{TF},Vector{Int32}}}(undef, length(tree.leaf_index))
+    for (i_A, i_leaf) in enumerate(tree.leaf_index)
+        leaf = tree.branches[i_leaf]
+        n_panels = length(leaf.bodies_index)
+        t_solve += @elapsed A = Matrix{TF}(undef, n_panels, n_panels)
+        t_solve += @elapsed update_influence_matrix!(A, panels, scheme; panel_indices=leaf.bodies_index, set_unit_strength=true)
+        influence_matrices[i_A] = lu!(A)
+    end
+
+    # restore strengths
+    t_solve += @elapsed grid_2_panels_strength!(panels)
+
+    # unsort panels
+    t_fmm += @elapsed FastMultipole.unsort!(panels, tree)
+
+    # strengths
+    t_solve += @elapsed strengths = zeros(TF,length(panels.panels))
+
+    # RHS
+    t_solve += @elapsed external_right_hand_side = zeros(TF,length(panels.panels))
+    t_solve += @elapsed internal_right_hand_side = zeros(TF,length(panels.panels))
+
+    # convergence history
+    convergence_history = Float64[]
+
+    return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history), t_solve, t_fmm
+end
+
+function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver::FastGaussSeidel{<:Any,<:Any,<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=false, tolerance=1e-6, max_iterations=100, relaxation=1.4, error_style=:fixed_point, save_history=false) where {TF,scheme}
 
     @assert panels === solver.panels "solver was created with a different AbstractPanels object"
 
-    # sort into octree
-    FastMultipole.resort!(panels, solver.tree)
-
     # unpack solver
+    reuse_tree = solver.reuse_tree
     influence_matrices = solver.influence_matrices
     strengths = solver.strengths
     external_right_hand_side = solver.external_right_hand_side
     internal_right_hand_side = solver.internal_right_hand_side
     external_velocity = solver.external_velocity
+    switch = solver.derivatives_switch
+    expansion_order = solver.expansion_order
+    multipole_threshold = solver.multipole_threshold
+    leaf_size = solver.leaf_size
+    convergence_history = solver.convergence_history
+    save_history && sizehint!(convergence_history, max_iterations)
 
-    # sort external velocity into octree
-    FastMultipole.resort!(panels.velocity, external_velocity, solver.tree)
+    # create/retrieve tree
+    if reuse_tree
+        tree = solver.tree
+        FastMultipole.resort!(panels, tree)
+        m2l_list = solver.m2l_list
+        direct_list = solver.direct_list
+    else
+        tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
+        farfield, nearfield, self_induced = true, true, false
+        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_threshold, farfield, nearfield, self_induced)
+    end
+    branches = tree.branches
 
     # save sorted external velocity
     for i in eachindex(panels.velocity)
@@ -452,13 +691,9 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
     # convergence criterion
     ε = zero(TF)
 
-    # get interaction list
-    farfield, nearfield, self_induced = false, true, false
-    m2l_list, direct_list = FastMultipole.build_interaction_lists(solver.tree.branches, solver.tree.branches, multipole_threshold, farfield, nearfield, self_induced)
-
     #--- begin Fast Gauss Seidel iterations ---#
-
     i_iter = 0 # want this available outside the loop
+    verbose && println("\nBegin Fast Gauss-Seidel Iterations:")
     for _ in 1:max_iterations
         i_iter += 1
 
@@ -469,7 +704,7 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
         reset_potential_velocity!(panels)
 
         # get farfield influence
-        FastMultipole.fmm!(solver.tree, panels; multipole_threshold, reset_tree=true, farfield=true, nearfield=false, self_induced=false, unsort_bodies=false)
+        FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true, nearfield=false, unsort_bodies=false)
 
         # apply it to the RHS
         update_right_hand_side!(internal_right_hand_side, panels, scheme; reset=false)
@@ -478,19 +713,52 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
         reset_potential_velocity!(panels)
 
         # iterate over leaves
-        derivatives_switch = FastMultipole.DerivativesSwitch(false, false, true, false, panels)
-        for (A,i_leaf) in zip(influence_matrices, solver.tree.leaf_index)
+        # for (A_solve, A_fmm, i_leaf) in zip(influence_matrices, direct_list.influence_matrices, tree.leaf_index)
+        @assert length(tree.leaf_index) == length(influence_matrices)
+        for (i_matrix, i_leaf) in enumerate(tree.leaf_index)
 
             # unpack
-            leaf = solver.tree.branches[i_leaf]
+            A_solve = influence_matrices[i_matrix]
+            leaf = branches[i_leaf]
 
             # get index
             panel_indices = leaf.bodies_index
 
             # apply all direct interactions to this leaf using the current strengths
-            for (i_target, j_source) in direct_list
-                if i_target == i_leaf
-                    FastMultipole.P2P!(panels, leaf, derivatives_switch, panels, solver.tree.branches[j_source])
+            if solver.reuse_tree
+
+                # unpack fmm objects
+                strengths_fmm = direct_list.strengths
+                influence_fmm = direct_list.influence
+
+                # prepare just enough for this leaf
+                n_influence = 3 * length(leaf.bodies_index) # hard-coded to only velocity
+                this_influence = view(influence_fmm, 1:n_influence)
+                this_influence .= zero(eltype(this_influence))
+
+                # loop over all sources
+                for (j_source, j_matrix, row_index) in solver.fmm_matrix_maps[i_matrix]
+
+                    # update strengths
+                    source_branch = branches[j_source]
+                    n_strengths = FastMultipole.update_strengths!(strengths_fmm, source_branch, panels)
+                    this_strength = view(strengths_fmm, 1:n_strengths)
+
+                    # obtain influence
+                    fmm_matrix = view(direct_list.influence_matrices[j_matrix], row_index, :)
+
+                    # mul!(C, A, B, α, β) -> C; C = A B α + C β
+                    mul!(this_influence, fmm_matrix, this_strength, 1, 1)
+                end
+
+                # apply influence to this leaf
+                FastMultipole.update_influence!(panels, this_influence, 0, leaf.bodies_index, switch)
+
+            else
+                for (i_target, j_source) in direct_list
+                    if i_target == i_leaf # found a source
+                        FastMultipole.P2P!(panels, leaf, switch, panels, branches[j_source])
+                    end
                 end
             end
 
@@ -502,21 +770,42 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
             rhs = view(internal_right_hand_side, panel_indices)
 
             # solve for strengths
-            s .= A \ rhs
+            s .= A_solve \ rhs
 
             # update strengths
             vector_2_panels_strengths!(panels.panels, strengths; panel_indices, relaxation)
 
-        end
+        end # iterate over leaves
 
         # update convergence criterion and update panels.strengths
         ε = zero(TF)
-        for i in eachindex(panels.strengths)
-            new_strength = panels.panels[i].strength
-            old_strength = panels.strengths[i]
-            ε = max(norm(new_strength-old_strength), ε)
-            panels.strengths[i] = new_strength
+        if error_style==:fixed_point # more performant
+            for i in eachindex(panels.strengths)
+                new_strength = panels.panels[i].strength
+                old_strength = panels.strengths[i]
+                ε = max(norm(new_strength-old_strength), ε)
+                panels.strengths[i] = new_strength
+            end
+        elseif error_style==:L2 # better error metric
+            # have to compute the n-body problem again with the new strengths
+            reset_potential_velocity!(panels)
+            FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true, unsort_bodies=false)
+            FastMultipole.fmm!(tree, panels, m2l_list, solver.self_direct_list, switch; reset_tree=false, upward_pass=false, horizontal_pass=false, downward_pass=false, unsort_bodies=false)
+            # FastMultipole.direct!(panels)
+            for i in eachindex(external_velocity)
+                panels.velocity[i] += external_velocity[i]
+            end
+
+            # L2 norm error
+            for (v,n) in zip(panels.velocity, panels.normals)
+                ε += dot(v,n)^2
+            end
+            ε = sqrt(ε)
+        else
+            throw("error method $error_style not found")
         end
+        verbose && println("\ti=$i_iter, epsilon = $(ε)")
+        save_history && push!(convergence_history, Float64(ε))
 
         if ε <= tolerance
             break
@@ -525,9 +814,9 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
     end # iterations
 
     if ε <= tolerance
-        println("Fast Gauss-Seidel Solver Successful:\n\titerations: $i_iter\n\terror: $ε")
+        verbose && println("Fast Gauss-Seidel Solver Successful:\n\titerations: $i_iter\n\terror: $ε")
     else
-        println("Fast Guass-Seidel Solver Failed:\n\titerations: $i_iter\n\terror: $ε")
+        verbose && println("Fast Guass-Seidel Solver Failed:\n\titerations: $i_iter\n\terror: $ε")
     end
 
     # restore external velocity (so it isn't lost)
@@ -535,12 +824,8 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
          panels.velocity[i] = external_velocity[i]
     end
 
-    # sort external velocity back to original order
-    # note that now external_velocity doesn't contain anything useful anymore
-    FastMultipole.unsort!(panels.velocity, external_velocity, solver.tree)
-
     # unsort back to original order
-    FastMultipole.unsort!(panels, solver.tree)
+    FastMultipole.unsort!(panels, tree)
 
     # update grid strengths
     panels_2_grid_strength!(panels)
