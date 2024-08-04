@@ -38,7 +38,7 @@ end
 #
 # # solve using LU decomposition
 scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FLOWPanel.FlowTangency}
-# solver = LUDecomposition(panels, scheme)
+# solver_lu = LUDecomposition(panels, scheme)
 # solve!(panels, solver)
 # grid_2_panels_strength!(panels)
 # vtk("test_simple_grid_lu.vts", panels)
@@ -165,33 +165,39 @@ scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FLOWPanel.FlowTangency}
 # # resid_gmres_mf2_3, velocity = get_residual(wing; apply_induced=true)
 
 # reuse tree/use fmm influence matrices
-# wing_fgs_b = prepare_wing(; AR=1, span=1/20, nc=20, ns=100, freestream=SVector{3}(1.0,0,0))
-m=2
-wing_fgs_b = prepare_wing(; nc=5*m, ns=50*m, freestream=SVector{3}(1.0,0,0))
+m=3
+fs = SVector{3}(1.0,0,-pi/10)
+# fs = SVector{3}(1.0,0,0)
+wing_fgs_b = prepare_wing(; nc=5*m, ns=50*m, freestream=fs)
 # wing_fgs_b = prepare_wing(; nc=5, ns=1, AR=1, freestream=SVector{3}(1.0,0,0))
-println("Building solver...")
-solver_fgs_wing = FastGaussSeidel(wing_fgs_b, scheme; leaf_size=5, expansion_order=3, multipole_threshold=0.0, reuse_tree=true)
-# solver_fgs_wing = FastGaussSeidel(wing_fgs_b, scheme; leaf_size=20, expansion_order=5, multipole_threshold=0.65, reuse_tree=true)
-println("solving...")
-@time solve!(wing_fgs_b, solver_fgs_wing; tolerance=1e-5, relaxation=1.4, max_iterations=50, verbose=true, save_history=true)
-resid_b_max, resid_b_mean, velocity = get_residual(wing_fgs_b)
-@show resid_b_max
-FLOWPanel.set_unit_strength!(wing_fgs_b)
-@time solve!(wing_fgs_b, solver_fgs_wing; tolerance=1e-5, relaxation=1.4, max_iterations=50, verbose=true, save_history=false)
-resid_b_max, resid_b_mean, velocity = get_residual(wing_fgs_b)
-@show resid_b_max
-FLOWPanel.set_unit_strength!(wing_fgs_b)
-@time solve!(wing_fgs_b, solver_fgs_wing; tolerance=1e-5, relaxation=1.4, max_iterations=50, verbose=true, save_history=true, error_style=:L2)
-resid_b_max, resid_b_mean, velocity = get_residual(wing_fgs_b)
-@show resid_b_max
-FLOWPanel.set_unit_strength!(wing_fgs_b)
-@time solve!(wing_fgs_b, solver_fgs_wing; tolerance=1e-5, relaxation=1.4, max_iterations=50, verbose=true, error_style=:L2,  save_history=false)
-resid_b_max, resid_b_mean, velocity = get_residual(wing_fgs_b)
-@show resid_b_max
-println()
-fmm.direct!(wing_fgs_b)
-println("Save vtk...")
-vtk("test_wing_fgs_b.vts", wing_fgs_b)
-# check residual
-@show resid_b_max
+solver_lu = LUDecomposition(wing_fgs_b, scheme)
+@show wing_fgs_b.velocity[1]
 
+println("Building solver...")
+solver_fgs_wing = FastGaussSeidel(wing_fgs_b, scheme; leaf_size=30, expansion_order=7, multipole_threshold=0.4, reuse_tree=false)
+#solver_fgs_wing = FastGaussSeidel(wing_fgs_b, scheme; leaf_size=100, expansion_order=12, multipole_threshold=0.4, reuse_tree=false)
+solver_gmres = MatrixFreeSolver(wing_fgs_b, scheme; leaf_size=30, expansion_order=7, multipole_threshold=0.35, reuse_tree=false)
+# solver_gmres = MatrixFreeSolver(wing_fgs_b, scheme; leaf_size=30, expansion_order=7, multipole_threshold=0.25, reuse_tree=false)
+#solver_gmres = MatrixFreeSolver(wing_fgs_b, scheme; leaf_size=100, expansion_order=12, multipole_threshold=0.4, reuse_tree=false)
+
+println("solving...")
+tol = 1e-6 * sqrt(length(wing_fgs_b.panels))/10
+@time solve!(wing_fgs_b, solver_gmres; tolerance=tol, max_iterations=100, rtol=0.0)#, rtol=tol)
+# @time solve!(wing_fgs_b, solver_fgs_wing; tolerance=tol, relaxation=1.4, max_iterations=30, verbose=true, save_history=false)
+# @time solve!(wing_fgs_b, solver_lu)
+
+resid_b_max, resid_b_mean, velocity = get_residual(wing_fgs_b, fs)
+
+#=
+@show resid_b_max
+println("Save vtk...")
+fmm.direct!(wing_fgs_b)
+vtk("test_wing_fgs_b.vts", wing_fgs_b)
+
+# check residual
+
+velocity_check = deepcopy(wing_fgs_b.velocity)
+FLOWPanel.reset_potential_velocity!(wing_fgs_b)
+FLOWPanel.apply_freestream!(wing_fgs_b, SVector{3}(1.0,0,0))
+#FLOWPanel.FastMultipole.fmm!(wing_fgs_b,
+=#

@@ -221,10 +221,11 @@ struct IterativeSolver{TF,TS<:Krylov.KrylovSolver,TA<:Union{Matrix{TF},LinearOpe
     solver::TS
     A::TA
     right_hand_side::Vector{TF}
+    x0::Vector{TF}
 end
 
-IterativeSolver(solver, A, right_hand_side, scheme) =
-    IterativeSolver{eltype(right_hand_side), typeof(solver), typeof(A), scheme}(solver, A, right_hand_side)
+IterativeSolver(solver, A, right_hand_side, x0, scheme) =
+    IterativeSolver{eltype(right_hand_side), typeof(solver), typeof(A), scheme}(solver, A, right_hand_side, x0)
 
 function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
 
@@ -232,6 +233,7 @@ function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, k
     n_panels = length(panels.panels)
     influence_matrix = zeros(TF,n_panels,n_panels)
     right_hand_side = zeros(TF,n_panels)
+    x0 = zeros(TF,n_panels)
 
     # update influence matrix
     update_influence_matrix!(influence_matrix, panels, scheme)
@@ -239,7 +241,7 @@ function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, k
     # create krylov solver
     solver = krylov_solver(influence_matrix, right_hand_side)
 
-    return IterativeSolver(solver, influence_matrix, right_hand_side, scheme)
+    return IterativeSolver(solver, influence_matrix, right_hand_side, x0, scheme)
 end
 
 function IterativeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
@@ -249,6 +251,7 @@ function IterativeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any},
         n_panels = length(panels.panels)
         influence_matrix = zeros(TF,n_panels,n_panels)
         right_hand_side = zeros(TF,n_panels)
+        x0 = zeros(TF,n_panels)
     end
 
     # update influence matrix
@@ -257,10 +260,10 @@ function IterativeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any},
     # create krylov solver
     t_alloc += @elapsed solver = krylov_solver(influence_matrix, right_hand_side)
 
-    return IterativeSolver(solver, influence_matrix, right_hand_side, scheme), t_aic, t_alloc
+    return IterativeSolver(solver, influence_matrix, right_hand_side, x0, scheme), t_aic, t_alloc
 end
 
-struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
+struct FastLinearOperator{TF,TP<:AbstractPanels{<:Any,TF,<:Any,<:Any},TT,TDL,TDS,scheme}
     panels::TP
     fmm_toggle::Bool
     reuse_tree::Bool
@@ -272,6 +275,7 @@ struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
     expansion_order::Int64
     leaf_size::Int64
     multipole_threshold::Float64
+    external_velocity::Vector{SVector{3,TF}}
 end
 
 function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree) where TF
@@ -290,16 +294,17 @@ function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion
     return switch, tree, m2l_list, direct_list
 end
 
-function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme; fmm_toggle=true, reuse_tree=true, save_residual=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3) where TF
+function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme; fmm_toggle=true, reuse_tree=false, save_residual=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3) where TF
 
     self_induced = true
     switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
     FastMultipole.unsort!(panels, tree)
+    external_velocity = zeros(SVector{3,TF}, length(panels.panels))
 
-    return FastLinearOperator{typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold)
+    return FastLinearOperator{TF,typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold, external_velocity)
 end
 
-function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
+function (flo::FastLinearOperator{<:Any,<:AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
     # unpack operator
     panels = flo.panels
     fmm_toggle = flo.fmm_toggle
@@ -311,6 +316,12 @@ function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,
     expansion_order = flo.expansion_order
     leaf_size = flo.leaf_size
     multipole_threshold = flo.multipole_threshold
+    external_velocity = flo.external_velocity
+
+    # # store external velocity
+    # for i in eachindex(external_velocity)
+    #     external_velocity[i] = panels.velocity[i]
+    # end
 
     # update panels with provided strengths
     for i in eachindex(panels.panels)
@@ -348,10 +359,16 @@ function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,
         velocity = panels.velocity[i]
         C[i] = dot(normal, velocity)
     end
+
+    # # restore external velocity
+    # for i in eachindex(external_velocity)
+    #      panels.velocity[i] = external_velocity[i]
+    # end
+
 end
 
 function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
+        fmm_toggle=true, reuse_tree=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
     # define fast linear operator functor (for use with FMM) (avoids closure)
@@ -363,14 +380,15 @@ function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any
 
     # construct ::KrylovSolver
     right_hand_side = zeros(TF,n_panels)
+    x0 = zeros(TF,n_panels)
     solver = krylov_solver(A, right_hand_side)
 
     # construct solver
-    return IterativeSolver(solver, A, right_hand_side, scheme)
+    return IterativeSolver(solver, A, right_hand_side, x0, scheme)
 end
 
 function MatrixFreeSolver_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
+        fmm_toggle=true, reuse_tree=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
     t_alloc = @elapsed begin
@@ -383,16 +401,21 @@ function MatrixFreeSolver_benchmark(panels::AbstractPanels{ConstantSource(),TF,<
 
         # construct ::KrylovSolver
         right_hand_side = zeros(TF,n_panels)
+        x0 = zeros(TF,n_panels)
         solver = krylov_solver(A, right_hand_side)
 
     end
 
     # construct solver
-    return IterativeSolver(solver, A, right_hand_side, scheme), t_alloc
+    return IterativeSolver(solver, A, right_hand_side, x0, scheme), t_alloc
 end
 
 function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b; solver_kwargs...)
     Krylov.gmres!(solver.solver, A, b; solver_kwargs...)
+end
+
+function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b, x0; solver_kwargs...)
+    Krylov.gmres!(solver.solver, A, b, x0; solver_kwargs...)
 end
 
 function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where scheme
@@ -400,12 +423,16 @@ function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solv
     # (; influence_matrix, right_hand_side, strengths) = solver
     A = solver.A
     right_hand_side = solver.right_hand_side
+    x0 = solver.x0
 
     # apply freestream/panel velocity
     update_right_hand_side!(right_hand_side, panels, scheme)
 
-    # solver for strengths
-    solver(A, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
+    # get x0 based on current panel strengths
+    panels_2_vector_strengths!(x0, panels.panels)
+
+    # solve for strengths
+    solver(A, right_hand_side, x0; atol=tolerance, itmax=max_iterations, solver_kwargs...)
     #x, stats = Krylov.gmres(influence_matrix, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
     #=
                    memory=20, M=I, N=I, ldiv::Bool=false,
@@ -459,8 +486,6 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     external_velocity = zeros(SVector{3,TF}, length(panels.panels))
 
     # fmm objects
-    println("fmm objects...")
-    @time begin
     self_induced = false
 
     # note this function sorts the panels into the resulting tree
@@ -469,16 +494,11 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     for (i,i_leaf) in enumerate(tree.leaf_index)
         self_direct_list[i] = SVector{2,Int32}(Int32(i_leaf),Int32(i_leaf))
     end
-    end # @time
 
     # compile fmm matrix maps
-    println("fmm matrix maps...")
-    @time begin
-
     if reuse_tree
 
         fmm_matrix_maps = Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}(undef, length(tree.leaf_index))
-
         for (i_map,i_leaf) in enumerate(tree.leaf_index)
             fmm_matrix_map = Tuple{Int32,Int32,UnitRange{Int64}}[]
 
@@ -513,13 +533,11 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
                     push!(fmm_matrix_map, (j_source, j_matrix, i_row_start:i_row_start+n_rows-1))
                 end
             end
-
             fmm_matrix_maps[i_map] = fmm_matrix_map
         end
     else
         fmm_matrix_maps = Vector{Vector{Tuple{Int32,Int32,UnitRange{Int64}}}}(undef, 0)
     end
-    end # @time
 
     # create influence matrices to solve for each leaf's strengths
     panels_2_grid_strength!(panels) # store current strengths so they aren't lost
@@ -561,6 +579,7 @@ function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, sc
 
     # fmm objects
     t_fmm += @elapsed begin
+        self_induced = false
         switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
         self_direct_list = Vector{SVector{2,Int32}}(undef,length(tree.leaf_index))
         for (i,i_leaf) in enumerate(tree.leaf_index)
@@ -649,7 +668,7 @@ function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, sc
     return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history), t_solve, t_fmm
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver::FastGaussSeidel{<:Any,<:Any,<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=false, tolerance=1e-6, max_iterations=100, relaxation=1.4, error_style=:fixed_point, save_history=false) where {TF,scheme}
+function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver::FastGaussSeidel{<:Any,<:Any,<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=false, tolerance=1e-6, max_iterations=100, relaxation=1.4, save_history=false, reset_history=true) where {TF,scheme}
 
     @assert panels === solver.panels "solver was created with a different AbstractPanels object"
 
@@ -665,6 +684,7 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
     multipole_threshold = solver.multipole_threshold
     leaf_size = solver.leaf_size
     convergence_history = solver.convergence_history
+    reset_history && resize!(convergence_history, 0)
     save_history && sizehint!(convergence_history, max_iterations)
 
     # create/retrieve tree
@@ -779,14 +799,18 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
 
         # update convergence criterion and update panels.strengths
         ε = zero(TF)
-        if error_style==:fixed_point # more performant
-            for i in eachindex(panels.strengths)
-                new_strength = panels.panels[i].strength
-                old_strength = panels.strengths[i]
-                ε = max(norm(new_strength-old_strength), ε)
-                panels.strengths[i] = new_strength
-            end
-        elseif error_style==:L2 # better error metric
+        for i in eachindex(panels.strengths)
+            new_strength = panels.panels[i].strength
+            old_strength = panels.strengths[i]
+            # ε += norm(new_strength-old_strength)
+            ε = max(norm(new_strength-old_strength), ε)
+            panels.strengths[i] = new_strength
+        end
+        # ε = sqrt(ε)
+        #elseif error_style==:L2 # better error metric
+
+        if ε <= tolerance || save_history
+            verbose && print("\n\tchecking error...")
             # have to compute the n-body problem again with the new strengths
             reset_potential_velocity!(panels)
             FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true, unsort_bodies=false)
@@ -796,14 +820,20 @@ function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver:
                 panels.velocity[i] += external_velocity[i]
             end
 
-            # L2 norm error
-            for (v,n) in zip(panels.velocity, panels.normals)
-                ε += dot(v,n)^2
+            # # L2 norm error
+            # for (i,(v,n)) in enumerate(zip(panels.velocity, panels.normals))
+            #     internal_right_hand_side[i] = dot(v,n)^2
+            # end
+            # ε = sqrt(sum(internal_right_hand_side))
+            # Linfty norm error
+            new_ε = zero(TF)
+            for (i,(v,n)) in enumerate(zip(panels.velocity, panels.normals))
+                new_ε = max(new_ε, abs(dot(v,n)))
             end
-            ε = sqrt(ε)
-        else
-            throw("error method $error_style not found")
+            verbose && println(" fixed point error: $ε; Linfty error: $new_ε")
+            ε = new_ε
         end
+
         verbose && println("\ti=$i_iter, epsilon = $(ε)")
         save_history && push!(convergence_history, Float64(ε))
 

@@ -238,7 +238,8 @@ function get_residual(velocity, panels::FLOWPanel.AbstractPanels, freestream=SVe
         apply_freestream!(panels, freestream)
 
         # calculate induced velocity
-        fmm.fmm!(panels; expansion_order=16, multipole_threshold=0.0, leaf_size=100)
+        # FLOWPanel.FastMultipole.fmm!(panels; expansion_order=14, multipole_threshold=0.0, leaf_size=200)
+        FLOWPanel.FastMultipole.direct!(panels)
     end
 
     # get residual
@@ -247,9 +248,9 @@ function get_residual(velocity, panels::FLOWPanel.AbstractPanels, freestream=SVe
     for (v,n) in zip(panels.velocity, panels.normals)
         dot_prod = abs(dot(v,n))
         resid_max = max(resid_max, dot_prod)
-        resid_mean += dot_prod
+        resid_mean += dot_prod^2
     end
-    resid_mean /= length(panels.velocity)
+    resid_mean = sqrt(resid_mean)
 
     if apply_induced
         # restore velocity

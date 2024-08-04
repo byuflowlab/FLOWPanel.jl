@@ -59,8 +59,7 @@ function benchmark_wing_gmres(wing, tolerance, max_iterations, freestream=SVecto
     print(" Created solver.")
 
     # solve
-    this_tolerance = tolerance * 50
-    t_solve = @elapsed solve!(wing, solver; verbose=false, tolerance=this_tolerance, max_iterations)
+    t_solve = @elapsed solve!(wing, solver; verbose=false, tolerance, max_iterations, rtol=0.0)
     print(" Finished solve.")
 
     return t_aic+t_alloc, t_solve
@@ -79,8 +78,7 @@ function benchmark_wing_gmres_mf(wing, tolerance, max_iterations, expansion_orde
     print(" Created solver.")
 
     # solve
-    this_tolerance = tolerance * 50
-    t_solve = @elapsed solve!(wing, solver; verbose=false, tolerance=this_tolerance, max_iterations)
+    t_solve = @elapsed solve!(wing, solver; verbose=false, tolerance, max_iterations, rtol=0.0)
     print(" Finished solve.")
 
     return t_alloc, t_solve
@@ -94,17 +92,13 @@ function benchmark_wing_fgs(wing, tolerance, max_iterations, expansion_order, le
     cold_start && FLOWPanel.set_unit_strength!(wing)
 
     # create solver
-    @show wing.panels[1]
     scheme = FLOWPanel.Scheme{FLOWPanel.DirectNeumann, FlowTangency}
-    @show expansion_order leaf_size multipole_threshold reuse_tree
     solver, t_solver, t_fmm = FLOWPanel.FastGaussSeidel_benchmark(wing, scheme; expansion_order, leaf_size, multipole_threshold, reuse_tree)
-    @show wing.panels[1]
     print(" Created solver.")
 
     # solve
-    this_tolerance = tolerance# / 50
+    this_tolerance = tolerance
     t_solve = @elapsed solve!(wing, solver; verbose=false, tolerance=this_tolerance, max_iterations, relaxation)
-    @show wing.panels[1]
     print(" Finished solve.")
 
     return t_solver, t_fmm, t_solve
@@ -137,6 +131,7 @@ function benchmark_wing(wing::FLOWPanel.AbstractPanels, dummy_velocity, toleranc
     ## save vtk
     vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_gmres_mf_a", "benchmark_gmres_mf_a_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order_a)_l$(leaf_size_a)_$(multipole_threshold_a).vts"), wing)
 
+    #=
     # benchmark MF-GMRES-b
     print("\n\tMF-GMRES-b...")
     reuse_tree = true
@@ -147,6 +142,8 @@ function benchmark_wing(wing::FLOWPanel.AbstractPanels, dummy_velocity, toleranc
 
     ## save vtk
     vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_gmres_mf_b", "benchmark_gmres_mf_b_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order_b)_l$(leaf_size_b)_$(multipole_threshold_b).vts"), wing)
+    =#
+    t_alloc_gmres_mf_b, t_solve_gmres_mf_b, resid_max_gmres_mf_b, resid_mean_gmres_mf_b = NaN, NaN, NaN, NaN
 
     # benchmark FGS-a
     print("\n\tFast Gauss-Seidel-a...")
@@ -161,6 +158,7 @@ function benchmark_wing(wing::FLOWPanel.AbstractPanels, dummy_velocity, toleranc
     vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_fgs_a", "benchmark_fgs_a_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order_a)_l$(leaf_size_a)_$(multipole_threshold_a)_relax$(relaxation).vts"), wing)
 
     # benchmark FGS-b
+    #=
     print("\n\tFast Gauss-Seidel-b...")
     max_iterations=500
     reuse_tree = true
@@ -172,12 +170,15 @@ function benchmark_wing(wing::FLOWPanel.AbstractPanels, dummy_velocity, toleranc
     ## save vtk
     vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_fgs_b", "benchmark_fgs_b_nc$(nc)_ns$(ns)_atol$(tolerance)_p$(expansion_order_b)_l$(leaf_size_b)_$(multipole_threshold_b)_relax$(relaxation).vts"), wing)
     println()
+    =#
+
+    t_solver_fgs_b, t_fmm_fgs_b, t_solve_fgs_b, resid_max_fgs_b, resid_mean_fgs_b = NaN, NaN, NaN, NaN, NaN
 
     return (t_aic_lu, t_lu_lu, t_solve_lu, resid_max_lu, resid_mean_lu), (t_aic_gmres, t_solve_gmres, resid_max_gmres, resid_mean_gmres), (t_alloc_gmres_mf_a, t_solve_gmres_mf_a, resid_max_gmres_mf_a, resid_mean_gmres_mf_a), (t_alloc_gmres_mf_b, t_solve_gmres_mf_b, resid_max_gmres_mf_b, resid_mean_gmres_mf_b), (t_solver_fgs_a, t_fmm_fgs_a, t_solve_fgs_a, resid_max_fgs_a, resid_mean_fgs_a), (t_solver_fgs_b, t_fmm_fgs_b, t_solve_fgs_b, resid_max_fgs_b, resid_mean_fgs_b)
 end
 
-function benchmark_wing(ms; benchmark_dir="benchmarks_20240625",
-        replace_file=false,
+function benchmark_wing(ms, benchmark_dir;
+        replace_file=false, omit_lu=false,
         freestream=SVector{3}(1.0,0,0),
         kernel=ConstantSource(),
         nc0=5, ns0=50, span=1.0, AR=10,
@@ -190,6 +191,13 @@ function benchmark_wing(ms; benchmark_dir="benchmarks_20240625",
         mts_b = [(0.4,0.4,0.4), (0.55,0.6,0.6), (0.5,0.6,0.6), (0.5,0.6,0.4), (0.5,0.4,0.45), (0.5,0.4,0.45), (0.5,0.4,0.45), (0.5,0.4,0.45)],
         relaxation = 1.4,
     )
+    # check if folders exist
+    !isdir(joinpath(FLOWPanel_dir, benchmark_dir)) && mkdir(joinpath(FLOWPanel_dir, benchmark_dir))
+    for dir in ("benchmark_lu", "benchmark_gmres", "benchmark_gmres_mf_a", "benchmark_gmres_mf_b", "benchmark_fgs_a", "benchmark_fgs_b")
+        if !isdir(joinpath(FLOWPanel_dir, benchmark_dir, dir))
+            mkdir(joinpath(FLOWPanel_dir, benchmark_dir, dir))
+        end
+    end
 
     # check if file exists
     file = joinpath(FLOWPanel_dir, benchmark_dir, "assembled_benchmarks.bson")
@@ -228,14 +236,19 @@ function benchmark_wing(ms; benchmark_dir="benchmarks_20240625",
 
         # benchmark LU
         print("\n\tLU Decomposition...")
-        t_aic_lu, t_lu_lu, t_solve_lu = benchmark_wing_lu(wing, freestream)
+        if omit_lu
+            # bms_lu[:,i_tol,i_m] .= bm_lu
+            t_aic_lu, t_lu_lu, t_solve_lu, resid_max_lu, resid_mean_lu = bms_lu[:,1,i_m]
+        else
+            t_aic_lu, t_lu_lu, t_solve_lu = benchmark_wing_lu(wing, freestream)
+
+            ## get residual
+            resid_max_lu, resid_mean_lu = get_residual(dummy_velocity, wing, freestream)
+
+            ## save vtk
+            vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_lu", "benchmark_lu_nc$(nc)_ns$(ns).vts"), wing)
+        end
         println()
-
-        ## get residual
-        resid_max_lu, resid_mean_lu = get_residual(dummy_velocity, wing, freestream)
-
-        ## save vtk
-        vtk(joinpath(FLOWPanel_dir, benchmark_dir, "benchmark_lu", "benchmark_lu_nc$(nc)_ns$(ns).vts"), wing)
 
         # loop over tolerances
         for (i_tol,tol) in enumerate(tolerances)
@@ -279,61 +292,77 @@ function plot_benchmark_1b(file, save_name)
         fig = figure("benchmark_wing_1b_$i_tol")
         fig.clf()
         fig.add_subplot(211, ylabel="total cost, seconds")
-        fig.add_subplot(212, ylabel="maximum error, meters per second", xlabel="number of panels")
+        fig.add_subplot(212, ylabel=L"L^2"*" norm error, meters per second", xlabel="number of panels")
         axs = fig.get_axes()
 
         # plot total cost for each solver
 
         ## lu decomposition
         axs[0].plot(n_panels, bms_lu[1,i_tol,:] + bms_lu[2,i_tol,:] + bms_lu[3,i_tol,:], color=cmap(0), "-", marker=".")
-        axs[1].plot(n_panels, bms_lu[4,i_tol,:], color=cmap(0), "-", marker=".")
+        axs[1].plot(n_panels, bms_lu[5,i_tol,:], color=cmap(0), "-", marker=".")
 
         ## gmres
         axs[0].plot(n_panels, bms_gmres[1,i_tol,:] + bms_gmres[2,i_tol,:], color=cmap(1), "-", marker="*")
-        axs[1].plot(n_panels, bms_gmres[3,i_tol,:], color=cmap(1), "-", marker="*")
+        axs[1].plot(n_panels, bms_gmres[4,i_tol,:], color=cmap(1), "-", marker="*")
 
         ## gmres-mf-a
         axs[0].plot(n_panels, bms_gmres_mf_a[1,i_tol,:] + bms_gmres_mf_a[2,i_tol,:], color=cmap(2), "-", marker="x")
-        axs[1].plot(n_panels, bms_gmres_mf_a[3,i_tol,:], color=cmap(2), "-", marker="x")
+        axs[1].plot(n_panels, bms_gmres_mf_a[4,i_tol,:], color=cmap(2), "-", marker="x")
 
         ## gmres-mf-b
-        axs[0].plot(n_panels, bms_gmres_mf_b[1,i_tol,:] + bms_gmres_mf_b[2,i_tol,:], color=cmap(3), "--", marker="+")
-        axs[1].plot(n_panels, bms_gmres_mf_b[3,i_tol,:], color=cmap(3), "--", marker="+")
+        # axs[0].plot(n_panels, bms_gmres_mf_b[1,i_tol,:] + bms_gmres_mf_b[2,i_tol,:], color=cmap(3), "--", marker="+")
+        # axs[1].plot(n_panels, bms_gmres_mf_b[4,i_tol,:], color=cmap(3), "--", marker="+")
 
         ## fgs-a
         axs[0].plot(n_panels, bms_fgs_a[1,i_tol,:] + bms_fgs_a[2,i_tol,:] + bms_fgs_a[3,i_tol,:], color=cmap(4), "-", marker="1")
-        axs[1].plot(n_panels, bms_fgs_a[4,i_tol,:], color=cmap(4), "-", marker="1")
+        axs[1].plot(n_panels, bms_fgs_a[5,i_tol,:], color=cmap(4), "-", marker="1")
 
         ## fgs-b
-        axs[0].plot(n_panels, bms_fgs_b[1,i_tol,:] + bms_fgs_b[2,i_tol,:] + bms_fgs_b[3,i_tol,:], color=cmap(5), "--", marker="2")
-        axs[1].plot(n_panels, bms_fgs_b[4,i_tol,:], color=cmap(5), "--", marker="2")
+        # axs[0].plot(n_panels, bms_fgs_b[1,i_tol,:] + bms_fgs_b[2,i_tol,:] + bms_fgs_b[3,i_tol,:], color=cmap(5), "--", marker="2")
+        # axs[1].plot(n_panels, bms_fgs_b[5,i_tol,:], color=cmap(5), "--", marker="2")
 
         # set axes
         axs[0].set_yscale("log")
         axs[1].set_yscale("log")
-        axs[1].set_ylim([1e-12, 1e0])
+        axs[1].set_ylim([1e-10, 1e0])
+        axs[0].set_xscale("log")
+        axs[1].set_xscale("log")
 
         # create legend
-        axs[1].legend(["LU decomposition", "GMRES", "FMM+GMRES (a)", "FMM+GMRES (b)", "Fast Gauss-Seidel (a)", "Fast Gauss-Seidel (b)"])
+        # axs[1].legend(["LU decomposition", "GMRES", "FMM+GMRES (a)", "FMM+GMRES (b)", "Fast Gauss-Seidel (a)", "Fast Gauss-Seidel (b)"])
+        axs[1].legend(["LU decomposition", "GMRES", "MF-GMRES", "Fast Gauss-Seidel"])
 
         # tight layout
         fig.tight_layout()
-        fig.tight_layout()
 
         # save figure
-        savefig(save_name*"_$i_tol.png")
+        savefig(save_name*"_$i_tol.pdf")
     end
 end
 
 # set save path
-benchmark_dir = "benchmarks_20240625"
+# benchmark_dir = "benchmarks_20240630_10aoa_new_fmm_params_12"
+benchmark_dir = "benchmarks_20240629_10aoa_1_12"
 
 # get results
-bm = benchmark_wing(2:2; benchmark_dir)
-
-# plot results
-# this_path = joinpath(FLOWPanel_dir, benchmark_dir)
-# file = joinpath(this_path, "assembled_benchmarks.bson")
-# save_name = joinpath(this_path, "assembled_benchmark")
-# plot_benchmark_1b(file, save_name)
+ms = vcat(collect(1:8),12)
+# ms = [12]
+# bm = benchmark_wing(vcat(collect(1:8),12), benchmark_dir; omit_lu=false, freestream=SVector{3}(1.0,0,-tan(10*pi/180)))
+# benchmark_wing(ms, benchmark_dir; replace_file=false, omit_lu=true,
+#         freestream=SVector{3}(1.0,0,-tan(10*pi/180)), kernel=ConstantSource(),
+#         nc0=5, ns0=50, span=1.0, AR=10,
+#         tolerances = [1e-3, 1e-6, 1e-9],
+#         ps_a = fill((5,7,12), length(ms)),
+#         ls_a = fill((20,30,100), length(ms)),
+#         mts_a = fill((0.6,0.3,0.35), length(ms)),
+#         ps_b = [(1,1,1), (3,1,1), (4,1,1), (4,10,6), (4,8,14), (4,8,14), (4,8,14), (4,8,14)],
+#         ls_b = [(200,200,200), (100,800,800), (100,800,800), (100,400,800), (100,300,400), (100,300,400), (100,300,400), (100,300,400)],
+#         mts_b = [(0.4,0.4,0.4), (0.55,0.6,0.6), (0.5,0.6,0.6), (0.5,0.6,0.4), (0.5,0.4,0.45), (0.5,0.4,0.45), (0.5,0.4,0.45), (0.5,0.4,0.45)],
+#         relaxation = 1.4,
+#     )
+# # plot results
+this_path = joinpath(FLOWPanel_dir, benchmark_dir)
+file = joinpath(this_path, "assembled_benchmarks.bson")
+save_name = joinpath(this_path, "assembled_benchmark")
+plot_benchmark_1b(file, save_name)
 
