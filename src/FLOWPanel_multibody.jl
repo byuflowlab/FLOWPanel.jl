@@ -168,7 +168,11 @@ function get_field(self::MultiBody, field_name::String)
     fields = [get_field(body, field_name) for body in self.bodies]
 
     # Concatenate field data
-    field_data = vcat([field["field_data"] for field in fields]...)
+    if fields[1]["entry_type"]=="system"
+        field_data = mean([field["field_data"] for field in fields])
+    else
+        field_data = vcat([field["field_data"] for field in fields]...)
+    end
 
     # Create a new field
     field = Dict( "field_name" => field_name,
