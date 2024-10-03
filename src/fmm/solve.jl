@@ -299,7 +299,7 @@ function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme
     return FastLinearOperator{typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold)
 end
 
-function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
+function (flo::FastLinearOperator{<:AbstractPanels{<:Any,<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
     # unpack operator
     panels = flo.panels
     fmm_toggle = flo.fmm_toggle
@@ -350,7 +350,7 @@ function (flo::FastLinearOperator{<:AbstractPanels{ConstantSource(),<:Any,<:Any,
     end
 end
 
-function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
+function MatrixFreeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
         fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
@@ -369,7 +369,7 @@ function MatrixFreeSolver(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any
     return IterativeSolver(solver, A, right_hand_side, scheme)
 end
 
-function MatrixFreeSolver_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
+function MatrixFreeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
         fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
     ) where TF
 
@@ -395,7 +395,7 @@ function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b;
     Krylov.gmres!(solver.solver, A, b; solver_kwargs...)
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where scheme
+function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where scheme
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     A = solver.A
