@@ -395,7 +395,7 @@ function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b;
     Krylov.gmres!(solver.solver, A, b; solver_kwargs...)
 end
 
-function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, solver_kwargs...) where scheme
+function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, out=nothing, solver_kwargs...) where scheme
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     A = solver.A
@@ -405,7 +405,7 @@ function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::Iterati
     update_right_hand_side!(right_hand_side, panels, scheme)
 
     # solver for strengths
-    solver(A, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
+    solver_output = solver(A, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
     #x, stats = Krylov.gmres(influence_matrix, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
     #=
                    memory=20, M=I, N=I, ldiv::Bool=false,
@@ -415,6 +415,10 @@ function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::Iterati
                    callback=solver->false, iostream::IO=kstdout)
     =#
     verbose && println("Finished GMRES: \n\tstatus = $(solver.solver.stats.status)\n\tniter = $(solver.solver.stats.niter)\n\tinconsistent = $(solver.solver.stats.inconsistent)")
+
+    if !isnothing(out)
+        push!(out, solver_output)
+    end
 
     strengths = solver.solver.x
 
