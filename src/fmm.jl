@@ -96,7 +96,7 @@ end
 @inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {PS,VS,GS}
     # iterate over targets
     for i_target in target_index
-        potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {PS,VS,GS}
+        potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, derivatives_switch)
         if PS
             target_system[i_target, FastMultipole.SCALAR_POTENTIAL] = target_system[i_target, FastMultipole.SCALAR_POTENTIAL] + potential
         end
