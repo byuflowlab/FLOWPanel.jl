@@ -1,16 +1,16 @@
 function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
-    
+
     Rprime, Rxprime, Ryprime, Rzprime = rotate_to_panel(panel)
 
     potential, velocity, velocity_gradient = _induced(target, panel, kernel, Rprime, Rxprime, Ryprime, Rzprime, derivatives_switch)
-    
+
     return potential, velocity, velocity_gradient
 end
 
 function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
-    
+
     potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
-    
+
     return potential, velocity, velocity_gradient
 end
 
@@ -74,7 +74,7 @@ end
     # (; normal, vertices) = panel
     normal = panel.normal
     vertices = panel.vertices
-    
+
     # rotate into panel frame
     new_z = normal
     new_x = vertices[3] - vertices[1]
@@ -139,8 +139,8 @@ end
 #####
 ##### constant source
 #####
-
-struct ConstantSource <: AbstractRotatedKernel end
+struct Source{M} <: AbstractRotatedKernel{M} end
+const ConstantSource = Source{1}
 
 @inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
@@ -161,7 +161,7 @@ struct ConstantSource <: AbstractRotatedKernel end
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
         dx = dxs[i]
         dy = dys[i]
-        
+
         if PS# && !isinf(ms[i])
             potential += (rxs[i] * dy - rys[i] * dx) / ds[i] * log_term
             potential += dz * tan_term
@@ -184,7 +184,7 @@ struct ConstantSource <: AbstractRotatedKernel end
 
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
             lambda = rxs[i] * rys[i+1] - rxs[i+1] * rys[i]
-            
+
             val1 = r_plus_rp1_2 - d2
             val2 = rx_over_rs[i] + rx_over_rs[i+1]
             val3 = ry_over_rs[i] + ry_over_rs[i+1]
@@ -219,13 +219,13 @@ struct ConstantSource <: AbstractRotatedKernel end
     return potential, velocity, velocity_gradient
 end
 
-@inline kernel_multiplicity(::ConstantSource) = 1
 
 #####
 ##### constant normal doublet
 #####
 
-struct ConstantNormalDoublet <: AbstractRotatedKernel end
+struct NormalDoublet{M} <: AbstractRotatedKernel{M} end
+const ConstantNormalDoublet = NormalDoublet{1}
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
@@ -244,11 +244,11 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         rip1 = rs[i+1]
         iszero(rip1) && (rip1 += eps())
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
-        
+
         if PS# && !isinf(ms[i])
             potential -= tan_term
         end
-        
+
         if VS
             r_plus_rp1 = rs[i] + rs[i+1]
             r_times_rp1 = rs[i] * rs[i+1]
@@ -261,23 +261,23 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
                 lambda * val4
             )
         end
-            
+
         if GS
             # intermediate values
             d2 = ds[i]^2
             r_plus_rp1 = rs[i] + rs[i+1]
             r_plus_rp1_2 = r_plus_rp1^2
             r_times_rp1 = rs[i] * rs[i+1]
-            
+
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
             lambda = rxs[i] * rys[i+1] - rxs[i+1] * rys[i]
-            
+
             val1 = r_times_rp1 * r_plus_rp1_2 + rho * rs[i+1]^2
             val1 /= rho * rs[i] * r_plus_rp1
             val2 = r_times_rp1 * r_plus_rp1_2 + rho * rs[i]^2
             val2 /= rho * rs[i+1] * r_plus_rp1
             val3 = r_plus_rp1 / (rho * r_times_rp1^2)
-            
+
             # construct velocity_gradient
             psi_xx = dz * dys[i] * val3 * (rxs[i] * val1 + rxs[i+1] * val2)
             psi_xy = dz * dys[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
@@ -318,13 +318,13 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
     return potential, velocity, velocity_gradient
 end
 
-@inline kernel_multiplicity(::ConstantNormalDoublet) = 1
 
 #####
 ##### constant source plus constant normal doublet
 #####
 
-struct ConstantSourceNormalDoublet <: AbstractRotatedKernel end
+struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
+const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations;
@@ -344,12 +344,12 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         rip1 = rs[i+1]
         iszero(rip1) && (rip1 += eps())
         tan_term = atan((ms[i] * es[i] - hs[i]) / dz / ri) - atan((ms[i] * es[i+1] - hs[i+1]) / dz / rip1)
-        
+
         if PS# && !isinf(ms[i])
             potential += strength[1] * ((rxs[i] * dys[i] - rys[i] * dxs[i]) / ds[i] * log_term + dz * tan_term)
             potential -= strength[2] * tan_term
         end
-        
+
         if VS
             r_plus_rp1 = rs[i] + rs[i+1]
             r_times_rp1 = rs[i] * rs[i+1]
@@ -367,14 +367,14 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
                 lambda * val4
             )
         end
-            
+
         if GS
             # intermediate values
             d2 = ds[i]^2
             r_plus_rp1 = rs[i] + rs[i+1]
             r_plus_rp1_2 = r_plus_rp1^2
             r_times_rp1 = rs[i] * rs[i+1]
-            
+
             rho = r_times_rp1 + rxs[i] * rxs[i+1] + rys[i] * rys[i+1] + dz2
             lambda = rxs[i] * rys[i+1] - rxs[i+1] * rys[i]
 
@@ -398,13 +398,13 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
                 phi_xy, phi_yy, phi_yz,
                 phi_xz, phi_yz, phi_zz
             )
-            
+
             val1 = r_times_rp1 * r_plus_rp1_2 + rho * rs[i+1]^2
             val1 /= rho * rs[i] * r_plus_rp1
             val2 = r_times_rp1 * r_plus_rp1_2 + rho * rs[i]^2
             val2 /= rho * rs[i+1] * r_plus_rp1
             val3 = r_plus_rp1 / (rho * r_times_rp1^2)
-            
+
             # construct velocity_gradient
             psi_xx = dz * dys[i] * val3 * (rxs[i] * val1 + rxs[i+1] * val2)
             psi_xy = dz * dys[i] * val3 * (rys[i] * val1 + rys[i+1] * val2)
@@ -433,20 +433,21 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
     return potential, velocity, velocity_gradient
 end
 
-@inline kernel_multiplicity(::ConstantSourceNormalDoublet) = 2
 
 #####
 ##### vortex ring panel
 #####
 
-struct VortexRing <: AbstractUnrotatedKernel end
+struct Vortex{M} <: AbstractUnrotatedKernel{M} end
+const VortexRing = Vortex{1}
+
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     TF = promote_type(TFT,TFP)
     corner_vectors = SVector{NS,SVector{3,TF}}(corner - target for corner in panel.vertices)
     velocity = zero(SVector{3,TF})
     gradient = zero(SMatrix{3,3,TF,9})
-    
+
     # finite core settings
     finite_core = false
     core_size = 1e-3
@@ -499,7 +500,7 @@ function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kerne
         gradient += g
     end
 
-    return zero(TF), velocity, gradient 
+    return zero(TF), velocity, gradient
 end
 
 function _bound_vortex_velocity(r1norm::TF, r2norm, r1normr2norm, rcross, rdot, finite_core::Bool, core_size::Number; epsilon=10*eps()) where TF
@@ -515,13 +516,13 @@ function _bound_vortex_velocity(r1norm::TF, r2norm, r1normr2norm, rcross, rdot, 
             return velocity
         end
     end
-    
+
     # otherwise, use singular kernel
     f1 = rcross/(r1normr2norm + rdot)
     f2 = (1/r1norm + 1/r2norm)
 
     velocity = (f1*f2) * ONE_OVER_4PI
-    
+
     return velocity
 end
 
@@ -557,5 +558,3 @@ function _bound_vortex_gradient(r1, r2, r1norm::TF, r2norm, r1normr2norm, rcross
 
     return gradient
 end
-
-@inline kernel_multiplicity(::VortexRing) = 1
