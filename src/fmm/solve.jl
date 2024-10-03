@@ -21,10 +21,19 @@ abstract type AbstractSolver end
 ##### auxilliary functions
 #####
 
-function update_influence_matrix!(influence_matrix, panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, ::Type{Scheme{DirectNeumann, FlowTangency}}; panel_indices=1:length(panels.panels), set_unit_strength=false)
+function update_influence_matrix!(influence_matrix,
+                                    panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                                    ::Type{Scheme{DirectNeumann, FlowTangency}};
+                                    panel_indices=1:length(panels.panels),
+                                    set_unit_strength=false
+                                    ) where {K <: AbstractKernel{1}}
     # check matrix size
-    @assert size(influence_matrix,1) == size(influence_matrix,2) "influence matrix should be square"
-    @assert size(influence_matrix,1) == length(panel_indices) "influence matrix size $(size(influence_matrix,1)) inconsistent with number of panels $(length(panels.panels))"
+    @assert size(influence_matrix,1) == size(influence_matrix,2) ""*
+        "influence matrix should be square"
+
+    @assert size(influence_matrix,1) == length(panel_indices) ""*
+        "influence matrix size $(size(influence_matrix,1)) inconsistent with"*
+        " number of panels $(length(panels.panels))"
 
     # set panels to unit strength
     if set_unit_strength
@@ -32,12 +41,15 @@ function update_influence_matrix!(influence_matrix, panels::AbstractPanels{Const
         set_unit_strength!(panels; panel_indices)
     end
 
+    kernel = K()
+
     # update influence matrix
     for (j,i_source) in enumerate(panel_indices)
         source_panel = panels.panels[i_source]
         for (i,i_target) in enumerate(panel_indices)
             target_panel = panels.panels[i_target]
-            _, v, _ = induced(target_panel.control_point, source_panel, ConstantSource(), DerivativesSwitch(false,false,true,false))
+            _, v, _ = induced(target_panel.control_point, source_panel, kernel,
+                                      DerivativesSwitch(false,false,true,false))
             influence_matrix[i, j] = dot(v, target_panel.normal)
         end
     end
@@ -46,20 +58,6 @@ function update_influence_matrix!(influence_matrix, panels::AbstractPanels{Const
     set_unit_strength && grid_2_panels_strength!(panels; panel_indices)
 end
 
-function update_influence_matrix!(influence_matrix, panels::AbstractPanels{ConstantNormalDoublet(),<:Any,<:Any,<:Any}, ::Type{Scheme{DirectNeumann, FlowTangency}})
-    # check matrix size
-    @assert size(influence_matrix,1) == size(influence_matrix,2) "influence matrix should be square"
-    @assert size(influence_matrix,1) == length(panels.panels) "influence matrix size $(size(influence_matrix,1)) inconsistent with number of panels $(length(panels.panels))"
-
-    # update influence matrix
-    for (i_source,source_panel) in enumerate(panels.panels)
-        for (i_target,target_panel) in enumerate(panels.panels)
-            _, v, _ = induced(target_panel.control_point, source_panel, ConstantNormalDoublet(); toggle_potential=false, toggle_velocity=true, toggle_hessian=false)
-            influence_matrix[i_target, i_source] = dot(v, target_panel.normal)
-            # i_source == i_target && (influence_matrix[i_target,i_source] /= 2)
-        end
-    end
-end
 
 """
 # Arguments
@@ -103,7 +101,9 @@ end
 LUDecomposition(influence_matrix, right_hand_side, strengths, scheme) =
 LUDecomposition{typeof(influence_matrix), eltype(right_hand_side), scheme}(influence_matrix, right_hand_side, strengths)
 
-function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
+function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
+                            save_lu=true
+                            ) where {TF, K<:AbstractKernel{1}}
     # preallocate memory
     n_panels = length(panels.panels)
     influence_matrix = zeros(TF,n_panels,n_panels)
@@ -122,7 +122,9 @@ function LUDecomposition(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}
     return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
 end
 
-function LUDecomposition_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
+function LUDecomposition_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
+                                    scheme; save_lu=true
+                                    ) where {TF, K<:AbstractKernel{1}}
     # preallocate memory
     t_alloc = @elapsed begin
         n_panels = length(panels.panels)
@@ -140,27 +142,13 @@ function LUDecomposition_benchmark(panels::AbstractPanels{ConstantSource(),TF,<:
     return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme), t_aic, t_lu, t_alloc
 end
 
-function LUDecomposition(panels::AbstractPanels{ConstantNormalDoublet(),TF,<:Any,<:Any}, scheme; save_lu=true) where {TF}
-    # preallocate memory, assuming strength of the first panel is zero
-    n_panels = length(panels.panels)
-    influence_matrix = zeros(TF,n_panels,n_panels)
-    right_hand_side = zeros(TF,n_panels)
-
-    # update influence matrix
-    update_influence_matrix!(influence_matrix, panels, scheme)
-    save_lu && (influence_matrix = lu!(influence_matrix))
-
-    # initialize strengths
-    strengths = zeros(TF,n_panels)
-
-    return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
-end
-
 @inline function get_strength(strengths::Vector, i)
     return SVector{1}(strengths[i])
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,<:Any,S}, dt=0.0) where S
+function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                solver::LUDecomposition{<:Any,<:Any,S}, dt=0.0
+                ) where {S, K<:AbstractKernel{1}}
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     influence_matrix = solver.influence_matrix
@@ -183,33 +171,6 @@ function solve!(panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, solv
         radius = panels.panels[i].radius
         strength = get_strength(strengths, i)
 
-        panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
-        panels.strengths[i] = strength
-    end
-end
-
-function solve!(panels::AbstractPanels{ConstantNormalDoublet(),<:Any,<:Any,<:Any}, solver::LUDecomposition{<:Any,<:Any,S}, dt=nothing) where S
-    # unpack
-    # (; influence_matrix, right_hand_side, strengths) = solver
-    influence_matrix = solver.influence_matrix
-    right_hand_side = solver.right_hand_side
-    strengths = solver.strengths
-
-    # apply freestream/panel velocity
-    update_right_hand_side!(right_hand_side, panels, S)
-
-    # solver for strengths
-    strengths .= influence_matrix \ right_hand_side
-
-    # update panels
-    for i in 1:length(panels.panels)
-        # (; vertices, control_point, normal, strength, radius) = panels.panels[i]
-        vertices = panels.panels[i].vertices
-        control_point = panels.panels[i].control_point
-        normal = panels.panels[i].normal
-        # strength = panels.panels[i].strength
-        radius = panels.panels[i].radius
-        strength = get_strength(strengths, i)
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
     end
@@ -226,7 +187,9 @@ end
 IterativeSolver(solver, A, right_hand_side, scheme) =
     IterativeSolver{eltype(right_hand_side), typeof(solver), typeof(A), scheme}(solver, A, right_hand_side)
 
-function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
+function IterativeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
+                            krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver
+                            ) where {TF, K<:AbstractKernel{1}}
 
     # preallocate memory
     n_panels = length(panels.panels)
@@ -242,7 +205,10 @@ function IterativeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, k
     return IterativeSolver(solver, influence_matrix, right_hand_side, scheme)
 end
 
-function IterativeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver) where TF
+function IterativeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
+                                    scheme,
+                                    krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver
+                                    ) where {TF, K<:AbstractKernel{1}}
 
     # preallocate memory
     t_alloc = @elapsed begin
@@ -299,7 +265,7 @@ function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme
     return FastLinearOperator{typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold)
 end
 
-function (flo::FastLinearOperator{<:AbstractPanels{<:Any,<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}})(C, B, α, β; fmm_args...)
+function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}} where {K<:AbstractKernel{1}})(C, B, α, β; fmm_args...)
     # unpack operator
     panels = flo.panels
     fmm_toggle = flo.fmm_toggle
@@ -350,9 +316,12 @@ function (flo::FastLinearOperator{<:AbstractPanels{<:Any,<:Any,<:Any,<:Any}, <:A
     end
 end
 
-function MatrixFreeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
-    ) where TF
+function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
+                            krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
+                            fmm_toggle=true, reuse_tree=true,
+                            expansion_order=4, leaf_size=18,
+                            multipole_threshold=0.3
+                            ) where {TF, K<:AbstractKernel{1}}
 
     # define fast linear operator functor (for use with FMM) (avoids closure)
     flo = FastLinearOperator(panels, scheme; fmm_toggle, reuse_tree, expansion_order, leaf_size, multipole_threshold)
@@ -369,9 +338,13 @@ function MatrixFreeSolver(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, 
     return IterativeSolver(solver, A, right_hand_side, scheme)
 end
 
-function MatrixFreeSolver_benchmark(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme, krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
-        fmm_toggle=true, reuse_tree=true, expansion_order=4, leaf_size=18, multipole_threshold=0.3
-    ) where TF
+function MatrixFreeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
+                                    scheme,
+                                    krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
+                                    fmm_toggle=true, reuse_tree=true,
+                                    expansion_order=4, leaf_size=18,
+                                    multipole_threshold=0.3
+                                    ) where {TF, K<:AbstractKernel{1}}
 
     t_alloc = @elapsed begin
         # define fast linear operator functor (for use with FMM) (avoids closure)
@@ -395,7 +368,13 @@ function (solver::IterativeSolver{<:Any,<:Krylov.GmresSolver,<:Any,<:Any})(A, b;
     Krylov.gmres!(solver.solver, A, b; solver_kwargs...)
 end
 
-function solve!(panels::AbstractPanels{<:Any,<:Any,<:Any,<:Any}, solver::IterativeSolver{<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=true, tolerance=1e-6, max_iterations=100, out=nothing, solver_kwargs...) where scheme
+function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                solver::IterativeSolver{<:Any,<:Any,<:Any,scheme},
+                dt=0.0;
+                verbose=true,
+                tolerance=1e-6, max_iterations=100,
+                out=nothing, solver_kwargs...
+                ) where {scheme, K<:AbstractKernel{1}}
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
     A = solver.A
@@ -653,7 +632,14 @@ function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, sc
     return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history), t_solve, t_fmm
 end
 
-function solve!(panels::AbstractPanels{ConstantSource(),TF,<:Any,<:Any}, solver::FastGaussSeidel{<:Any,<:Any,<:Any,<:Any,<:Any,scheme}, dt=0.0; verbose=false, tolerance=1e-6, max_iterations=100, relaxation=1.4, error_style=:fixed_point, save_history=false) where {TF,scheme}
+function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
+                solver::FastGaussSeidel{<:Any,<:Any,<:Any,<:Any,<:Any,scheme},
+                dt=0.0;
+                verbose=false,
+                tolerance=1e-6, max_iterations=100,
+                relaxation=1.4,
+                error_style=:fixed_point,
+                save_history=false) where {TF, scheme, K<:AbstractKernel{1}}
 
     @assert panels === solver.panels "solver was created with a different AbstractPanels object"
 

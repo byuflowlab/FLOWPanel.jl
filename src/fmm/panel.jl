@@ -45,11 +45,11 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     wake_points::Vector{SVector{3,TF}}
 end
 
-function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::AbstractKernel)
+function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K) where {K<:AbstractKernel}
 
     n_cells = length(meshcells)
     TF = eltype(eltype(points))
-    NK = kernel_multiplicity(kernel)
+    NK = kernel_multiplicity(K)
     NS = meshcells[1].ctype.nodes
 
     for meshcell in meshcells
@@ -72,7 +72,7 @@ function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCe
 
     wake_points = SVector{3,TF}[]
 
-    return UnstructuredGrid{kernel,TF,NK,NS}(points, meshcells, control_points, normals, strengths, potential, velocity, panels, wake_points)
+    return UnstructuredGrid{K,TF,NK,NS}(points, meshcells, control_points, normals, strengths, potential, velocity, panels, wake_points)
 end
 
 #####
@@ -97,7 +97,7 @@ struct StructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     wake_points::Vector{SVector{3,TF}}
 end
 
-function PanelArray(corner_grid::Array{<:Number,4}, kernel::AbstractKernel; invert_normals=false)
+function PanelArray(corner_grid::Array{<:Number,4}, args...; optargs...)
     _, nx, ny, nz = size(corner_grid)
     @assert nz == 1 "corner grid must be a single surface; $nz detected"
     new_corner_grid = Array{SVector{3,eltype(corner_grid)},3}(undef, nx, ny, 1)
@@ -106,12 +106,13 @@ function PanelArray(corner_grid::Array{<:Number,4}, kernel::AbstractKernel; inve
             new_corner_grid[ix,iy,1] = SVector{3,eltype(corner_grid)}(corner_grid[1,ix,iy,1], corner_grid[2,ix,iy,1], corner_grid[3,ix,iy,1])
         end
     end
-    return PanelArray(new_corner_grid, kernel; invert_normals)
+    return PanelArray(new_corner_grid, args...; optargs...)
 end
 
-function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::AbstractKernel; invert_normals=false) where TF
+function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::K;
+                            invert_normals=false) where {TF, K<:AbstractKernel}
     # meta parameters
-    NK = kernel_multiplicity(kernel)
+    NK = kernel_multiplicity(K)
     NS = 4 # quad panels
     nxp1, nyp1, _ = size(corner_grid)
     nx = nxp1-1
@@ -171,7 +172,7 @@ function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::AbstractK
     wake_points = SVector{3,TF}[]
 
     # return panels
-    return StructuredGrid{kernel,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, panels, wake_points)
+    return StructuredGrid{K,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, panels, wake_points)
 end
 
 function panels_2_vector_strengths!(strengths, panels::AbstractVector{Panel{TF,NK,NS}}) where {TF,NK,NS}
