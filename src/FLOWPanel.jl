@@ -63,7 +63,8 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "utils", "postprocess"
+                    "utils", "postprocess",
+                    "fmm"
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end
