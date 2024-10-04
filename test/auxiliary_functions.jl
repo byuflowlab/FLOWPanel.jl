@@ -200,6 +200,128 @@ function create_sphere_unstructured(kernel, center=SVector{3}(0.0,0.0,0.0);
     return sphere
 end
 
+function create_plate_unstructured(kernel, center=SVector{3}(0.0,0.0,0.0);
+        dx=1.0, dy=1.0, dz=1.0, nx=10, ny=10, nz=10,
+        invert_normals=true,
+    )
+    n_points = 0
+    n_points += (nx+1) * (ny+1) # xy face 1
+    n_points += nz * (ny+1) # yz face 1
+    n_points += nx * (ny+1) # xy face 2
+    n_points += (nz-1) * (ny+1) # yz face 2
+    n_points += (nx-1) * (nz-1) * 2
+    n_mesh_cells = 2*nx*ny + 2*ny*nz + 2*nx*nz
+    points = Vector{SVector{3,Float64}}(undef,n_points)
+    meshcells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellType, SVector{3,Int64}}}(undef,n_mesh_cells)
+
+    # add points/cells
+    i_point = 0
+    i_meshcell = 0
+
+    # xy face 1
+    for ix in 0:nx
+        for iy in 0:ny
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] - dx/2 + dx/nx*ix, center[2] - dy/2 + dy/ny*iy, center[3] - dz/2)
+        end
+    end
+
+    for ix in 1:nx
+        for iy in 1:ny
+            i_meshcell += 1
+            meshcells[i_meshcell] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD,
+                                                      SVector{3}(ix+nx*(iy-1), ix+nx*(iy-1)+1, ix+nx*iy+1, ix+nx*iy))
+        end
+    end
+
+    # yz face 1
+    for iz in 1:nz
+        for iy in 0:ny
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] + dx/2, center[2] - dy/2 + dy/ny*iy, center[3] - dz/2 + dz/nz*iz)
+        end
+    end
+
+    i_start = nx*(ny+1)
+    for iz in 1:nz
+        for iy in 1:ny
+            i_meshcell += 1
+            meshcells[i_meshcell] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD,
+                                                      SVector{3}(i_start+iz+nz*(iy-1), i_start+iz+nz*(iy-1)+1, i_start+iz+nz*iy+1, i_start+iz+nz*iy))
+        end
+    end
+
+    # xy face 2
+    for ix in nx-1:-1:0
+        for iy in 0:ny
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] - dx/2 + dx/nx*ix, center[2] - dy/2 + dy/ny*iy, center[3] + dz/2)
+        end
+    end
+
+    i_start += nz*(ny+1)
+    for ix in 1:nx
+        for iy in 1:ny
+            i_meshcell += 1
+            ip = i_start + i_z + nz*(iy-1)
+            meshcells[i_meshcell] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD,
+                                                      SVector{3}(ip, ip+1, ip+(ny+1)+1, ip+ny+1))
+        end
+    end
+
+    # yz face 2
+    for iz in nz-1:-1:1
+        for iy in 0:ny
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] - dx/2, center[2] - dy/2 + dy/ny*iy, center[3] -dz/2 + dz/nz*iz)
+        end
+    end
+
+    i_start += nx*(ny+1)
+    for iz in 1:nz
+        for iy in 1:ny
+            i_meshcell += 1
+            ip = i_start + iz + nz*(iy-1)
+            meshcells[i_meshcell] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD,
+                                                      SVector{3}(ip, ip+1, ip+(ny+1)+1, ip+ny+1))
+        end
+    end
+
+    # xz face 1
+    for ix in 1:nx-1
+        for iz in 1:nz-1
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] - dx/2 + dx/nx*ix, center[2] - dy/2, center[3] - dz/2 + dz/nz*iz)
+        end
+    end
+
+    i_start += nx*(ny+1)
+    for ix in 1:nx
+        for iy in 1:ny
+            i_meshcell += 1
+            ip = i_start + ix + nx*(iy-1)
+            meshcells[i_meshcell] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD,
+                                                      SVector{3}(ip, ip+1, ip+(ny+1)+1, ip+ny+1))
+        end
+    end
+
+    # xz face 2
+    for ix in nx-1:-1:1
+        for iz in 1:nz-1
+            i_point += 1
+            points[i_point] = SVector{3}(center[1] - dx/2 + dx/nx*ix, center[2] + dy/2, center[3] - dz/2 + dz/nz*iz)
+        end
+    end
+
+    # add mesh cells
+
+
+
+    # create panels
+    sphere = PanelArray(points, meshcells, kernel)
+    return sphere
+end
+
 function naca(x)
     return 0.594689181*(0.298222773*sqrt(x) - 0.127125232*x - 0.357907906*x^2 + 0.291984971*x^3 - 0.105174606*x^4)
 end

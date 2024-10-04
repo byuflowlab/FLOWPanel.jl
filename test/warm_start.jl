@@ -950,22 +950,22 @@ function plot_warm_start_cycle_history_final(file, smart_file, save_name; i_tol,
         # axs[i].set_ylim([1,24])
         # axs[i].set_yticks([5,10,15,20])
         # axs[i].set_xscale("log")
-        # axs[i].set_xlim([1,maxiter])
-        # axs[i].set_yscale("log")
-        # axs[i].set_ylim([1e-7, 1e1])
+        axs[i].set_xlim([1,maxiter])
+        axs[i].set_yscale("log")
+        axs[i].set_ylim([1e-7, 1e1])
     end
-    # tight_layout()
+    tight_layout()
 
-    # savefig(save_name*"_cold.png")
+    savefig(save_name*"_cold.png")
 
     #--- warm start ---#
-    # fig = figure("history_warm")
-    # fig.clf()
-    # fig.add_subplot(141, xlabel="iteration", ylabel="L-2 norm residual")
-    # fig.add_subplot(142, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(143, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(144, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # axs = fig.get_axes()
+    fig = figure("history_warm")
+    fig.clf()
+    fig.add_subplot(141, xlabel="iteration", ylabel="L-2 norm residual")
+    fig.add_subplot(142, xlabel="iteration")#, ylabel="L-2 norm residual")
+    fig.add_subplot(143, xlabel="iteration")#, ylabel="L-2 norm residual")
+    fig.add_subplot(144, xlabel="iteration")#, ylabel="L-2 norm residual")
+    axs = fig.get_axes()
 
     # loop over St
     maxiter = 0
@@ -984,37 +984,37 @@ function plot_warm_start_cycle_history_final(file, smart_file, save_name; i_tol,
         history_fgs = histories_fgs_a[i_tol,i_m][i_t,i_st]
 
         i_ax = i_st-1
-        axs[i_ax].plot(1:length(history), history, color=cmap(2), "--")
-        axs[i_ax].plot(1:length(history_fgs), history_fgs, color=cmap(4), "--")
+        axs[i_ax].plot(1:length(history), history, color=cmap(2))
+        axs[i_ax].plot(1:length(history_fgs), history_fgs, color=cmap(4))
 
     end
-    # axs[3].legend(["MF-GMRES", "FGS"])
+    axs[3].legend(["MF-GMRES", "FGS"])
 
     for i in 0:3
         # axs[i].set_ylim([1,24])
         # axs[i].set_yticks([5,10,15,20])
         # axs[i].set_xscale("log")
-        # axs[i].set_xlim([1,maxiter])
-        # axs[i].set_yscale("log")
-        # axs[i].set_ylim([1e-7, 1e1])
+        axs[i].set_xlim([1,maxiter])
+        axs[i].set_yscale("log")
+        axs[i].set_ylim([1e-7, 1e1])
     end
-    # tight_layout()
+    tight_layout()
 
-    # savefig(save_name*"_warm.png")
+    savefig(save_name*"_warm.png")
 
     #--- smart warm start ---#
 
     # load data
     BSON.@load smart_file ws_gmres_mf_a ws_gmres_mf_a_cold ws_fgs_a ws_fgs_a_cold histories_gmres_mf_a histories_gmres_mf_a_cold histories_fgs_a histories_fgs_a_cold n_panels tolerances ps_a ls_a mts_a ps_b ls_b mts_b nc0 ns0 span AR relaxation St Δt f
 
-    # @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
-    # fig = figure("history_smart")
-    # fig.clf()
-    # fig.add_subplot(141, xlabel="iteration", ylabel="L-2 norm residual")
-    # fig.add_subplot(142, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(143, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(144, xlabel="iteration")#, ylabel="L-2 norm residual")
-    # axs = fig.get_axes()
+    @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
+    fig = figure("history_smart")
+    fig.clf()
+    fig.add_subplot(141, xlabel="iteration", ylabel="L-2 norm residual")
+    fig.add_subplot(142, xlabel="iteration")#, ylabel="L-2 norm residual")
+    fig.add_subplot(143, xlabel="iteration")#, ylabel="L-2 norm residual")
+    fig.add_subplot(144, xlabel="iteration")#, ylabel="L-2 norm residual")
+    axs = fig.get_axes()
 
     # loop over St
     maxiter = 0
@@ -1033,25 +1033,143 @@ function plot_warm_start_cycle_history_final(file, smart_file, save_name; i_tol,
         history_fgs = histories_fgs_a[i_tol_smart,i_m_smart][i_t_smart,i_st]
 
         i_ax = i_st-1
-        axs[i_ax].plot(1:length(history), history, color=cmap(2), ":")
-        axs[i_ax].plot(1:length(history_fgs), history_fgs, color=cmap(4), ":")
+        axs[i_ax].plot(1:length(history), history, color=cmap(2))
+        axs[i_ax].plot(1:length(history_fgs), history_fgs, color=cmap(4))
 
     end
-    # axs[3].legend(["MF-GMRES", "FGS"])
+    axs[3].legend(["MF-GMRES", "FGS"])
 
     for i in 0:3
         # axs[i].set_ylim([1,24])
         # axs[i].set_yticks([5,10,15,20])
         # axs[i].set_xscale("log")
-        # axs[i].set_xlim([1,maxiter])
+        axs[i].set_xlim([1,maxiter])
         axs[i].set_yscale("log")
         axs[i].set_ylim([1e-7, 1e1])
     end
     tight_layout()
 
-    savefig(save_name*"_combined.pdf")
+    savefig(save_name*"_smart.png")
 end
 
+function plot_warm_start_final_time_justfgs(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart, i_St)
+
+    # load data
+    BSON.@load file ws_gmres_mf_a ws_gmres_mf_a_cold ws_fgs_a ws_fgs_a_cold histories_gmres_mf_a histories_gmres_mf_a_cold histories_fgs_a histories_fgs_a_cold n_panels tolerances ps_a ls_a mts_a ps_b ls_b mts_b nc0 ns0 span AR relaxation St Δt f
+
+    # prepare colors
+    n_colors = 6
+    cmap = PythonPlot.get_cmap("viridis_r", n_colors)
+
+    # generate figure
+    fig = figure("history_final")
+    fig.clf()
+    fig.add_subplot(111, xlabel="timestep", ylabel="time cost, seconds")
+    ax = fig.get_axes()[0]
+
+    # loop over St
+    maxiter = 0
+    for i in eachindex(St)
+        maxiter = max(maxiter, length(histories_gmres_mf_a_cold[i_tol,i_m][i_t,i]))
+    end
+
+    TFGS = nothing
+
+    maxt= 0
+    for i in eachindex(St)
+        maxt = max(maxt, maximum(ws_gmres_mf_a_cold[:,1,i,i_tol,i_m]))
+        maxt = max(maxt, maximum(ws_fgs_a_cold[:,1,i,i_tol,i_m]))
+    end
+    for (i_st, st) in enumerate(St)
+        if i_st == i_St
+            # plot GMRES
+
+            ## get time
+            t_cold = ws_gmres_mf_a_cold[:,1,i_st,i_tol,i_m]
+            t_cold_fgs = ws_fgs_a_cold[:,1,i_st,i_tol,i_m]
+
+            ## get histories
+            niter_cold = ws_gmres_mf_a_cold[:,4,i_st,i_tol,i_m]
+            niter_cold_fgs = ws_fgs_a_cold[:,4,i_st,i_tol,i_m]
+
+            ## other
+            i_ax = i_st-1
+            ax.plot(0:length(niter_cold_fgs), vcat([t_cold_fgs[1]], t_cold_fgs), color=cmap(4))
+
+            TFGS = t_cold_fgs[1]
+        end
+    end
+    #axs[3].legend(["MF-GMRES", "FGS"])
+
+    for i in 0:3
+        # axs[i].set_ylim([1,24])
+        # axs[i].set_yticks([5,10,15,20])
+        # axs[i].set_xscale("log")
+    end
+    tight_layout()
+
+    #savefig(save_name*"_cold.png")
+
+    # loop over St
+    maxiter = 0
+    for i in eachindex(St)
+        maxiter = max(maxiter, length(histories_gmres_mf_a[i_tol,i_m][i_t,i]))
+    end
+    maxt= 0
+    for i in eachindex(St)
+        maxt = max(maxt, maximum(ws_gmres_mf_a[:,1,i,i_tol,i_m]))
+        maxt = max(maxt, maximum(ws_fgs_a[:,1,i,i_tol,i_m]))
+    end
+    for (i_st, st) in enumerate(St)
+        if i_st == i_St
+            # plot GMRES
+
+            ## get time
+            t = ws_gmres_mf_a[:,1,i_st,i_tol,i_m]
+            t_fgs = ws_fgs_a[:,1,i_st,i_tol,i_m]
+
+            ## get histories
+            niter = ws_gmres_mf_a[:,4,i_st,i_tol,i_m]
+            niter_fgs = ws_fgs_a[:,4,i_st,i_tol,i_m]
+
+            ax.plot(0:length(niter_fgs), vcat(TFGS,t_fgs), "--", color=cmap(4))
+        end
+    end
+
+    # load data
+    BSON.@load smart_file ws_gmres_mf_a ws_gmres_mf_a_cold ws_fgs_a ws_fgs_a_cold histories_gmres_mf_a histories_gmres_mf_a_cold histories_fgs_a histories_fgs_a_cold n_panels tolerances ps_a ls_a mts_a ps_b ls_b mts_b nc0 ns0 span AR relaxation St Δt f
+
+    # loop over St
+    maxiter = 0
+    for i in eachindex(St)
+        maxiter = max(maxiter, length(histories_gmres_mf_a[i_tol_smart,i_m_smart][i_t_smart,i]))
+    end
+    maxt= 0
+    for i in eachindex(St)
+        maxt = max(maxt, maximum(ws_gmres_mf_a[:,1,i,i_tol_smart,i_m_smart]))
+        maxt = max(maxt, maximum(ws_fgs_a[:,1,i,i_tol_smart,i_m_smart]))
+    end
+    for (i_st, st) in enumerate(St)
+        if i_st == i_St
+            # plot GMRES
+
+            ## get time
+            t = ws_gmres_mf_a[:,1,i_st,i_tol_smart,i_m_smart]
+            t_fgs = ws_fgs_a[:,1,i_st,i_tol_smart,i_m_smart]
+
+            ## get histories
+            niter = ws_gmres_mf_a[:,4,i_st,i_tol_smart,i_m_smart]
+            niter_fgs = ws_fgs_a[:,4,i_st,i_tol_smart,i_m_smart]
+
+            i_ax = i_st-1
+            ax.plot(0:length(niter_fgs), vcat(TFGS,t_fgs), ":", color=cmap(4))
+        end
+    end
+
+    tight_layout()
+
+    savefig(save_name*"_smart_justfgs_St$(i_St).pdf")
+end
 
 function plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart)
 
@@ -1105,20 +1223,20 @@ function plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t
         # axs[i].set_ylim([1,24])
         # axs[i].set_yticks([5,10,15,20])
         # axs[i].set_xscale("log")
-        # axs[i].set_ylim([0,maxiter])
+        axs[i].set_ylim([0,maxiter])
     end
     tight_layout()
 
-    # savefig(save_name*"_cold.png")
+    savefig(save_name*"_cold.png")
 
     #--- warm start ---#
-    # fig = figure("history_warm")
-    # fig.clf()
-    # fig.add_subplot(141, xlabel="timestep", ylabel="time cost, seconds")
-    # fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # axs = fig.get_axes()
+    fig = figure("history_warm")
+    fig.clf()
+    fig.add_subplot(141, xlabel="timestep", ylabel="time cost, seconds")
+    fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
+    axs = fig.get_axes()
 
     # loop over St
     maxiter = 0
@@ -1142,11 +1260,11 @@ function plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t
         niter_fgs = ws_fgs_a[:,4,i_st,i_tol,i_m]
 
         i_ax = i_st-1
-        axs[i_ax].plot(1:length(niter), t, color=cmap(2), "--")
-        axs[i_ax].plot(1:length(niter_fgs), t_fgs, color=cmap(4), "--")
+        axs[i_ax].plot(1:length(niter), t, color=cmap(2))
+        axs[i_ax].plot(1:length(niter_fgs), t_fgs, color=cmap(4))
 
     end
-    # axs[3].legend(["MF-GMRES", "FGS"])
+    axs[3].legend(["MF-GMRES", "FGS"])
 
     for i in 0:3
         # axs[i].set_ylim([1,24])
@@ -1154,23 +1272,23 @@ function plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t
         # axs[i].set_xscale("log")
         axs[i].set_ylim([0,maxiter])
     end
-    # tight_layout()
+    tight_layout()
 
-    # savefig(save_name*"_warm.png")
+    savefig(save_name*"_warm.png")
 
     #--- smart warm start ---#
 
     # load data
     BSON.@load smart_file ws_gmres_mf_a ws_gmres_mf_a_cold ws_fgs_a ws_fgs_a_cold histories_gmres_mf_a histories_gmres_mf_a_cold histories_fgs_a histories_fgs_a_cold n_panels tolerances ps_a ls_a mts_a ps_b ls_b mts_b nc0 ns0 span AR relaxation St Δt f
 
-    # @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
-    # fig = figure("history_smart")
-    # fig.clf()
-    # fig.add_subplot(141, xlabel="timestep", ylabel="time cost, seconds")
-    # fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # axs = fig.get_axes()
+    @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
+    fig = figure("history_smart")
+    fig.clf()
+    fig.add_subplot(141, xlabel="timestep", ylabel="time cost, seconds")
+    fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
+    axs = fig.get_axes()
 
     # loop over St
     maxiter = 0
@@ -1194,21 +1312,21 @@ function plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t
         niter_fgs = ws_fgs_a[:,4,i_st,i_tol_smart,i_m_smart]
 
         i_ax = i_st-1
-        axs[i_ax].plot(1:length(niter), t, color=cmap(2), ":")
-        axs[i_ax].plot(1:length(niter_fgs), t_fgs, color=cmap(4), ":")
+        axs[i_ax].plot(1:length(niter), t, color=cmap(2))
+        axs[i_ax].plot(1:length(niter_fgs), t_fgs, color=cmap(4))
 
     end
-    # axs[3].legend(["MF-GMRES", "FGS"])
+    axs[3].legend(["MF-GMRES", "FGS"])
 
     for i in 0:3
         # axs[i].set_ylim([1,24])
         # axs[i].set_yticks([5,10,15,20])
         # axs[i].set_xscale("log")
-        # axs[i].set_ylim([0,maxiter])
+        axs[i].set_ylim([0,maxiter])
     end
     tight_layout()
 
-    savefig(save_name*"_combined.pdf")
+    savefig(save_name*"_smart.png")
 end
 
 function plot_warm_start_final(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart)
@@ -1260,9 +1378,9 @@ function plot_warm_start_final(file, smart_file, save_name; i_tol, i_m, i_t, i_t
         # axs[i].set_xscale("log")
         axs[i].set_ylim([0,maxiter])
     end
-    # tight_layout()
+    tight_layout()
 
-    # savefig(save_name*"_cold.png")
+    savefig(save_name*"_cold.png")
 
     #--- warm start ---#
     fig = figure("history_warm")
@@ -1294,7 +1412,7 @@ function plot_warm_start_final(file, smart_file, save_name; i_tol, i_m, i_t, i_t
         axs[i_ax].plot(1:length(niter_fgs), niter_fgs, color=cmap(4))
 
     end
-    # axs[3].legend(["MF-GMRES", "FGS"])
+    axs[3].legend(["MF-GMRES", "FGS"])
 
     for i in 0:3
         # axs[i].set_ylim([1,24])
@@ -1302,23 +1420,23 @@ function plot_warm_start_final(file, smart_file, save_name; i_tol, i_m, i_t, i_t
         # axs[i].set_xscale("log")
         axs[i].set_ylim([0,maxiter])
     end
-    # tight_layout()
+    tight_layout()
 
-    # savefig(save_name*"_warm.png")
+    savefig(save_name*"_warm.png")
 
     #--- smart warm start ---#
 
     # load data
     BSON.@load smart_file ws_gmres_mf_a ws_gmres_mf_a_cold ws_fgs_a ws_fgs_a_cold histories_gmres_mf_a histories_gmres_mf_a_cold histories_fgs_a histories_fgs_a_cold n_panels tolerances ps_a ls_a mts_a ps_b ls_b mts_b nc0 ns0 span AR relaxation St Δt f
 
-    # @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
-    # fig = figure("history_smart")
-    # fig.clf()
-    # fig.add_subplot(141, xlabel="timestep", ylabel="iterations to convergence")
-    # fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
-    # axs = fig.get_axes()
+    @show tolerances[i_tol_smart], size(ws_gmres_mf_a_cold,5)
+    fig = figure("history_smart")
+    fig.clf()
+    fig.add_subplot(141, xlabel="timestep", ylabel="iterations to convergence")
+    fig.add_subplot(142, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(143, xlabel="timestep")#, ylabel="L-2 norm residual")
+    fig.add_subplot(144, xlabel="timestep")#, ylabel="L-2 norm residual")
+    axs = fig.get_axes()
 
     # loop over St
     maxiter = 0
@@ -1351,7 +1469,7 @@ function plot_warm_start_final(file, smart_file, save_name; i_tol, i_m, i_t, i_t
     end
     tight_layout()
 
-    savefig(save_name*"_combined.pdf")
+    savefig(save_name*"_smart.png")
 end
 
 
@@ -1383,9 +1501,11 @@ save_name = joinpath(cycle_dir, "cycle_m$(i_m)_itol$(i_tol)_time")
 # plot_warm_start_cycle_individual(file, save_name; i_tol, i_m)
 
 plot_warm_start_final_time(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart)
+plot_warm_start_final_time_justfgs(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart, i_St=1)
+plot_warm_start_final_time_justfgs(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart, i_St=4)
 
 save_name = joinpath(cycle_dir, "cycle_m$(i_m)_itol$(i_tol)_it$(i_t)_history")
 #plot_warm_start_cycle_history(file, save_name; i_tol, i_m, i_t)
 #plot_warm_start_cycle_history_individual(file, save_name; i_tol, i_m, i_t)
 
-plot_warm_start_cycle_history_final(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart)
+#plot_warm_start_cycle_history_final(file, smart_file, save_name; i_tol, i_m, i_t, i_tol_smart, i_m_smart, i_t_smart)
