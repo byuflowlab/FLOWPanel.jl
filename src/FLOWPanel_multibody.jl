@@ -221,6 +221,23 @@ function get_fieldval(self::MultiBody, field_name::String, i::Int; optargs...)
 
 end
 
+function get_strength(self::MultiBody, i)
+
+    counter = 0
+
+    for body in self.bodies
+        offset = get_nstrengths(body)
+
+        if i>counter && i<=counter+offset
+            return get_strength(body, i-counter)
+        end
+
+        counter += offset
+    end
+end
+
+get_nstrengths(self::MultiBody) = sum(get_nstrengths(body) for body in self.bodies, init=0)
+
 function check_solved(self::MultiBody)
     if check_field(self, "solved")
         return get_fieldval(self, "solved", 1, "system")

@@ -373,7 +373,7 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
                 dt=0.0;
                 verbose=true,
                 tolerance=1e-6, max_iterations=100,
-                out=nothing, solver_kwargs...
+                solver_kwargs...
                 ) where {scheme, K<:AbstractKernel{1}}
     # unpack
     # (; influence_matrix, right_hand_side, strengths) = solver
@@ -394,10 +394,6 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
                    callback=solver->false, iostream::IO=kstdout)
     =#
     verbose && println("Finished GMRES: \n\tstatus = $(solver.solver.stats.status)\n\tniter = $(solver.solver.stats.niter)\n\tinconsistent = $(solver.solver.stats.inconsistent)")
-
-    if !isnothing(out)
-        push!(out, solver_output)
-    end
 
     strengths = solver.solver.x
 
@@ -639,7 +635,8 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
                 tolerance=1e-6, max_iterations=100,
                 relaxation=1.4,
                 error_style=:fixed_point,
-                save_history=false) where {TF, scheme, K<:AbstractKernel{1}}
+                history=false
+                ) where {TF, scheme, K<:AbstractKernel{1}}
 
     @assert panels === solver.panels "solver was created with a different AbstractPanels object"
 
@@ -655,7 +652,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     multipole_threshold = solver.multipole_threshold
     leaf_size = solver.leaf_size
     convergence_history = solver.convergence_history
-    save_history && sizehint!(convergence_history, max_iterations)
+    history && sizehint!(convergence_history, max_iterations)
 
     # create/retrieve tree
     if reuse_tree
@@ -666,7 +663,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     else
         tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
         farfield, nearfield, self_induced = true, true, false
-        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_threshold, farfield, nearfield, self_induced)
+        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, tree.leaf_index, multipole_threshold, farfield, nearfield, self_induced)
     end
     branches = tree.branches
 
@@ -795,7 +792,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
             throw("error method $error_style not found")
         end
         verbose && println("\ti=$i_iter, epsilon = $(ε)")
-        save_history && push!(convergence_history, Float64(ε))
+        history && push!(convergence_history, Float64(ε))
 
         if ε <= tolerance
             break

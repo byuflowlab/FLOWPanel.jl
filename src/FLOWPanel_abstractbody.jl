@@ -331,6 +331,9 @@ function get_cart2lin_nodes(self::AbstractBody)
     return LinearIndices(Tuple(ndivsnodes))
 end
 
+get_strength(self::AbstractBody, i) = view(self.strength, i, :)
+get_nstrengths(self::AbstractBody) = size(self.strength, 1)
+
 
 """
     get_unitvectors(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
