@@ -1,33 +1,141 @@
 # using Revise
 
+################################################################################
+# FMM WRAPPER
+################################################################################
 module FMM
 
-using StaticArrays
-using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
-using WriteVTK
-import Krylov
-import LinearOperators
+    using StaticArrays
+    using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
+    using WriteVTK
+    import Krylov
+    import LinearOperators
 
-# https://github.com/byuflowlab/FastMultipole
-using FastMultipole
+    # https://github.com/byuflowlab/FastMultipole
+    using FastMultipole
 
-const ONE_OVER_4PI = 1/4/pi
+    const ONE_OVER_4PI = 1/4/pi
 
-for header_name in ["types", "panel", "kernel", "geometry", "fmm",
-                    "solve", "freestream", "vtk"]
+    for header_name in ["types", "panel", "kernel", "geometry", "fmm",
+                        "solve", "freestream", "vtk"]
 
-  include(joinpath("fmm", header_name*".jl"))
+      include(joinpath("fmm", header_name*".jl"))
 
-end
+    end
 
 end # END OF MODULE
 
 
+################################################################################
+# FMM-BASED SOLVER
+################################################################################
+function solvefmm(body::AbstractBody{VortexRing},
+                    Uinfs::AbstractMatrix{T1},
+                    Das::AbstractMatrix{T2},
+                    Dbs::AbstractMatrix{T3},
+                    args...;
+                    optargs...
+                    ) where {T1, T2, T3}
+
+    T = promote_type(T1, T2, T3)
+
+    # Convert body to FMM body
+    body_fmm = body2fmmbody(body)
+
+    # Call FMM-based solver
+    solver = _solvefmm!(body, body_fmm, Uinfs, Das, Dbs, args...; optargs...)
+
+    # Fetch strengths
+    Gamma = [P.strength[1] for P in body_fmm.panels]
+
+    # Store strengths as field Gamma
+    add_field(body, "Gamma", "scalar", Gamma, "cell")
+
+    return solver
+end
+
+function _solvefmm!(body::AbstractBody, body_fmm::FMM.UnstructuredGrid,
+                    Uinfs::AbstractMatrix,
+                    Das::AbstractMatrix,
+                    Dbs::AbstractMatrix,
+                    args...; optargs...)
+
+    # Error cases
+    if size(Uinfs) != (3, body.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(body.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, body.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(body.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, body.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(body.nsheddings)), got $(size(Dbs))")
+    end
+
+    # Solve linear system of equations
+    solver = _solvefmm!(body_fmm, Uinfs, Das, Dbs, args...; optargs...)
+
+    # Set strengths calculated through FMM-based solver back in the body
+    for (Pi, P) in enumerate(body_fmm.panels)
+        set_strength(body, Pi, P.strength)
+    end
+
+    _solvedflag(body, true)
+    add_field(body, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(body, "Da", "vector", collect(eachcol(Das)), "system")
+    add_field(body, "Db", "vector", collect(eachcol(Dbs)), "system")
+
+    return solver
+
+end
+
+function _solvefmm!(body_fmm::FMM.UnstructuredGrid,
+                    Uinfs::AbstractMatrix,
+                    Das::AbstractMatrix,
+                    Dbs::AbstractMatrix;
+                    solver=FMM.MatrixFreeSolver,
+                    scheme=FMM.Scheme{FMM.DirectNeumann, FMM.FlowTangency},
+                    set_initial_guess=FMM.set_unit_strength!,
+                    settings_fmm=(; expansion_order = 10,
+                                    leaf_size = 50,
+                                    multipole_threshold = 0.4),
+                    settings_solver=(;
+                                    tolerance=1e-6,
+                                    max_iterations=1000,
+                                    history=true
+                                    )
+                    )
+
+    # TODO: Do something with Das, Dbs, and TE once FMMVortexFilament kernel is
+    #       implemented!
+
+    # Set freestream at each FMM panel
+    for (i, Uinf) in zip(eachindex(body_fmm.velocity), eachcol(Uinfs))
+        body_fmm.velocity[i] -= body_fmm.velocity[i] # Cancel out current velocity
+        body_fmm.velocity[i] += Uinf                 # Set freestream instead
+    end
+
+    # Set initial guess of strengths
+    set_initial_guess(body_fmm)
+
+    # Initiate solver
+    _solver = solver(body_fmm, scheme; reuse_tree=false, settings_fmm...)
+
+    # Call solver
+    FMM.solve!(body_fmm, _solver; settings_solver...)
+
+    return _solver
+
+end
+
+################################################################################
+# Body TO FMM Body CONVERTER
+################################################################################
 const SVector = FMM.SVector
 const WriteVTK = FMM.WriteVTK
 
 
-bodytype2fmmkernel(::AbstractBody{<:VortexRing, 1}) = FMM.ConstantNormalDoublet
+bodytype2fmmkernel(::AbstractBody{<:VortexRing}) = FMM.ConstantNormalDoublet
 
 """
 Convert nodes into VTK points

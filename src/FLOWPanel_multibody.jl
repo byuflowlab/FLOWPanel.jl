@@ -238,6 +238,21 @@ end
 
 get_nstrengths(self::MultiBody) = sum(get_nstrengths(body) for body in self.bodies, init=0)
 
+function set_strength(self::MultiBody, i::Int, val)
+
+    counter = 0
+
+    for body in self.bodies
+        offset = get_nstrengths(body)
+
+        if i>counter && i<=counter+offset
+            return set_strength(body, i-counter, val)
+        end
+
+        counter += offset
+    end
+end
+
 function check_solved(self::MultiBody)
     if check_field(self, "solved")
         return get_fieldval(self, "solved", 1, "system")

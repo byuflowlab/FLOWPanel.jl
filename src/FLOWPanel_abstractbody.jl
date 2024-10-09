@@ -333,7 +333,7 @@ end
 
 get_strength(self::AbstractBody, i) = view(self.strength, i, :)
 get_nstrengths(self::AbstractBody) = size(self.strength, 1)
-
+set_strength(self::AbstractBody, i::Int, val) = (self.strength[i, :] .= val)
 
 """
     get_unitvectors(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
