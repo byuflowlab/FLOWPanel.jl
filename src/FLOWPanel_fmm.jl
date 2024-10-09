@@ -137,88 +137,11 @@ const WriteVTK = FMM.WriteVTK
 
 bodytype2fmmkernel(::AbstractBody{<:VortexRing}) = FMM.ConstantNormalDoublet
 
-"""
-Convert nodes into VTK points
-"""
-function _get_vtkpoints(body::AbstractBody; TF=Float64)
+function body2fmmbody(body)
 
-    points = zeros(SVector{3, TF}, body.nnodes)
-    _get_vtkpoints!(body, points)
+    args = allocate_body2fmmbody(body)
+    return body2fmmbody!(body, args...)
 
-    return points
-end
-
-function _get_vtkpoints!(body::AbstractBody, points::AbstractVector{<:SVector})
-
-    @assert length(points)==body.nnodes ""*
-        "In-place target output `points` has a different length than needed"*
-        " ($(length(points)) != $(body.nnodes))"
-
-    for (i, X) in enumerate(eachcol(body.grid._nodes))
-        points[i] = SVector(X...)
-    end
-
-end
-
-function _get_vtkpoints!(multibody::MultiBody, points::AbstractVector{<:SVector})
-
-    @assert length(points)==multibody.nnodes ""*
-        "In-place target output `points` has a different length than needed"*
-        " ($(length(points)) != $(multibody.nnodes))"
-
-    offset = 0
-
-    for body in multibody.bodies
-
-        _get_vtkpoints!(body, view(points, (1:body.nnodes) .+ offset))
-
-        offset += body.nnodes
-    end
-
-end
-
-
-"""
-Return cells in VTK format (WriteVTK.MeshCell)
-"""
-function _get_vtkcells(body::AbstractBody; offset=0)
-
-    # Pre-allocate memory for panel calculation
-    (tri_out, tricoor, quadcoor, quad_out,
-            lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
-
-    # Format mesh connectivity in VTK format
-    meshcells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellType, SVector{3,Int64}}}(undef, body.ncells)
-
-    for ni in 1:body.ncells
-
-        # Fetch panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            body.grid, ni, lin, ndivscells, cin)
-        # Offset point indices
-        panel .+= offset
-
-        # Convert panel to VTK format
-        meshcells[ni] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, SVector{3}(panel...))
-
-    end
-
-    return meshcells
-end
-
-function _get_vtkcells(multibody::MultiBody)
-
-    meshcells = WriteVTK.MeshCell{WriteVTK.VTKCellType, SVector{3,Int64}}[]
-
-    offset = 0
-    for body in multibody.bodies
-
-        meshcells = vcat(meshcells, _get_vtkcells(body; offset=offset))
-
-        offset += body.nnodes
-    end
-
-    return meshcells
 end
 
 function body2fmmbody!(body,
@@ -307,9 +230,87 @@ function allocate_body2fmmbody(body)
     return (body_fmm, normals, controlpoints)
 end
 
-function body2fmmbody(body)
 
-    args = allocate_body2fmmbody(body)
-    return body2fmmbody!(body, args...)
+"""
+Convert nodes into VTK points
+"""
+function _get_vtkpoints(body::AbstractBody; TF=Float64)
 
+    points = zeros(SVector{3, TF}, body.nnodes)
+    _get_vtkpoints!(body, points)
+
+    return points
+end
+
+function _get_vtkpoints!(body::AbstractBody, points::AbstractVector{<:SVector})
+
+    @assert length(points)==body.nnodes ""*
+        "In-place target output `points` has a different length than needed"*
+        " ($(length(points)) != $(body.nnodes))"
+
+    for (i, X) in enumerate(eachcol(body.grid._nodes))
+        points[i] = SVector(X...)
+    end
+
+end
+
+function _get_vtkpoints!(multibody::MultiBody, points::AbstractVector{<:SVector})
+
+    @assert length(points)==multibody.nnodes ""*
+        "In-place target output `points` has a different length than needed"*
+        " ($(length(points)) != $(multibody.nnodes))"
+
+    offset = 0
+
+    for body in multibody.bodies
+
+        _get_vtkpoints!(body, view(points, (1:body.nnodes) .+ offset))
+
+        offset += body.nnodes
+    end
+
+end
+
+
+"""
+Return cells in VTK format (WriteVTK.MeshCell)
+"""
+function _get_vtkcells(body::AbstractBody; offset=0)
+
+    # Pre-allocate memory for panel calculation
+    (tri_out, tricoor, quadcoor, quad_out,
+            lin, ndivscells, cin) = gt.generate_getcellt_args!(body.grid)
+
+    # Format mesh connectivity in VTK format
+    meshcells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellType, SVector{3,Int64}}}(undef, body.ncells)
+
+    for ni in 1:body.ncells
+
+        # Fetch panel
+        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
+                                            body.grid, ni, lin, ndivscells, cin)
+        # Offset point indices
+        panel .+= offset
+
+        # Convert panel to VTK format
+        meshcells[ni] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, SVector{3}(panel...))
+
+    end
+
+    return meshcells
+end
+
+function _get_vtkcells(multibody::MultiBody)
+
+    meshcells = WriteVTK.MeshCell{WriteVTK.VTKCellType, SVector{3,Int64}}[]
+
+    offset = 0
+    for body in multibody.bodies
+
+        meshcells = vcat(meshcells, _get_vtkcells(body; offset=offset))
+
+        offset += body.nnodes
+    end
+
+    return meshcells
 end
