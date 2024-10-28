@@ -138,7 +138,7 @@ end
 
 """
     `generate_multibody(bodytype::Type{<:AbstractLiftingBody},
-                                meshfiles::AbstractVector{Tuple{String, String, Bool}},
+                                meshfiles::AbstractVector{Tuple{String, String, <:Union{Bool, NamedTuple}}},
                                 trailingedges::AbstractVector{Tuple{String, Function, Function, Bool}},
                                 reader::Function;
                                 read_path=pwd(),
@@ -167,6 +167,11 @@ least-squares solver (`solve(multibody, ...; elprescribe=elsprescribe, ...)`).
                                 `flip=true` indicates that the mesh has normals
                                 pointing inside and control points need to be
                                 flipped to end up outside of the geometry.
+                                Alternatively, use
+                                `meshfiles[i] = (name, meshfile, options)`,
+                                where `options` is a NamedTuple of options where
+                                flip can be one of them. Possible options are
+                                flip and mirrorcoordinate.
 * `trailingedges`:          Array with trailing edges that can be identified in
                                 `meshfiles`, defined as `trailingedges[i] =
                                 (trailingedge_meshfile, sorting_function,
@@ -245,7 +250,7 @@ end
 ```
 """
 function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
-                            meshfiles::AbstractVector{Tuple{String, String, Bool}},
+                            meshfiles::AbstractVector{Tuple{String, String, T}},
                             trailingedges::AbstractVector{Tuple{String, F1, F2, Bool}},
                             reader::Function;
                             read_path=pwd(),
@@ -259,7 +264,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             debug=false,
                             verbose=true,
                             v_lvl=0
-                            ) where {F1<:Union{Function, Any}, F2<:Union{Function, Any}}
+                            ) where {T<:Union{Bool, NamedTuple},
+                                     F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
     @assert 0 < tolerance <= 1 ""*
         "Received invalid tolerance $(tolerance); it needs to be between 0 and 1."
@@ -277,7 +283,16 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
     # `panel_omit_shedding[body][ei] = (shed incoming, shed outgoing, shed unsteady)`
 
     # Generate each body
-    for (name, meshfile, flip) in meshfiles
+    for (name, meshfile, options) in meshfiles
+
+        # Fetch flip option
+        if typeof(options)==Bool
+            flip = options
+        elseif :flip in propertynames(options)
+            flip = options.flip
+        else
+            flip = false
+        end
 
         if verbose; println("\t"^(v_lvl)*"Reading $(name) ($(meshfile))"); end
 
@@ -286,6 +301,11 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
         # Transform the original mesh: Translate, rotate, and scale
         msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+
+        # Mirror mesh if requested
+        if typeof(options)!=Bool && :mirrorcoordinate in propertynames(options)
+            msh = gt.mirror(msh, options.mirrorcoordinate)
+        end
 
         # Wrap Meshes object into a Grid object from GeometricTools
         grid = gt.GridTriangleSurface(msh)
