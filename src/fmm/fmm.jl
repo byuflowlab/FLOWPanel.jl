@@ -28,7 +28,7 @@ end
 
 Base.setindex!(sys::AbstractPanels, val, i, ::FastMultipole.ScalarPotential) = sys.potential[i] = val
 
-Base.setindex!(::AbstractPanels, val, i, ::FastMultipole.VectorPotential) = nothing
+# Base.setindex!(::AbstractPanels, val, i, ::FastMultipole.VectorPotential) = nothing
 
 Base.setindex!(sys::AbstractPanels, val, i, ::FastMultipole.Velocity) = sys.velocity[i] = val
 
@@ -50,15 +50,15 @@ FastMultipole.buffer_element(sys::AbstractPanels) = deepcopy(sys.panels[1]), zer
 
 Base.eltype(::AbstractPanels{<:Any,TF,<:Any,<:Any}) where TF = TF
 
-FastMultipole.B2M!(system::AbstractPanels{ConstantSource,<:Any,1,4}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.B2M!_quadpanel(system, branch, bodies_index, harmonics, expansion_order, FastMultipole.UniformSourcePanel())
+FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantSource,<:Any,1,4}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.body_to_multipole!(FastMultipole.Panel{Source}, system, branch, bodies_index, harmonics, expansion_order)
 
-FastMultipole.B2M!(system::AbstractPanels{ConstantSource,<:Any,1,3}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.B2M!_tripanel(system, branch, bodies_index, harmonics, expansion_order, FastMultipole.UniformSourcePanel())
+FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantSource,<:Any,1,3}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.body_to_multipole!(FastMultipole.Panel{Source}, system, branch, bodies_index, harmonics, expansion_order)
 
-FastMultipole.B2M!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,4}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.B2M!_quadpanel(system, branch, bodies_index, harmonics, expansion_order, FastMultipole.UniformNormalDipolePanel())
+FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,4}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.body_to_multipole!(FastMultipole.Panel{Dipole}, system, branch, bodies_index, harmonics, expansion_order)
 
-FastMultipole.B2M!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,3}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.B2M!_tripanel(system, branch, bodies_index, harmonics, expansion_order, FastMultipole.UniformNormalDipolePanel())
+FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,3}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.body_to_multipole!(FastMultipole.Panel{Dipole}, system, branch, bodies_index, harmonics, expansion_order)
 
-@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractRotatedKernel, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {PS,VS,GS}
+@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractRotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
     # rotate into source panel frame
     Rprime, Rxprime, Ryprime, Rzprime = rotate_to_panel(panel)
 
@@ -93,7 +93,7 @@ FastMultipole.B2M!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,3}, bran
     end
 end
 
-@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {PS,VS,GS}
+@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
     # iterate over targets
     for i_target in target_index
         potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, derivatives_switch)

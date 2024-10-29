@@ -49,7 +49,7 @@ function update_influence_matrix!(influence_matrix,
         for (i,i_target) in enumerate(panel_indices)
             target_panel = panels.panels[i_target]
             _, v, _ = induced(target_panel.control_point, source_panel, kernel,
-                                      DerivativesSwitch(false,false,true,false))
+                                      DerivativesSwitch(false,true,false))
             influence_matrix[i, j] = dot(v, target_panel.normal)
         end
     end
@@ -241,7 +241,7 @@ struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
 end
 
 function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree) where TF
-    switch = FastMultipole.DerivativesSwitch(false, false, true, false, panels)
+    switch = FastMultipole.DerivativesSwitch(false, true, false, panels)
     if reuse_tree
         tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
         farfield, nearfield = true, true

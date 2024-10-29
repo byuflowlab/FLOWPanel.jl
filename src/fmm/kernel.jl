@@ -1,4 +1,4 @@
-function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
+function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true))
 
     Rprime, Rxprime, Ryprime, Rzprime = rotate_to_panel(panel)
 
@@ -7,7 +7,7 @@ function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switc
     return potential, velocity, velocity_gradient
 end
 
-function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,false,true,true))
+function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true))
 
     potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
 
@@ -142,7 +142,7 @@ end
 struct Source{M} <: AbstractRotatedKernel{M} end
 const ConstantSource = Source{1}
 
-@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+@inline function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSource, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
     strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
@@ -227,7 +227,7 @@ end
 struct NormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantNormalDoublet = NormalDoublet{1}
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations
     strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
 
@@ -326,7 +326,7 @@ end
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::ConstantSourceNormalDoublet, R, Rxprime, Ryprime, Rzprime, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     # prelimilary computations;
     # note that strength[1] is the source strength and strength[2] is the dipole strength
     strength, TF, potential, velocity, velocity_gradient, dxs, dys, ds, ms, dz, dz2, rxs, rys, es, hs, rs, rx_over_rs, ry_over_rs = source_dipole_preliminaries(target, panel, TFT, TFP, R, Rxprime, Ryprime)
@@ -442,7 +442,7 @@ struct Vortex{M} <: AbstractUnrotatedKernel{M} end
 const VortexRing = Vortex{1}
 
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, derivatives_switch::DerivativesSwitch{PS,<:Any,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     TF = promote_type(TFT,TFP)
     corner_vectors = SVector{NS,SVector{3,TF}}(corner - target for corner in panel.vertices)
     velocity = zero(SVector{3,TF})
