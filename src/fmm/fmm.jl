@@ -11,7 +11,7 @@ Base.getindex(sys::AbstractPanels, i, ::FastMultipole.Velocity) = sys.velocity[i
 Base.getindex(sys::AbstractPanels, i, ::FastMultipole.VelocityGradient) = zero(SMatrix{3,3,Float64,3})
 
 Base.getindex(sys::AbstractPanels, i, ::FastMultipole.Strength) = sys.panels[i].strength
-Base.getindex(sys::AbstractPanels{ConstantSource,<:Any}, i, ::FastMultipole.Strength) = sys.panels[i].strength[1]
+Base.getindex(sys::AbstractPanels{ConstantSource,T}, i, ::FastMultipole.Strength) where T = sys.panels[i].strength[1]
 Base.getindex(sys::AbstractPanels{ConstantSource}, i, ::FastMultipole.Strength) = sys.panels[i].strength
 if kernel_multiplicity(ConstantNormalDoublet)==1
     Base.getindex(sys::AbstractPanels{ConstantNormalDoublet}, i, ::FastMultipole.Strength) = sys.panels[i].strength[1]*sys.panels[i].normal
@@ -69,15 +69,7 @@ FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:
     for i_target in target_index
         potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, Rprime, Rxprime, Ryprime, Rzprime, derivatives_switch)
         if PS
-            if FastMultipole.DEBUG_TOGGLE[]
-                println("before:")
-                @show target_system[i_target, FastMultipole.SCALAR_POTENTIAL]
-            end
             target_system[i_target, FastMultipole.SCALAR_POTENTIAL] += potential
-            if FastMultipole.DEBUG_TOGGLE[]
-                println("after:")
-                @show target_system[i_target, FastMultipole.SCALAR_POTENTIAL]
-            end
         end
         # target_system[i_target, FastMultipole.SCALAR_POTENTIAL] = target_system[i_target, FastMultipole.SCALAR_POTENTIAL] + potential
         if VS
@@ -90,10 +82,6 @@ FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:
         # target_system[i_target, FastMultipole.VELOCITY_GRADIENT] = target_system[i_target, FastMultipole.VELOCITY_GRADIENT] + gradient
     end
 
-    if FastMultipole.DEBUG_TOGGLE[]
-        println("after after:")
-        @show target_system[1, FastMultipole.SCALAR_POTENTIAL]
-    end
 end
 
 @inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
@@ -113,9 +101,6 @@ end
 end
 
 @inline function FastMultipole.direct!(target_system, target_index, derivatives_switch, source_system::AbstractPanels{K,<:Any,<:Any,<:Any}, source_index) where K
-    if FastMultipole.DEBUG_TOGGLE[]
-        @show source_index target_index
-    end
     kernel = K()
     for i_panel in source_index
         convolve_kernel!(target_system, target_index, source_system.panels[i_panel], kernel, derivatives_switch)
