@@ -153,8 +153,8 @@ if paraview
     run(`paraview --data=$(str)`)
 end
 
-display(Us_old)
-display(strength_old)
+# display(Us_old)
+# display(strength_old)
 
 if pyplot
 
@@ -286,7 +286,7 @@ if !isnothing(save_path)
 end
 
 Us_fmm = [V[i] for i in 1:3, V in body_fmm.velocity]
-display(Us_old)
+# display(Us_old)
 
 println("Maximum error:\t$(maximum(abs.(Us_fmm .- Us_old)))")
 println("Maximum error:\t$(maximum(abs.(Us_fmm .- Us_old) ./ abs.(Us_old)) * 100) %")
