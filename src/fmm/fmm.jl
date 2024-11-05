@@ -11,8 +11,7 @@ Base.getindex(sys::AbstractPanels, i, ::FastMultipole.Velocity) = sys.velocity[i
 Base.getindex(sys::AbstractPanels, i, ::FastMultipole.VelocityGradient) = zero(SMatrix{3,3,Float64,3})
 
 Base.getindex(sys::AbstractPanels, i, ::FastMultipole.Strength) = sys.panels[i].strength
-Base.getindex(sys::AbstractPanels{ConstantSource,T}, i, ::FastMultipole.Strength) where T = sys.panels[i].strength[1]
-Base.getindex(sys::AbstractPanels{ConstantSource}, i, ::FastMultipole.Strength) = sys.panels[i].strength
+Base.getindex(sys::AbstractPanels{ConstantSource,<:Any}, i, ::FastMultipole.Strength) = sys.panels[i].strength[1]
 if kernel_multiplicity(ConstantNormalDoublet)==1
     Base.getindex(sys::AbstractPanels{ConstantNormalDoublet}, i, ::FastMultipole.Strength) = sys.panels[i].strength[1]*sys.panels[i].normal
 end
