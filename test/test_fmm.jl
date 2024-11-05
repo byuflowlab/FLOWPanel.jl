@@ -1,3 +1,21 @@
+envpath = pwd()
+
+#= -------------------- CREATE THE ENVIRONMENT -----------------------------------
+---------------------------------------------------------------------------------- =#
+if isdir(envpath)
+    rm(envpath, recursive=true)
+end
+mkpath(envpath)
+
+using Pkg
+Pkg.activate(envpath)
+
+Pkg.add(url="https://github.com/byuflowlab/FastMultipole")
+Pkg.add(url="https://github.com/byuflowlab/FLOWPanel.jl", rev="fastmultipole-mvp")
+
+Pkg.status()
+
+
 # -------------------- IMPORT MODULES --------------------------------------------
 import FLOWPanel as pnl
 import FLOWPanel: dot, norm
