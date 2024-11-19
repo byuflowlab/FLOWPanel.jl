@@ -1051,6 +1051,15 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
         display(halfedges)
         display("shedding")
         display(shedding)
+
+        points = [nodes[:, i] for i in TEindices]
+        gt.generateVTK("TEindices", points; keep_points=true)
+
+        lines = [[i-1, j-1] for (i, j) in paircandidates]
+        gt.generateVTK("paircandidates", eachcol(nodes); lines=lines)
+
+        lines = [[i-1, j-1] for (i, j) in pairs]
+        gt.generateVTK("pairs", eachcol(nodes); lines=lines)
     end
 
     return shedding

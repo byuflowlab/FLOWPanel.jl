@@ -348,7 +348,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
             # Generate full TE shedding matrix
             fullshedding = calc_shedding(grid, trailingedge;
                                             tolerance=lengthscale*tolerance,
-                                            periodic=closed)
+                                            periodic=closed,
+                                            debug=debug)
 
             # Categorize TE cells with points close to junctions
             tokeep = []
@@ -439,6 +440,11 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
 
         # Check if watertight
         watertight = gt.isclosed(msh)
+
+        # Overwrite watertight if requested
+        if typeof(options)!=Bool && :overwrite_watertight in propertynames(options)
+            watertight = options.overwrite_watertight
+        end
 
         # Function for calculating elements to prescribe in least-square solver
         # (none if open mesh, arbitrary if watertight)
