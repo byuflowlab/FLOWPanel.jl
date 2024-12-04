@@ -263,6 +263,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             panel_omit_shedding=nothing,
                             debug=false,
                             verbose=true,
+                            bodytype_optargs=(;),
                             v_lvl=0
                             ) where {T<:Union{Bool, NamedTuple},
                                      F1<:Union{Function, Any}, F2<:Union{Function, Any}}
@@ -348,7 +349,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
             # Generate full TE shedding matrix
             fullshedding = calc_shedding(grid, trailingedge;
                                             tolerance=lengthscale*tolerance,
-                                            periodic=closed)
+                                            periodic=closed,
+                                            debug=debug)
 
             # Categorize TE cells with points close to junctions
             tokeep = []
@@ -435,10 +437,21 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         shedding = hcat(sheddings...)
 
         # Generate paneled body
-        body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
+        body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14, bodytype_optargs...)
 
         # Check if watertight
         watertight = gt.isclosed(msh)
+
+        # Check watertight
+        if typeof(options)!=Bool && :overwrite_watertight in propertynames(options)
+            # Prescribe if requested
+            watertight = options.overwrite_watertight
+        else
+            # Check from topology
+            # NOTE: This is a really expensive operation for large grids,
+            #       so in such cases is better to prescribe
+            watertight = gt.isclosed(msh)
+        end
 
         # Function for calculating elements to prescribe in least-square solver
         # (none if open mesh, arbitrary if watertight)
