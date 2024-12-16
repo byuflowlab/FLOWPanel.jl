@@ -500,6 +500,8 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     end
     end # @time
 
+    println("create influence matrices...")
+
     # create influence matrices to solve for each leaf's strengths
     panels_2_grid_strength!(panels) # store current strengths so they aren't lost
     set_unit_strength!(panels.panels)
@@ -513,6 +515,8 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
         update_influence_matrix!(A, panels, scheme; panel_indices=leaf.bodies_index, set_unit_strength=true)
         influence_matrices[i_A] = lu!(A)
     end
+
+    println("set up strengths...")
 
     # restore strengths
     grid_2_panels_strength!(panels)
@@ -529,6 +533,8 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
 
     # convergence history
     convergence_history = Float64[]
+
+    println("return solver...")
 
     return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history)
 end
@@ -663,7 +669,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     else
         tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
         farfield, nearfield, self_induced = true, true, false
-        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, tree.leaf_index, multipole_threshold, farfield, nearfield, self_induced)
+        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, tree.leaf_index, multipole_threshold, farfield, nearfield, self_induced, FastMultipole.UnequalSpheres(), expansion_order)
     end
     branches = tree.branches
 
@@ -681,6 +687,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     #--- begin Fast Gauss Seidel iterations ---#
     i_iter = 0 # want this available outside the loop
     verbose && println("\nBegin Fast Gauss-Seidel Iterations:")
+    expansion_order_val = Val(expansion_order)
     for _ in 1:max_iterations
         i_iter += 1
 
@@ -691,7 +698,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
         reset_potential_velocity!(panels)
 
         # get farfield influence
-        FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true, nearfield=false, unsort_bodies=false)
+        FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch, expansion_order_val; reset_tree=true, nearfield=false, unsort_bodies=false)
 
         # apply it to the RHS
         update_right_hand_side!(internal_right_hand_side, panels, scheme; reset=false)
@@ -744,7 +751,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
             else
                 for (i_target, j_source) in direct_list
                     if i_target == i_leaf # found a source
-                        FastMultipole.P2P!(panels, leaf, switch, panels, branches[j_source])
+                        FastMultipole._direct!(panels, leaf.bodies_index, switch, panels, branches[j_source].bodies_index)
                     end
                 end
             end
@@ -766,11 +773,12 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
 
         # update convergence criterion and update panels.strengths
         ε = zero(TF)
+        inv_relaxation = 1/relaxation
         if error_style==:fixed_point # more performant
             for i in eachindex(panels.strengths)
                 new_strength = panels.panels[i].strength
                 old_strength = panels.strengths[i]
-                ε = max(norm(new_strength-old_strength), ε)
+                ε = max(norm(new_strength-old_strength)*inv_relaxation, ε)
                 panels.strengths[i] = new_strength
             end
         elseif error_style==:L2 # better error metric
