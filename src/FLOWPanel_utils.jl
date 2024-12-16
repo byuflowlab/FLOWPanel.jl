@@ -251,7 +251,7 @@ end
 """
 function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             meshfiles::AbstractVector{Tuple{String, String, T}},
-                            trailingedges::AbstractVector{Tuple{String, F1, F2, Bool}},
+                            trailingedges::AbstractVector{Tuple{F0, F1, F2, Bool}},
                             reader::Function;
                             read_path=pwd(),
                             offset=zeros(3),
@@ -266,6 +266,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             bodytype_optargs=(;),
                             v_lvl=0
                             ) where {T<:Union{Bool, NamedTuple},
+                                     F0<:Union{AbstractString, Function, Tuple{AbstractString, Function}},
                                      F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
     @assert 0 < tolerance <= 1 ""*
@@ -323,27 +324,45 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         if verbose; println("\t"^(v_lvl+1)*"Identifying trailing edges"); end
 
         # Read all trailing edges
-        for (trailingedgefile, sortingfunction, junctioncriterion, closed) in trailingedges
+        for (trailingedgeref, sortingfunction, junctioncriterion, closed) in trailingedges
 
-            if verbose; println("\t"^(v_lvl+2)*"$(trailingedgefile)"); end
+            if verbose; println("\t"^(v_lvl+2)*"$(trailingedgeref)"); end
 
-            # Read Gmsh line of trailing edge
-            TEmsh = reader(joinpath(read_path, trailingedgefile))
+            # Define trailing edge criterion
+            if typeof(trailingedgeref) <: Union{AbstractString, Tuple{AbstractString, Function}}
 
-            # Apply the same transformations of the mesh to the trailing edge
-            TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+                if typeof(trailingedgeref) <: Tuple{AbstractString, Function}
+                    trailingedgefile = trailingedgeref[1]
+                else
+                    trailingedgefile = trailingedgeref
+                end
 
-            # Convert TE Meshes object into a matrix of points used to identify the trailing edge
-            trailingedge = gt.vertices2nodes(TEmsh.vertices)
+                # Read Gmsh line of trailing edge
+                TEmsh = reader(joinpath(read_path, trailingedgefile))
 
-            # Sort TE points from "left" to "right" according to span direction
-            trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
+                # Apply the same transformations of the mesh to the trailing edge
+                TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
 
-            # Rediscretize the TE line with enough resolution to meet tolerance
-            if rediscretize_trailingedge
-                ndiscretize = ceil(Int, 1/(0.5*tolerance))
-                trailingedge = gt.rediscretize_line(trailingedge, ndiscretize;
-                                                    parameterization=sortingfunction)
+                # Convert TE Meshes object into a matrix of points used to identify the trailing edge
+                trailingedge = gt.vertices2nodes(TEmsh.vertices)
+
+                # Sort TE points from "left" to "right" according to span direction
+                trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
+
+                if typeof(trailingedgeref) <: Tuple{AbstractString, Function}
+                    # Define TE line analytically
+                    criterion = trailingedgeref[2](trailingedge)
+                    trailingedge = X->(criterion(X), sortingfunction(X))
+                else
+                    # Rediscretize the TE line with enough resolution to meet tolerance
+                    if rediscretize_trailingedge
+                        ndiscretize = ceil(Int, 1/(0.5*tolerance))
+                        trailingedge = gt.rediscretize_line(trailingedge, ndiscretize;
+                                                            parameterization=sortingfunction)
+                    end
+                end
+            else
+                trailingedge = X->(trailingedgeref(X), sortingfunction(X))
             end
 
             # Generate full TE shedding matrix
@@ -491,6 +510,46 @@ end
 direction(dir; X0=zeros(3)) = X -> dot(X - X0, dir)
 loop(; Oaxis=Matrix(1.0I, 3, 3), X0=zeros(3)) = X -> -atand(dot(X - X0, Oaxis[:, 2]), dot(X - X0, Oaxis[:, 3]))
 nojunction(X) = Inf
+
+function distancetoline(line::Matrix)
+    X0 = view(line, :, 1)
+    X1 = view(line, :, size(line, 2))
+
+    return distancetoline(X0, X1)
+end
+function distancetoline(X0::AbstractVector, X1::AbstractVector)
+
+    # Calculate unit direction of line and length
+    dir = X1 - X0
+    len = norm(dir)
+    dir /= len
+
+    function calc_distancetoline(X)
+
+        X2 = X - X0
+
+        # Projection to line
+        proj = dot(X2, dir)
+        X3 = proj * dir
+
+        # Component normal to line
+        Xn = X2 - X3
+
+        # Distance to line
+        distance = norm(Xn)
+
+        # Add projection to line if point is beyond the line
+        if proj < 0
+            distance += abs(proj)
+        elseif proj > len
+            distance += proj - len
+        end
+
+        return distance
+    end
+
+    return calc_distancetoline
+end
 
 
 """

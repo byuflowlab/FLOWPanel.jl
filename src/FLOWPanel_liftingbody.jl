@@ -934,7 +934,7 @@ Note: It is important that the points in `trailingedge` have been previously
     panels that are at the trailing edge, or unphysically large trailing
     vortices.
 """
-function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Union{Matrix, Function};
                             periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             ) where {G<:gt.Meshes.SimpleMesh}
