@@ -259,6 +259,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             scaling=1.0,
                             tolerance=1e-6,
                             lengthscale=nothing,
+                            processmsh=noprocessmsh,
                             rediscretize_trailingedge=true,
                             panel_omit_shedding=nothing,
                             debug=false,
@@ -308,6 +309,9 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         if typeof(options)!=Bool && :mirrorcoordinate in propertynames(options)
             msh = gt.mirror(msh, options.mirrorcoordinate)
         end
+
+        # Call user-defined msh processing function
+        msh = processmsh(name, msh, options)
 
         # Wrap Meshes object into a Grid object from GeometricTools
         grid = gt.GridTriangleSurface(msh)
@@ -511,6 +515,8 @@ direction(dir; X0=zeros(3)) = X -> dot(X - X0, dir)
 loop(; Oaxis=Matrix(1.0I, 3, 3), X0=zeros(3)) = X -> -atand(dot(X - X0, Oaxis[:, 2]), dot(X - X0, Oaxis[:, 3]))
 nojunction(X) = Inf
 
+noprocessmsh(name, msh, options) = msh
+
 function distancetoline(line::Matrix)
     X0 = view(line, :, 1)
     X1 = view(line, :, size(line, 2))
@@ -549,6 +555,66 @@ function distancetoline(X0::AbstractVector, X1::AbstractVector)
     end
 
     return calc_distancetoline
+end
+
+
+"""
+Filtering criterion for splitting up edges of control surfaces in mesh
+"""
+function filter_splitsurfaces(connectivity, vertices, controlsurfaces;
+                                        offset=zeros(3),
+                                        invrotation::Meshes.Rotation=one(Meshes.QuatRotation),
+                                        scaling=1.0)
+
+    # Fetch and untransform the vertices
+    Xs = [invrotation * (vertices[vi].coords / scaling) - offset for vi in connectivity.indices]
+
+    # Calculate centroid
+    X = mean(Xs)
+
+    # Identify whether this element is intercepted by the edge of a control surface
+    for (csi, controlsurface) in enumerate(controlsurfaces)    # Iterate over control surfaces
+
+        (; hinge, side1, side2, boundingbox, tol) = controlsurface
+
+        # Identify whether the centroid is aft the hinge (positive side)
+        hingecrit = dot(X - hinge.center, hinge.normal) > tol
+
+        # Identify whether the vertices are split by side 1
+        side1crit = length(unique( dot(X - side1.center, side1.normal) > tol for X in Xs )) != 1
+
+        # Identify whether the vertices are split by side 2
+        side2crit = length(unique( dot(X - side2.center, side2.normal) > tol for X in Xs )) != 1
+
+        # Identify whether the centroid is inside the bounding box
+        boxcrit = all( boundingbox.lower[i] <= X[i] <= boundingbox.upper[i] for i in 1:length(X) )
+
+        # Check for mirrored conditions if requested
+        mirror = (controlsurface.mirror==:symmetric || controlsurface.mirror==:antisymmetric)
+
+        # Check whether the mirroring conditions are satisfied
+        if !(hingecrit && (side1crit || side2crit) && boxcrit) && mirror
+
+            # Bring vertices from the other side of the symmetry plane to this side
+            Xs = [X .* Meshes.Vec(1, -1, 1) for X in Xs]
+            X = mean(Xs)
+
+            # Re-evaluation criteria
+            hingecrit = dot(X - hinge.center, hinge.normal) > tol
+            side1crit = length(unique( dot(X - side1.center, side1.normal) > tol for X in Xs )) != 1
+            side2crit = length(unique( dot(X - side2.center, side2.normal) > tol for X in Xs )) != 1
+            boxcrit = all( boundingbox.lower[i] <= X[i] <= boundingbox.upper[i] for i in 1:length(X) )
+
+        end
+
+        # Return if identified that element is intercepted
+        if hingecrit && (side1crit || side2crit) && boxcrit
+            return false
+        end
+
+    end
+
+    return true
 end
 
 
