@@ -251,6 +251,7 @@ end
 """
 function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             meshfiles::AbstractVector{Tuple{String, String, T}},
+                            # trailingedges::AbstractVector{Tuple{F0, F1, F2, Bool}},
                             trailingedges::AbstractVector{Tuple{F0, F1, F2, Bool}},
                             reader::Function;
                             read_path=pwd(),
@@ -267,7 +268,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             bodytype_optargs=(;),
                             v_lvl=0
                             ) where {T<:Union{Bool, NamedTuple},
-                                     F0<:Union{AbstractString, Function, Tuple{AbstractString, Function}},
+                                     # F0<:Union{AbstractString, Function, Tuple{AbstractString, Function}}, # <-- commented this out so we can mix TE definitions
+                                     F0<:Any,
                                      F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
     @assert 0 < tolerance <= 1 ""*
@@ -517,12 +519,28 @@ nojunction(X) = Inf
 
 noprocessmsh(name, msh, options) = msh
 
-function distancetoline(line::Matrix)
+
+function distancetoline(line::Matrix; symmetry=nothing)
     X0 = view(line, :, 1)
     X1 = view(line, :, size(line, 2))
 
-    return distancetoline(X0, X1)
+    if isnothing(symmetry)
+        return distancetoline(X0, X1)
+    else
+        X0sym = X0 - 2*dot(X0, symmetry)*symmetry
+        X1sym = X1 - 2*dot(X1, symmetry)*symmetry
+        fun1 = distancetoline(X0, X1)
+        fun2 = distancetoline(X0sym, X1sym)
+
+        return (args...; optargs...) -> min(fun1(args...; optargs...), fun2(args...; optargs...))
+    end
+
 end
+
+function distancetoline_symmetric(symmetry)
+    return (args...; optargs...) -> distancetoline(args...; optargs..., symmetry=symmetry)
+end
+
 function distancetoline(X0::AbstractVector, X1::AbstractVector)
 
     # Calculate unit direction of line and length
