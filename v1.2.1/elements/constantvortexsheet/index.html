@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Constant Vortex Sheet · FLOWPanel.jl</title><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/favicon.ico" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="FLOWPanel.jl logo"/></a><form class="docs-search" action="../../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../../">Intro</a></li><li><a class="tocitem" href="../../potentialflow/">Potential Flow</a></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox" checked/><label class="tocitem" for="menuitem-3"><span class="docs-label">Elements</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../paneldefinition/">Panel Definition</a></li><li><a class="tocitem" href="../constantsource/">Constant Source</a></li><li><a class="tocitem" href="../constantdoublet/">Constant Doublet</a></li><li><a class="tocitem" href="../semiinfdoublet/">Semi-Infinite Doublet</a></li><li><a class="tocitem" href="../semiinfnonplanardoublet/">Non-Planar Semi-Infinite Doublet</a></li><li class="is-active"><a class="tocitem" href>Constant Vortex Sheet</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">Geometry Engine</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Grid Generation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/gridgeneration/">Methods</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-loft/">Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-pathloft/">Path-Lofting Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-rev/">Surface of Revolution Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-transf/">Space Transformation Method</a></li><li><a class="tocitem" href="../../geometry/gridgeneration-triang/">Grid Triangulation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Advanced</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../geometry/basics/"><code>GeometricTools.jl</code></a></li><li><a class="tocitem" href="../../geometry/basics-grid/">Cartesian Grid</a></li><li><a class="tocitem" href="../../geometry/basics-transformations/">Space Transformations</a></li><li><a class="tocitem" href="../../geometry/basics-loopedgrid/">Looped Grid</a></li><li><a class="tocitem" href="../../geometry/basics-surfacegrid/">Surface Grid</a></li><li><a class="tocitem" href="../../geometry/panel-gradient/">Panel Gradients</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">Tutorials</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Swept Wing</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/sweptwing-4p2aoa/">4.2° Angle of Attack</a></li><li><a class="tocitem" href="../../examples/sweptwing-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/sweptwing-solver/">Solver Benchmark</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Centerbody</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/centerbody-source/">Source Elements</a></li><li><a class="tocitem" href="../../examples/centerbody-slice/">Slice</a></li><li><a class="tocitem" href="../../examples/centerbody-vortexring/">Vortex Ring Elements</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">Duct</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/duct-aoasweep/">AOA Sweep</a></li><li><a class="tocitem" href="../../examples/duct-fluiddomain/">Fluid Domain</a></li><li><a class="tocitem" href="../../examples/duct-leastsquares/">Least-Squares Solver</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Blended Wing Body</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/blendedwingbody-cad/">CAD Model</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-gmsh/">Unstructured Meshing</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-TE/">Export Trailing Edge</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-aero/">Import Mesh and Solve</a></li><li><a class="tocitem" href="../../examples/blendedwingbody-gpucpu/">GPU and CPU Acceleration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-5" type="checkbox"/><label class="tocitem" for="menuitem-5-5"><span class="docs-label">Cessna 210</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/cessna-openvsp/">OpenVSP Model</a></li><li><a class="tocitem" href="../../examples/cessna-TE/">Export Trailing Edge</a></li><li><a class="tocitem" href="../../examples/cessna-aero/">Import Mesh and Solve</a></li><li><a class="tocitem" href="../../examples/cessna-vspgeom/">VSPGeom.jl</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Elements</a></li><li class="is-active"><a href>Constant Vortex Sheet</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Constant Vortex Sheet</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/byuflowlab/FLOWPanel.jl/blob/master/docs/src/elements/constantvortexsheet.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Constant-Strength-Vortex-Sheet"><a class="docs-heading-anchor" href="#Constant-Strength-Vortex-Sheet">Constant-Strength Vortex Sheet</a><a id="Constant-Strength-Vortex-Sheet-1"></a><a class="docs-heading-anchor-permalink" href="#Constant-Strength-Vortex-Sheet" title="Permalink"></a></h1><p>(Adapted from David <a href="https://smartech.gatech.edu/handle/1853/58265">Pate&#39;s 2017</a> doctoral dissertation <em>A Surface Vorticity Method for Wake-Body Interactions</em>, and <a href="https://arc.aiaa.org/doi/abs/10.2514/1.J057120">Pate and German (2018)</a>, <em>A Surface Vorticity Panel Method</em>)</p><p>The velocity induced by a vortex sheet at a target point <span>$\mathbf{x}$</span> is the integral of the Biot-Savart law over the surface of the sheet:</p><p class="math-container">\[\begin{align*}
+        \mathbf{u}(\mathbf{x})
+    =
+        \frac{1}{4\pi}
+        \int\limits_S
+            \frac{\mathbf{r} \times \boldsymbol\gamma}{\Vert \mathbf{r} \Vert^3}
+        \,\mathrm{d} S&#39;
+,\end{align*}\]</p><p>where <span>$\mathrm{r} = \mathbf{x}&#39; - \mathbf{x}$</span> is the vector directed from the target to the differential <span>$\mathrm{d}S&#39;$</span>.</p><p>In order to evaluate this integral, we follow the procedure put forth by <a href="https://smartech.gatech.edu/handle/1853/58265">Pate 2017</a>. First, we define a local coordinate system at the projection of point <span>$\mathbf{x}$</span> unto the plane of the triangle as shown below:</p><center>
+  <img src="../../assets/images/pate-figa1.png" alt="Pic here" style="width:50%;"/>
+  <br>
+  <span style="color:gray">(figure retrieved from <a href="https://smartech.gatech.edu/handle/1853/58265">Pate 2017</a>)</span>
+  <br><br>
+</center><p>The projection point <span>$\mathbf{p}_x$</span> (or <span>$P_B$</span> in the figure above) is calculated as <span>$\mathbf{p}_x = \mathbf{x} - \left[ (\mathbf{x} - \mathbf{p}_1)\cdot \hat{\mathbf{n}} \right] \hat{\mathbf{n}}$</span>, and the orthonormal basis <span>$(\mathbf{b}_1, \mathbf{b}_2, \mathbf{b}_3)$</span>  is completely arbitrary except for requiring <span>$\mathbf{b}_3 = \hat{\mathbf{n}}$</span>. We also define the vector directed from <span>$\mathbf{p}_x$</span> to the differential as <span>$\boldsymbol\rho \equiv \mathbf{x}&#39; - \mathbf{p}_x$</span>. We then define the following three triangles <span>$S_1, S_2, S_3$</span> that will be used for the integration:</p><center>
+  <img src="../../assets/images/pate-figa2.png" alt="Pic here" style="width:35%;"/>
+  <br>
+  <span style="color:gray">(figure retrieved from <a href="https://smartech.gatech.edu/handle/1853/58265">Pate 2017</a>)</span>
+  <br><br>
+</center><p>where, <span>$\mathbf{q}_i = \mathbf{p}_i - \mathbf{p}_x$</span>. <span>$S_1$</span> is the triangle of vertices <span>$(\mathbf{p}_x, \mathbf{p}_1, \mathbf{p}_2)$</span>, <span>$S_2$</span> is <span>$(\mathbf{p}_x, \mathbf{p}_2, \mathbf{p}_3)$</span>, and <span>$S_3$</span> is <span>$(\mathbf{p}_x, \mathbf{p}_3, \mathbf{p}_1)$</span>. More generally, the vertices of triangle <span>$S_i$</span> in the global coordinate system are <span>$(\mathbf{p}_x, \mathbf{p}_i, \mathbf{p}_{i+1})$</span>, with <span>$\mathbf{p}_{4} = \mathbf{p}_{1}$</span>. In the coordinate system with origin at <span>$\mathbf{p}_x$</span> and basis <span>$(\mathbf{b}_1, \mathbf{b}_2, \mathbf{b}_3)$</span>, the vertices of triangle <span>$S_i$</span> are</p><p class="math-container">\[\begin{align*}
+    \boxed{
+        (\mathbf{0}, \mathbf{q}_1, \mathbf{q}_{2})_i
+    =
+        (\mathbf{p}_x, \mathbf{p}_i - \mathbf{p}_x, \mathbf{p}_{i+1} - \mathbf{p}_x)
+    }
+\end{align*}\]</p><p>For each triangle <span>$S_i$</span>, Pate then proceeds to define the following orthonormal basis <span>$(\mathbf{c}_1, \mathbf{c}_2, \mathbf{c}_3)$</span>:</p><center>
+  <img src="../../assets/images/pate-figa3.png" alt="Pic here" style="width:35%;"/>
+  <br>
+  <span style="color:gray">(figure retrieved from <a href="https://smartech.gatech.edu/handle/1853/58265">Pate 2017</a>)</span>
+  <br><br>
+</center><p class="math-container">\[\begin{align*}
+            \mathbf{c}_3
+        &amp; \equiv
+            \mathbf{b}_3 = \hat{\mathbf{n}}
+    \\
+            \mathbf{c}_2
+        &amp; \equiv
+            \frac{\mathbf{q}_2 - \mathbf{q}_1}{\Vert \mathbf{q}_2 - \mathbf{q}_1 \Vert}
+    \\
+            \mathbf{c}_1
+        &amp; \equiv
+            \mathbf{c}_2 \times \mathbf{c}_3
+\end{align*}\]</p><p>The vector <span>$\boldsymbol\rho$</span> is then decomposed in this basis as</p><p class="math-container">\[\begin{align*}
+        \boldsymbol\rho
+    &amp; =
+        u \mathbf{c}_1 + v \mathbf{c}_2
+\end{align*}\]</p><p>where</p><p class="math-container">\[\begin{align*}
+        u
+    &amp; \equiv
+        \boldsymbol\rho \cdot \mathbf{c}_1
+    \\
+        v
+    &amp; \equiv
+        \boldsymbol\rho \cdot \mathbf{c}_2
+.\end{align*}\]</p><p>The full-distance vector <span>$\mathbf{r}$</span> (pointing from <span>$\mathbf{x}$</span> to the differential) is decomposed as</p><p class="math-container">\[\begin{align*}
+        \mathbf{r}
+    &amp; =
+        u \mathbf{c}_1 + v \mathbf{c}_2 - z \mathbf{c}_3
+\end{align*}\]</p><p>where</p><p class="math-container">\[\begin{align*}
+        z
+    &amp; \equiv
+        \left( \mathbf{x} - \mathbf{p}_1 \right) \cdot \hat{\mathbf{n}}
+,\end{align*}\]</p><p>while the constant strength of the vortex sheet is decomposed as</p><p class="math-container">\[\begin{align*}
+        \boldsymbol\gamma
+    &amp; =
+        a_{00} \mathbf{c}_1 + b_{00} \mathbf{c}_2
+,\end{align*}\]</p><p>where</p><p class="math-container">\[\begin{align*}
+        a_{00}
+    &amp; \equiv
+        \boldsymbol\gamma \cdot \mathbf{c}_1
+    \\
+        b_{00}
+    &amp; \equiv
+        \boldsymbol\gamma \cdot \mathbf{c}_2
+.\end{align*}\]</p><p>The numerator in the integral of the Biot-Savart law then becomes</p><p class="math-container">\[\begin{align*}
+        \mathbf{r} \times \boldsymbol\gamma
+    &amp; =
+        z b_{00} \mathbf{c}_1 - z a_{00} \mathbf{c}_2 + (u b_{00} - v a_{00}) \mathbf{c}_3
+.\end{align*}\]</p><p>In order to avoid the singularity when the denominator of the integral becomes zero, we add a small offset <span>$\delta$</span> to the distance of the denominator defining <span>$\boxed{r \equiv \sqrt{u^2 + v^2 + z^2 + \delta^2}}$</span>. We also add the same offset to the height of the target as <span>$\boxed{h \equiv \sqrt{z^2 + \delta^2}}$</span>, effectively defining a thickness for the sheet.</p><p>The integral over the original triange <span>$S$</span> can then be expressed in terms of <span>$S_1$</span>, <span>$S_2$</span>, and <span>$S_3$</span> as</p><p class="math-container">\[\begin{align*}
+        \int\limits_S
+            \frac{\mathbf{r} \times \boldsymbol\gamma}{r^3}
+        \,\mathrm{d} S&#39;
+    =
+        \sum\limits_i
+        \int\limits_{S_i}
+            \frac{\mathbf{r} \times \boldsymbol\gamma}{r^3}
+        \,\mathrm{d} S_i&#39;
+,\end{align*}\]</p><p>The integral terms <span>$H_{00}$</span>, <span>$H_{10}$</span>, and <span>$H_{01}$</span> are given in Pate 2017, Appendix A.4:</p><p class="math-container">\[\begin{align*}
+    &amp;
+           H_{00}
+       =
+           \frac{1}{h} \tan^{-1}\left.\left(
+               \frac{al}{ a^2 + h^2 + h\sqrt{l^2 + a^2 + h^2}}
+           \right)\right\rvert_{l_1}^{l_2}
+    \\ &amp;
+           H_{10}
+       =
+           \left.
+           \left[
+               \frac{l}{\sqrt{l^2 + a^2}} \ln\left( \sqrt{l^2 + a^2 + h^2} + \sqrt{l^2 + a^2} \right)
+               -
+               \ln\left( l + \sqrt{l^2 + a^2 + h^2} \right)
+               -
+               \frac{l \ln h }{\sqrt{l^2 + a^2}}
+           \right]
+           \right\rvert_{l_1}^{l_2}
+    \\ &amp;
+           H_{01}
+       =
+           \left.
+           \left\{
+               \frac{a}{\sqrt{l^2 + a^2}}
+               \left[
+                   \ln h
+                   -
+                   \ln\left( \sqrt{l^2 + a^2 + h^2} + \sqrt{l^2 + a^2} \right)
+               \right]
+           \right\}
+           \right\rvert_{l_1}^{l_2}
+\end{align*}\]</p><p>and the integral over <span>$S_i$</span> is calculated as</p><p class="math-container">\[\begin{align*}
+            \int\limits_{S_i}
+                \frac{\mathbf{r} \times \boldsymbol\gamma}{r^3}
+            \,\mathrm{d} S_i&#39;
+        =
+            z b_{00} \mathbf{c}_1
+            \underbrace{
+                \int\limits_{S_i}  
+                    \frac{1}{r^3}
+                \,\mathrm{d} S_i&#39;
+            }_{H_{00}}
+        -
+            z a_{00} \mathbf{c}_2
+            \underbrace{
+                \int\limits_{S_i}
+                    \frac{1}{r^3}
+                \,\mathrm{d} S_i&#39;
+            }_{H_{00}}
+        +
+            b_{00} \mathbf{c}_3
+            \underbrace{
+                \int\limits_{S_i}
+                    \frac{u}{r^3}
+                \,\mathrm{d} S_i&#39;
+            }_{H_{10}}
+        -
+            a_{00} \mathbf{c}_3
+            \underbrace{
+                \int\limits_{S_i}
+                    \frac{v}{r^3}
+                \,\mathrm{d} S_i&#39;
+            }_{H_{01}}
+.\end{align*}\]</p><p>The integral terms <span>$H_{00}$</span>, <span>$H_{10}$</span>, and <span>$H_{01}$</span> are given in Pate 2017, Appendix A.4:</p><p class="math-container">\[\begin{align*}
+    &amp;
+           H_{00}
+       =
+           \frac{1}{h} \tan^{-1}\left.\left(
+               \frac{al}{ a^2 + h^2 + h\sqrt{l^2 + a^2 + h^2}}
+           \right)\right\rvert_{l_1}^{l_2}
+    \\ &amp;
+           H_{10}
+       =
+           \left.
+           \left[
+               \frac{l}{\sqrt{l^2 + a^2}} \ln\left( \sqrt{l^2 + a^2 + h^2} + \sqrt{l^2 + a^2} \right)
+               -
+               \ln\left( l + \sqrt{l^2 + a^2 + h^2} \right)
+               -
+               \frac{l \ln h }{\sqrt{l^2 + a^2}}
+           \right]
+           \right\rvert_{l_1}^{l_2}
+    \\ &amp;
+           H_{01}
+       =
+           \left.
+           \left\{
+               \frac{a}{\sqrt{l^2 + a^2}}
+               \left[
+                   \ln h
+                   -
+                   \ln\left( \sqrt{l^2 + a^2 + h^2} + \sqrt{l^2 + a^2} \right)
+               \right]
+           \right\}
+           \right\rvert_{l_1}^{l_2}
+\end{align*}\]</p><p>where</p><p class="math-container">\[\begin{align*}
+    &amp;
+       a = \mathbf{q}_1 \cdot \mathbf{c}_1
+   \\ &amp;
+       l_1 = \mathbf{q}_1 \cdot \mathbf{c}_2
+   \\ &amp;
+       l_2 = \mathbf{q}_2 \cdot \mathbf{c}_2
+   \\ &amp;
+       h = \sqrt{z^2 + \delta^2}
+   \\ &amp;
+       z = \left( \mathbf{x} - \mathbf{p}_1 \right) \cdot \hat{\mathbf{n}}
+\end{align*}\]</p><blockquote><p><strong>NOTE:</strong> <span>$H_{10}$</span> and <span>$H_{01}$</span> becomes undefined when the projection of <span>$\mathbf{x}$</span> onto the panel plane lays on one of the vertices, leading to the a division of zero by zero in <span>$\frac{l}{\sqrt{l^2 + a^2}}$</span> and <span>$\frac{a}{\sqrt{l^2 + a^2}}$</span>. Both <span>$H_{10}$</span> and <span>$H_{01}$</span> actually converge to 0 in that situation, and can be manually prescibed to that value.</p></blockquote><p>Finally, the velocity induced by the sheet is evaluated as</p><p class="math-container">\[\begin{align*}
+    \boxed{
+            \mathbf{u}(\mathbf{x})
+        =
+            \frac{1}{4\pi}
+            \int\limits_S
+                \frac{\mathbf{r} \times \boldsymbol\gamma}{\Vert \mathbf{r} \Vert^3}
+            \,\mathrm{d} S&#39;
+        =
+            \frac{1}{4\pi}
+            \sum\limits_i
+            \left[
+                z b_{00} H_{00} \mathbf{c}_1
+                -
+                z a_{00} H_{00} \mathbf{c}_2
+                +
+                \left(b_{00} H_{10} - a_{00} H_{01}\right) \mathbf{c}_3
+            \right]
+    \,
+    }
+,\end{align*}\]</p><p>To speed up computation, we can use <a href="https://en.wikipedia.org/wiki/Inverse_trigonometric_functions#Arctangent_addition_formula">trigonometric</a> and <a href="https://en.wikipedia.org/wiki/Logarithm#Logarithmic_identities">logarithmic</a> identities to rewrite the formulas given by Pate as</p><p class="math-container">\[\begin{align*}
+    &amp;
+           H_{00}
+       =
+           \frac{1}{h} \tan^{-1}\left(
+               \frac{m_2 - m_1}{1 + m_1 m_2}
+           \right)
+           \qquad \text{ where } \quad
+           m_i = \frac{al_i}{ a^2 + h^2 + h\sqrt{l_i^2 + a^2 + h^2}}
+    \\ &amp;
+           H_{10}
+       =
+           \ln\left( \frac{m_2}{m_1} \right)
+           \qquad \text{ where } \quad
+           m_i = \frac{1}{l_i + \sqrt{l_i^2 + a^2 + h^2}}
+               \left(
+                   \frac{\sqrt{l_i^2 + a^2 + h^2} + \sqrt{l_i^2 + a^2}}{h}
+               \right)^\frac{l_i}{\sqrt{l_i^2 + a^2}}
+    \\ &amp;
+           H_{01}
+       =
+               -
+               \ln \left(
+                   \frac{m_2}{m_1}
+               \right)
+           \qquad \text{ where } \quad
+           m_i = \left( \frac{\sqrt{l_i^2 + a^2 + h^2} + \sqrt{l_i^2 + a^2}}{h} \right)^\frac{a}{\sqrt{l_i^2 + a^2}}
+,\end{align*}\]</p><p>thus reducing the number of <span>$\log$</span> and <span>$\tan^{-1}$</span> evaluations.</p><center>
+  <table>
+      <tr>
+          <td>
+              <img src="../../assets/images/vortexsheet-viz-w02.png" alt="Pic here" width="100%">
+          </td>
+          <td>
+              <img src="../../assets/images/vortexsheet-viz-u02.png" alt="Pic here" width="100%">
+          </td>
+      </tr>
+  </table>
+</center><center>
+    <img src="../../assets/images/constantvortexsheet01-probe1.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/constantvortexsheet01-probe2.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/constantvortexsheet01-probe3.png" alt="Pic here" width="90%">
+</center></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../semiinfnonplanardoublet/">« Non-Planar Semi-Infinite Doublet</a><a class="docs-footer-nextpage" href="../../geometry/gridgeneration/">Methods »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.25 on <span class="colophon-date" title="Friday 24 January 2025 18:42">Friday 24 January 2025</span>. Using Julia version 1.11.3.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
