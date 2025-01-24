@@ -11,20 +11,23 @@ ImplicitAD = "e7cbb90b-9b31-4eb2-a8c8-45099c074ee1"
 Krylov = "ba0b0d4f-ebba-5204-a429-3ac8c609bfb7"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LinearOperators = "5c8ed15e-5a4c-59e4-a42b-c7e8811fb125"
-Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 
 # [sources]
 # FastMultipole = {url = "https://github.com/byuflowlab/FastMultipole", rev = "d21d242d081ea8c9c19655097d83413b1f783d2d"}
 
 [compat]
+julia = "1.8"
 Dierckx = "0.5"
-GeometricTools = "2.2"
+GeometricTools = "2"
 ImplicitAD = "0.3"
 Krylov = "0.9"
+LinearOperators = "2"
+StaticArrays = "1"
+WriteVTK = "1"
 Requires = "1"
-julia = "1.6"
 
 [extras]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
