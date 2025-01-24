@@ -15,6 +15,9 @@ Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
+[sources]
+FastMultipole = {url = "https://github.com/byuflowlab/FastMultipole", rev = "d21d242d081ea8c9c19655097d83413b1f783d2d"}
+
 [compat]
 Dierckx = "0.5"
 GeometricTools = "2.2"
