@@ -168,7 +168,11 @@ function get_field(self::MultiBody, field_name::String)
     fields = [get_field(body, field_name) for body in self.bodies]
 
     # Concatenate field data
-    field_data = vcat([field["field_data"] for field in fields]...)
+    if fields[1]["entry_type"]=="system"
+        field_data = mean([field["field_data"] for field in fields])
+    else
+        field_data = vcat([field["field_data"] for field in fields]...)
+    end
 
     # Create a new field
     field = Dict( "field_name" => field_name,
@@ -215,6 +219,38 @@ function get_fieldval(self::MultiBody, field_name::String, i::Int; optargs...)
     error("Invalid method for MultiBody."*
           " Try `get_fieldval(multibody, field_name, i, entry_type)` instead")
 
+end
+
+function get_strength(self::MultiBody, i)
+
+    counter = 0
+
+    for body in self.bodies
+        offset = get_nstrengths(body)
+
+        if i>counter && i<=counter+offset
+            return get_strength(body, i-counter)
+        end
+
+        counter += offset
+    end
+end
+
+get_nstrengths(self::MultiBody) = sum(get_nstrengths(body) for body in self.bodies, init=0)
+
+function set_strength(self::MultiBody, i::Int, val)
+
+    counter = 0
+
+    for body in self.bodies
+        offset = get_nstrengths(body)
+
+        if i>counter && i<=counter+offset
+            return set_strength(body, i-counter, val)
+        end
+
+        counter += offset
+    end
 end
 
 function check_solved(self::MultiBody)

@@ -81,9 +81,10 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
         if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
 
             mesh = grid.orggrid
+            watertight = gt.isclosed(mesh)
 
             # Check that topology is consistent with the solver
-            if gt.isclosed(mesh) && E<:VortexRing && N==1
+            if watertight && E<:VortexRing && N==1
                 @warn "Requested direct vortex ring solver on an closed mesh;"*
                 " least-squares solver is recommended instead"*
                 " (use `RigidWakeBody{VortexRing, 2}`)"
@@ -99,10 +100,18 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
             (minw, maxw) = calc_minmax_winding(mesh, controlpoints)
 
             if abs(minw) > eps()^0.75 || abs(maxw) >= eps()^0.75
-                @warn "Found winding numbers other than 0, which might indicate"*
-                " that control points are inside the geometry; flipping the"*
-                " sign of `CPoffset` is recommended; (minw, maxw) ="*
-                " $((minw, maxw))"
+
+                if watertight
+                    @warn "Found winding numbers other than 0, which might indicate"*
+                    " that control points are inside the geometry; flipping the"*
+                    " sign of `CPoffset` is recommended; (minw, maxw) ="*
+                    " $((minw, maxw))"
+                else
+                    @warn "Found winding numbers other than 0, which might indicate"*
+                    " that control points are inside the geometry; however,"*
+                    " geometry is not watertight, so it might be ok."*
+                    " (minw, maxw) = $((minw, maxw))"
+                end
             end
 
         end
@@ -350,6 +359,7 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
                                 Uinfs, CPs, normals,
                                 Das, Dbs,
                                 elprescribe::AbstractArray{Tuple{Int, T}};
+                                onlycomputeG=false,
                                 optargs...
                                 ) where {T<:Number}
 
@@ -377,6 +387,10 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
     # -------------- Influence of vortex rings -------------------------
     # Calculate influence of all vortex rings
     _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
+
+    if onlycomputeG
+        return Gls, RHSls
+    end
 
     # Move influence of prescribed vortex ring elements to right-hand side
     for (eli, elval) in elprescribe
@@ -925,7 +939,8 @@ Note: It is important that the points in `trailingedge` have been previously
     panels that are at the trailing edge, or unphysically large trailing
     vortices.
 """
-function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Union{Matrix, Function};
+                            periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             ) where {G<:gt.Meshes.SimpleMesh}
 
@@ -936,6 +951,16 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
     # Identify the nodes that are on the TE line
     TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
     TEindices = [nodei for (nodei, pointi) in TEindices]
+
+    # Return if no TE nodes were identified
+    if length(TEindices)==0
+        return noshedding
+    end
+
+    # Append first node at end if expected to be periodic
+    if periodic
+        push!(TEindices, TEindices[1])
+    end
 
     # All node pairs that could form an edge at the TE
     paircandidates = zip(view(TEindices, 1:length(TEindices)-1), view(TEindices, 2:length(TEindices)))
@@ -1031,6 +1056,15 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
         display(halfedges)
         display("shedding")
         display(shedding)
+
+        points = [nodes[:, i] for i in TEindices]
+        gt.generateVTK("TEindices", points; keep_points=true)
+
+        lines = [[i-1, j-1] for (i, j) in paircandidates]
+        gt.generateVTK("paircandidates", eachcol(nodes); lines=lines)
+
+        lines = [[i-1, j-1] for (i, j) in pairs]
+        gt.generateVTK("pairs", eachcol(nodes); lines=lines)
     end
 
     return shedding

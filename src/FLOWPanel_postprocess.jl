@@ -1074,6 +1074,11 @@ function calcfield_Cp!(out::Arr1,
     # to be equal (average between upper and lower)
     if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
 
+        if typeof(body.grid) <: gt.GridTriangleSurface{gt.Meshes.SimpleMesh}
+            @warn "Kutta correction requested in calcfield_Cp, but"*
+                    " current implementation is wrong for unstructured meshes!"
+        end
+
         # Iterate over TE panels
         for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
             if pj != -1
@@ -1235,6 +1240,11 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
     # to be equal (average between upper and lower)
     # NOTE: This overwrites any previous force value instead of accumulating it
     if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
+
+        if typeof(body.grid) <: gt.GridTriangleSurface{gt.Meshes.SimpleMesh}
+            @warn "Kutta correction requested in calcfield_F, but"*
+                    " current implementation is wrong for unstructured meshes!"
+        end
 
         q = 0.5*rho*Uinf^2
 

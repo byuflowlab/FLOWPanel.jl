@@ -1,23 +1,3 @@
-```@raw html
-<center>
-  <img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna000.jpg" alt="Pic here" style="width: 100%;"/>
-</center>
-```
-
-# Import Mesh and Solve
-Here we import the mesh into FLOWPanel using
-[Meshes.jl](https://juliageometry.github.io/MeshesDocs), identify the
-trailing edge, and run the watertight solver.
-
-
-!!! info "Default OpenVSP files"
-    We have pre-generated and uploaded an OpenVSP mesh to this example so that
-    you can run this section without needing to complete the previous
-    sections. However, if you would like to use your own mesh, simply change
-    `read_path`, `meshfile`, and `trailingedges` to point to
-    your files.
-
-```julia
 #=##############################################################################
 # DESCRIPTION
     Cessna 210 aircraft. The mesh used in this analysis was created using
@@ -58,7 +38,7 @@ rotation        = RotX(0*pi/180) * RotY(0*pi/180) * RotX(0*pi/180) # Rotation to
 scaling         = 0.3048                    # Factor to scale mesh dimensions (ft -> m)
 
 trailingedges   = [                         # Gmsh files with trailing edges
-#   (  Gmsh file,                    span sorting function,   junction criterion,     closed )
+#   (  Gmsh file,                    span sorting function,   junction criterion,    closed )
     ( "cessna-TE-leftwing.msh",      X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
     ( "cessna-TE-rightwing.msh",     X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
     ( "cessna-TE-leftelevator.msh",  X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.23, false  ),
@@ -93,7 +73,8 @@ bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
 
 # ----------------- GENERATE BODY ----------------------------------------------
 body, elsprescribe = pnl.generate_multibody(bodytype, meshfiles, trailingedges, meshreader;
-                                tolerance=0.001*bref,
+                                tolerance=0.001,
+                                lengthscale=bref,
                                 read_path=read_path,
                                 offset=offset, rotation=rotation, scaling=scaling,
                                 )
@@ -192,85 +173,3 @@ vtks *= pnl.save(body, run_name; path=save_path, debug=false)
 if paraview
     run(`paraview --data=$(vtks)`)
 end
-```
-```@raw html
-<span style="font-size: 0.9em; color:gray;"><i>
-    Number of panels: 24,000. <br>
-    Run time: ~100 seconds on a Dell Precision 7760 laptop (no GPU). <br>
-</i></span>
-<br><br>
-```
-
-|                         | VSPAERO | FLOWPanel |
-| ----------------------: | :-----: | :-------: |
-| Lift ``C_L``            | 0.499   | 0.554     |
-| Drag ``C_D``            | 0.0397  | 0.0496    |
-
-
-```@raw html
-<center>
-  <img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna002.jpg" alt="Pic here" style="width: 100%;"/>
-  <img src="https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna005.jpg" alt="Pic here" style="width: 100%;"/>
-</center>
-<br><br>
-<br><br>
-```
-
-
-
-!!! details "Tip"
-    You can also automatically run this example
-    with the following command:
-    ```julia
-    import FLOWPanel as pnl
-
-    include(joinpath(pnl.examples_path, "cessna.jl"))
-    ```
-
-
-!!! details "Checklist for importing meshes"
-    1. **Check whether normals point into the body:** Using the flag
-        `debug=true` in `pnl.save(body, run_name; path=save_path, debug=true)`
-        will output the control points of the body along with the associated
-        normal vector of each panel.
-            We recommend opening the body and control points in ParaView and
-        visualizing the normals with the Glyph filter.
-            Whenever the normals are pointing into the body, the user needs
-        to flip the offset of the
-        control points with `CPoffset=-1e-14` or any other negligibly small
-        negative number. This won't flip the normals outwards, but it will flip
-        the zero-potential domain from outwards back to inside the body
-        (achieved by shifting the control points slightly into the body).
-        If you pull up the solution in ParaView and realize that the surface
-        velocity is much smaller than the freestream everywhere along the
-        aircraft, that's an indication that the normals are point inwards
-        and you need to set `CPoffset` to be negative.
-    2. **Check that the trailing edge was correctly identified:**
-        `pnl.save(body, run_name; path=save_path)` automatically outputes the
-        wake.
-            We recommend opening the body and wake in ParaView and visually
-        inspecting that the wake runs along the trailing edge line that you
-        defined under `trailingedge`.
-            If not successful, increase the resolution of `trailingedge` and tighten
-        the tolerance to something small like
-        `pnl.calc_shedding(grid, trailingedge; tolerance=0.0001*span)`.
-    3. **Choose the right solver for the geometry:**
-        Use the least-squares solver with watertight bodies
-        (`bodytype = pnl.RigidWakeBody{pnl.VortexRing, 2}`), and the direct
-        linear solver with open bodies
-        (`bodytype = pnl.RigidWakeBody{pnl.VortexRing}`). The least-squares
-        solver runs much faster in GPU
-        (`pnl.solve(body, Uinfs, Das, Dbs; GPUArray=CUDA.CuArray{Float32})`),
-        but it comes at the price of sacrificing accuracy (single precision
-        numbers as opposed to double).
-
-!!! tip "Visualization"
-    To help you practice in ParaView, we have uploaded the solution files
-    of this simulation along with the ParaView state file (`.pvsm`) that
-    we used to generate the visualizations shown above:
-    [DOWNLOAD](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna.zip)
-
-    To open in ParaView: `File → Load State → cessna.pvsm` then
-    select "Search files under specified directory" and point it to the
-    folder with the outputs of FLOWPanel.
-
