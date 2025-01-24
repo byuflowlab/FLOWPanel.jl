@@ -64,14 +64,16 @@ for header_name in ["elements", "linearsolver",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
                     "utils", "postprocess",
-                    "fmm"
+                    # "fmm"
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end
 
-# Conditionally load monitors if PyPlot is available
+
+
 function __init__()
 
+    # Conditionally load monitors if PyPlot is available
     try
         @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
@@ -88,6 +90,23 @@ function __init__()
         @warn "PyPlot is not available; monitors will not be loaded"
     end
 
+
+    # Conditionally load FMM solver if FastMultipole is available
+    try
+        @require FastMultipole="ce07d0d3-2b9f-49ba-89eb-12c800257c85" begin
+
+            for header_name in ["fmm"]
+              include("FLOWPanel_"*header_name*".jl")
+            end
+
+        end
+
+    catch e
+        @warn "FastMultipole is not available; FMM solvers will not be loaded"
+    end
+
 end
+
+
 
 end # END OF MODULE
