@@ -1,6 +1,6 @@
 #=##############################################################################
 # DESCRIPTION
-    Definition of non-lifting paneled body types (implementations of
+    Definition of lifting paneled body types (implementations of
     AbstractLiftingBody).
 
 # AUTHORSHIP

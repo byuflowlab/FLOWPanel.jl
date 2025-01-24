@@ -154,7 +154,7 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
                         [i for i in 1:body.nnodes], "node"; raise_warn=false)
     end
 
-    _out_cellindexdim = debug && length(out_cellindexdim)==0 ? [1, 2] : out_cellindexdim
+    _out_cellindexdim = debug && length(out_cellindexdim)==0 ? body.grid.dims==2 ? [1] : [1, 2] : out_cellindexdim
     for dim in _out_cellindexdim
         ndivs = gt.get_ndivscells(body.grid)[1:2]
         data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
@@ -692,7 +692,38 @@ function _calc_controlpoints!(grid::gt.GridTriangleSurface,
     end
 
 end
-function _calc_controlpoints(grid::gt.GridTriangleSurface, args...; optargs...)
+function _calc_controlpoints!(grid::gt.GridSurface2D,
+                                controlpoints, normals; off::Real=0.005,
+                                characteristiclength::Function=characteristiclength_sqrtarea)
+
+    out, coor, lin, ndivscells, cin = gt.generate_getcellt_args!(grid)
+
+    nodes = grid._nodes
+
+    for pi in 1:grid.ncells
+
+        coor[1] = pi
+        panel = gt.get_cell_t!(out, grid, coor, lin, ndivscells)
+
+        controlpoints[:, pi] .= 0
+
+        # Control point: Average point between nodes
+        for ni in panel
+            controlpoints[1, pi] += nodes[1, ni]
+            controlpoints[2, pi] += nodes[2, ni]
+        end
+        controlpoints[:, pi] /= length(panel)
+
+        l = characteristiclength(nodes, panel)
+
+        # Offset the controlpoint in the normal direction
+        controlpoints[1, pi] += off*l*normals[1, pi]
+        controlpoints[2, pi] += off*l*normals[2, pi]
+        controlpoints[3, pi] += off*l*normals[3, pi]
+    end
+
+end
+function _calc_controlpoints(grid::gt.AbstractGrid, args...; optargs...)
     controlpoints = zeros(3, grid.ncells)
     _calc_controlpoints!(grid, controlpoints, args...; optargs...)
     return controlpoints
@@ -735,6 +766,11 @@ See `calc_controlpoints!` documentation for more details.
 const calc_controlpoints = _calc_controlpoints
 
 
+function _calc_normals(grid::gt.AbstractGrid)
+    normals = zeros(3, grid.ncells)
+    _calc_normals!(grid, normals)
+    return normals
+end
 function _calc_normals!(grid::gt.GridTriangleSurface, normals)
 
     lin = LinearIndices(grid._ndivsnodes)
@@ -753,11 +789,18 @@ function _calc_normals!(grid::gt.GridTriangleSurface, normals)
         normals[3, pi] = gt._calc_n3(grid._nodes, panel)
     end
 end
-function _calc_normals(grid::gt.GridTriangleSurface)
-    normals = zeros(3, grid.ncells)
-    _calc_normals!(grid, normals)
-    return normals
+function _calc_normals!(grid::gt.GridSurface2D, normals)
+
+    out, coor, lin, ndivscells, cin = gt.generate_getcellt_args!(grid)
+
+    for pi in 1:grid.ncells
+        coor[1] = pi
+        panel = gt.get_cell_t!(out, grid, coor, lin, ndivscells)
+        normals[1, pi] = gt._calc_n1_2D(grid._nodes, panel)
+        normals[2, pi] = gt._calc_n2_2D(grid._nodes, panel)
+    end
 end
+
 function _calc_normals!(self::AbstractBody, normals; flipbyCPoffset=false)
     _calc_normals!(self.grid, normals)
     if flipbyCPoffset
@@ -826,7 +869,18 @@ function _calc_tangents!(grid::gt.GridTriangleSurface, tangents)
         tangents[3, pi] = gt._calc_t3(grid._nodes, panel)
     end
 end
-function _calc_tangents(grid::gt.GridTriangleSurface)
+function _calc_tangents!(grid::gt.GridSurface2D, tangents)
+
+    out, coor, lin, ndivscells, cin = gt.generate_getcellt_args!(grid)
+
+    for pi in 1:grid.ncells
+        coor[1] = pi
+        panel = gt.get_cell_t!(out, grid, coor, lin, ndivscells)
+        tangents[1, pi] = gt._calc_t1_2D(grid._nodes, panel)
+        tangents[2, pi] = gt._calc_t2_2D(grid._nodes, panel)
+    end
+end
+function _calc_tangents(grid::gt.AbstractGrid)
     tangents = zeros(3, grid.ncells)
     _calc_tangents!(grid, tangents)
     return tangents
@@ -873,7 +927,11 @@ function _calc_obliques!(grid::gt.GridTriangleSurface, obliques)
         obliques[3, pi] = gt._calc_o3(grid._nodes, panel)
     end
 end
-function _calc_obliques(grid::gt.GridTriangleSurface)
+function _calc_obliques!(grid::gt.GridSurface2D, obliques)
+    obliques .= 0
+    obliques[3, :] .= 1
+end
+function _calc_obliques(grid::gt.AbstractGrid)
     obliques = zeros(3, grid.ncells)
     _calc_obliques!(grid, obliques)
     return obliques

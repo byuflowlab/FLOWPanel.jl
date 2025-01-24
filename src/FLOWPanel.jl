@@ -61,7 +61,7 @@ const noshedding = zeros(Int, 6, 0)
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
-                    "abstractliftingbody", "liftingbody",
+                    "abstractliftingbody", "liftingbody", "liftingbody2D",
                     "multibody",
                     "utils", "postprocess",
                     # "fmm"
