@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v1
         with:
-          version: '1.10'
+          version: '1.11'
       - uses: julia-actions/cache@v1
       - name: Override Conda Python
         run: if [ "$RUNNER_OS" = "Linux" ]; then julia -e 'import Pkg; Pkg.add("PyCall"); ENV["PYTHON"]="/usr/bin/python3"; Pkg.build("PyCall")'; fi
