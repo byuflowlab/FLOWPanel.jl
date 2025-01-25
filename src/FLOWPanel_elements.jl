@@ -16,6 +16,9 @@ struct VortexRing <: AbstractElement end
 struct ConstantVortexSheet <: AbstractElement end
 struct UniformVortexSheet <: AbstractElement end
 
+abstract type AbstractElement2D <: AbstractElement end
+struct LinearVortex2D <: AbstractElement2D end
+
 ################################################################################
 # SOURCE ELEMENTS
 ################################################################################
@@ -1387,6 +1390,102 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
             @inbounds out[1, ti] += V1
             @inbounds out[2, ti] += V2
             @inbounds out[3, ti] += V3
+        end
+
+    end
+
+end
+
+
+
+
+
+
+
+
+################################################################################
+# 2D ELEMENTS
+################################################################################
+"""
+Computes the velocity induced by a 2D panel of vertices `nodes[:, panel]` and
+linear vortex strength (varying linearly between `gamma1` and `gamma2`) on the
+targets `targets`. It adds the velocity at the i-th target to out[i].
+
+Implementation of equations in Katz and Plotkin's Secs. 10.2.3, 10.3.3, and
+11.4.2.
+"""
+function U_2D_linear_vortex(nodes::Arr1, panel,
+                                gamma1::Number, gamma2::Number,
+                                targets::Arr2, out::Arr3;
+                                dot_with=nothing,
+                                offset=1e-8
+                              ) where{T1, Arr1<:AbstractMatrix{T1},
+                                      T2, Arr2<:AbstractMatrix{T2},
+                                      T3, Arr3<:AbstractArray{T3}}
+
+    nt = size(targets, 2)                   # Number of targets
+    no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    nn = length(panel)                      # Number of nodes
+
+    @assert nn==2 "Invalid panel with $(nn) nodes: Expected only 2."
+    @assert no==nt "Invalid `out` argument. Expected size $(nt), got $(no)."
+
+    # Normal and tangent vectors
+    n1, n2 = gt._calc_n1_2D(nodes, panel), gt._calc_n2_2D(nodes, panel)
+    t1, t2 = gt._calc_t1_2D(nodes, panel), gt._calc_t2_2D(nodes, panel)
+
+    @inbounds p1 = panel[1]                    # Index of first vertex
+    @inbounds p2 = panel[2]                    # Index of second vertex
+
+    # Iterate over targets
+    for p3 in 1:nt
+
+        # Projection of points onto the coordinate system of the panel
+        @inbounds begin
+            x1 = 0
+            x2 = (nodes[1, p2] - nodes[1, p1])*t1 + (nodes[2, p2] - nodes[2, p1])*t2
+
+            x = (targets[1, p3] - nodes[1, p1])*t1 + (targets[2, p3] - nodes[2, p1])*t2
+            y = (targets[1, p3] - nodes[1, p1])*n1 + (targets[2, p3] - nodes[2, p1])*n2
+
+            r1squared = (targets[1, p3] - nodes[1, p1])^2 + (targets[2, p3] - nodes[2, p1])^2
+            r2squared = (targets[1, p3] - nodes[1, p2])^2 + (targets[2, p3] - nodes[2, p2])^2
+        end
+
+        # Offset x slightly to avoid random behavior with floating point
+        # precision at the vertices (x=x1 or x=x2 while y=0)
+        if abs(y) <= 1e2*eps()
+            if abs(x - x1) <= 1e2*eps()
+                x += offset
+            elseif abs(x - x2) <= 1e2*eps()
+                x -= offset
+            end
+        end
+
+        # Offset y slightly to avoid random behavior with floating point
+        # precision at the panel surface (y=0)
+        y += offset
+
+        # Intermediate calcs
+        dgamma = gamma2 - gamma1
+        d = x2 - x1
+        theta1 = atan(y, x - x1)
+        theta2 = atan(y, x - x2)
+        logr1r2 = 0.5*log(r1squared/r2squared)
+
+        # Velocity components
+        u = -dgamma*y/d*logr1r2 + (gamma1 + dgamma*(x - x1)/d)*(theta2 - theta1)
+        u /= 2*pi
+
+        v = -dgamma*y/d*(theta2 - theta1) - (gamma1 + dgamma*(x - x1)/d)*logr1r2 + dgamma
+        v /= 2*pi
+
+        # Transform velocity from panel reference system to global
+        if dot_with!=nothing
+            @inbounds out[p3] += (u*t1 + v*n1)*dot_with[1, p3] + (u*t2 + v*n2)*dot_with[2, p3]
+        else
+            @inbounds out[1, p3] += u*t1 + v*n1
+            @inbounds out[2, p3] += u*t2 + v*n2
         end
 
     end
