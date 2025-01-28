@@ -1464,20 +1464,24 @@ function U_2D_linear_vortex(nodes::Arr1, panel,
 
         # Offset y slightly to avoid random behavior with floating point
         # precision at the panel surface (y=0)
-        y += offset
+        y += abs(y) > 1e2*eps() ? sign(y)*offset : offset
 
         # Intermediate calcs
         dgamma = gamma2 - gamma1
         d = x2 - x1
         theta1 = atan(y, x - x1)
         theta2 = atan(y, x - x2)
-        logr1r2 = 0.5*log(r1squared/r2squared)
+        # logr1r2 = 0.5*log(r1squared/r2squared)
+
+        # Offset r1 and r2 slightly to avoid singularities at r1=0 and r2=0
+        logr1r2 = 0.5*log((r1squared+offset^2)/(r2squared+offset^2))
 
         # Velocity components
         u = -dgamma*y/d*logr1r2 + (gamma1 + dgamma*(x - x1)/d)*(theta2 - theta1)
         u /= 2*pi
 
         v = -dgamma*y/d*(theta2 - theta1) - (gamma1 + dgamma*(x - x1)/d)*logr1r2 + dgamma
+        # v = dgamma*y/d*(theta2 - theta1) - (gamma1 + dgamma*(x - x1)/d)*logr1r2 + dgamma
         v /= 2*pi
 
         # Transform velocity from panel reference system to global
