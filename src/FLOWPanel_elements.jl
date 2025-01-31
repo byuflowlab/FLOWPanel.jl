@@ -1484,6 +1484,13 @@ function U_2D_linear_vortex(nodes::Arr1, panel,
         # v = dgamma*y/d*(theta2 - theta1) - (gamma1 + dgamma*(x - x1)/d)*logr1r2 + dgamma
         v /= 2*pi
 
+        # Flip components to have +gamma vortex panel aligned with z-axis
+        # (this effectively multiplies all of Katz and Plotkin's eqs by -1)
+        # NOTE: Without this, then the +gamma vortex panel is aligned with -z
+        #       and the velocity at y=+0 becomes +gamma/2, which is desirable
+        # u *= -1
+        # v *= -1
+
         # Transform velocity from panel reference system to global
         if dot_with!=nothing
             @inbounds out[p3] += (u*t1 + v*n1)*dot_with[1, p3] + (u*t2 + v*n2)*dot_with[2, p3]
