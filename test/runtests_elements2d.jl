@@ -57,19 +57,42 @@ v_lvl = 0
                   )
     ntargets = size(targets, 2)
 
-    # Array where to store velocities
-    Us = zeros(3, ntargets)
+    @testset verbose=verbose "Linear-strength vortex" begin
 
-    # Calculate velocities
-    pnl.U_2D_linear_vortex(nodes, panel,
-                                gamma1, gamma2,
-                                targets, Us;
-                                offset=offset
-                              )
+        # Array where to store velocities
+        Us = zeros(3, ntargets)
 
-    @test abs(pnl.dot(Us[:, 3], tangent) - (gamma1 + gamma2)/4) <= offset
-    @test abs(pnl.dot(Us[:, 3], normal) - (gamma2 - gamma1)/(2*pi)) <= offset
-    @test abs(pnl.dot(Us[:, 1], tangent) - gamma1/2) <= 1e7*offset
-    @test abs(pnl.dot(Us[:, 2], tangent) - gamma2/2) <= 1e7*offset
+        # Calculate velocities
+        pnl.U_2D_linear_vortex(nodes, panel,
+                                    gamma1, gamma2,
+                                    targets, Us;
+                                    offset=offset
+                                  )
+
+        @test abs(pnl.dot(Us[:, 3], tangent) - (gamma1 + gamma2)/4) <= offset
+        @test abs(pnl.dot(Us[:, 3], normal) - (gamma2 - gamma1)/(2*pi)) <= offset
+        @test abs(pnl.dot(Us[:, 1], tangent) - gamma1/2) <= 1e7*offset
+        @test abs(pnl.dot(Us[:, 2], tangent) - gamma2/2) <= 1e7*offset
+
+    end
+
+    @testset verbose=verbose "Linear-strength source" begin
+
+        # Array where to store velocities
+        Us = zeros(3, ntargets)
+
+        # Calculate velocities
+        pnl.U_2D_linear_source(nodes, panel,
+                                    gamma1, gamma2,
+                                    targets, Us;
+                                    offset=offset
+                                  )
+
+        @test abs(pnl.dot(Us[:, 3], normal) - (gamma1 + gamma2)/4) <= offset
+        @test abs(pnl.dot(Us[:, 3], tangent) + (gamma2 - gamma1)/(2*pi)) <= offset
+        @test abs(pnl.dot(Us[:, 1], normal) - gamma1/2) <= 1e7*offset
+        @test abs(pnl.dot(Us[:, 2], normal) - gamma2/2) <= 1e7*offset
+
+    end
 
 end
