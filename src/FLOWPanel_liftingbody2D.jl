@@ -13,7 +13,7 @@
 # 2D BODY TYPE
 ################################################################################
 
-struct Body2D{E, N} <: AbstractBody{E, N}
+struct Body2D{E<:AbstractElement2D, N} <: AbstractBody{E, N}
 
     # User inputs
     grid::gt.GridSurface2D                       # Paneled geometry
@@ -41,18 +41,30 @@ struct Body2D{E, N} <: AbstractBody{E, N}
                             strength=zeros(grid.ncells, N),
                             CPoffset=1e-14,
                             kerneloffset=1e-8,
-                            kernelcutoff=1e-14,
                             characteristiclength=characteristiclength_unitary
                             ) where {E, N}
+
+        check2D(E, N, grid)
 
         return new(grid,
                     nnodes, ncells,
                     fields,
                     Oaxis, O,
                     strength,
-                    CPoffset, kerneloffset, kernelcutoff, characteristiclength)
+                    CPoffset, kerneloffset, characteristiclength)
+    end
+
+    function Body2D{E}(args...; optargs...) where E
+        return Body2D{E, multiplicity(E)}(args...; optargs...)
     end
 end
 
 
 save(body::Body2D, args...; optargs...) = save_base(body, args...; optargs...)
+
+function check2D(E::Type, N::Int, grid)
+
+    if E <: Union{pnl.LinearSource2D, pnl.LinearVortex2D} && N==2
+
+    end
+end

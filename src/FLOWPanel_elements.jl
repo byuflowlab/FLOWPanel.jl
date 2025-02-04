@@ -17,8 +17,35 @@ struct ConstantVortexSheet <: AbstractElement end
 struct UniformVortexSheet <: AbstractElement end
 
 abstract type AbstractElement2D <: AbstractElement end
+struct ConstantVortex2D <: AbstractElement2D end
+struct ConstantSource2D <: AbstractElement2D end
 struct LinearVortex2D <: AbstractElement2D end
 struct LinearSource2D <: AbstractElement2D end
+
+"Count the multiplicity in an Union of AbstractElement"
+function multiplicity(type::Type)
+
+    if type isa Union
+        return _count(type.a) + _count(type.b)
+
+    elseif type <: ConstantVortexSheet
+        return 2
+
+    elseif type <: LinearVortex2D || type <: LinearSource2D
+        return 2
+
+    elseif type <: AbstractElement
+        return 1
+
+    elseif type isa Core.TypeofBottom
+        return 0
+
+    else
+        return error("Undefined multiplicity of type $(type)")
+    end
+end
+
+const _count = multiplicity
 
 ################################################################################
 # SOURCE ELEMENTS
@@ -1507,6 +1534,8 @@ function U_2D_linear_vortex(nodes::Arr1, panel,
 
 end
 
+U_2D_constant_vortex(nodes, panel, gamma, args...; optargs...) = U_2D_linear_vortex(nodes, panel, gamma, gamma, args... ; optargs...)
+
 
 """
 Computes the velocity induced by a 2D panel of vertices `nodes[:, panel]` and
@@ -1601,3 +1630,5 @@ function U_2D_linear_source(nodes::Arr1, panel,
     end
 
 end
+
+U_2D_constant_source(nodes, panel, gamma, args...; optargs...) = U_2D_linear_source(nodes, panel, gamma, gamma, args... ; optargs...)

@@ -1044,15 +1044,4 @@ function _solvedflag(self::AbstractBody, val::Bool)
     # Add solved flag
     add_field(self, "solved", "scalar", [val], "system")
 end
-
-"Count the number of types in an Union type"
-function _count(type::Type)
-    if type isa Union
-        return _count(type.a) + _count(type.b)
-    elseif type isa Core.TypeofBottom
-        return 0
-    else
-        return 1
-    end
-end
 ##### END OF ABSTRACT BODY #####################################################
