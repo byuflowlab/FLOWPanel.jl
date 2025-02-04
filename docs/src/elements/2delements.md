@@ -11,7 +11,7 @@ components as follows.
 ### Constant Strength
 
 Given a vortex element laying between points $\mathbf{p}_1$ and $\mathbf{p}_2$ and constant strength $\gamma_a$,
-we wish to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
+we want to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
 
 The induced velocity is given in Eqs. (10.39) and (10.40) of Katz & Plotkin as follows:
 
@@ -60,7 +60,7 @@ Given a vortex element laying between points $\mathbf{p}_1$ and $\mathbf{p}_2$ a
     \gamma(x) = \gamma_b x
 ,\end{align*}
 ```
-we wish to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
+we want to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
 
 The induced velocity is given in Eqs. (10.72) and (10.73) of Katz & Plotkin as follows:
 
@@ -123,12 +123,13 @@ The induced velocity is given in Eqs. (10.72) and (10.73) of Katz & Plotkin as f
       <tr>
           <td>
             <center>
-                <img src="../../assets/images/2Dlinearvortex.png" alt="Pic here" width="30%">
+                <img src="../../assets/images/2Dlinearvortex.png" alt="Pic here" width="60%">
               </center>
           </td>
       </tr>
   </table>
 </center>
+<br>
 ```
 
 Given a vortex element laying between points $\mathbf{p}_1$ and $\mathbf{p}_2$ and strength varying linearly from $\gamma_1$ to $\gamma_2$ as,
@@ -137,7 +138,7 @@ Given a vortex element laying between points $\mathbf{p}_1$ and $\mathbf{p}_2$ a
     \gamma(x) = \gamma_1 + (\gamma_2 - \gamma_1) \frac{x - x_1}{x_2 - x_1}
 \end{align*}
 ```
-we wish to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
+we want to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
 
 Notice that the strength distribution can be reduced to a superposition of the two previous cases with
 ```math
@@ -154,7 +155,7 @@ Notice that the strength distribution can be reduced to a superposition of the t
 \end{align*}
 ```
 
-Expressing $\mathrm{p}_1$, $\mathrm{p}_2$, and $\mathrm{p}_3$ in terms of the element's coordinate system shown above, the velocity induced at $\mathrm{p}_3$ by the constant-strength component is
+Expressing $\mathbf{p}_1$, $\mathbf{p}_2$, and $\mathbf{p}_3$ in terms of the element's coordinate system shown above, the velocity induced at $\mathbf{p}_3$ by the constant-strength component is
 ```math
 \begin{align*}
         u_\mathrm{const}
@@ -373,5 +374,179 @@ Furthermore, at the center of the panel ($x = \frac{x_1 + x_2}{2}$)
 <center>
     <img src="../../assets/images/vortexpanel-viz002-probe1.png" alt="Pic here" width="90%">
     <img src="../../assets/images/vortexpanel-viz002-probe2.png" alt="Pic here" width="90%">
+</center>
+```
+
+
+
+
+## Linear-Strength Source Panel
+*(Adapted from Katz and Plotkin's Low Speed Aerodynamics, Secs 10.2.1 and 10.3.1)*
+
+
+Given a source element laying between points $\mathbf{p}_1$ and $\mathbf{p}_2$
+and strength varying linearly from $\sigma_1$ to $\sigma_2$ as,
+```math
+\begin{align*}
+    \sigma(x) = \sigma_1 + (\sigma_2 - \sigma_1) \frac{x - x_1}{x_2 - x_1}
+\end{align*}
+```
+we want to calculate the velocity induced by the element at an arbitrary point $\mathbf{p}_3$.
+
+Similarly to how we constructed the compound linear vortex element, we use Eqs.
+(10.20), (10.21), (10.48), and (10.49) from Katz and Plotkin to arrive to
+```math
+\begin{align*}
+    \bullet \quad &
+        u
+    =
+        \frac{1}{2\pi} \left( \sigma_1 + \Delta\sigma \frac{x - x_1}{d} \right)
+        \ln\frac{r_1}{r_2}
+        -
+        \frac{\Delta\sigma}{2\pi}
+        +
+        \frac{\Delta\sigma}{2\pi}
+        \frac{y}{d}
+        \left( \theta_2 - \theta_1 \right)
+    \\
+    \bullet \quad &
+        v
+    =
+        \frac{1}{2\pi} \left( \sigma_1 + \Delta\sigma \frac{x - x_1}{d} \right)
+        \left( \theta_2 - \theta_1 \right)
+        -
+        \frac{\Delta\sigma}{2\pi}
+        \frac{y}{d} \ln\frac{r_1}{r_2}
+    \\
+    \bullet \quad &
+        \Delta \sigma
+    =
+        \sigma_2 - \sigma_1
+    \\
+    \bullet \quad &
+        d
+    =
+        x_2 - x_1
+    \\
+    \bullet \quad &
+        \theta_1
+    =
+        \tan^{-1}\frac{y}{x-x_1}
+    \\
+    \bullet \quad &
+        \theta_2
+    =
+        \tan^{-1}\frac{y}{x-x_2}
+\end{align*}
+```
+where $r_1 \equiv \Vert \mathbf{p}_3 - \mathbf{p}_1 \Vert$ and $r_2 \equiv \Vert \mathbf{p}_3 - \mathbf{p}_2 \Vert$.
+
+Comparing against the linear vortex element, notice the relations $u_\mathrm{source} = -v_\mathrm{vortex}$ and $v_\mathrm{source} = u_\mathrm{vortex}$, which is equivalent to $\mathbf{u}_\mathrm{source} = \mathbf{\hat{k}} \times \mathbf{u}_\mathrm{vortex}$ in the panel reference frame.
+
+
+> **NOTES:**
+> the same singularities and regularization of the linear vortex element apply to
+> the linear source element since
+> $\mathbf{u}_\mathrm{source} = \mathbf{\hat{k}} \times \mathbf{u}_\mathrm{vortex}$.
+
+
+We now evaluate the velocity at $y = 0$ to obtain the velocity induced by the panel on itself.
+Notice that $\theta_1$ and $\theta_2$ are the angles from the vertices to the probe, which, at $y = \pm 0$, they are $0$ outside of the panel and $\pm \pi$ on between the panel. Hence, we get
+```math
+\begin{align*}
+        u(x, 0)
+    & =
+        \frac{1}{2\pi}
+        \left( \sigma_1 + \Delta \sigma \frac{x-x_1}{d} \right)
+        \ln\frac{r_1}{r_2}
+        -
+        \frac{\Delta \sigma}{2\pi}
+    \\
+          v(x, \pm 0)
+      & =
+          \pm \frac{\sigma_1}{2}
+          \pm \frac{\Delta\sigma}{2}\frac{x - x_1}{d}
+\end{align*}
+```
+Furthermore, at the center of the panel ($x = \frac{x_1 + x_2}{2}$)
+```math
+\begin{align*}
+        u(\frac{x_1 + x_2}{2}, 0)
+    & =
+        - \frac{\sigma_2 - \sigma_1}{2\pi}
+    \\
+        v(\frac{x_1 + x_2}{2}, \pm 0)
+    & =
+        \pm \frac{\sigma_1 + \sigma_2}{4}
+\end{align*}
+```
+
+
+
+
+
+```@raw html
+<center>
+  <br><i>2D source panel with $\sigma_1 = 1$ and $\sigma_2 = 1$</i>
+  <table>
+      <tr>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-constant000.png" alt="Pic here" width="100%">
+          </td>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-constant001.png" alt="Pic here" width="100%">
+          </td>
+      </tr>
+  </table>
+</center>
+<center>
+    <img src="../../assets/images/sourcepanel-viz000-probe1.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/sourcepanel-viz000-probe2.png" alt="Pic here" width="90%">
+</center>
+<br>
+```
+
+
+
+```@raw html
+<center>
+  <br><i>2D vortex panel with $\sigma_1 = 0$ and $\sigma_2 = 1$</i>
+  <table>
+      <tr>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-linear000.png" alt="Pic here" width="100%">
+          </td>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-linear001.png" alt="Pic here" width="100%">
+          </td>
+      </tr>
+  </table>
+</center>
+<center>
+    <img src="../../assets/images/sourcepanel-viz001-probe1.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/sourcepanel-viz001-probe2.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/sourcepanel-viz001-probe3.png" alt="Pic here" width="90%">
+</center>
+<br>
+```
+
+
+```@raw html
+<center>
+  <br><i>2D vortex panel with $\sigma_1 = -1$ and $\sigma_2 = 1$</i>
+  <table>
+      <tr>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-compound000.png" alt="Pic here" width="100%">
+          </td>
+          <td>
+              <img src="../../assets/images/sourcepanel2d-compound002.png" alt="Pic here" width="100%">
+          </td>
+      </tr>
+  </table>
+</center>
+<center>
+    <img src="../../assets/images/sourcepanel-viz002-probe1.png" alt="Pic here" width="90%">
+    <img src="../../assets/images/sourcepanel-viz002-probe2.png" alt="Pic here" width="90%">
 </center>
 ```
