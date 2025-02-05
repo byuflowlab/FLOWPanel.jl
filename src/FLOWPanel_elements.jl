@@ -17,6 +17,7 @@ struct ConstantVortexSheet <: AbstractElement end
 struct UniformVortexSheet <: AbstractElement end
 
 abstract type AbstractElement2D <: AbstractElement end
+struct UniformVortex2D <: AbstractElement2D end
 struct ConstantVortex2D <: AbstractElement2D end
 struct ConstantSource2D <: AbstractElement2D end
 struct LinearVortex2D <: AbstractElement2D end
@@ -1446,14 +1447,12 @@ NOTE: `offset` must be no smaller than 1e-10 or you may encounter some random
 behavior on the velocity at the vertix positions due to floating point
 precision randomness.
 """
-function U_2D_linear_vortex(nodes::Arr1, panel,
+function U_2D_linear_vortex(nodes::AbstractMatrix{T1}, panel,
                                 gamma1::Number, gamma2::Number,
-                                targets::Arr2, out::Arr3;
+                                targets::AbstractMatrix{T2}, out::AbstractArray{T3};
                                 dot_with=nothing,
                                 offset=1e-8
-                              ) where{T1, Arr1<:AbstractMatrix{T1},
-                                      T2, Arr2<:AbstractMatrix{T2},
-                                      T3, Arr3<:AbstractArray{T3}}
+                              ) where{T1, T2, T3}
 
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
@@ -1548,14 +1547,12 @@ NOTE: `offset` must be no smaller than 1e-10 or you may encounter some random
 behavior on the velocity at the vertix positions due to floating point
 precision randomness.
 """
-function U_2D_linear_source(nodes::Arr1, panel,
+function U_2D_linear_source(nodes::AbstractMatrix{T1}, panel,
                                 sigma1::Number, sigma2::Number,
-                                targets::Arr2, out::Arr3;
+                                targets::AbstractMatrix{T2}, out::AbstractArray{T3};
                                 dot_with=nothing,
                                 offset=1e-8
-                              ) where{T1, Arr1<:AbstractMatrix{T1},
-                                      T2, Arr2<:AbstractMatrix{T2},
-                                      T3, Arr3<:AbstractArray{T3}}
+                              ) where{T1, T2, T3}
 
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
