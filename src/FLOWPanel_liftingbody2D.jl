@@ -110,10 +110,18 @@ save(body::Body2D, args...; optargs...) = save_base(body, args...; optargs...)
 
 
 ################################################################################
-# HESS-SMITH SOLVER (SOURCE DISTRIBUTION + UNIFORM VORTEX + KUTTA CONDITION)
+# ORIGINAL HESS-SMITH SOLVER (CONSTANT SOURCE + UNIFORM VORTEX + KUTTA CONDITION)
 ################################################################################
 # See https://github.com/EdoAlvarezR/MyPanel2D/blob/master/docs/MyPanel2D_documentation.ipynb
-function solve(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
+
+HessSmithBodies = Union{
+                            Body2D{Union{ConstantSource2D, UniformVortex2D}, 2},
+                            Body2D{Union{LinearSource2D, UniformVortex2D}, 2}
+                        }
+
+_get_Gdims(body::HessSmithBodies) = (body.ncells+1, body.ncells+1)
+
+function solve(body::HessSmithBodies,
                 Uinfs::AbstractMatrix{T};
                 solver=solve_ludiv!, solver_optargs=(),
                 kuttapanels=(1, body.ncells),
@@ -158,23 +166,156 @@ function solve(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
 end
 
 
-function set_solution(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
-                        strengths, Uinfs)
+function set_solution(body::HessSmithBodies, strengths, Uinfs)
 
     @. body.strength[:, 1] = strengths[1:end-1]
     @. body.strength[:, 2] = strengths[end]
 
     _solvedflag(body, true)
     add_field(body, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    # add_field(body, "sigma", "scalar", vcat(view(body.strength, :, 1), body.strength[1, 1]), "node")
-    # add_field(body, "gamma", "scalar", vcat(view(body.strength, :, 2), body.strength[1, 2]), "node")
-    add_field(body, "sigma", "scalar", view(body.strength, :, 1), "node")
-    add_field(body, "gamma", "scalar", view(body.strength, :, 2), "node")
-    add_field(body, "sigma-cell", "scalar", view(body.strength, :, 1), "cell")
-    add_field(body, "gamma-cell", "scalar", view(body.strength, :, 2), "cell")
+    add_field(body, "sigma", "scalar", view(body.strength, :, 1), "cell")
+    add_field(body, "gamma", "scalar", view(body.strength, :, 2), "cell")
 end
 
 
+function _G_U!(body::Body2D{Union{ConstantSource2D, UniformVortex2D}, 2},
+                G::AbstractMatrix, CPs::AbstractMatrix,
+                normals::AbstractMatrix, tangents::AbstractMatrix,
+                kuttapanels::Tuple{Int, Int}; optargs...
+                )
+
+    N = body.ncells+1
+    M = size(CPs, 2)+1
+
+    @assert size(G, 1)==M && size(G, 2)==N ""*
+        "Matrix G with invalid dimensions; got $(size(G)), expected $((M, N))."
+
+    @assert size(normals, 2)==size(CPs, 2) ""*
+        "normals matrix with invalid dimensions; got $(size(normals)), expected $((2, M))."
+
+    # Build geometric matrix from panel contributions
+    panels = 1:body.ncells
+    # chunks = collect(Iterators.partition(panels, max(length(panels) ÷ Threads.nthreads(), 3*Threads.nthreads())))
+
+    # Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
+
+        # Pre-allocate memory for panel calculation
+        out, coor, lin, ndivscells, cin = gt.generate_getcellt_args!(body.grid)
+
+        # Impose no-flow-throug condition
+        # for pj in chunk                       # Iterate over panels
+        for pj in panels
+
+            coor[1] = pj
+            panel = gt.get_cell_t!(out, body.grid, coor, lin, ndivscells)
+
+            # Add contribution of source panel on every target
+            U_2D_constant_source(
+                                body.grid._nodes,               # All nodes
+                                panel,                          # Indices of nodes that make this panel
+                                1.0,                            # Unitary strength
+                                CPs,                            # Targets
+                                view(G, 1:M-1, pj);             # Add velocity of j-th panel on every CP
+                                dot_with=normals,               # Normal of every CP
+                                offset=body.kerneloffset,       # Offset of kernel to avoid singularities
+                                optargs...
+                                )
+
+            # Add contribution of vortex panel on every target
+            U_2D_constant_vortex(
+                                body.grid._nodes,               # All nodes
+                                panel,                          # Indices of nodes that make this panel
+                                1.0,                            # Unitary strength
+                                CPs,                            # Targets
+                                view(G, 1:M-1, N);              # Add velocity of j-th panel on every CP
+                                dot_with=normals,               # Normal of every CP
+                                offset=body.kerneloffset,       # Offset of kernel to avoid singularities
+                                optargs...
+                                )
+         end
+
+         # Impose Kutta condition
+         # for pj in chunk                       # Iterate over panels
+         for pj in panels
+
+             coor[1] = pj
+             panel = gt.get_cell_t!(out, body.grid, coor, lin, ndivscells)
+
+             for kuttapanel in kuttapanels     # Iterate over Kutta panels
+
+                 kCP = view(CPs, :, kuttapanel:kuttapanel)
+                 ktangent = view(tangents, :, kuttapanel:kuttapanel)
+
+                 # Add contribution of source panel on Kutta panel
+                 U_2D_constant_source(
+                                     body.grid._nodes,               # All nodes
+                                     panel,                          # Indices of nodes that make this panel
+                                     1.0,                            # Unitary strength
+                                     kCP,                            # Kutta panel
+                                     view(G, M, pj);                 # Add velocity of j-th panel on Kutta panel
+                                     dot_with=ktangent,              # Tangent of Kutta panel
+                                     offset=body.kerneloffset,       # Offset of kernel to avoid singularities
+                                     optargs...
+                                     )
+
+                 # Add contribution of vortex panel on Kutta panel
+                 U_2D_constant_vortex(
+                                     body.grid._nodes,               # All nodes
+                                     panel,                          # Indices of nodes that make this panel
+                                     1.0,                            # Unitary strength
+                                     kCP,                            # Kutta panel
+                                     view(G, M, N);                  # Add velocity of j-th panel on Kutta panel
+                                     dot_with=ktangent,              # Tangent of Kutta panel
+                                     offset=body.kerneloffset,       # Offset of kernel to avoid singularities
+                                     optargs...
+                                     )
+             end
+          end
+
+    # end
+
+end
+
+function _Uind!(body::Body2D{Union{ConstantSource2D, UniformVortex2D}, 2},
+                                                    targets, out; optargs...)
+
+    # Pre-allocate memory for panel calculation
+    pout, coor, lin, ndivscells, cin = gt.generate_getcellt_args!(body.grid)
+
+    # Iterates over panels
+    for i in 1:body.ncells
+
+        coor[1] = i
+        panel = gt.get_cell_t!(pout, body.grid, coor, lin, ndivscells)
+
+        # Velocity of i-th panel on every target
+        U_2D_constant_source(
+                            body.grid._nodes,                  # All nodes
+                            panel,                             # Indices of nodes that make this panel
+                            body.strength[i, 1],               # Source strength
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            offset=body.kerneloffset,          # Offset of kernel to avoid singularities
+                            optargs...
+                         )
+
+         U_2D_constant_vortex(
+                             body.grid._nodes,                  # All nodes
+                             panel,                             # Indices of nodes that make this panel
+                             body.strength[i, 2],               # Vortex strength
+                             targets,                           # Targets
+                             out;                               # Outputs
+                             offset=body.kerneloffset,          # Offset of kernel to avoid singularities
+                             optargs...
+                          )
+    end
+end
+
+
+
+################################################################################
+# MODIFIED HESS-SMITH SOLVER (LINEAR SOURCE + UNIFORM VORTEX + KUTTA CONDITION)
+################################################################################
 function _G_U!(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
                 G::AbstractMatrix, CPs::AbstractMatrix,
                 normals::AbstractMatrix, tangents::AbstractMatrix,
@@ -301,8 +442,6 @@ function _G_U!(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
 
 end
 
-_get_Gdims(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2}) = (body.ncells+1, body.ncells+1)
-
 function _Uind!(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
                                                     targets, out; optargs...)
 
@@ -330,7 +469,7 @@ function _Uind!(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
          U_2D_constant_vortex(
                              body.grid._nodes,                  # All nodes
                              panel,                             # Indices of nodes that make this panel
-                             body.strength[i, 2],               # Strength at first node
+                             body.strength[i, 2],               # Vortex strength
                              targets,                           # Targets
                              out;                               # Outputs
                              offset=body.kerneloffset,          # Offset of kernel to avoid singularities
@@ -338,9 +477,6 @@ function _Uind!(body::Body2D{Union{LinearSource2D, UniformVortex2D}, 2},
                           )
     end
 end
-
-
-
 
 #### COMMON FUNCTIONS ###########################################################
 function _phi!(body::Body2D, args...; optargs...)
