@@ -12,7 +12,19 @@
 ################################################################################
 # 2D BODY TYPE
 ################################################################################
+"""
+Numerical observations:
+* LinearSource2D bodies seem to be numerically ill conditioned on closed bodies.
+    This is probably related to the fact that a linear source actually resembles
+    a point vortex, so closing the body leads to the reduction in degrees of
+    freedom that we see in a watertight body with point vortex elements.
+    To avoid that, make sure that the body is open and use `check_mesh=false`.
 
+* ConstantSource2D seems to be have a similar ill conditioning for some reason.
+    I have observed that leaving the TE open or making the TE sharp and singular
+    (meaning, the TE points very close to each other) lead to good results.
+
+"""
 struct Body2D{E<:AbstractElement2D, N} <: AbstractBody{E, N}
 
     # User inputs
@@ -148,8 +160,9 @@ function solve(body::HessSmithBodies,
     # NOTE: Here we make the RHS negative so we don't need to flip the sign of
     #       the LHS row
     push!(RHS, 0)
-    RHS[end] -= dot(tangents[:, kuttapanels[1]], Uinfs[:, [1]])
-    RHS[end] -= dot(tangents[:, kuttapanels[2]], Uinfs[:, [2]])
+    for kpi in kuttapanels
+        RHS[end] -= dot(tangents[:, kpi], Uinfs[:, kpi])
+    end
 
     # Solve system of equations
     strengths = GPUArray(undef, body.ncells+1)
@@ -271,6 +284,13 @@ function _G_U!(body::Body2D{Union{ConstantSource2D, UniformVortex2D}, 2},
                                      )
              end
           end
+
+          # # Add self-induced component of surface velocity (-∇μ/2 = -γ/2) to
+          # # the Kutta condition
+          # for kuttapanel in kuttapanels     # Iterate over Kutta panels
+          #     G[M, N] += -1/2
+          #     # G[M, N] -= 1
+          # end
 
     # end
 
