@@ -60,13 +60,14 @@ FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:
 
 FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:Any,1,3}, branch, bodies_index, harmonics, expansion_order) = FastMultipole.body_to_multipole!(FastMultipole.Panel{Dipole}, system, branch, bodies_index, harmonics, expansion_order)
 
-@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractRotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
+function convolve_kernel!(target_system, target_index, panel, kernel::AbstractRotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
     # rotate into source panel frame
-    Rprime, Rxprime, Ryprime, Rzprime = rotate_to_panel(panel)
+    R = rotate_to_panel(panel)
 
     # iterate over targets
     for i_target in target_index
-        potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, Rprime, Rxprime, Ryprime, Rzprime, derivatives_switch)
+
+        potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel.vertices, panel.control_point, panel.strength, kernel, R, derivatives_switch)
         if PS
             target_system[i_target, FastMultipole.SCALAR_POTENTIAL] += potential
         end
@@ -83,7 +84,7 @@ FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:
 
 end
 
-@inline function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
+function convolve_kernel!(target_system, target_index, panel, kernel::AbstractUnrotatedKernel, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
     # iterate over targets
     for i_target in target_index
         potential, velocity, gradient = _induced(target_system[i_target, FastMultipole.POSITION], panel, kernel, derivatives_switch)
@@ -99,10 +100,11 @@ end
     end
 end
 
-@inline function FastMultipole.direct!(target_system, target_index, derivatives_switch, source_system::AbstractPanels{K,<:Any,<:Any,<:Any}, source_index) where K
+function FastMultipole.direct!(target_system, target_index, derivatives_switch, source_system::AbstractPanels{K,<:Any,<:Any,<:Any}, source_index) where K
     kernel = K()
     for i_panel in source_index
         convolve_kernel!(target_system, target_index, source_system.panels[i_panel], kernel, derivatives_switch)
     end
+
     return nothing
 end
