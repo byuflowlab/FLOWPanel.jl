@@ -14,7 +14,7 @@ function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_swi
     return potential, velocity, velocity_gradient
 end
 
-function rotate_to_panel(panel::Panel{TFP,<:Any,<:Any}) where TFP
+@inline function rotate_to_panel(panel::Panel{TFP,<:Any,<:Any}) where TFP
     # unpack panel
     # (; normal, vertices) = panel
     normal = panel.normal
@@ -32,7 +32,7 @@ end
 
 @inline mysign(val) = val >= zero(val) ? 1 : -1
 
-function source_dipole_preliminaries(TFT, TFP, target, centroid, R)
+@inline function source_dipole_preliminaries(TFT, TFP, target, centroid, R)
 
     # promote types
     TF = promote_type(TFT,TFP)
@@ -51,7 +51,7 @@ function source_dipole_preliminaries(TFT, TFP, target, centroid, R)
     return potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz
 end
 
-function recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+@inline function recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
     # eip1, hip1, rip1
     dx = target_Rx - vx_ip1
     dy = target_Ry - vy_ip1
@@ -88,7 +88,7 @@ const ConstantNormalDoublet = NormalDoublet{1}
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
 
-function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
@@ -153,7 +153,7 @@ function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
@@ -231,7 +231,7 @@ function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
