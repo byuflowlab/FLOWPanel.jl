@@ -7,7 +7,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        julia-version: ['1.8', '1.10']
+        julia-version: ['1.8', '1.10', '1.11']
         julia-arch: [x64]
         os: [ubuntu-latest, macOS-latest]
 
@@ -24,3 +24,5 @@ jobs:
         shell: bash
       # - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        with:
+          test_args: 'remote'

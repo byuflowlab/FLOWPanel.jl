@@ -359,6 +359,7 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
                                 Uinfs, CPs, normals,
                                 Das, Dbs,
                                 elprescribe::AbstractArray{Tuple{Int, T}};
+                                onlycomputeG=false,
                                 optargs...
                                 ) where {T<:Number}
 
@@ -386,6 +387,10 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
     # -------------- Influence of vortex rings -------------------------
     # Calculate influence of all vortex rings
     _G_Uvortexring!(self, G, CPs, normals, Das, Dbs; optargs...)
+
+    if onlycomputeG
+        return Gls, RHSls
+    end
 
     # Move influence of prescribed vortex ring elements to right-hand side
     for (eli, elval) in elprescribe
@@ -934,7 +939,7 @@ Note: It is important that the points in `trailingedge` have been previously
     panels that are at the trailing edge, or unphysically large trailing
     vortices.
 """
-function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Matrix;
+function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Union{Matrix, Function};
                             periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             ) where {G<:gt.Meshes.SimpleMesh}

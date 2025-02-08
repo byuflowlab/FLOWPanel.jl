@@ -251,7 +251,8 @@ end
 """
 function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             meshfiles::AbstractVector{Tuple{String, String, T}},
-                            trailingedges::AbstractVector{Tuple{String, F1, F2, Bool}},
+                            # trailingedges::AbstractVector{Tuple{F0, F1, F2, Bool}},
+                            trailingedges::AbstractVector{Tuple{F0, F1, F2, Bool}},
                             reader::Function;
                             read_path=pwd(),
                             offset=zeros(3),
@@ -259,6 +260,7 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             scaling=1.0,
                             tolerance=1e-6,
                             lengthscale=nothing,
+                            processmsh=noprocessmsh,
                             rediscretize_trailingedge=true,
                             panel_omit_shedding=nothing,
                             debug=false,
@@ -266,6 +268,8 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
                             bodytype_optargs=(;),
                             v_lvl=0
                             ) where {T<:Union{Bool, NamedTuple},
+                                     # F0<:Union{AbstractString, Function, Tuple{AbstractString, Function}}, # <-- commented this out so we can mix TE definitions
+                                     F0<:Any,
                                      F1<:Union{Function, Any}, F2<:Union{Function, Any}}
 
     @assert 0 < tolerance <= 1 ""*
@@ -308,6 +312,9 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
             msh = gt.mirror(msh, options.mirrorcoordinate)
         end
 
+        # Call user-defined msh processing function
+        msh = processmsh(name, msh, options)
+
         # Wrap Meshes object into a Grid object from GeometricTools
         grid = gt.GridTriangleSurface(msh)
 
@@ -323,27 +330,45 @@ function generate_multibody(bodytype::Type{<:AbstractLiftingBody},
         if verbose; println("\t"^(v_lvl+1)*"Identifying trailing edges"); end
 
         # Read all trailing edges
-        for (trailingedgefile, sortingfunction, junctioncriterion, closed) in trailingedges
+        for (trailingedgeref, sortingfunction, junctioncriterion, closed) in trailingedges
 
-            if verbose; println("\t"^(v_lvl+2)*"$(trailingedgefile)"); end
+            if verbose; println("\t"^(v_lvl+2)*"$(trailingedgeref)"); end
 
-            # Read Gmsh line of trailing edge
-            TEmsh = reader(joinpath(read_path, trailingedgefile))
+            # Define trailing edge criterion
+            if typeof(trailingedgeref) <: Union{AbstractString, Tuple{AbstractString, Function}}
 
-            # Apply the same transformations of the mesh to the trailing edge
-            TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
+                if typeof(trailingedgeref) <: Tuple{AbstractString, Function}
+                    trailingedgefile = trailingedgeref[1]
+                else
+                    trailingedgefile = trailingedgeref
+                end
 
-            # Convert TE Meshes object into a matrix of points used to identify the trailing edge
-            trailingedge = gt.vertices2nodes(TEmsh.vertices)
+                # Read Gmsh line of trailing edge
+                TEmsh = reader(joinpath(read_path, trailingedgefile))
 
-            # Sort TE points from "left" to "right" according to span direction
-            trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
+                # Apply the same transformations of the mesh to the trailing edge
+                TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
 
-            # Rediscretize the TE line with enough resolution to meet tolerance
-            if rediscretize_trailingedge
-                ndiscretize = ceil(Int, 1/(0.5*tolerance))
-                trailingedge = gt.rediscretize_line(trailingedge, ndiscretize;
-                                                    parameterization=sortingfunction)
+                # Convert TE Meshes object into a matrix of points used to identify the trailing edge
+                trailingedge = gt.vertices2nodes(TEmsh.vertices)
+
+                # Sort TE points from "left" to "right" according to span direction
+                trailingedge = sortslices(trailingedge; dims=2, by=sortingfunction)
+
+                if typeof(trailingedgeref) <: Tuple{AbstractString, Function}
+                    # Define TE line analytically
+                    criterion = trailingedgeref[2](trailingedge)
+                    trailingedge = X->(criterion(X), sortingfunction(X))
+                else
+                    # Rediscretize the TE line with enough resolution to meet tolerance
+                    if rediscretize_trailingedge
+                        ndiscretize = ceil(Int, 1/(0.5*tolerance))
+                        trailingedge = gt.rediscretize_line(trailingedge, ndiscretize;
+                                                            parameterization=sortingfunction)
+                    end
+                end
+            else
+                trailingedge = X->(trailingedgeref(X), sortingfunction(X))
             end
 
             # Generate full TE shedding matrix
@@ -491,6 +516,124 @@ end
 direction(dir; X0=zeros(3)) = X -> dot(X - X0, dir)
 loop(; Oaxis=Matrix(1.0I, 3, 3), X0=zeros(3)) = X -> -atand(dot(X - X0, Oaxis[:, 2]), dot(X - X0, Oaxis[:, 3]))
 nojunction(X) = Inf
+
+noprocessmsh(name, msh, options) = msh
+
+
+function distancetoline(line::Matrix; symmetry=nothing)
+    X0 = view(line, :, 1)
+    X1 = view(line, :, size(line, 2))
+
+    if isnothing(symmetry)
+        return distancetoline(X0, X1)
+    else
+        X0sym = X0 - 2*dot(X0, symmetry)*symmetry
+        X1sym = X1 - 2*dot(X1, symmetry)*symmetry
+        fun1 = distancetoline(X0, X1)
+        fun2 = distancetoline(X0sym, X1sym)
+
+        return (args...; optargs...) -> min(fun1(args...; optargs...), fun2(args...; optargs...))
+    end
+
+end
+
+function distancetoline_symmetric(symmetry)
+    return (args...; optargs...) -> distancetoline(args...; optargs..., symmetry=symmetry)
+end
+
+function distancetoline(X0::AbstractVector, X1::AbstractVector)
+
+    # Calculate unit direction of line and length
+    dir = X1 - X0
+    len = norm(dir)
+    dir /= len
+
+    function calc_distancetoline(X)
+
+        X2 = X - X0
+
+        # Projection to line
+        proj = dot(X2, dir)
+        X3 = proj * dir
+
+        # Component normal to line
+        Xn = X2 - X3
+
+        # Distance to line
+        distance = norm(Xn)
+
+        # Add projection to line if point is beyond the line
+        if proj < 0
+            distance += abs(proj)
+        elseif proj > len
+            distance += proj - len
+        end
+
+        return distance
+    end
+
+    return calc_distancetoline
+end
+
+
+"""
+Filtering criterion for splitting up edges of control surfaces in mesh
+"""
+function filter_splitsurfaces(connectivity, vertices, controlsurfaces;
+                                        offset=zeros(3),
+                                        invrotation::Meshes.Rotation=one(Meshes.QuatRotation),
+                                        scaling=1.0)
+
+    # Fetch and untransform the vertices
+    Xs = [invrotation * (vertices[vi].coords / scaling) - offset for vi in connectivity.indices]
+
+    # Calculate centroid
+    X = mean(Xs)
+
+    # Identify whether this element is intercepted by the edge of a control surface
+    for (csi, controlsurface) in enumerate(controlsurfaces)    # Iterate over control surfaces
+
+        (; hinge, side1, side2, boundingbox, tol) = controlsurface
+
+        # Identify whether the centroid is aft the hinge (positive side)
+        hingecrit = dot(X - hinge.center, hinge.normal) > tol
+
+        # Identify whether the vertices are split by side 1
+        side1crit = length(unique( dot(X - side1.center, side1.normal) > tol for X in Xs )) != 1
+
+        # Identify whether the vertices are split by side 2
+        side2crit = length(unique( dot(X - side2.center, side2.normal) > tol for X in Xs )) != 1
+
+        # Identify whether the centroid is inside the bounding box
+        boxcrit = all( boundingbox.lower[i] <= X[i] <= boundingbox.upper[i] for i in 1:length(X) )
+
+        # Check for mirrored conditions if requested
+        mirror = (controlsurface.mirror==:symmetric || controlsurface.mirror==:antisymmetric)
+
+        # Check whether the mirroring conditions are satisfied
+        if !(hingecrit && (side1crit || side2crit) && boxcrit) && mirror
+
+            # Bring vertices from the other side of the symmetry plane to this side
+            Xs = [X .* Meshes.Vec(1, -1, 1) for X in Xs]
+            X = mean(Xs)
+
+            # Re-evaluation criteria
+            hingecrit = dot(X - hinge.center, hinge.normal) > tol
+            side1crit = length(unique( dot(X - side1.center, side1.normal) > tol for X in Xs )) != 1
+            side2crit = length(unique( dot(X - side2.center, side2.normal) > tol for X in Xs )) != 1
+            boxcrit = all( boundingbox.lower[i] <= X[i] <= boundingbox.upper[i] for i in 1:length(X) )
+
+        end
+
+        # Return if identified that element is intercepted
+        if hingecrit && (side1crit || side2crit) && boxcrit
+            return false
+        end
+
+    end
+
+    return true
+end
 
 
 """
