@@ -178,6 +178,29 @@ end
 
 #------- iterative solvers -------#
 
+struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
+    panels::TP
+    fmm_toggle::Bool
+    reuse_tree::Bool
+    save_residual::Bool
+    tree::TT
+    m2l_list::Vector{SVector{2,Int32}}
+    direct_list::TDL
+    derivatives_switch::TDS
+    expansion_order::Int64
+    leaf_size::SVector{1,Int64}
+    multipole_threshold::Float64
+end
+
+Base.eltype(flo::FastLinearOperator) = eltype(flo.panels)
+
+function LinearAlgebra.mul!(C, flo::FastLinearOperator, B, α, β)
+    flo(C, B, α, β; expansion_order=flo.expansion_order, leaf_size_source=flo.leaf_size,
+       multipole_threshold=flo.multipole_threshold)
+end
+
+Base.size(flo::FastLinearOperator) = (length(flo.panels.panels), length(flo.panels.panels))
+
 struct IterativeSolver{TF,TS<:Krylov.KrylovSolver,TA<:Union{Matrix{TF},FastLinearOperator},S<:Scheme} <: AbstractSolver
     solver::TS
     A::TA
@@ -226,55 +249,34 @@ function IterativeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
     return IterativeSolver(solver, influence_matrix, right_hand_side, scheme), t_aic, t_alloc
 end
 
-struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
-    panels::TP
-    fmm_toggle::Bool
-    reuse_tree::Bool
-    save_residual::Bool
-    tree::TT
-    m2l_list::Vector{SVector{2,Int32}}
-    direct_list::TDL
-    derivatives_switch::TDS
-    expansion_order::Int64
-    leaf_size::Int64
-    multipole_threshold::Float64
-end
-
-Base.eltype(flo::FastLinearOperator) = eltype(flo.panels)
-
-function LinearAlgebra.mul!(C, flo::FastLinearOperator, B, α, β)
-    flo(C, B, α, β; expansion_order=flo.expansion_order, leaf_size_source=flo.leaf_size,
-       multipole_threshold=flo.multipole_threshold)
-end
-
-Base.size(flo::FastLinearOperator) = (length(flo.panels.panels), length(flo.panels.panels))
-
 function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree) where TF
     switch = FastMultipole.DerivativesSwitch(false, true, false, panels)
     if reuse_tree
-        tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
-        farfield, nearfield = true, true
-        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, multipole_threshold, farfield, nearfield, self_induced)
-        direct_list = FastMultipole.InteractionList(direct_list, panels, tree, panels, tree, switch)
-    else
+        # tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
+        # farfield, nearfield = true, true
+        # m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, leaf_size, multipole_threshold, farfield, nearfield, self_induced)
+        # direct_list = FastMultipole.InteractionList(direct_list, panels, tree, panels, tree, switch)
+        @warn "reuse_tree was requested but is not currently supported; proceeding without"
+    # else
+    end
         tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
         m2l_list = Vector{SVector{2,Int32}}(undef,0)
         direct_list = FastMultipole.InteractionList(Matrix{TF}[], TF[], TF[], m2l_list)
-    end
+    # end
 
     return switch, tree, m2l_list, direct_list
 end
 
-function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme; fmm_toggle=true, reuse_tree=true, save_residual=false, expansion_order=4, leaf_size=18, multipole_threshold=0.3) where TF
+function FastLinearOperator(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, scheme; fmm_toggle=true, reuse_tree=true, save_residual=false, expansion_order=4, leaf_size=SVector{1}(18), multipole_threshold=0.3) where TF
 
     self_induced = true
     switch, tree, m2l_list, direct_list = get_fmm_objects(panels, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree)
-    FastMultipole.unsort!(panels, tree)
+    FastMultipole.unsort!((panels,), tree)
 
     return FastLinearOperator{typeof(panels), typeof(tree), typeof(direct_list), typeof(switch), scheme}(panels, fmm_toggle, reuse_tree, save_residual, tree, m2l_list, direct_list, switch, expansion_order, leaf_size, multipole_threshold)
 end
 
-function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}} where {K<:AbstractKernel{1}})(C, B, α, β; fmm_args...)
+function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, <:Any, <:Any, Scheme{DirectNeumann, FlowTangency}} where {K<:AbstractKernel})(C, B, α, β; fmm_args...)
     # unpack operator
     panels = flo.panels
     fmm_toggle = flo.fmm_toggle
@@ -328,7 +330,7 @@ end
 function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
                             krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
                             fmm_toggle=true, reuse_tree=true,
-                            expansion_order=4, leaf_size=18,
+                            expansion_order=4, leaf_size=SVector{1}(18),
                             multipole_threshold=0.3
                             ) where {TF, K<:AbstractKernel{1}}
 
@@ -350,7 +352,7 @@ end
 function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
                             krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
                             fmm_toggle=true, reuse_tree=true,
-                            expansion_order=4, leaf_size=18,
+                            expansion_order=4, leaf_size=SVector{1}(18),
                             multipole_threshold=0.3
                             ) where {TF, K<:AbstractKernel{2}, TF}
 
@@ -374,7 +376,7 @@ function MatrixFreeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
                                     scheme,
                                     krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
                                     fmm_toggle=true, reuse_tree=true,
-                                    expansion_order=4, leaf_size=18,
+                                    expansion_order=4, leaf_size=SVector{1}(18),
                                     multipole_threshold=0.3
                                     ) where {TF, K<:AbstractKernel{1}}
 
@@ -540,11 +542,11 @@ struct FastGaussSeidel{TF,TP,TT,TDL,TDS,S} <: AbstractSolver
     internal_right_hand_side::Vector{TF}
     expansion_order::Int
     multipole_threshold::Float64
-    leaf_size::Int
+    leaf_size::SVector{1,Int}
     convergence_history::Vector{Float64}
 end
 
-function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; reuse_tree=false, expansion_order=5, multipole_threshold=0.5, leaf_size=20) where {TK,TF}
+function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; reuse_tree=false, expansion_order=5, multipole_threshold=0.5, leaf_size=SVector{1}(20)) where {TK,TF}
     external_velocity = zeros(SVector{3,TF}, length(panels.panels))
 
     # fmm objects
@@ -632,7 +634,7 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     grid_2_panels_strength!(panels)
 
     # unsort panels
-    FastMultipole.unsort!(panels, tree)
+    FastMultipole.unsort!((panels,), tree)
 
     # strengths
     strengths = zeros(TF,length(panels.panels))
@@ -649,7 +651,7 @@ function FastGaussSeidel(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type
     return FastGaussSeidel{TF,typeof(panels),typeof(tree),typeof(direct_list),typeof(switch),scheme}(panels, external_velocity, reuse_tree, tree, m2l_list, direct_list, self_direct_list, fmm_matrix_maps, switch, influence_matrices, strengths, external_right_hand_side, internal_right_hand_side, expansion_order, multipole_threshold, leaf_size, convergence_history)
 end
 
-function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; expansion_order=5, multipole_threshold=0.5, leaf_size=20, reuse_tree=false) where {TK,TF}
+function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, scheme::Type{Scheme{DirectNeumann, FlowTangency}}; expansion_order=5, multipole_threshold=0.5, leaf_size=SVector{1}(20), reuse_tree=false) where {TK,TF}
     t_solve, t_fmm = 0.0, 0.0
 
     t_solve += @elapsed external_velocity = zeros(SVector{3,TF}, length(panels.panels))
@@ -729,7 +731,7 @@ function FastGaussSeidel_benchmark(panels::AbstractPanels{TK,TF,<:Any,<:Any}, sc
     t_solve += @elapsed grid_2_panels_strength!(panels)
 
     # unsort panels
-    t_fmm += @elapsed FastMultipole.unsort!(panels, tree)
+    t_fmm += @elapsed FastMultipole.unsort!((panels,), tree)
 
     # strengths
     t_solve += @elapsed strengths = zeros(TF,length(panels.panels))
@@ -779,7 +781,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     else
         tree = FastMultipole.Tree(panels; expansion_order, leaf_size, shrink_recenter=true)
         farfield, nearfield, self_induced = true, true, false
-        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, tree.leaf_index, multipole_threshold, farfield, nearfield, self_induced, FastMultipole.UnequalSpheres(), expansion_order)
+        m2l_list, direct_list = FastMultipole.build_interaction_lists(tree.branches, tree.branches, leaf_size, tree.leaf_index, multipole_threshold, farfield, nearfield, self_induced, FastMultipole.UnequalSpheres(), expansion_order)
     end
     branches = tree.branches
 
@@ -930,7 +932,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     end
 
     # unsort back to original order
-    FastMultipole.unsort!(panels, tree)
+    FastMultipole.unsort!((panels,), tree)
 
     # update grid strengths
     panels_2_grid_strength!(panels)
