@@ -315,7 +315,7 @@ function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, 
     if fmm_toggle
         if reuse_tree
             FastMultipole.resort!((panels,), tree)
-            fmm!(tree, panels, m2l_list, direct_list, switch; unsort_bodies=true)
+            fmm!(tree, panels, m2l_list, direct_list, switch)
         else
             fmm!(panels; velocity_gradient=false, expansion_order, leaf_size, multipole_threshold, fmm_args...)
         end
@@ -814,7 +814,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
         reset_potential_velocity!(panels)
 
         # get farfield influence
-        FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch, expansion_order_val; reset_tree=true, nearfield=false, unsort_bodies=false)
+        FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch, expansion_order_val; reset_tree=true, nearfield=false)#, unsort_bodies=false)
 
         # apply it to the RHS
         update_right_hand_side!(internal_right_hand_side, panels, scheme; reset=false)
@@ -900,8 +900,8 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
         elseif error_style==:L2 # better error metric
             # have to compute the n-body problem again with the new strengths
             reset_potential_velocity!(panels)
-            FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true, unsort_bodies=false)
-            FastMultipole.fmm!(tree, panels, m2l_list, solver.self_direct_list, switch; reset_tree=false, upward_pass=false, horizontal_pass=false, downward_pass=false, unsort_bodies=false)
+            FastMultipole.fmm!(tree, panels, m2l_list, direct_list, switch; reset_tree=true)#, unsort_bodies=false)
+            FastMultipole.fmm!(tree, panels, m2l_list, solver.self_direct_list, switch; reset_tree=false, upward_pass=false, horizontal_pass=false, downward_pass=false)#, unsort_bodies=false)
             # FastMultipole.direct!(panels)
             for i in eachindex(external_velocity)
                 panels.velocity[i] += external_velocity[i]
