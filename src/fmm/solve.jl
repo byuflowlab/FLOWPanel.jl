@@ -314,7 +314,7 @@ function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, 
     # solve N-body problem
     if fmm_toggle
         if reuse_tree
-            FastMultipole.resort!(panels, tree)
+            FastMultipole.resort!((panels,), tree)
             fmm!(tree, panels, m2l_list, direct_list, switch; unsort_bodies=true)
         else
             fmm!(panels; velocity_gradient=false, expansion_order, leaf_size, multipole_threshold, fmm_args...)
@@ -779,7 +779,7 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     # create/retrieve tree
     if reuse_tree
         tree = solver.tree
-        FastMultipole.resort!(panels, tree)
+        FastMultipole.resort!((panels,), tree)
         m2l_list = solver.m2l_list
         direct_list = solver.direct_list
     else
