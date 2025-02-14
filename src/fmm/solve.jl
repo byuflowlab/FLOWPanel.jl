@@ -354,7 +354,7 @@ function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
                             fmm_toggle=true, reuse_tree=true,
                             expansion_order=4, leaf_size=SVector{1}(18),
                             multipole_threshold=0.3
-                            ) where {TF, K<:AbstractKernel{2}, TF}
+                            ) where {K<:AbstractKernel{2}, TF}
 
     # define fast linear operator functor (for use with FMM) (avoids closure)
     flo = FastLinearOperator(panels, scheme; fmm_toggle, reuse_tree, expansion_order, leaf_size, multipole_threshold)
