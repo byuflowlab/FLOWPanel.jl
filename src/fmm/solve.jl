@@ -142,8 +142,12 @@ function LUDecomposition_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
     return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme), t_aic, t_lu, t_alloc
 end
 
-@inline function get_strength(strengths::Vector, i)
+@inline function get_strength(strengths::Vector, i, old_strength::SVector{1,<:Any})
     return SVector{1}(strengths[i])
+end
+
+@inline function get_strength(strengths::Vector, i, old_strength::SVector{2,<:Any})
+    return SVector{2}(old_strength[1], strengths[i])
 end
 
 function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
@@ -167,9 +171,9 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
         vertices = panels.panels[i].vertices
         control_point = panels.panels[i].control_point
         normal = panels.panels[i].normal
-        # strength = panels.panels[i].strength
+        strength = panels.panels[i].strength
         radius = panels.panels[i].radius
-        strength = get_strength(strengths, i)
+        strength = get_strength(strengths, i, old_strength)
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
@@ -295,9 +299,9 @@ function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, 
         vertices = panels.panels[i].vertices
         control_point = panels.panels[i].control_point
         normal = panels.panels[i].normal
-        # strength = panels.panels[i].strength
+        old_strength = panels.panels[i].strength
         radius = panels.panels[i].radius
-        strength = get_strength(B, i)
+        strength = get_strength(B, i, old_strength)
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
@@ -438,9 +442,9 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
         vertices = panels.panels[i].vertices
         control_point = panels.panels[i].control_point
         normal = panels.panels[i].normal
-        # strength = panels.panels[i].strength
+        old_strength = panels.panels[i].strength
         radius = panels.panels[i].radius
-        strength = get_strength(strengths, i)
+        strength = get_strength(strengths, i, old_strength)
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
