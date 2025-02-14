@@ -88,14 +88,14 @@ const ConstantNormalDoublet = NormalDoublet{1}
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
     num = ri + rip1 - ds
-    iszero(num) && (num += eps())
+    abs(num) < 5 * eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
     iszero(ri) && (ri += eps())
@@ -231,12 +231,12 @@ end
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
     num = ri + rip1 - ds
-    iszero(num) && (num += eps())
+    abs(num) < 5*eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
     ri = ri
@@ -264,8 +264,8 @@ end
             tan_term
         )
         velocity += strength[2] * SVector{3}(
-            dz * dy * val4,
-            -dz * dx * val4,
+            target_Rz * dy * val4,
+            -target_Rz * dx * val4,
             lambda * val4
         )
     end
@@ -278,7 +278,7 @@ end
         r_plus_rp1_2 = r_plus_rp1 * r_plus_rp1
         r_times_rp1 = ri * rip1
 
-        rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + dz2
+        rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
         ri_inv = 1/ri
@@ -295,9 +295,9 @@ end
         # construct velocity_gradient
         phi_xx = 2 * dy / val1 * val2
         phi_xy = -2 * dx / val1 * val2
-        phi_xz = dz * dy * val4
+        phi_xz = target_Rz * dy * val4
         phi_yy = -2 * dx / val1 * val3
-        phi_yz = -dz * dx * val4
+        phi_yz = -target_Rz * dx * val4
         phi_zz = lambda * val4
         velocity_gradient += SMatrix{3,3,eltype(velocity_gradient),9}(
             phi_xx, phi_xy, phi_xz,
@@ -312,14 +312,14 @@ end
         val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1)
 
         # construct velocity_gradient
-        psi_xx = dz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
-        psi_xy = dz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
-        psi_yy = -dz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
+        psi_xx = target_Rz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
+        psi_xy = target_Rz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
+        psi_yy = -target_Rz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         val4 = r_plus_rp1_2 / rho
         val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / r_times_rp1
-        val6 = dz * (val4 + val5)
+        val6 = target_Rz * (val4 + val5)
         psi_zz = lambda * val3 * val6
-        val7 = r_times_rp1 - dz * val6
+        val7 = r_times_rp1 - target_Rz * val6
         val8 = val3 * val7
         psi_xz = -dy * val8
         psi_yz = dx * val8
