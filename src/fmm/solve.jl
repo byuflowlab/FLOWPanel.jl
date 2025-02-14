@@ -315,7 +315,7 @@ function (flo::FastLinearOperator{<:AbstractPanels{K,<:Any,<:Any,<:Any}, <:Any, 
     if fmm_toggle
         if reuse_tree
             FastMultipole.resort!((panels,), tree)
-            fmm!(tree, panels, m2l_list, direct_list, switch)
+            fmm!((panels,), tree, (panels,), tree, m2l_list, direct_list, switch)
         else
             fmm!(panels; velocity_gradient=false, expansion_order, leaf_size, multipole_threshold, fmm_args...)
         end
