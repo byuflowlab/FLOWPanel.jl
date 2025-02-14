@@ -6,6 +6,7 @@
 module FMM
 
     using StaticArrays
+    import LinearAlgebra
     using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
     using WriteVTK
     import Krylov
