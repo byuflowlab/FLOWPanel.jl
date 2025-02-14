@@ -338,6 +338,28 @@ function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
     return IterativeSolver(solver, A, right_hand_side, scheme)
 end
 
+function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
+                            krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
+                            fmm_toggle=true, reuse_tree=true,
+                            expansion_order=4, leaf_size=18,
+                            multipole_threshold=0.3
+                            ) where {TF, K<:AbstractKernel{2}}
+
+    # define fast linear operator functor (for use with FMM) (avoids closure)
+    flo = FastLinearOperator(panels, scheme; fmm_toggle, reuse_tree, expansion_order, leaf_size, multipole_threshold)
+
+    # define linear operator object for use with Krylov.jl
+    n_panels = length(panels.panels)
+    A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
+
+    # construct ::KrylovSolver
+    right_hand_side = zeros(TF,n_panels)
+    solver = krylov_solver(A, right_hand_side)
+
+    # construct solver
+    return IterativeSolver(solver, A, right_hand_side, scheme)
+end
+
 function MatrixFreeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
                                     scheme,
                                     krylov_solver::Type{<:Krylov.KrylovSolver}=Krylov.GmresSolver;
@@ -406,6 +428,83 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
         # strength = panels.panels[i].strength
         radius = panels.panels[i].radius
         strength = get_strength(strengths, i)
+
+        panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
+        panels.strengths[i] = strength
+    end
+end
+
+"""
+Assumes `freestream` has NOT been applied to `panels` yet, but any other induced velocity has.
+"""
+function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
+                solver::IterativeSolver{<:Any,<:Any,<:Any,scheme},
+                freestream::AbstractVector,
+                dt=0.0;
+                verbose=true,
+                tolerance=1e-6, max_iterations=100,
+                solver_kwargs...
+                ) where {scheme, K<:AbstractKernel{2}}
+    # unpack
+    A = solver.A
+    right_hand_side = solver.right_hand_side
+
+    # solve for source panel strength
+    for i_panel in eachindex(panels.panels)
+        normal = panels.panels[i_panel].normal
+        new_strength = dot(normal, freestream) * 4*pi
+
+        # update panel strength
+        panels.strengths[i_panel] = SVector{2}(new_strength, 0.0)
+    end
+
+    # update panels
+    grid_2_panels_strength!(panels)
+
+    # apply induced velocity
+    if solver.A.fmm_toggle
+        fmm!(panels; multipole_threshold=solver.A.multipole_threshold, leaf_size_source=solver.A.leaf_size, expansion_order=solver.A.expansion_order)
+    else
+        direct!(panels)
+    end
+
+    # apply freestream
+    apply_freestream!(panels, freestream)
+
+    # update right-hand-side
+    update_right_hand_side!(right_hand_side, panels, scheme)
+
+    # stash source panel strengths
+    source_strengths = zeros(TF, length(panels.panels))
+    for i in eachindex(source_strengths)
+        source_strengths[i] = panels.strengths[i][1]
+        panels.strengths[i] = SVector{2,TF}(0.0,0.0)
+    end
+    grid_2_panels_strength!(panels)
+
+    # solver for strengths
+    solver_output = solver(A, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
+    #x, stats = Krylov.gmres(influence_matrix, right_hand_side; atol=tolerance, itmax=max_iterations, solver_kwargs...)
+    #=
+                   memory=20, M=I, N=I, ldiv::Bool=false,
+                   restart::Bool=false, reorthogonalization::Bool=false,
+                   atol::T=√eps(T), rtol::T=√eps(T), itmax::Int=0,
+                   timemax::Float64=Inf, verbose::Int=0, history::Bool=false,
+                   callback=solver->false, iostream::IO=kstdout)
+    =#
+    verbose && println("Finished GMRES: \n\tstatus = $(solver.solver.stats.status)\n\tniter = $(solver.solver.stats.niter)\n\tinconsistent = $(solver.solver.stats.inconsistent)")
+
+    dipole_strengths = solver.solver.x
+
+    # update panels
+    for i in 1:length(panels.panels)
+        # (; vertices, control_point, normal, strength, radius) = panels.panels[i]
+        vertices = panels.panels[i].vertices
+        control_point = panels.panels[i].control_point
+        normal = panels.panels[i].normal
+        # strength = panels.panels[i].strength
+        radius = panels.panels[i].radius
+        strength = SVector{2,TF}(source_strengths[i], dipole_strengths[i])
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
