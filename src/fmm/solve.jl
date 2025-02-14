@@ -178,7 +178,7 @@ end
 
 #------- iterative solvers -------#
 
-struct IterativeSolver{TF,TS<:Krylov.KrylovSolver,TA<:Union{Matrix{TF},LinearOperators.LinearOperator},S<:Scheme} <: AbstractSolver
+struct IterativeSolver{TF,TS<:Krylov.KrylovSolver,TA<:Union{Matrix{TF},FastLinearOperator},S<:Scheme} <: AbstractSolver
     solver::TS
     A::TA
     right_hand_side::Vector{TF}
@@ -239,6 +239,15 @@ struct FastLinearOperator{TP,TT,TDL,TDS,scheme}
     leaf_size::Int64
     multipole_threshold::Float64
 end
+
+Base.eltype(flo::FastLinearOperator) = eltype(flo.panels)
+
+function LinearAlgebra.mul!(C, flo::FastLinearOperator, B, α, β)
+    flo(C, B, α, β; expansion_order=flo.expansion_order, leaf_size_source=flo.leaf_size,
+       multipole_threshold=flo.multipole_threshold)
+end
+
+Base.size(flo::FastLinearOperator) = (length(flo.panels.panels), length(flo.panels.panels))
 
 function get_fmm_objects(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}, expansion_order, leaf_size, multipole_threshold, self_induced, reuse_tree) where TF
     switch = FastMultipole.DerivativesSwitch(false, true, false, panels)
@@ -328,7 +337,7 @@ function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
 
     # define linear operator object for use with Krylov.jl
     n_panels = length(panels.panels)
-    A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
+    A = flo
 
     # construct ::KrylovSolver
     right_hand_side = zeros(TF,n_panels)
@@ -350,7 +359,8 @@ function MatrixFreeSolver(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme,
 
     # define linear operator object for use with Krylov.jl
     n_panels = length(panels.panels)
-    A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
+    A = flo
+    # A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
 
     # construct ::KrylovSolver
     right_hand_side = zeros(TF,n_panels)
@@ -374,7 +384,8 @@ function MatrixFreeSolver_benchmark(panels::AbstractPanels{K,TF,<:Any,<:Any},
 
         # define linear operator object for use with Krylov.jl
         n_panels = length(panels.panels)
-        A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
+        # A = LinearOperators.LinearOperator(TF, n_panels, n_panels, false, false, flo)
+        A = flo
 
         # construct ::KrylovSolver
         right_hand_side = zeros(TF,n_panels)
