@@ -37,6 +37,7 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     strengths::Vector{SVector{NK,TF}}
     potential::Vector{TF}
     velocity::Vector{SVector{3,TF}}
+    sigma::TF
 
     # efficient panel access assembly
     panels::Vector{Panel{TF,NK,NS}}
@@ -45,7 +46,7 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     wake_points::Vector{SVector{3,TF}}
 end
 
-function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K) where {K<:AbstractKernel}
+function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K; sigma=1e-2) where {K<:AbstractKernel}
 
     n_cells = length(meshcells)
     TF = eltype(eltype(points))
@@ -72,7 +73,7 @@ function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCe
 
     wake_points = SVector{3,TF}[]
 
-    return UnstructuredGrid{K,TF,NK,NS}(points, meshcells, control_points, normals, strengths, potential, velocity, panels, wake_points)
+    return UnstructuredGrid{K,TF,NK,NS}(points, meshcells, control_points, normals, strengths, potential, velocity, sigma, panels, wake_points)
 end
 
 #####
@@ -89,6 +90,7 @@ struct StructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     strengths::Array{SVector{NK,TF},3}
     potential::Array{TF,3}
     velocity::Array{SVector{3,TF},3}
+    sigma::TF # regularization radius
 
     # efficient panel access assembly
     panels::Vector{Panel{TF,NK,NS}}
@@ -110,7 +112,7 @@ function PanelArray(corner_grid::Array{<:Number,4}, args...; optargs...)
 end
 
 function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::K;
-                            invert_normals=false) where {TF, K<:AbstractKernel}
+                            invert_normals=false, sigma=1e-2) where {TF, K<:AbstractKernel}
     # meta parameters
     NK = kernel_multiplicity(K)
     NS = 4 # quad panels
@@ -172,7 +174,7 @@ function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::K;
     wake_points = SVector{3,TF}[]
 
     # return panels
-    return StructuredGrid{K,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, panels, wake_points)
+    return StructuredGrid{K,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, sigma, panels, wake_points)
 end
 
 function panels_2_vector_strengths!(strengths, panels::AbstractVector{Panel{TF,NK,NS}}) where {TF,NK,NS}

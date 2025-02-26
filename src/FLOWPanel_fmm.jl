@@ -138,16 +138,16 @@ const WriteVTK = FMM.WriteVTK
 
 bodytype2fmmkernel(::AbstractBody{<:VortexRing}) = FMM.ConstantNormalDoublet
 
-function body2fmmbody(body)
+function body2fmmbody(body; sigma=1e-5)
 
-    args = allocate_body2fmmbody(body)
-    return body2fmmbody!(body, args...)
+    args = allocate_body2fmmbody(body; sigma)
+    return body2fmmbody!(body, args...; sigma)
 
 end
 
 function body2fmmbody!(body,
                         body_fmm::FMM.UnstructuredGrid{<:Any, TF, NK, <:Any},
-                        normals, controlpoints
+                        normals, controlpoints; sigma=1e-5
                         ) where {TF, NK}
 
     # Fetch data from FMM body
@@ -192,7 +192,7 @@ function body2fmmbody!(body,
 
 end
 
-function allocate_body2fmmbody(body)
+function allocate_body2fmmbody(body; sigma=1e-5)
 
     # Identify FMM kernel from body type
     kernel_fmm = bodytype2fmmkernel(body)
@@ -226,6 +226,7 @@ function allocate_body2fmmbody(body)
                                                             controlpoints_fmm, normals_fmm,
                                                             strengths_fmm,
                                                             potential_fmm, velocity_fmm,
+                                                            sigma,
                                                             panels_fmm, wake_points_vtk)
 
     return (body_fmm, normals, controlpoints)

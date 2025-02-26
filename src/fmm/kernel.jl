@@ -1,17 +1,69 @@
-function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true))
+function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0)
 
     R = rotate_to_panel(panel)
 
     potential, velocity, velocity_gradient = _induced(target, panel.vertices, panel.control_point, panel.strength, kernel, R, derivatives_switch)
 
+    potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel.vertices, kernel, sigma)
+
     return potential, velocity, velocity_gradient
 end
 
-function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true))
+function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0)
 
     potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
 
+    potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
+
     return potential, velocity, velocity_gradient
+end
+
+# Function to calculate the distance from point P to the line segment AB
+function minimum_distance(A, B, target)
+    # compute vectos AB and Atarget
+    ABx = B[1] - A[1]
+    ABy = B[2] - A[2]
+    ABz = B[3] - A[3]
+
+    Atargetx = target[1] - A[1]
+    Atargety = target[2] - A[2]
+    Atargetz = target[3] - A[3]
+
+    # Compute dot products directly (AB · AB and Atarget · AB)
+    AB_dot_AB = ABx*ABx + ABy*ABy + ABz*ABz
+    Atarget_dot_AB = Atargetx*ABx + Atargety*ABy + Atargetz*ABz
+
+    # targetrojection length
+    projection_length = Atarget_dot_AB / AB_dot_AB
+
+    # Clamp projection_length to [0, 1]
+    projection_length = clamp(projection_length, 0.0, 1.0)
+
+    # Closest point calculation
+    closest_x = A[1] + projection_length * ABx
+    closest_y = A[2] + projection_length * ABy
+    closest_z = A[3] + projection_length * ABz
+
+    # Distance from target to the closest point
+    dx = target[1] - closest_x
+    dy = target[2] - closest_y
+    dz = target[3] - closest_z
+
+    return sqrt(dx*dx + dy*dy + dz*dz)
+end
+
+function minimum_distance(target, vertices)
+    dist = eltype(target)(Inf)
+    for i_vertex in 1:length(vertices)-1
+        A = vertices[i_vertex]
+        B = vertices[i_vertex+1]
+        dist = min(dist, minimum_distance(A, B, target))
+    end
+    A = vertices[end]
+    B = vertices[1]
+    dist = min(dist, minimum_distance(A, B, target))
+
+    return dist
 end
 
 @inline function rotate_to_panel(panel::Panel{TFP,<:Any,<:Any}) where TFP
@@ -20,6 +72,10 @@ end
     normal = panel.normal
     vertices = panel.vertices
 
+    return rotate_to_panel(normal, vertices)
+end
+
+@inline function rotate_to_panel(normal, vertices)
     # rotate into panel frame
     new_z = normal
     new_x = vertices[3] - vertices[1]
@@ -413,6 +469,87 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
     return potential, velocity, velocity_gradient
 end
 
+"version for use with FastMultipole"
+function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+    #--- prelimilary computations ---#
+
+    potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
+
+    #--- first recursive quantities ---#
+
+    # current vertex locations
+    vertex_ip1 = vertices[1] - centroid
+    vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+    vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+
+    # loop over side contributions
+    for i in 1:NS-1
+
+        #--- recurse values ---#
+
+        # current vertex locations
+        vertex_i = vertex_ip1
+        vx_i = vx_ip1
+        vy_i = vy_ip1
+
+        # the next vertex locations
+        vertex_ip1 = vertices[i+1] - centroid
+        vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+        vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+
+        # the rest
+        eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+
+        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+        if PS
+            potential += p
+        end
+        if VS
+            velocity += v
+        end
+        if GS
+            velocity_gradient += vg
+        end
+
+    end
+
+    #--- recurse values ---#
+
+    # current vertex locations
+    vertex_i = vertex_ip1
+    vx_i = vx_ip1
+    vy_i = vy_ip1
+
+    # the next vertex locations
+    vertex_ip1 = vertices[1] - centroid
+    vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+    vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+
+    # the rest
+    eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+
+    #--- compute values ---#
+
+    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+
+    #--- return result ---#
+
+    if PS
+        potential += p
+        potential *= ONE_OVER_4PI
+    end
+    if VS
+        velocity += v
+        velocity = ONE_OVER_4PI * R * velocity
+    end
+    if GS
+        velocity_gradient += vg
+        velocity_gradient = -ONE_OVER_4PI * R * velocity_gradient * transpose(R)
+    end
+
+    return potential, velocity, velocity_gradient
+end
+
 
 #------- vortex ring panel -------#
 
@@ -536,3 +673,20 @@ function _bound_vortex_gradient(r1, r2, r1norm::TF, r2norm, r1normr2norm, rcross
 
     return gradient
 end
+
+#------- regularization functions -------#
+
+function regularize(potential::TF, velocity, velocity_gradient, target, vertices, kernel::Union{NormalDoublet, SourceNormalDoublet}, sigma) where TF
+    distance = minimum_distance(target, vertices)
+    r_over_σ = distance / sigma
+    factor = one(TF) - exp(-r_over_σ * r_over_σ * r_over_σ)
+
+    # TODO: use the product rule to regularize the gradient also
+
+    return potential, velocity * factor, velocity_gradient * factor
+end
+
+function regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
+    return potential, velocity, velocity_gradient
+end
+

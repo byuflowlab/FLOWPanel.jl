@@ -173,7 +173,7 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
         normal = panels.panels[i].normal
         strength = panels.panels[i].strength
         radius = panels.panels[i].radius
-        strength = get_strength(strengths, i, old_strength)
+        # strength = get_strength(strengths, i, old_strength)
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
