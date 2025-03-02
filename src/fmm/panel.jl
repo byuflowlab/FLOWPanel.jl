@@ -46,7 +46,7 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     wake_points::Vector{SVector{3,TF}}
 end
 
-function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K; sigma=1e-2) where {K<:AbstractKernel}
+function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K; sigma=1e-5) where {K<:AbstractKernel}
 
     n_cells = length(meshcells)
     TF = eltype(eltype(points))

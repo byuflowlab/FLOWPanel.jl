@@ -4,6 +4,7 @@ function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switc
 
     potential, velocity, velocity_gradient = _induced(target, panel.vertices, panel.control_point, panel.strength, kernel, R, derivatives_switch)
 
+    sigma = panel.radius * 0.1
     potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel.vertices, kernel, sigma)
 
     return potential, velocity, velocity_gradient
@@ -13,6 +14,7 @@ function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_swi
 
     potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
 
+    sigma = panel.radius * 0.1
     potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
 
     return potential, velocity, velocity_gradient

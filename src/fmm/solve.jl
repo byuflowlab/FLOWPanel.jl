@@ -102,7 +102,7 @@ LUDecomposition(influence_matrix, right_hand_side, strengths, scheme) =
 LUDecomposition{typeof(influence_matrix), eltype(right_hand_side), scheme}(influence_matrix, right_hand_side, strengths)
 
 function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
-                            save_lu=true
+                            save_lu=false
                             ) where {TF, K<:AbstractKernel{1}}
     # preallocate memory
     n_panels = length(panels.panels)

@@ -1,4 +1,3 @@
-import DelimitedFiles
 #------- FastMultipole compatibility functions -------#
 
 Base.eltype(::AbstractPanels{<:Any,TF,<:Any,<:Any}) where TF = TF
