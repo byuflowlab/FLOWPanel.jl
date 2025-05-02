@@ -21,7 +21,7 @@ export  solve, save, Uind!, phi!,
 
 export  AbstractPanels, UniformSource, ConstantNormalDoublet, UniformSourceNormalDoublet,
         AbstractRotatedKernel, AbstractUnrotatedKernel,
-        _induced, convolve_kernel!
+        _induced, convolve_kernel!, rotate_to_panel
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
