@@ -138,15 +138,15 @@ end
 #------- constant source, normal doublet, source + normal doublet -------#
 
 struct Source{M} <: AbstractRotatedKernel{M} end
-const ConstantSource = Source{1}
+const UniformSource = Source{1}
 
 struct NormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantNormalDoublet = NormalDoublet{1}
 
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
-const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
+const UniformSourceNormalDoublet = SourceNormalDoublet{2}
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource, reg_term) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, reg_term) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
@@ -290,7 +290,7 @@ end
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet, reg_term) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSourceNormalDoublet, reg_term) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
@@ -392,7 +392,7 @@ end
     return potential, velocity, velocity_gradient
 end
 
-function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, centroid::AbstractVector{TFP}, strength, kernel::Union{UniformSource, ConstantNormalDoublet, UniformSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     #--- prelimilary computations ---#
 
     # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
@@ -486,7 +486,7 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 end
 
 # "version for use with FastMultipole"
-# function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+# function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{UniformSource, ConstantNormalDoublet, UniformSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
 #     #--- prelimilary computations ---#
 
 #     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)

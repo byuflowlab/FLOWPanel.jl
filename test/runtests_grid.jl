@@ -36,7 +36,7 @@ v_lvl = 0
     triang_grid = pnl.gt.GridTriangleSurface(grid, dimsplit)
 
     # Generate body object
-    body = pnl.NonLiftingBody{pnl.ConstantSource}(triang_grid)
+    body = pnl.NonLiftingBody{pnl.UniformSource}(triang_grid)
 
     # Unitary vectors
     tangents = pnl._calc_tangents(body)

@@ -970,7 +970,7 @@ struct FastJacobi{NK,TF,NP,FO,S<:Scheme} <: AbstractSolver
     epsilon::Float64
 end
 
-# function apply_boundary_condition!(right_hand_side, panels::AbstractPanels{ConstantSource(),<:Any,<:Any,<:Any}, scheme::FlowTangency)
+# function apply_boundary_condition!(right_hand_side, panels::AbstractPanels{UniformSource(),<:Any,<:Any,<:Any}, scheme::FlowTangency)
 #     for (i,(velocity,panel)) in enumerate(zip(panels.velocity, panels.panels))
 #         right_hand_side[i] = -dot(velocity, panel.normal)
 #     end

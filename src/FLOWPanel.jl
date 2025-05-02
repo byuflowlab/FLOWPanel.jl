@@ -19,7 +19,7 @@ export  solve, save, Uind!, phi!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas
 
-export  AbstractPanels, ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet,
+export  AbstractPanels, UniformSource, ConstantNormalDoublet, UniformSourceNormalDoublet,
         AbstractRotatedKernel, AbstractUnrotatedKernel,
         _induced, convolve_kernel!
 
@@ -76,6 +76,8 @@ end
 for header_name in ["fmm"]
     include("FLOWPanel_"*header_name*".jl")
 end
+
+using .FMM
 
 # function __init__()
 #

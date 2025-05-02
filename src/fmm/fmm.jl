@@ -6,7 +6,7 @@ function FastMultipole.strength_dims(system::AbstractPanels{<:Any,<:Any,NK,<:Any
     return NK
 end
 
-# function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantSourceNormalDoublet})
+# function get_r̃(panel::Panel, core_size, ε, ::Type{UniformSourceNormalDoublet})
     
 #     # panel properties
 #     ρ = panel.radius
@@ -96,11 +96,11 @@ end
 
 FastMultipole.get_n_bodies(system::AbstractPanels) = length(system.panels)
 
-FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantSource,<:Any,<:Any,<:Any}, args...) = FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Source}, system, args...)
+FastMultipole.body_to_multipole!(system::AbstractPanels{UniformSource,<:Any,<:Any,<:Any}, args...) = FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Source}, system, args...)
 
 FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantNormalDoublet,<:Any,<:Any,<:Any}, args...) = FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-FastMultipole.body_to_multipole!(system::AbstractPanels{ConstantSourceNormalDoublet,<:Any,<:Any,<:Any}, args...) = FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...)
+FastMultipole.body_to_multipole!(system::AbstractPanels{UniformSourceNormalDoublet,<:Any,<:Any,<:Any}, args...) = FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...)
 
 function FastMultipole.buffer_to_target_system!(target_system::AbstractPanels, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
     # get values

@@ -24,7 +24,7 @@ module FMM
 
     end
 
-    export  AbstractPanels, ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet,
+    export  AbstractPanels, UniformSource, ConstantNormalDoublet, UniformSourceNormalDoublet,
             AbstractRotatedKernel, AbstractUnrotatedKernel,
             _induced, convolve_kernel!
 
