@@ -1,21 +1,21 @@
-function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0)
+function induced(target, panel, kernel::AbstractRotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0e-2)
 
     R = rotate_to_panel(panel)
 
-    potential, velocity, velocity_gradient = _induced(target, panel.vertices, panel.control_point, panel.strength, kernel, R, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, panel.vertices, panel.control_point, panel.strength, kernel, sigma, R, derivatives_switch)
 
     # sigma = panel.radius * 0.1
-    potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel.vertices, kernel, sigma)
+    # potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel.vertices, kernel, sigma)
 
     return potential, velocity, velocity_gradient
 end
 
-function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0)
+function induced(target, panel, kernel::AbstractUnrotatedKernel, derivatives_switch=DerivativesSwitch(true,true,true); sigma=1.0e-2)
 
-    potential, velocity, velocity_gradient = _induced(target, panel, kernel, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, panel, kernel, sigma, derivatives_switch)
 
     # sigma = panel.radius * 0.1
-    potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
+    # potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
 
     return potential, velocity, velocity_gradient
 end
@@ -146,19 +146,20 @@ const ConstantNormalDoublet = NormalDoublet{1}
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSource, reg_term) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = ri + rip1 - ds
-    abs(num) < 5 * eps() && (num = typeof(num)(5*eps()))
+    num = ri + rip1 - ds + reg_term # try adding the regularization term to the numerator
+    # abs(num) < 5 * eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    iszero(ri) && (ri += eps())
-    iszero(rip1) && (rip1 += eps())
-    tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hip1) / (target_Rz * rip1))
+    # iszero(ri) && (ri += eps())
+    # iszero(rip1) && (rip1 += eps())
+    # TODO: is reg_term needed here? maybe just for the gradient?
+    tan_term = atan((mi * ei - hi) / (target_Rz * ri + reg_term * 0.0)) - atan((mi * eip1 - hip1) / (target_Rz * rip1 + reg_term * 0.0))
 
     potential = zero(TF)
     if PS# && !isinf(mi)
@@ -211,17 +212,17 @@ const ConstantSourceNormalDoublet = SourceNormalDoublet{2}
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet, reg_term) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = ri + rip1 - ds
-    abs(num) < 5*eps() && (num = typeof(num)(eps()))
-    log_term = log(num / (ri + rip1 + ds))
+    # num = ri + rip1 - ds
+    # abs(num) < 5*eps() && (num = typeof(num)(eps()))
+    # log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    iszero(ri) && (ri += eps())
-    rip1 = rip1
-    iszero(rip1) && (rip1 += eps())
+    # iszero(ri) && (ri += eps())
+    # rip1 = rip1
+    # iszero(rip1) && (rip1 += eps())
     tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hi) / (target_Rz * rip1))
     # arg1 = (mi * es - hs) / (target_Rz * ri)
     # arg2 = (mi * esp1 - hs) / (target_Rz * rip1)
@@ -242,7 +243,7 @@ end
         r_times_rp1 = ri * rip1
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
-        val4 = r_plus_rp1 / (r_times_rp1 * rho)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
         velocity += strength[1] * SVector{3}(
             target_Rz * dy * val4,
             -target_Rz * dx * val4,
@@ -262,17 +263,17 @@ end
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
         val1 = r_times_rp1 * r_plus_rp1_2 + rho * rip1 * rip1
-        val1 /= rho * ri * r_plus_rp1
+        val1 /= rho * ri * r_plus_rp1 + reg_term
         val2 = r_times_rp1 * r_plus_rp1_2 + rho * ri * ri
-        val2 /= rho * rip1 * r_plus_rp1
-        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1)
+        val2 /= rho * rip1 * r_plus_rp1 + reg_term
+        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1 + reg_term)
 
         # construct velocity_gradient
         psi_xx = target_Rz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
         psi_xy = target_Rz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         psi_yy = -target_Rz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         val4 = r_plus_rp1_2 / rho
-        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / r_times_rp1
+        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1 + reg_term)
         val6 = target_Rz * (val4 + val5)
         psi_zz = lambda * val3 * val6
         val7 = r_times_rp1 - target_Rz * val6
@@ -289,18 +290,18 @@ end
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantSourceNormalDoublet, reg_term) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = ri + rip1 - ds
-    abs(num) < 5*eps() && (num = typeof(num)(5*eps()))
+    num = ri + rip1 - ds + reg_term
+    # abs(num) < 5*eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    ri = ri
-    iszero(ri) && (ri += eps())
-    rip1 = rip1
-    iszero(rip1) && (rip1 += eps())
+    # ri = ri
+    # iszero(ri) && (ri += eps())
+    # rip1 = rip1
+    # iszero(rip1) && (rip1 += eps())
     tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hip1) / (target_Rz * rip1))
 
     potential = zero(TF)
@@ -315,7 +316,7 @@ end
         r_times_rp1 = ri * rip1
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
-        val4 = r_plus_rp1 / (r_times_rp1 * rho)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
         velocity -= strength[1] * SVector{3}(
             dy / ds * log_term,
             -dx / ds * log_term,
@@ -331,7 +332,7 @@ end
     velocity_gradient = zero(SMatrix{3,3,TF,9})
     if GS
         # intermediate values
-        d2 = ds^2
+        d2 = ds * ds
         r_plus_rp1 = ri + rip1
         r_plus_rp1_2 = r_plus_rp1 * r_plus_rp1
         r_times_rp1 = ri * rip1
@@ -339,15 +340,15 @@ end
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
-        ri_inv = 1/ri
-        rip1_inv = 1/rip1
+        ri_inv = 1/(ri + reg_term)
+        rip1_inv = 1/(rip1 + reg_term)
 
         val1 = r_plus_rp1_2 - d2
         val2 = (target_Rx - vx_i) * ri_inv + (target_Rx - vx_ip1) * rip1_inv
         val2 *= strength[1]
         val3 = (target_Ry - vy_i) * ri_inv + (target_Ry - vy_ip1) * rip1_inv
         val3 *= strength[1]
-        val4 = r_plus_rp1 / (r_times_rp1 * rho)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
         val4 *= strength[1]
 
         # construct velocity_gradient
@@ -367,14 +368,14 @@ end
         val1 /= rho * ri * r_plus_rp1
         val2 = r_times_rp1 * r_plus_rp1_2 + rho * ri * ri
         val2 /= rho * rip1 * r_plus_rp1
-        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1)
+        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1 + reg_term)
 
         # construct velocity_gradient
         psi_xx = target_Rz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
         psi_xy = target_Rz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         psi_yy = -target_Rz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         val4 = r_plus_rp1_2 / rho
-        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / r_times_rp1
+        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1 + reg_term)
         val6 = target_Rz * (val4 + val5)
         psi_zz = lambda * val3 * val6
         val7 = r_times_rp1 - target_Rz * val6
@@ -391,9 +392,10 @@ end
     return potential, velocity, velocity_gradient
 end
 
-function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     #--- prelimilary computations ---#
 
+    # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
 
     #--- first recursive quantities ---#
@@ -405,23 +407,29 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 
     # loop over side contributions
     for i in 1:NS-1
-
+        
         #--- recurse values ---#
-
+        
         # current vertex locations
         vertex_i = vertex_ip1
         vx_i = vx_ip1
         vy_i = vy_ip1
-
+        
         # the next vertex locations
         vertex_ip1 = vertices[i+1] - centroid
         vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
         vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
 
-        # the rest
+        #--- regularization term based on the minimum distance to this side ---#
+
+        m_dist = minimum_distance(vertex_i, vertex_ip1, target)
+        reg_term = regularize(m_dist, core_radius)
+        
+        #--- the rest ---#
+
         eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
-        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, reg_term)
         if PS
             potential += p
         end
@@ -446,12 +454,18 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
     vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
     vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
 
-    # the rest
+    #--- regularization term based on the minimum distance to this side ---#
+
+    m_dist = minimum_distance(vertex_i, vertex_ip1, target)
+    reg_term = regularize(m_dist, core_radius)
+    
+    #--- the rest ---#
+
     eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
     #--- compute values ---#
 
-    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, reg_term)
 
     #--- return result ---#
 
@@ -472,7 +486,7 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 end
 
 "version for use with FastMultipole"
-function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     #--- prelimilary computations ---#
 
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
@@ -559,15 +573,15 @@ struct Vortex{M} <: AbstractUnrotatedKernel{M} end
 const VortexRing = Vortex{1}
 
 
-function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, core_radius, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     TF = promote_type(TFT,TFP)
     corner_vectors = SVector{NS,SVector{3,TF}}(corner - target for corner in panel.vertices)
     velocity = zero(SVector{3,TF})
     gradient = zero(SMatrix{3,3,TF,9})
 
     # finite core settings
-    finite_core = false
-    core_size = 1e-3
+    finite_core = true
+    core_size = core_radius
 
     # evaluate velocity/gradient
     for i in 1:NS-1
@@ -678,17 +692,22 @@ end
 
 #------- regularization functions -------#
 
-function regularize(potential::TF, velocity, velocity_gradient, target, vertices, kernel::Union{NormalDoublet, SourceNormalDoublet}, sigma) where TF
-    distance = minimum_distance(target, vertices)
-    r_over_σ = distance / sigma
-    factor = one(TF) - exp(-r_over_σ * r_over_σ * r_over_σ)
+# function regularize(potential::TF, velocity, velocity_gradient, target, vertices, kernel::Union{NormalDoublet, SourceNormalDoublet}, sigma) where TF
+#     distance = minimum_distance(target, vertices)
+#     r_over_σ = distance / sigma
+#     factor = one(TF) - exp(-r_over_σ * r_over_σ * r_over_σ)
 
-    # TODO: use the product rule to regularize the gradient also
+#     # TODO: use the product rule to regularize the gradient also
 
-    return potential, velocity * factor, velocity_gradient * factor
+#     return potential, velocity * factor, velocity_gradient * factor
+# end
+
+# function regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
+#     return potential, velocity, velocity_gradient
+# end
+
+@inline function regularize(distance, core_size)
+    δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
+
+    return δ
 end
-
-function regularize(potential, velocity, velocity_gradient, target, panel, kernel, sigma)
-    return potential, velocity, velocity_gradient
-end
-

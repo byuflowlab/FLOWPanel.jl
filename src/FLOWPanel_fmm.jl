@@ -10,6 +10,7 @@ module FMM
     using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
     using WriteVTK
     import Krylov
+    import Roots
     # import LinearOperators
 
     # https://github.com/byuflowlab/FastMultipole
@@ -141,13 +142,13 @@ bodytype2fmmkernel(::AbstractBody{<:VortexRing}) = FMM.ConstantNormalDoublet
 function body2fmmbody(body; sigma=1e-5)
 
     args = allocate_body2fmmbody(body; sigma)
-    return body2fmmbody!(body, args...; sigma)
+    return body2fmmbody!(body, args...)
 
 end
 
 function body2fmmbody!(body,
                         body_fmm::FMM.UnstructuredGrid{<:Any, TF, NK, <:Any},
-                        normals, controlpoints; sigma=1e-5
+                        normals, controlpoints
                         ) where {TF, NK}
 
     # Fetch data from FMM body
@@ -187,6 +188,9 @@ function body2fmmbody!(body,
     for (i, panel) in enumerate(panels_fmm)
         strengths_fmm[i] = panel.strength
     end
+
+    # update core radius and error tolerance
+    # body_fmm.sigma = sigma
 
     return body_fmm
 

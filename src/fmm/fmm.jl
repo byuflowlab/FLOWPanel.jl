@@ -6,13 +6,58 @@ function FastMultipole.strength_dims(system::AbstractPanels{<:Any,<:Any,NK,<:Any
     return NK
 end
 
-function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractPanels{<:Any,<:Any,NK,NS}, i_body) where {NK,NS}
+function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantSourceNormalDoublet})
+    
+    # panel properties
+    ρ = panel.radius
+    A = get_area(panel.vertices)
+    μ = abs(panel.strength[2])
+    f1 = 1 / (core_size * core_size * core_size)
+    f2 = 2 * π * ε / (μ * A)
+
+    # solve for d
+    d_upper = cbrt(μ * A / (2 * π * ε))
+    d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
+    
+    # compute r̃
+    r̃ = ρ + d
+    
+    return r̃
+end
+
+function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantNormalDoublet})
+    
+    # panel properties
+    ρ = panel.radius
+    A = get_area(panel.vertices)
+    μ = abs(panel.strength[1])
+    f1 = 1 / (core_size * core_size * core_size)
+    f2 = 2 * π * ε / (μ * A)
+
+    # solve for d
+    d_upper = cbrt(μ * A / (2 * π * ε))
+    d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
+    # @show d, ρ
+    @show core_size, ε
+    
+    # compute r̃
+    r̃ = ρ + d
+    
+    return r̃
+end
+
+function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractPanels{TK,<:Any,NK,NS}, i_body) where {TK,NK,NS}
     # position
     panel = system.panels[i_body]
 
-    # centroid and radius
+    # centroid
     buffer[1:3, i_buffer] .= panel.control_point
-    buffer[4, i_buffer] = panel.radius
+
+    # regularization radius
+    # r̃ = get_r̃(panel, system.sigma[i_body], system.ε[i_body], TK)
+    # buffer[4, i_buffer] = r̃
+    buffer[4, i_buffer] = panel.radius + system.sigma
+    # @show panel.radius / r̃
 
     # strength
     strength = panel.strength
@@ -31,9 +76,9 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
         i_offset += 3
     end
 
-    # regularization radius
-    σ = 1e-2
-    buffer[5+NK+3*NS,i_buffer] = σ
+    # # regularization radius
+    # σ = system.sigma[i_body]
+    # buffer[5+NK+3*NS,i_buffer] = σ
 end
 
 function FastMultipole.data_per_body(system::AbstractPanels{<:Any,<:Any,NK,NS}) where {NK,NS}
@@ -113,10 +158,10 @@ function convolve_kernel!(target_system, target_index, source_system::AbstractPa
         target = FastMultipole.get_position(target_system, i_target)
 
         # compute induced velocity
-        potential, velocity, velocity_gradient = _induced(target, vertices, control_point, strength, kernel, R, derivatives_switch)
+        potential, velocity, velocity_gradient = _induced(target, vertices, control_point, strength, kernel, sigma, R, derivatives_switch)
 
         # regularize
-        potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, vertices, kernel, sigma)
+        # potential, velocity, velocity_gradient = regularize(potential, velocity, velocity_gradient, target, vertices, kernel, sigma)
 
         if PS
             FastMultipole.set_scalar_potential!(target_system, i_target, potential)

@@ -37,7 +37,8 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     strengths::Vector{SVector{NK,TF}}
     potential::Vector{TF}
     velocity::Vector{SVector{3,TF}}
-    sigma::TF
+    sigma::TF # core radius for regularization
+    # ε::Vector{TF} # error tolerance
 
     # efficient panel access assembly
     panels::Vector{Panel{TF,NK,NS}}
@@ -46,7 +47,7 @@ struct UnstructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     wake_points::Vector{SVector{3,TF}}
 end
 
-function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K; sigma=1e-5) where {K<:AbstractKernel}
+function PanelArray(points::Vector{<:AbstractVector}, meshcells::Vector{<:MeshCell}, kernel::K; sigma=1e-5, ε=1e-4) where {K<:AbstractKernel}
 
     n_cells = length(meshcells)
     TF = eltype(eltype(points))
@@ -90,7 +91,8 @@ struct StructuredGrid{TK,TF,NK,NS} <: AbstractPanels{TK,TF,NK,NS}
     strengths::Array{SVector{NK,TF},3}
     potential::Array{TF,3}
     velocity::Array{SVector{3,TF},3}
-    sigma::TF # regularization radius
+    sigma::TF # core radius
+    # ε::Vector{TF} # error tolerance
 
     # efficient panel access assembly
     panels::Vector{Panel{TF,NK,NS}}
@@ -112,7 +114,7 @@ function PanelArray(corner_grid::Array{<:Number,4}, args...; optargs...)
 end
 
 function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::K;
-                            invert_normals=false, sigma=1e-2) where {TF, K<:AbstractKernel}
+                            invert_normals=false, sigma=1e-2, ε=1e-4) where {TF, K<:AbstractKernel}
     # meta parameters
     NK = kernel_multiplicity(K)
     NS = 4 # quad panels
@@ -175,6 +177,7 @@ function PanelArray(corner_grid::AbstractArray{SVector{3,TF}}, kernel::K;
 
     # return panels
     return StructuredGrid{K,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, sigma, panels, wake_points)
+    # return StructuredGrid{K,TF,NK,NS}(corner_grid, control_points, normals, strengths, potential, velocity, fill(sigma, length(panels)), fill(ε, length(panels)), panels, wake_points)
 end
 
 function panels_2_vector_strengths!(strengths, panels::AbstractVector{Panel{TF,NK,NS}}) where {TF,NK,NS}
