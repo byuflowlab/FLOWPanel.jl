@@ -6,45 +6,45 @@ function FastMultipole.strength_dims(system::AbstractPanels{<:Any,<:Any,NK,<:Any
     return NK
 end
 
-function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantSourceNormalDoublet})
+# function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantSourceNormalDoublet})
     
-    # panel properties
-    ρ = panel.radius
-    A = get_area(panel.vertices)
-    μ = abs(panel.strength[2])
-    f1 = 1 / (core_size * core_size * core_size)
-    f2 = 2 * π * ε / (μ * A)
+#     # panel properties
+#     ρ = panel.radius
+#     A = get_area(panel.vertices)
+#     μ = abs(panel.strength[2])
+#     f1 = 1 / (core_size * core_size * core_size)
+#     f2 = 2 * π * ε / (μ * A)
 
-    # solve for d
-    d_upper = cbrt(μ * A / (2 * π * ε))
-    d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
+#     # solve for d
+#     d_upper = cbrt(μ * A / (2 * π * ε))
+#     d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
     
-    # compute r̃
-    r̃ = ρ + d
+#     # compute r̃
+#     r̃ = ρ + d
     
-    return r̃
-end
+#     return r̃
+# end
 
-function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantNormalDoublet})
+# function get_r̃(panel::Panel, core_size, ε, ::Type{ConstantNormalDoublet})
     
-    # panel properties
-    ρ = panel.radius
-    A = get_area(panel.vertices)
-    μ = abs(panel.strength[1])
-    f1 = 1 / (core_size * core_size * core_size)
-    f2 = 2 * π * ε / (μ * A)
+#     # panel properties
+#     ρ = panel.radius
+#     A = get_area(panel.vertices)
+#     μ = abs(panel.strength[1])
+#     f1 = 1 / (core_size * core_size * core_size)
+#     f2 = 2 * π * ε / (μ * A)
 
-    # solve for d
-    d_upper = cbrt(μ * A / (2 * π * ε))
-    d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
-    # @show d, ρ
-    @show core_size, ε
+#     # solve for d
+#     d_upper = cbrt(μ * A / (2 * π * ε))
+#     d = Roots.find_zero(d -> exp(-d*d*d * f1) - d * d * d * f2, (zero(d_upper), d_upper), Roots.Brent())
+#     # @show d, ρ
+#     @show core_size, ε
     
-    # compute r̃
-    r̃ = ρ + d
+#     # compute r̃
+#     r̃ = ρ + d
     
-    return r̃
-end
+#     return r̃
+# end
 
 function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractPanels{TK,<:Any,NK,NS}, i_body) where {TK,NK,NS}
     # position

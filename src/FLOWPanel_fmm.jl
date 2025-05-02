@@ -10,7 +10,6 @@ module FMM
     using LinearAlgebra: cross, norm, dot, mul!, lu!, LU
     using WriteVTK
     import Krylov
-    import Roots
     # import LinearOperators
 
     # https://github.com/byuflowlab/FastMultipole
