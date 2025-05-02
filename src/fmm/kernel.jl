@@ -22,7 +22,7 @@ end
 
 # Function to calculate the distance from point P to the line segment AB
 function minimum_distance(A, B, target)
-    # compute vectos AB and Atarget
+    # compute vectors AB and Atarget
     ABx = B[1] - A[1]
     ABy = B[2] - A[2]
     ABz = B[3] - A[3]
@@ -35,7 +35,7 @@ function minimum_distance(A, B, target)
     AB_dot_AB = ABx*ABx + ABy*ABy + ABz*ABz
     Atarget_dot_AB = Atargetx*ABx + Atargety*ABy + Atargetz*ABz
 
-    # targetrojection length
+    # target projection length
     projection_length = Atarget_dot_AB / AB_dot_AB
 
     # Clamp projection_length to [0, 1]
@@ -422,7 +422,7 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 
         #--- regularization term based on the minimum distance to this side ---#
 
-        m_dist = minimum_distance(vertex_i, vertex_ip1, target)
+        m_dist = minimum_distance(vertex_i, vertex_ip1, target - centroid)
         reg_term = regularize(m_dist, core_radius)
         
         #--- the rest ---#
@@ -456,7 +456,7 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 
     #--- regularization term based on the minimum distance to this side ---#
 
-    m_dist = minimum_distance(vertex_i, vertex_ip1, target)
+    m_dist = minimum_distance(vertex_i, vertex_ip1, target - centroid)
     reg_term = regularize(m_dist, core_radius)
     
     #--- the rest ---#
