@@ -485,86 +485,86 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
     return potential, velocity, velocity_gradient
 end
 
-"version for use with FastMultipole"
-function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
-    #--- prelimilary computations ---#
+# "version for use with FastMultipole"
+# function _induced(target::AbstractVector{TFT}, vertices, centroid::AbstractVector{TFP}, strength, kernel::Union{ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet}, core_radius, R, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
+#     #--- prelimilary computations ---#
 
-    potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
+#     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
 
-    #--- first recursive quantities ---#
+#     #--- first recursive quantities ---#
 
-    # current vertex locations
-    vertex_ip1 = vertices[1] - centroid
-    vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
-    vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+#     # current vertex locations
+#     vertex_ip1 = vertices[1] - centroid
+#     vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+#     vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
 
-    # loop over side contributions
-    for i in 1:NS-1
+#     # loop over side contributions
+#     for i in 1:NS-1
 
-        #--- recurse values ---#
+#         #--- recurse values ---#
 
-        # current vertex locations
-        vertex_i = vertex_ip1
-        vx_i = vx_ip1
-        vy_i = vy_ip1
+#         # current vertex locations
+#         vertex_i = vertex_ip1
+#         vx_i = vx_ip1
+#         vy_i = vy_ip1
 
-        # the next vertex locations
-        vertex_ip1 = vertices[i+1] - centroid
-        vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
-        vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+#         # the next vertex locations
+#         vertex_ip1 = vertices[i+1] - centroid
+#         vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+#         vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
 
-        # the rest
-        eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+#         # the rest
+#         eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
-        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
-        if PS
-            potential += p
-        end
-        if VS
-            velocity += v
-        end
-        if GS
-            velocity_gradient += vg
-        end
+#         p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+#         if PS
+#             potential += p
+#         end
+#         if VS
+#             velocity += v
+#         end
+#         if GS
+#             velocity_gradient += vg
+#         end
 
-    end
+#     end
 
-    #--- recurse values ---#
+#     #--- recurse values ---#
 
-    # current vertex locations
-    vertex_i = vertex_ip1
-    vx_i = vx_ip1
-    vy_i = vy_ip1
+#     # current vertex locations
+#     vertex_i = vertex_ip1
+#     vx_i = vx_ip1
+#     vy_i = vy_ip1
 
-    # the next vertex locations
-    vertex_ip1 = vertices[1] - centroid
-    vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
-    vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
+#     # the next vertex locations
+#     vertex_ip1 = vertices[1] - centroid
+#     vx_ip1 = R[1,1] * vertex_ip1[1] + R[2,1] * vertex_ip1[2] + R[3,1] * vertex_ip1[3]
+#     vy_ip1 = R[1,2] * vertex_ip1[1] + R[2,2] * vertex_ip1[2] + R[3,2] * vertex_ip1[3]
 
-    # the rest
-    eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+#     # the rest
+#     eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
-    #--- compute values ---#
+#     #--- compute values ---#
 
-    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
+#     p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel)
 
-    #--- return result ---#
+#     #--- return result ---#
 
-    if PS
-        potential += p
-        potential *= ONE_OVER_4PI
-    end
-    if VS
-        velocity += v
-        velocity = ONE_OVER_4PI * R * velocity
-    end
-    if GS
-        velocity_gradient += vg
-        velocity_gradient = -ONE_OVER_4PI * R * velocity_gradient * transpose(R)
-    end
+#     if PS
+#         potential += p
+#         potential *= ONE_OVER_4PI
+#     end
+#     if VS
+#         velocity += v
+#         velocity = ONE_OVER_4PI * R * velocity
+#     end
+#     if GS
+#         velocity_gradient += vg
+#         velocity_gradient = -ONE_OVER_4PI * R * velocity_gradient * transpose(R)
+#     end
 
-    return potential, velocity, velocity_gradient
-end
+#     return potential, velocity, velocity_gradient
+# end
 
 
 #------- vortex ring panel -------#

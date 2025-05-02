@@ -19,6 +19,10 @@ export  solve, save, Uind!, phi!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas
 
+export  AbstractPanels, ConstantSource, ConstantNormalDoublet, ConstantSourceNormalDoublet,
+        AbstractRotatedKernel, AbstractUnrotatedKernel,
+        _induced, convolve_kernel!
+
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import LinearAlgebra as LA
