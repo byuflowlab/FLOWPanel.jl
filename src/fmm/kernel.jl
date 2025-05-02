@@ -152,7 +152,7 @@ const UniformSourceNormalDoublet = SourceNormalDoublet{2}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = ri + rip1 - ds + reg_term # try adding the regularization term to the numerator
+    num = max(zero(ri), ri + rip1 - ds) + reg_term # try adding the regularization term to the numerator
     # abs(num) < 5 * eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
@@ -294,7 +294,7 @@ end
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = ri + rip1 - ds + reg_term
+    num = max(zero(ri), ri + rip1 - ds) + reg_term
     # abs(num) < 5*eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
