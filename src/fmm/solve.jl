@@ -1134,7 +1134,7 @@ function (solver::LUSolver)(A, b, x=similar(b))
     return x
 end
 
-function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) where {TK,TF,NK,NS}
+function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing, watertight=false) where {TK,TF,NK,NS}
     # set up freestream
     AOA = 5.0 # deg
     magVinf = 10.0 # m/s
@@ -1160,7 +1160,7 @@ function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) w
 
     # create rhs
     println("Creating RHS...")
-    rhs = zeros(length(panels.panels))
+    rhs = zeros(length(panels.panels)-watertight)
     for i in eachindex(rhs)
         v = panels.velocity[i]
         n = panels.panels[i].normal
@@ -1169,7 +1169,7 @@ function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) w
 
     # initial guess
     # x0 = [panels.panels[i].strength[2] for i in eachindex(panels.panels)]
-    x0 = ones(length(panels.panels))
+    # x0 = ones(length(panels.panels))
 
     # set panel strengths to unity
     for i in eachindex(panels.panels)
@@ -1180,10 +1180,10 @@ function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) w
     # create matrix
     println("Creating influence matrix...")
     if isnothing(A)
-        A = zeros(length(panels.panels), length(panels.panels))
-        Threads.@threads for i_source in 1:length(panels.panels)
+        A = zeros(length(panels.panels)-watertight, length(panels.panels)-watertight)
+        Threads.@threads for i_source in 1:length(panels.panels)-watertight
             panel = panels.panels[i_source]
-            for i_target in 1:length(panels.panels)
+            for i_target in 1:length(panels.panels)-watertight
                 x = panels.panels[i_target].control_point
                 n = panels.panels[i_target].normal
                 _, v, _ = induced(x, panel, TK(); sigma=1e-4)
@@ -1198,9 +1198,12 @@ function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) w
     println("done.")
 
     # update strengths
-    for i in eachindex(panels.panels)
+    for i in 1:length(panels.panels)-watertight
         old_strength = σs[i]
         panels.strengths[i] = SVector{2}(old_strength, μ[i])
+    end
+    if watertight
+        panels.strengths[end] = SVector{2}(σs[end], 0.0)
     end
     grid_2_panels_strength!(panels)
 

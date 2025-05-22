@@ -343,9 +343,9 @@ end
 
 panels = change_kernel(body_fmm, pnl.FMM.UniformSourceNormalDoublet)
 
-solver = pnl.FMM.BlockGaussSeidel(100, 10, 1.0)
-solver = pnl.FMM.LUSolver()
-resid, A, rhs, σ, μ = pnl.FMM.solve_panels!(panels, solver)
+solver = pnl.FMM.BlockGaussSeidel(1000, 1000, 1.0)
+# solver = pnl.FMM.LUSolver()
+resid, A, rhs, σ, μ = pnl.FMM.solve_panels!(panels, solver; watertight=true)
 
 # function zero_strength!(panels, i)
 #     mask = SVector{2}(j!=i for j in 1:2)
