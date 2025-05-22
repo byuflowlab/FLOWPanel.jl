@@ -944,6 +944,281 @@ function solve!(panels::AbstractPanels{K,TF,<:Any,<:Any},
     return nothing
 end
 
+
+#------- other solvers -------#
+
+struct SVDSolver
+    epsilon::Float64
+end
+
+function (solver::SVDSolver)(A, b)
+
+    # singular value decomp
+    U, S, V = svd(A)
+
+    # pseudo-inverse
+    for i in eachindex(S)
+        if abs(S[i]) > solver.epsilon
+            S[i] = 1 / S[i]
+        end
+    end
+    S_pseudo_inv = Diagonal(S)
+
+    # solve
+    x = V * S_pseudo_inv * U' * b
+    return x
+end
+
+struct BlockGaussSeidel
+    n_iter::Int
+    n::Int
+    rlx::Float64
+end
+
+function BlockGaussSeidel(; n_iter, n, rlx)
+    return BlockGaussSeidel(n_iter, n, rlx)
+end
+
+function _bgs!(x0, A, b, n, rlx)
+    N = length(x0)
+    b2 = copy(b)
+    for istart in 1:n:N
+        iend = min(istart+n-1, N)
+        bb = view(b2, istart:iend)
+        # bb .= b[istart:iend]
+
+        # subtract left influence
+        if istart > 1
+            dA = view(A, istart:iend, 1:istart-1)
+            dx = view(x0, 1:istart-1)
+            mul!(bb, dA, dx, -1.0, 1.0)
+        end
+
+        # subtract right influence
+        if iend < N
+            dA = view(A, istart:iend, iend+1:N)
+            dx = view(x0, iend+1:N)
+            mul!(bb, dA, dx, -1.0, 1.0)
+        end
+
+        # solve for x
+        dA = view(A, istart:iend, istart:iend)
+        dx = view(x0, istart:iend)
+        # dx .*= (1-rlx)
+        # dx .+= rlx .* (dA \ bb)
+        dx .= dA \ bb
+    end
+end
+
+function _bgs_mt!(x0, A, b, n, rlx)
+    N = length(x0)
+    b2 = copy(b)
+    Threads.@threads for istart in 1:n:N
+        iend = min(istart+n-1, N)
+        bb = view(b2, istart:iend)
+        # bb .= b[istart:iend]
+
+        # subtract left influence
+        if istart > 1
+            dA = view(A, istart:iend, 1:istart-1)
+            dx = view(x0, 1:istart-1)
+            mul!(bb, dA, dx, -1.0, 1.0)
+        end
+
+        # subtract right influence
+        if iend < N
+            dA = view(A, istart:iend, iend+1:N)
+            dx = view(x0, iend+1:N)
+            mul!(bb, dA, dx, -1.0, 1.0)
+        end
+
+        # solve for x
+        dA = view(A, istart:iend, istart:iend)
+        dx = view(x0, istart:iend)
+        # dx .*= (1-rlx)
+        # dx .+= rlx .* (dA \ bb)
+        dx .= dA \ bb
+    end
+end
+
+function bgs_singlethread!(x0, A, b, n, rlx, n_iter)
+    for _ in 1:n_iter
+        _bgs!(x0, A, b, n, rlx)
+    end
+end
+
+function bgs_multithread!(x0, A, b, n, rlx, n_iter)
+    for _ in 1:n_iter
+        _bgs_mt!(x0, A, b, n, rlx)
+    end
+end
+
+function (bgs::BlockGaussSeidel)(A, b, x0=ones(length(b)))
+    n_iter = bgs.n_iter
+    n = bgs.n
+    rlx = bgs.rlx
+    if Threads.nthreads() > 1
+        bgs_multithread!(x0, A, b, n, rlx, n_iter)
+    else
+        bgs_singlethread!(x0, A, b, n, rlx, n_iter)
+    end
+    return x0
+end
+
+struct GaussSeidel
+    n_iter::Int
+    atol::Float64
+end
+
+function _gs!(x0, A, b)
+    N = length(x0)
+    for i in 1:N
+        x = b[i]
+        for j in 1:i-1
+            x -= A[i,j] * x0[j]
+        end
+        for j in i+1:N
+            x -= A[i,j] * x0[j]
+        end
+        x0[i] = x / A[i,i]
+    end
+end
+
+function _gs_mt!(x0, A, b, n_threads)
+    N = length(x0)
+    n_per_thread, rem = divrem(n_threads, N)
+    rem > 0 && (n_per_thread += 1)
+    i_starts = 1:n_per_thread:N
+
+    Threads.@threads for i_start in i_starts
+        for i in i_start:min(i_start-1+n_per_thread, N)
+            x = b[i]
+            for j in 1:i-1
+                x -= A[i,j] * x0[j]
+            end
+            for j in i+1:N
+                x -= A[i,j] * x0[j]
+            end
+            x0[i] = x / A[i,i]
+        end
+    end
+end
+
+function gs_singlethread!(x0, A, b, n_iter)
+    for _ in 1:n_iter
+        _gs!(x0, A, b)
+    end
+end
+
+function gs_multithread!(x0, A, b, n_iter, n_threads)
+    for i in 1:n_iter
+        println("iteration $i")
+        _gs_mt!(x0, A, b, n_threads)
+    end
+end
+
+function (gs::GaussSeidel)(A, b, x0=ones(length(b)); n_threads = Threads.nthreads())
+    if n_threads == 1
+        gs_singlethread!(x0, A, b, gs.n_iter)
+    else
+        gs_multithread!(x0, A, b, gs.n_iter, n_threads)
+    end
+    return x0
+end
+
+struct LUSolver end
+
+function (solver::LUSolver)(A, b, x=similar(b))
+    # solve
+    x .= A \ b
+    return x
+end
+
+function solve_panels!(panels::AbstractPanels{TK,TF,NK,NS}, solver; A=nothing) where {TK,TF,NK,NS}
+    # set up freestream
+    AOA = 5.0 # deg
+    magVinf = 10.0 # m/s
+    Vinf = magVinf*SVector{3}(cos(AOA*pi/180), sin(AOA*pi/180), 0)
+
+    # update panels
+    for i in 1:length(panels.panels)
+        panels.velocity[i] = Vinf
+    end
+
+    # set source strengths
+    σs = zeros(TF, length(panels.panels))
+    for i in 1:length(panels.panels)
+        σ = -2 * dot(Vinf, panels.panels[i].normal)
+        panels.strengths[i] = SVector{2}(σ, 0.0)
+        σs[i] = σ
+    end
+    grid_2_panels_strength!(panels)
+
+    # source-induced velocity
+    expansion_order, leaf_size_source, multipole_threshold = 8, 18, 0.4
+    fmm!(panels; expansion_order, leaf_size_source, multipole_threshold)
+
+    # create rhs
+    println("Creating RHS...")
+    rhs = zeros(length(panels.panels))
+    for i in eachindex(rhs)
+        v = panels.velocity[i]
+        n = panels.panels[i].normal
+        rhs[i] = -dot(v, n)
+    end
+
+    # initial guess
+    # x0 = [panels.panels[i].strength[2] for i in eachindex(panels.panels)]
+    x0 = ones(length(panels.panels))
+
+    # set panel strengths to unity
+    for i in eachindex(panels.panels)
+        (; vertices, control_point, normal, strength, radius) = panels.panels[i]
+        panels.panels[i] = eltype(panels.panels)(vertices, control_point, normal, SVector{2}(0.0, 1.0), radius)
+    end
+
+    # create matrix
+    println("Creating influence matrix...")
+    if isnothing(A)
+        A = zeros(length(panels.panels), length(panels.panels))
+        Threads.@threads for i_source in 1:length(panels.panels)
+            panel = panels.panels[i_source]
+            for i_target in 1:length(panels.panels)
+                x = panels.panels[i_target].control_point
+                n = panels.panels[i_target].normal
+                _, v, _ = induced(x, panel, TK(); sigma=1e-4)
+                A[i_target, i_source] = dot(v, n)
+            end
+        end
+    end
+
+    println("solving...")
+    μ = solver(A, rhs)
+    # μ = A \ rhs
+    println("done.")
+
+    # update strengths
+    for i in eachindex(panels.panels)
+        old_strength = σs[i]
+        panels.strengths[i] = SVector{2}(old_strength, μ[i])
+    end
+    grid_2_panels_strength!(panels)
+
+    # check residual
+    reset_potential_velocity!(panels)
+    for i in eachindex(panels.panels)
+        panels.velocity[i] = Vinf
+    end
+
+    fmm!(panels; expansion_order, leaf_size_source, multipole_threshold)
+
+    resid = [dot(panels.panels[i].normal, panels.velocity[i]) for i in eachindex(panels.panels)]
+
+    return resid, solver, A, rhs, μ
+end
+
+
+
 #=
 #####
 ##### FMM-accelerated Jacobi iterations
