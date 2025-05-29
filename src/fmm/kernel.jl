@@ -129,10 +129,13 @@ end
     dy = vy_ip1 - vy_i
     ds = sqrt(dx * dx + dy * dy)
 
+    # R_dot_s
+    R_dot_s = dx * (target_Rx - vx_i) + dy * (target_Ry - vy_i)
+
     # mi
     mi = dy / dx
 
-    return eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy
+    return eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, R_dot_s
 end
 
 #------- constant source, normal doublet, source + normal doublet -------#
@@ -146,20 +149,29 @@ const ConstantNormalDoublet = NormalDoublet{1}
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const UniformSourceNormalDoublet = SourceNormalDoublet{2}
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, reg_term) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, R_dot_s) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = max(zero(ri), ri + rip1 - ds) + reg_term # try adding the regularization term to the numerator
+    num = max(zero(ri), ri + rip1 - ds) # try adding the regularization term to the numerator
     # abs(num) < 5 * eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
     # iszero(ri) && (ri += eps())
     # iszero(rip1) && (rip1 += eps())
     # TODO: is reg_term needed here? maybe just for the gradient?
-    tan_term = atan((mi * ei - hi) / (target_Rz * ri + reg_term * 0.0)) - atan((mi * eip1 - hip1) / (target_Rz * rip1 + reg_term * 0.0))
+    # tan_term = atan((mi * ei - hi) / (target_Rz * ri + reg_term * 0.0)) - atan((mi * eip1 - hip1) / (target_Rz * rip1 + reg_term * 0.0))
+    
+    # determine closeness to an extension of the panel side
+    if (abs(R_dot_s) - ri * ds) < 1e-8
+        tan_term = zero(target_Rz)
+    else
+        arg1 = (mi * ei - hi) / (target_Rz * ri)
+        arg2 = (mi * eip1 - hip1) / (target_Rz * rip1)
+        tan_term = atan((arg1 - arg2), (1 + arg1 * arg2))
+    end
 
     potential = zero(TF)
     if PS# && !isinf(mi)
@@ -223,17 +235,16 @@ end
     # iszero(ri) && (ri += eps())
     # rip1 = rip1
     # iszero(rip1) && (rip1 += eps())
-    tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hi) / (target_Rz * rip1))
-    # arg1 = (mi * es - hs) / (target_Rz * ri)
-    # arg2 = (mi * esp1 - hs) / (target_Rz * rip1)
-    # tan_term = atan((arg1 + arg2) / (1 - arg1 * arg2))
-    # if arg1 * arg2 > 1.0
-    #     if arg1 > 0
-    #         tan_term += π
-    #     else
-    #         tan_term -= π
-    #     end
-    # end
+    # tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hi) / (target_Rz * rip1))
+    
+    # determine closeness to an extension of the panel side
+    if (abs(R_dot_s) - ri * ds) < 1e-8
+        tan_term = zero(target_Rz)
+    else
+        arg1 = (mi * ei - hi) / (target_Rz * ri)
+        arg2 = (mi * eip1 - hip1) / (target_Rz * rip1)
+        tan_term = atan((arg1 - arg2), (1 + arg1 * arg2))
+    end
 
     potential = -strength[1] * tan_term
 
@@ -243,7 +254,7 @@ end
         r_times_rp1 = ri * rip1
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
-        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho)# + reg_term)
         velocity += strength[1] * SVector{3}(
             target_Rz * dy * val4,
             -target_Rz * dx * val4,
@@ -263,17 +274,17 @@ end
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
         val1 = r_times_rp1 * r_plus_rp1_2 + rho * rip1 * rip1
-        val1 /= rho * ri * r_plus_rp1 + reg_term
+        val1 /= rho * ri * r_plus_rp1# + reg_term
         val2 = r_times_rp1 * r_plus_rp1_2 + rho * ri * ri
-        val2 /= rho * rip1 * r_plus_rp1 + reg_term
-        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1 + reg_term)
+        val2 /= rho * rip1 * r_plus_rp1# + reg_term
+        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1)# + reg_term)
 
         # construct velocity_gradient
         psi_xx = target_Rz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
         psi_xy = target_Rz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         psi_yy = -target_Rz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         val4 = r_plus_rp1_2 / rho
-        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1 + reg_term)
+        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1)# + reg_term)
         val6 = target_Rz * (val4 + val5)
         psi_zz = lambda * val3 * val6
         val7 = r_times_rp1 - target_Rz * val6
@@ -290,11 +301,11 @@ end
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSourceNormalDoublet, reg_term) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSourceNormalDoublet, R_dot_s) where {PS,VS,GS,TF}
 
     # intermediate quantities
     # singularity if probing on a side [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
-    num = max(zero(ri), ri + rip1 - ds) + reg_term
+    num = max(zero(ri), ri + rip1 - ds)# + reg_term
     # abs(num) < 5*eps() && (num = typeof(num)(5*eps()))
     log_term = log(num / (ri + rip1 + ds))
     # singularity if d_z=0 [ SOLVED ] or probing at a vertex [ SOLVED ]; (easy way out is to perturb the evaluation point slightly)
@@ -302,7 +313,25 @@ end
     # iszero(ri) && (ri += eps())
     # rip1 = rip1
     # iszero(rip1) && (rip1 += eps())
-    tan_term = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hip1) / (target_Rz * rip1))
+    # tan_term_old = atan((mi * ei - hi) / (target_Rz * ri)) - atan((mi * eip1 - hip1) / (target_Rz * rip1))
+
+    # determine closeness to an extension of the panel side
+    if (abs(R_dot_s) - ri * ds) < 1e-8
+        tan_term = zero(target_Rz)
+    else
+        arg1 = (mi * ei - hi) / (target_Rz * ri)
+        arg2 = (mi * eip1 - hip1) / (target_Rz * rip1)
+        tan_term = atan((arg1 - arg2), (1 + arg1 * arg2))
+    end
+
+    # @show tan_term tan_term_old
+    # if arg1 * arg2 > 1.0
+    #     if arg1 > 0
+    #         tan_term += π
+    #     else
+    #         tan_term -= π
+    #     end
+    # end
 
     potential = zero(TF)
     if PS# && !isinf(mi)
@@ -316,7 +345,7 @@ end
         r_times_rp1 = ri * rip1
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
-        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho)# + reg_term)
         velocity -= strength[1] * SVector{3}(
             dy / ds * log_term,
             -dx / ds * log_term,
@@ -340,15 +369,15 @@ end
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
-        ri_inv = 1/(ri + reg_term)
-        rip1_inv = 1/(rip1 + reg_term)
+        ri_inv = 1/(ri)# + reg_term)
+        rip1_inv = 1/(rip1)# + reg_term)
 
         val1 = r_plus_rp1_2 - d2
         val2 = (target_Rx - vx_i) * ri_inv + (target_Rx - vx_ip1) * rip1_inv
         val2 *= strength[1]
         val3 = (target_Ry - vy_i) * ri_inv + (target_Ry - vy_ip1) * rip1_inv
         val3 *= strength[1]
-        val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
+        val4 = r_plus_rp1 / (r_times_rp1 * rho)# + reg_term)
         val4 *= strength[1]
 
         # construct velocity_gradient
@@ -368,14 +397,14 @@ end
         val1 /= rho * ri * r_plus_rp1
         val2 = r_times_rp1 * r_plus_rp1_2 + rho * ri * ri
         val2 /= rho * rip1 * r_plus_rp1
-        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1 + reg_term)
+        val3 = r_plus_rp1 / (rho * r_times_rp1 * r_times_rp1)# + reg_term)
 
         # construct velocity_gradient
         psi_xx = target_Rz * dy * val3 * ((target_Rx - vx_i) * val1 + (target_Rx - vx_ip1) * val2)
         psi_xy = target_Rz * dy * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         psi_yy = -target_Rz * dx * val3 * ((target_Ry - vy_i) * val1 + (target_Ry - vy_ip1) * val2)
         val4 = r_plus_rp1_2 / rho
-        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1 + reg_term)
+        val5 = (ri * ri - r_times_rp1 + rip1 * rip1) / (r_times_rp1)# + reg_term)
         val6 = target_Rz * (val4 + val5)
         psi_zz = lambda * val3 * val6
         val7 = r_times_rp1 - target_Rz * val6
@@ -427,9 +456,9 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
         
         #--- the rest ---#
 
-        eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+        eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, R_dot_s = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
-        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, reg_term)
+        p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, R_dot_s)
         if PS
             potential += p
         end
@@ -456,16 +485,16 @@ function _induced(target::AbstractVector{TFT}, vertices::SVector{NS,<:Any}, cent
 
     #--- regularization term based on the minimum distance to this side ---#
 
-    m_dist = minimum_distance(vertex_i, vertex_ip1, target - centroid)
-    reg_term = regularize(m_dist, core_radius)
+    # m_dist = minimum_distance(vertex_i, vertex_ip1, target - centroid)
+    # reg_term = regularize(m_dist, core_radius)
     
     #--- the rest ---#
 
-    eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
+    eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, R_dot_s = recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1)
 
     #--- compute values ---#
 
-    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, reg_term)
+    p, v, vg = compute_source_dipole(derivatives_switch, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength, kernel, R_dot_s)
 
     #--- return result ---#
 
