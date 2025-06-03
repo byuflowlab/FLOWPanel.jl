@@ -140,15 +140,6 @@ end
 
 #------- constant source, normal doublet, source + normal doublet -------#
 
-struct Source{M} <: AbstractRotatedKernel{M} end
-const UniformSource = Source{1}
-
-struct NormalDoublet{M} <: AbstractRotatedKernel{M} end
-const ConstantNormalDoublet = NormalDoublet{1}
-
-struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
-const UniformSourceNormalDoublet = SourceNormalDoublet{2}
-
 @inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, R_dot_s, reg_term) where {PS,VS,GS,TF}
 
     #--- compute values ---#
@@ -580,10 +571,6 @@ end
 
 
 #------- vortex ring panel -------#
-
-struct Vortex{M} <: AbstractUnrotatedKernel{M} end
-const VortexRing = Vortex{1}
-
 
 function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, core_radius, derivatives_switch::DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
     TF = promote_type(TFT,TFP)
