@@ -149,7 +149,7 @@ const ConstantNormalDoublet = NormalDoublet{1}
 struct SourceNormalDoublet{M} <: AbstractRotatedKernel{M} end
 const UniformSourceNormalDoublet = SourceNormalDoublet{2}
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, R_dot_s) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::UniformSource, R_dot_s, reg_term) where {PS,VS,GS,TF}
 
     #--- compute values ---#
 
@@ -220,7 +220,7 @@ const UniformSourceNormalDoublet = SourceNormalDoublet{2}
     return potential, velocity, velocity_gradient
 end
 
-@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet, reg_term) where {PS,VS,GS,TF}
+@inline function compute_source_dipole(::DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::ConstantNormalDoublet, R_dot_s, reg_term) where {PS,VS,GS,TF}
     
     # singularity at extension of the panel side
     if abs(abs(R_dot_s) - ri * ds) < 1e-12

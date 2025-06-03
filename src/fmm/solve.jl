@@ -58,6 +58,88 @@ function update_influence_matrix!(influence_matrix,
     set_unit_strength && grid_2_panels_strength!(panels; panel_indices)
 end
 
+function update_influence_matrix!(influence_matrix,
+                                    panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                                    ::Type{Scheme{DirectNeumann, FlowTangency}};
+                                    panel_indices=1:length(panels.panels),
+                                    set_unit_strength=false
+                                    ) where {K <: NormalDoublet{1}}
+    # check matrix size
+    @assert size(influence_matrix,1) == size(influence_matrix,2)+1 ""*
+        "influence matrix should have 1 more row than columns"
+
+    @assert size(influence_matrix,1) == length(panel_indices) ""*
+        "influence matrix size $(size(influence_matrix,1)) inconsistent with"*
+        " number of panels $(length(panels.panels))"
+
+    # set panels to unit strength
+    if set_unit_strength
+        panels_2_grid_strength!(panels; panel_indices)
+        set_unit_strength!(panels; panel_indices)
+    end
+
+    kernel = K()
+
+    # update influence matrix
+    panel_indices_view = view(panel_indices, 1:length(panels.panels)-1)
+    for (j,i_source) in enumerate(panel_indices_view)
+        source_panel = panels.panels[i_source]
+        for (i,i_target) in enumerate(panel_indices)
+            target_panel = panels.panels[i_target]
+            _, v, _ = induced(target_panel.control_point, source_panel, kernel,
+                                      DerivativesSwitch(false,true,false))
+            influence_matrix[i, j] = dot(v, target_panel.normal)
+        end
+    end
+
+    # zero last panel
+    panels.strengths[end] = zero(eltype(panels.strengths))
+
+    # restore panel strengths
+    set_unit_strength && grid_2_panels_strength!(panels; panel_indices)
+end
+
+function update_influence_matrix!(influence_matrix,
+                                    panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                                    ::Type{Scheme{DirectNeumann, FlowTangency}};
+                                    panel_indices=1:length(panels.panels),
+                                    set_unit_strength=false
+                                    ) where {K <: SourceNormalDoublet{2}}
+    # check matrix size
+    @assert size(influence_matrix,1) == size(influence_matrix,2)+1 ""*
+        "influence matrix should have 1 more row than columns"
+
+    @assert size(influence_matrix,1) == length(panel_indices) ""*
+        "influence matrix size $(size(influence_matrix,1)) inconsistent with"*
+        " number of panels $(length(panels.panels))"
+
+    # set panels to unit strength
+    if set_unit_strength
+        panels_2_grid_strength!(panels; panel_indices)
+        set_unit_strength!(panels; panel_indices)
+    end
+
+    kernel = K()
+
+    # update influence matrix
+    panel_indices_view = view(panel_indices, 1:length(panels.panels)-1)
+    for (j,i_source) in enumerate(panel_indices_view)
+        source_panel = panels.panels[i_source]
+        for (i,i_target) in enumerate(panel_indices)
+            target_panel = panels.panels[i_target]
+            _, v, _ = induced(target_panel.control_point, source_panel, kernel,
+                                      DerivativesSwitch(false,true,false))
+            influence_matrix[i, j] = dot(v, target_panel.normal)
+        end
+    end
+
+    # zero last panel
+    panels.strengths[end] = zero(eltype(panels.strengths))
+
+    # restore panel strengths
+    set_unit_strength && grid_2_panels_strength!(panels; panel_indices)
+end
+
 
 """
 # Arguments
@@ -103,7 +185,7 @@ LUDecomposition{typeof(influence_matrix), eltype(right_hand_side), scheme}(influ
 
 function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
                             save_lu=false
-                            ) where {TF, K<:AbstractKernel{1}}
+                            ) where {TF, K<:Source{1}}
     # preallocate memory
     n_panels = length(panels.panels)
     influence_matrix = zeros(TF,n_panels,n_panels)
@@ -118,6 +200,48 @@ function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
 
     # initialize strengths
     strengths = zeros(TF,n_panels)
+
+    return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
+end
+
+function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
+                            save_lu=false
+                            ) where {TF, K<:NormalDoublet{1}}
+    # preallocate memory
+    n_panels = length(panels.panels)
+    influence_matrix = zeros(TF,n_panels,n_panels-1)
+    right_hand_side = zeros(TF,n_panels)
+
+    # update influence matrix
+    update_influence_matrix!(influence_matrix, panels, scheme; set_unit_strength=true)
+
+    # get LU decomposition
+    lu_decomposition = nothing#lu(influence_matrix)
+    save_lu && (influence_matrix = lu!(influence_matrix))
+
+    # initialize strengths
+    strengths = zeros(TF,n_panels-1)
+
+    return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
+end
+
+function LUDecomposition(panels::AbstractPanels{K,TF,<:Any,<:Any}, scheme;
+                            save_lu=false
+                            ) where {TF, K<:SourceNormalDoublet{2}}
+    # preallocate memory
+    n_panels = length(panels.panels)
+    influence_matrix = zeros(TF,n_panels,n_panels-1)
+    right_hand_side = zeros(TF,n_panels)
+
+    # update influence matrix
+    update_influence_matrix!(influence_matrix, panels, scheme; set_unit_strength=true)
+
+    # get LU decomposition
+    lu_decomposition = nothing#lu(influence_matrix)
+    save_lu && (influence_matrix = lu!(influence_matrix))
+
+    # initialize strengths
+    strengths = zeros(TF,n_panels-1)
 
     return LUDecomposition(influence_matrix, right_hand_side, strengths, scheme)
 end
@@ -171,12 +295,101 @@ function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
         vertices = panels.panels[i].vertices
         control_point = panels.panels[i].control_point
         normal = panels.panels[i].normal
-        strength = panels.panels[i].strength
+        old_strength = panels.panels[i].strength
         radius = panels.panels[i].radius
-        # strength = get_strength(strengths, i, old_strength)
+        strength = get_strength(strengths, i, old_strength)
 
         panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
         panels.strengths[i] = strength
+    end
+end
+
+function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                solver::LUDecomposition{<:Any,<:Any,S}, dt=0.0
+                ) where {S, K<:NormalDoublet{1}}
+    # unpack
+    # (; influence_matrix, right_hand_side, strengths) = solver
+    influence_matrix = solver.influence_matrix
+    right_hand_side = solver.right_hand_side
+    strengths = solver.strengths
+
+    # apply freestream/panel velocity
+    update_right_hand_side!(right_hand_side, panels, S)
+
+    # solver for strengths
+    strengths .= influence_matrix \ right_hand_side
+
+    # update panels
+    for i in 1:length(panels.panels)-1
+        # (; vertices, control_point, normal, strength, radius) = panels.panels[i]
+        vertices = panels.panels[i].vertices
+        control_point = panels.panels[i].control_point
+        normal = panels.panels[i].normal
+        old_strength = panels.panels[i].strength
+        radius = panels.panels[i].radius
+        strength = get_strength(strengths, i, old_strength)
+
+        panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
+        panels.strengths[i] = strength
+    end
+    i = length(panels.panels)
+    # (; vertices, control_point, normal, strength, radius) = panels.panels[i]
+    vertices = panels.panels[i].vertices
+    control_point = panels.panels[i].control_point
+    normal = panels.panels[i].normal
+    old_strength = panels.panels[i].strength
+    radius = panels.panels[i].radius
+    strength = zero(panels.panels[i].strength)
+
+    panels.panels[i] = Panel(vertices, control_point, normal, strength, radius)
+    panels.strengths[i] = zero(eltype(panels.strengths))
+end
+
+"""
+freestream should not be applied yet, but passed as an argument
+other influence is included as panels.velocity
+"""
+function solve!(panels::AbstractPanels{K,<:Any,<:Any,<:Any},
+                solver::LUDecomposition{<:Any,<:Any,S}, freestream::AbstractVector, dt=0.0
+        ) where {S, K<:SourceNormalDoublet{2}}
+    # unpack
+    # (; influence_matrix, right_hand_side, strengths) = solver
+    influence_matrix = solver.influence_matrix
+    right_hand_side = solver.right_hand_side
+    strengths = solver.strengths
+
+    old_velocity = deepcopy(panels.velocity)
+
+    # solve for source strengths
+    for i_panel in eachindex(panels.panels)
+        sigma = -2 * dot(freestream, panels.panels[i_panel].normal)
+        strength = SVector{2,typeof(sigma)}(sigma, zero(sigma))
+        panels.strengths[i_panel] = strength
+    end
+    grid_2_panels_strength!(panels)
+
+    # apply source influence
+    direct!(panels; scalar_potential=false)
+
+    # apply freestream
+    apply_freestream!(panels, freestream)
+
+    # apply freestream/source panel-induced/other velocity to RHS
+    update_right_hand_side!(right_hand_side, panels, S)
+
+    # solver for strengths
+    strengths .= influence_matrix \ right_hand_side
+
+    # update panels
+    for i in 1:length(panels.panels)-1
+        panels.strengths[i] = eltype(panels.strengths)(panels.strengths[i][1], strengths[i])
+    end
+    panels.strengths[end] = eltype(panels.strengths)(panels.strengths[end][1], zero(eltype(strengths)))
+    grid_2_panels_strength!(panels)
+
+    # reset velocity
+    for i in eachindex(panels.velocity)
+        panels.velocity[i] = old_velocity[i]
     end
 end
 

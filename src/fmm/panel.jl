@@ -207,25 +207,32 @@ function vector_2_panels_strengths!(panels::AbstractVector{Panel{TF,NK,NS}}, str
     return nothing
 end
 
-function set_unit_strength!(panels::AbstractPanels{<:Any,TF,<:Any,<:Any}; panel_indices=1:length(panels.panels)) where TF
+function set_unit_strength!(panels::AbstractPanels{K,TF,<:Any,<:Any}; panel_indices=1:length(panels.panels)) where {TF,K<:AbstractRotatedKernel{1}}
     for i in panel_indices
         panels.strengths[i] = SVector{1,TF}(1.0)
     end
-    set_unit_strength!(panels.panels)
+    grid_2_panels_strength!(panels)
 end
 
-function set_unit_strength!(panels::AbstractVector{Panel{TF,1,NS}}; panel_indices=1:length(panels)) where {TF,NS}
+function set_unit_strength!(panels::AbstractPanels{K,TF,<:Any,<:Any}; panel_indices=1:length(panels.panels)) where {TF,K<:SourceNormalDoublet{2}}
     for i in panel_indices
-        # (; vertices, control_point, normal, radius) = panels[i]
-        vertices = panels[i].vertices
-        control_point = panels[i].control_point
-        normal = panels[i].normal
-        radius = panels[i].radius
-
-        new_strength = SVector{1,TF}(1.0)
-        panels[i] = Panel(vertices, control_point, normal, new_strength, radius)
+        panels.strengths[i] = SVector{2,TF}(zero(TF),one(TF))
     end
+    grid_2_panels_strength!(panels)
 end
+
+# function set_unit_strength!(panels::AbstractVector{Panel{TF,1,NS}}; panel_indices=1:length(panels)) where {TF,NS}
+#     for i in panel_indices
+#         # (; vertices, control_point, normal, radius) = panels[i]
+#         vertices = panels[i].vertices
+#         control_point = panels[i].control_point
+#         normal = panels[i].normal
+#         radius = panels[i].radius
+
+#         new_strength = SVector{1,TF}(1.0)
+#         panels[i] = Panel(vertices, control_point, normal, new_strength, radius)
+#     end
+# end
 
 function reset_potential_velocity!(panels)
     for i in eachindex(panels.velocity)
