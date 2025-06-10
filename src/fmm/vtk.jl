@@ -17,6 +17,26 @@ function vtk(name::AbstractString, unstructured_grid::UnstructuredGrid, time=0.0
     end
 end
 
+function vtk(name::AbstractString, unstructured_grid::UnstructuredGrid{<:Any,<:Any,2,<:Any}, time=0.0; save_path="")
+    # (; points, meshcells, control_points, normals, strengths, potential, velocity) = unstructured_grid
+    points = unstructured_grid.points
+    meshcells = unstructured_grid.meshcells
+    control_points = unstructured_grid.control_points
+    normals = unstructured_grid.normals
+    strengths = unstructured_grid.strengths
+    potential = unstructured_grid.potential
+    velocity = unstructured_grid.velocity
+    vtk_grid(joinpath(save_path,name), points, meshcells) do vtk
+        vtk["control points"] = control_points
+        vtk["normals"] = normals
+        vtk["strengths 1"] = [s[1] for s in strengths]
+        vtk["strengths 2"] = [s[2] for s in strengths]
+        vtk["potential"] = potential
+        vtk["velocity"] = velocity
+        # vtk["time"] = time
+    end
+end
+
 function vtk(name::AbstractString, structured_grid::StructuredGrid, time=0.0; save_path="")
     # (; corner_grid, control_points, normals, strengths, potential, velocity) = structured_grid
     corner_grid = structured_grid.corner_grid

@@ -243,7 +243,7 @@ end
 
 # Evaluate mutually-induced velocity of panels for benchmark
 expansion_order, leaf_size_source, multipole_threshold = 6, 20, 0.4
-# @time tree_unstructured = pnl.FMM.FastMultipole.fmm!(body_fmm; expansion_order, leaf_size_source, multipole_threshold)
+# @time pnl.FMM.FastMultipole.fmm!(body_fmm; expansion_order, leaf_size_source, multipole_threshold)
 
 # Save FMM body for debugging purposes
 if !isnothing(save_path)
@@ -341,11 +341,31 @@ function change_kernel(panel_array::pnl.FMM.UnstructuredGrid{TK,TF,NK,NS}, new_k
     return pnl.FMM.UnstructuredGrid{new_kernel, TF, new_NK, NS}(points, meshcells, control_points, normals, new_strengths, potential, velocity, sigma, new_panels, wake_points)
 end
 
-panels = change_kernel(body_fmm, pnl.FMM.UniformSourceNormalDoublet)
 
-solver = pnl.FMM.BlockGaussSeidel(1000, 1000, 1.0)
+
+#------- try FastMultipole FGS solver -------#
+
+# reset strengths
+for i in eachindex(body_fmm.strengths)
+    body_fmm.strengths[i] = ones(eltype(body_fmm.strengths))
+end
+pnl.FMM.grid_2_panels_strength!(body_fmm)
+# pnl.FMM.solve_fgs!(body_fmm, Vinf; tolerance=1e-9)
+# pnl.FMM.vtk("test_fgs", body_fmm; save_path=".")
+
+#--- try source+dipole panels ---#
+
+panels = change_kernel(body_fmm, pnl.FMM.UniformSourceNormalDoublet)
+fgs = pnl.FMM.solve_fgs!(panels, Vinf; tolerance=1e-9, leaf_size=400)
+pnl.FMM.vtk("test_fgs_sourcedipole", panels; save_path=".")
+
+
+
+
+
+# solver = pnl.FMM.BlockGaussSeidel(1000, 1000, 1.0)
 # solver = pnl.FMM.LUSolver()
-resid, A, rhs, σ, μ = pnl.FMM.solve_panels!(panels, solver; watertight=true)
+# resid, A, rhs, σ, μ = pnl.FMM.solve_panels!(panels, solver; watertight=true)
 
 # function zero_strength!(panels, i)
 #     mask = SVector{2}(j!=i for j in 1:2)
@@ -374,27 +394,33 @@ resid, A, rhs, σ, μ = pnl.FMM.solve_panels!(panels, solver; watertight=true)
 
 
 
-#=
+
+
+
+# println("\n--- SOLVER: LU Decomposition ---\n")
+
+# strengths_fgs = save_strengths(body_fmm)
+# pnl.FMM.reset_potential_velocity!(body_fmm)
+# pnl.FMM.apply_freestream!(body_fmm, pnl.FMM.StaticArrays.SVector{3}(Uinfs[:,1]))
+# solver = pnl.FMM.LUDecomposition(body_fmm, pnl.FMM.Scheme{pnl.FMM.DirectNeumann, pnl.FMM.FlowTangency})
+# pnl.FMM.solve!(body_fmm, solver)
+# pnl.FMM.grid_2_panels_strength!(body_fmm)
+# pnl.FMM.FastMultipole.direct!(body_fmm)
+
+# pnl.FMM.vtk("test_fgs", body_fmm; save_path=".")
+
+# # test normal velocity
+# for (velocity,panel) in zip(body_fmm.velocity, body_fmm.panels)
+#     @test isapprox(dot(panel.normal, velocity), 0.0; atol=1e-6)
+# end
+
+# strengths_lu = save_strengths(body_fmm)
 
 
 
 
 
-strengths_old = save_strengths(body_fmm)
-pnl.FMM.reset_potential_velocity!(body_fmm)
-pnl.FMM.apply_freestream!(body_fmm, pnl.FMM.StaticArrays.SVector{3}(Uinfs[:,1]))
-solver = pnl.FMM.LUDecomposition(body_fmm, pnl.FMM.Scheme{pnl.FMM.DirectNeumann, pnl.FMM.FlowTangency})
-pnl.FMM.solve!(body_fmm, solver)
-pnl.FMM.grid_2_panels_strength!(body_fmm)
-pnl.FMM.FastMultipole.direct!(body_fmm)
 
-# test normal velocity
-for (velocity,panel) in zip(body_fmm.velocity, body_fmm.panels)
-    @test isapprox(dot(panel.normal, velocity), 0.0; atol=1e-6)
-end
-
-strengths_lu = save_strengths(body_fmm)
-=#
 
 #--- test FGS solver ---#
 
