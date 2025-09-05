@@ -106,8 +106,8 @@ function FastMultipole.buffer_to_target_system!(target_system::AbstractPanels, i
     # get values
     TF = eltype(target_buffer)
     scalar_potential = PS ? FastMultipole.get_scalar_potential(target_buffer, i_buffer) : zero(TF)
-    velocity = VS ? FastMultipole.get_velocity(target_buffer, i_buffer) : zero(SVector{3,TF})
-    velocity_gradient = GS ? FastMultipole.get_velocity_gradient(target_buffer, i_buffer) : zero(SMatrix{3,3,TF,9})
+    velocity = VS ? FastMultipole.get_gradient(target_buffer, i_buffer) : zero(SVector{3,TF})
+    velocity_gradient = GS ? FastMultipole.get_hessian(target_buffer, i_buffer) : zero(SMatrix{3,3,TF,9})
 
     # update system
     target_system.potential[i_target] += scalar_potential
@@ -167,10 +167,10 @@ function convolve_kernel!(target_system, target_index, source_system::AbstractPa
             FastMultipole.set_scalar_potential!(target_system, i_target, potential)
         end
         if VS
-            FastMultipole.set_velocity!(target_system, i_target, velocity)
+            FastMultipole.set_gradient!(target_system, i_target, velocity)
         end
         if GS
-            FastMultipole.set_velocity_gradient!(target_system, i_target, velocity_gradient)
+            FastMultipole.set_hessian!(target_system, i_target, velocity_gradient)
         end
     end
 
