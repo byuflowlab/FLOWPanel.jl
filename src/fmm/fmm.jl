@@ -76,13 +76,18 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
         i_offset += 3
     end
 
+    # normal
+    for i in 1:3
+        buffer[4+NK+3*NS+i, i_buffer] = panel.normal[i]
+    end
+
     # # regularization radius
     # σ = system.sigma[i_body]
     # buffer[5+NK+3*NS,i_buffer] = σ
 end
 
 function FastMultipole.data_per_body(system::AbstractPanels{<:Any,<:Any,NK,NS}) where {NK,NS}
-    return 5+NK+3*NS
+    return 5+NK+3*NS+3
 end
 
 function FastMultipole.reset!(system::AbstractPanels{<:Any,TF,<:Any,<:Any}) where TF
@@ -92,6 +97,10 @@ end
 
 function FastMultipole.get_position(system::AbstractPanels, i)
     return system.panels[i].control_point
+end
+
+function FastMultipole.has_vector_potential(::AbstractPanels) 
+    return false
 end
 
 FastMultipole.get_n_bodies(system::AbstractPanels) = length(system.panels)
@@ -183,4 +192,104 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch, 
     end
 
     return nothing
+end
+
+#--- solver specific functions ---#
+
+function FastMultipole.extra_data_per_target_body(system::AbstractPanels)
+    return 3
+end
+
+function FastMultipole.extra_target_to_buffer!(buffer, system::AbstractPanels, i_body, i_sorted)
+    # get normal
+    normal = system.panels[i_sorted].normal
+
+    # populate buffer
+    for i in 1:3
+        buffer[18+i, i_body] = normal[i]
+    end
+end
+
+function FastMultipole.influence!(influence, target_buffer, panels::AbstractPanels, source_buffer)
+    
+    # loop over targets
+    for i_target in eachindex(influence)
+
+        # unpack data
+        normal = SVector{3}(target_buffer[19, i_target], target_buffer[20, i_target], target_buffer[21, i_target])
+        velocity = FastMultipole.get_gradient(target_buffer, i_target)
+
+        # flow tangency boundary condition
+        influence[i_target] = dot(velocity, normal)
+    end
+end
+
+function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{UniformSource,<:Any,<:Any,<:Any}, i_body, value)
+    source_buffer[5, i_body] = value
+end
+
+function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{ConstantNormalDoublet,<:Any,<:Any,<:Any}, i_body, value)
+    source_buffer[5, i_body] = value
+end
+
+function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{UniformSourceNormalDoublet,<:Any,<:Any,<:Any}, i_body, value)
+    source_buffer[6, i_body] = value
+end
+
+function FastMultipole.strength_to_value(strength, ::AbstractPanels{UniformSource,<:Any,<:Any,<:Any})
+    return strength[1]
+end
+
+function FastMultipole.strength_to_value(strength, ::AbstractPanels{ConstantNormalDoublet,<:Any,<:Any,<:Any})
+    return strength[1]
+end
+
+function FastMultipole.strength_to_value(strength, ::AbstractPanels{UniformSourceNormalDoublet,<:Any,<:Any,<:Any})
+    return strength[2]
+end
+
+function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
+
+    # unpack panel
+    panel = system.panels[i_body]
+    vertices = panel.vertices
+    control_point = panel.control_point
+    normal = panel.normal
+    # strength = panel.strength
+    radius = panel.radius
+
+    # new strength
+    new_strength = SVector{1}(source_buffer[5, i_buffer])
+
+    # assemble updated panel
+    new_panel = eltype(system.panels)(vertices, control_point, normal, new_strength, radius)
+    system.panels[i_body] = new_panel
+end
+
+function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,2,<:Any}, i_body, source_buffer, i_buffer)
+
+    # unpack panel
+    panel = system.panels[i_body]
+    vertices = panel.vertices
+    control_point = panel.control_point
+    normal = panel.normal
+    source_strength = panel.strength[1]
+    radius = panel.radius
+
+    # new strength
+    new_strength = SVector{2}(source_strength, source_buffer[6, i_buffer])
+
+    # assemble updated panel
+    new_panel = eltype(system.panels)(vertices, control_point, normal, new_strength, radius)
+    system.panels[i_body] = new_panel
+end
+
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::AbstractPanels, i_target)
+    # unpack velocity
+    velocity = target_system.velocity[i_target]
+
+    # populate buffer
+    for i in 1:3
+        target_buffer[4+i, i_buffer] = velocity[i]
+    end
 end

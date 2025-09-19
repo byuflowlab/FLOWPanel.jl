@@ -19,49 +19,49 @@ abstract type AbstractSolver end
 
 #------- overload FastMultipole solve functions -------#
 
-function FastMultipole.influence!(influence, target_buffer, source_system::AbstractPanels, source_buffer)
-    for i in 1:size(target_buffer, 2)
-        # target velocity
-        velocity = FastMultipole.get_velocity(target_buffer, i)
+# function FastMultipole.influence!(influence, target_buffer, source_system::AbstractPanels, source_buffer)
+#     for i in 1:size(target_buffer, 2)
+#         # target velocity
+#         velocity = FastMultipole.get_velocity(target_buffer, i)
 
-        # target normal
-        normal = FastMultipole.get_normal(source_buffer, source_system, i)
+#         # target normal
+#         normal = FastMultipole.get_normal(source_buffer, source_system, i)
 
-        # normal component of velocity
-        influence[i] = dot(velocity, normal)
-    end
-end
+#         # normal component of velocity
+#         influence[i] = dot(velocity, normal)
+#     end
+# end
 
-function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::AbstractPanels, i_target)
-    FastMultipole.set_velocity!(target_buffer, i_buffer, target_system.velocity[i_target])
-end
+# function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::AbstractPanels, i_target)
+#     FastMultipole.set_velocity!(target_buffer, i_buffer, target_system.velocity[i_target])
+# end
 
-function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{<:Any,<:Any,1,<:Any}, i_body, value)
-    source_buffer[5, i_body] = value
-end
+# function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{<:Any,<:Any,1,<:Any}, i_body, value)
+#     source_buffer[5, i_body] = value
+# end
 
-function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{<:Any,<:Any,2,<:Any}, i_body, value)
-    source_buffer[5, i_body] = zero(eltype(source_buffer)) 
-    source_buffer[6, i_body] = value
-end
+# function FastMultipole.value_to_strength!(source_buffer, ::AbstractPanels{<:Any,<:Any,2,<:Any}, i_body, value)
+#     source_buffer[5, i_body] = zero(eltype(source_buffer)) 
+#     source_buffer[6, i_body] = value
+# end
 
-function FastMultipole.strength_to_value(strength, ::AbstractPanels{<:Any,<:Any,1,<:Any})
-    return strength[1]
-end
+# function FastMultipole.strength_to_value(strength, ::AbstractPanels{<:Any,<:Any,1,<:Any})
+#     return strength[1]
+# end
 
-function FastMultipole.strength_to_value(strength, ::AbstractPanels{<:Any,<:Any,2,<:Any})
-    return strength[2]
-end
+# function FastMultipole.strength_to_value(strength, ::AbstractPanels{<:Any,<:Any,2,<:Any})
+#     return strength[2]
+# end
 
-function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
-    system.strengths[i_body] = SVector{1}(source_buffer[5, i_buffer])
-    grid_2_panels_strength!(system; panel_indices=i_body:i_body)
-end
+# function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
+#     system.strengths[i_body] = SVector{1}(source_buffer[5, i_buffer])
+#     grid_2_panels_strength!(system; panel_indices=i_body:i_body)
+# end
 
-function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,2,<:Any}, i_body, source_buffer, i_buffer)
-    system.strengths[i_body] = SVector{2}(zero(eltype(source_buffer)), source_buffer[6, i_buffer])
-    # grid_2_panels_strength!(system; panel_indices=i_body:i_body)
-end
+# function FastMultipole.buffer_to_system_strength!(system::AbstractPanels{<:Any,<:Any,2,<:Any}, i_body, source_buffer, i_buffer)
+#     system.strengths[i_body] = SVector{2}(zero(eltype(source_buffer)), source_buffer[6, i_buffer])
+#     # grid_2_panels_strength!(system; panel_indices=i_body:i_body)
+# end
 
 #####
 ##### auxilliary functions
