@@ -188,12 +188,15 @@ CLs = sign.(dot.(Ls, Lhats)) .* norm.(Ls) / nondim
 CDs = sign.(dot.(Ds, Dhats)) .* norm.(Ds) / nondim
 
 # VSPAERO CL and CD
-data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
+# data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
+data_vsp = CSV.read(vsp_file, DataFrame; skipto=495, limit=536-495+1)
 alphas_vsp = [val for val in data_vsp[1, 2:end]]
 CDi_vsp = [val for val in data_vsp[3, 2:end]]
 CDtot_vsp = [val for val in data_vsp[6, 2:end]]
-CL_vsp = [val for val in data_vsp[11, 2:end]]
-CMy_vsp = [val for val in data_vsp[16, 2:end]]
+# CL_vsp = [val for val in data_vsp[11, 2:end]]
+CL_vsp = [val for val in data_vsp[20, 2:end]]
+# CMy_vsp = [val for val in data_vsp[16, 2:end]]
+CMy_vsp = [val for val in data_vsp[29, 2:end]]
 
 fig5 = plt.figure(figsize=[7*2, 5*1*0.75]*2/3)
 axs = fig5.subplots(1, 2)

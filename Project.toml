@@ -22,7 +22,7 @@ WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 Dierckx = "0.5"
 GeometricTools = "2.2"
 ImplicitAD = "0.3"
-Krylov = "0.9"
+Krylov = "0.10"
 Requires = "1"
 julia = "1.6"
 

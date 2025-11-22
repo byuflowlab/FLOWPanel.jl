@@ -404,14 +404,21 @@ function allocate_solver(self::Union{MultiBody{VortexRing, 2}, RigidWakeBody{Vor
     npres = length(_elprescribe)
 
     Gamma = zeros(T, n)
-    Gammals = zeros(T, n-npres)
+    # Gammals = zeros(T, n-npres)
     G = zeros(T, n, n)
-    Gred = zeros(T, n, n-npres)
-    tGred = zeros(T, n-npres, n)
-    gpuGred = zeros(T, n, n-npres)
-    Gls = zeros(T, n-npres, n-npres)
+    # Gred = zeros(T, n, n-npres)
+    # tGred = zeros(T, n-npres, n)
+    # gpuGred = zeros(T, n, n-npres)
+    # Gls = zeros(T, n-npres, n-npres)
     RHS = zeros(T, n)
-    RHSls = zeros(T, n-npres)
+    # RHSls = zeros(T, n-npres)
+
+    Gammals = nothing
+    Gred = nothing
+    tGred = nothing
+    gpuGred = nothing
+    Gls = nothing
+    RHSls = nothing
 
     return (; Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls)
 end

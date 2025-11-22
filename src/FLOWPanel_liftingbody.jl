@@ -368,15 +368,8 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
 
     @assert size(G, 1)==n && size(G, 2)==n ""*
         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
-    @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
-        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
-    @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
-        "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
-    @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
-        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-npres)x$(n-npres)"
 
     @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
-    @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-npres)"
 
     # Sort prescribed elements by index
     sort!(elprescribe, by = x -> x[1])
@@ -391,6 +384,14 @@ function _G_U_RHS_leastsquares!(self::AbstractBody,
     if onlycomputeG
         return Gls, RHSls
     end
+
+    @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
+        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n-npres)x$(n-npres)"
+    @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-npres)"
+    @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
+        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
+    @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
+        "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
 
     # Move influence of prescribed vortex ring elements to right-hand side
     for (eli, elval) in elprescribe

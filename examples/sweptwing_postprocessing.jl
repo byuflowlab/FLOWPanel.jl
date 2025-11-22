@@ -63,10 +63,10 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         # Plot VSPAERO
         if plot_vsp && AOA == 4.2
 
-            rowstart =  spanpos==0.041 ? 1139 :
-                        spanpos==0.163 ? 1169 :
-                        spanpos==0.245 ? 1184 :
-                        spanpos==0.510 ? 1199 :
+            rowstart =  spanpos==0.041 ? 1139 + (1578 - 1139) :
+                        spanpos==0.163 ? 1169 + (1578 - 1139) :
+                        spanpos==0.245 ? 1184 + (1578 - 1139) :
+                        spanpos==0.510 ? 1199 + (1578 - 1139) :
                         nothing
 
             if !isnothing(rowstart)
@@ -258,19 +258,32 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
         # Plot VSPAERO
         if plot_vsp
 
-            rowstart =  AOA==2.1 ? 482 :
-                        AOA==4.2 ? 544 :
-                        AOA==6.3 ? 606 :
-                        AOA==8.4 ? 668 :
+            # rowstart =  AOA==2.1 ? 482 :
+            #             AOA==4.2 ? 544 :
+            #             AOA==6.3 ? 606 :
+            #             AOA==8.4 ? 668 :
+            rowstart =  AOA==2.1 ? 644 :
+                        AOA==4.2 ? 751 :
+                        AOA==6.3 ? 858 :
+                        AOA==8.4 ? 965 :
                         nothing
 
             if !isnothing(rowstart)
 
-                data_vsp = CSV.read(vsp_file, DataFrame; skipto=rowstart+20, limit=24)
+                data_vsp = CSV.read(vsp_file, DataFrame; skipto=rowstart+28, limit=77)
 
-                ypos_vsp = [val for val in data_vsp[1, 2:end]]
-                cl_vsp = [val for val in data_vsp[9, 2:end]]
-                cd_vsp = [val for val in data_vsp[7, 2:end]]
+                println(rowstart)
+                # display(data_vsp)
+
+                println(data_vsp[21, 1])
+                println(data_vsp[29, 1])
+                println(data_vsp[23, 1])
+
+                ypos_vsp = 2*[val for val in data_vsp[21, 2:end]] / 2.48920 
+                ypos_vsp .+= 1
+                ypos_vsp ./= 2
+                cl_vsp = [val for val in data_vsp[29, 2:end]]
+                cd_vsp = [val for val in data_vsp[23, 2:end]]
 
                 ypos_vsp .-= 0.5
                 ypos_vsp .*= 2.0
