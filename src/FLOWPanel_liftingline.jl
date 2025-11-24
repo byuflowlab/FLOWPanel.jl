@@ -9,19 +9,21 @@
   * License     : MIT License
 =###############################################################################
 
+import LaTeXStrings: @L_str
+
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################
-struct LiftingLine
-
-    # User inputs
-    grid::gt.Grid                                # Flat-geometry grid
+struct LiftingLine{S<:StripwiseElement}
 
     # Internal properties
-    nelements::Int                               # Number of stripwise elements
-    ypositions::Vector{Float64}                  # Non-dimensional y-position of nodes, 2*y/b
+    grid::gt.Grid                               # Flat-geometry grid
+    ypositions::Vector{Float64}                 # Non-dimensional y-position of nodes, 2*y/b
 
-    function LiftingLine(args...; optargs...)
+    nelements::Int                              # Number of stripwise elements
+    elements::Vector{S}                         # Stripwise elements
+
+    function LiftingLine(airfoil_distribution, args...; element_optargs=(), optargs...)
 
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
@@ -38,9 +40,17 @@ struct LiftingLine
         
         # ------------------ MORPH GRID INTO WING GEOMETRY ---------------------
         _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                                spanaxiss, symmetric; center=true)
+                                            spanaxiss, symmetric; center=true)
 
-        new(grid, grid._ndivsnodes[1]-1, ypositions)
+        # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
+        ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
+
+        elements = generate_stripwise_elements(airfoil_distribution, 
+                                                ypositions_elements; 
+                                                element_optargs...)
+
+                                            
+        new{eltype(elements)}(grid, ypositions, length(elements), elements)
 
     end
 
@@ -234,5 +244,187 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
     return nothing
 
+end
+
+function generate_stripwise_elements(airfoil_distribution, ypositions; 
+                                        extrapolated=true, plot_polars=true, 
+                                        optargs...)
+
+    # Create baseline stripwise elements from polars
+    airfoils = _read_polars(airfoil_distribution; optargs...)
+
+    # Identify StripwiseElement types
+    element_types = unique([typeof(airfoil) for (ypos, airfoil) in airfoils])
+    element_types = Union{element_types...}
+
+    # Extrapolate polars to +-180 deg
+    if extrapolated
+        airfoils_extrapolated = [(ypos, extrapolate(airfoil)) for (ypos, airfoil) in airfoils]
+    else
+        airfoils_extrapolated = airfoils
+    end
+
+    # Blend the elements along the span
+    lo_i = 1                                        # Index of lower-bound element
+    airfoils_to_blend = airfoils_extrapolated
+    airfoils_blended = []
+    elements = element_types[]
+
+    for ypos in ypositions
+
+        # Find upper-bound element
+        up_i = findfirst(x -> ypos < x[1], airfoils_to_blend)
+
+        # Case that there is no upper bound: default to last element
+        if isnothing(up_i)
+            lo_i = length(airfoils_to_blend)
+            up_i = lo_i
+        end
+
+        # Fix lower-bound element if it found a new upper bound
+        if up_i - lo_i >= 2
+            lo_i = up_i - 1
+        end
+
+        # Fetch bounds
+        ypos_lo, airfoil_lo = airfoils_to_blend[lo_i]
+        ypos_up, airfoil_up = airfoils_to_blend[up_i]
+
+        # Catch case that airfoil bounds are different element types
+        # TODO: Define logic for blending disimilar StripwiseElements
+        @assert typeof(airfoil_lo) <: typeof(airfoil_up) ""*
+            "Requested to blend dissimilar StripwiseElement types "*
+            "$(typeof(airfoil_lo)) and $(typeof(airfoil_up))"
+
+        # Determine blending weight
+        weight = (ypos - ypos_lo) / (ypos_up - ypos_lo)
+
+        # Catch case that bounds are the same
+        if isinf(weight) || isnan(weight)
+            weight = 0.0
+        end
+
+        # Blend elements
+        blended_airfoil = blend(airfoil_lo, airfoil_up, weight)
+
+        push!(elements, blended_airfoil)
+        plot_polars && push!(airfoils_blended, (ypos, blended_airfoil))
+        
+    end
+
+    # Plot polars for verification
+    if plot_polars
+        _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
+    end
+
+    return elements
+
+end
+
+function _read_polars(airfoil_distribution; optargs...)
+
+    return [(ypos, element(polar_file; optargs...)) for (ypos, polar_file, element) in airfoil_distribution]
+
+end
+
+function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
+
+    stl_org = ""
+    stl_extrap = "-"
+    stl_blnd = "-"
+
+    fmt_org = (; marker=".", alpha=0.5)
+    fmt_extrap = (; linewidth=1, alpha=0.5)
+    fmt_blnd = (; linewidth=1, alpha=0.25)
+
+    # Compare raw vs extrapolated
+    fig1 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
+    axs1 = fig1.subplots(3, 1)
+
+    fig = fig1
+    axs = axs1
+    fig.suptitle("Extrapolation comparison")
+
+    for (ypos, airfoil) in airfoils
+        
+        clr = plt.cm.gnuplot(ypos)
+        stl = stl_org
+        fmt = fmt_org
+
+        axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+
+    end
+
+    for (ypos, airfoil) in airfoils_extrapolated
+        
+        clr = plt.cm.gnuplot(ypos)
+        stl = stl_extrap
+        fmt = fmt_extrap
+
+        axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
+        axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
+        axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+
+    end
+
+    ax = axs[1]
+    ax.set_ylabel(L"Lift $c_\ell$")
+
+    ax = axs[2]
+    ax.set_ylabel(L"Drag $c_d$")
+
+    ax = axs[3]
+    ax.set_ylabel(L"Pitching moment $c_m$")
+
+    for ax in axs
+        ax.set_xlabel(L"Angle of attack ($^\circ$)")
+        ax.spines["top"].set_visible(false)
+        ax.spines["right"].set_visible(false)
+        ax.legend(loc="best", frameon=false, fontsize=8)
+    end
+        
+    fig.tight_layout()
+
+    # Compare blends
+    fig2 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
+    axs2 = fig2.subplots(3, 1)
+
+    fig = fig2
+    axs = axs2
+    fig.suptitle("Blending comparison")
+
+    for (ypos, airfoil) in airfoils_blended
+        
+        clr = plt.cm.gnuplot(ypos)
+        stl = stl_blnd
+        fmt = fmt_blnd
+
+        axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+
+    end
+
+    ax = axs[1]
+    ax.set_ylabel(L"Lift $c_\ell$")
+
+    ax = axs[2]
+    ax.set_ylabel(L"Drag $c_d$")
+
+    ax = axs[3]
+    ax.set_ylabel(L"Pitching moment $c_m$")
+
+    for ax in axs
+        ax.set_xlabel(L"Angle of attack ($^\circ$)")
+        ax.spines["top"].set_visible(false)
+        ax.spines["right"].set_visible(false)
+        # ax.legend(loc="best", frameon=false, fontsize=8)
+    end
+        
+    fig.tight_layout()
+
+    return (fig1, axs1), (fig2, axs2)
 end
 ##### END OF LIFTING LINE ######################################################

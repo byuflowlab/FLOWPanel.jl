@@ -25,7 +25,6 @@ import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
 import Requires: @require
-import LaTeXStrings: @L_str
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -65,7 +64,7 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "liftingline",
+                    "liftingline_stripwise", "liftingline",
                     "utils", "postprocess",
                     # "fmm"
                     ]
