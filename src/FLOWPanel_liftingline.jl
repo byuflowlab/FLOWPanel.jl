@@ -55,8 +55,8 @@ struct LiftingLine{ R<:Number,
                             airfoil_distribution, 
                             args...;
                             element_optargs=(), 
-                            initial_aerocenters=1/4,
-                            initial_controlpoints=3/4,
+                            initial_aerodynamic_centers=1/4,
+                            initial_controlpoint_positions=3/4,
                             initial_Vinf=[1, 0, 0],
                             arraytype::Type=Array,
                             optargs...
@@ -107,21 +107,18 @@ struct LiftingLine{ R<:Number,
         Gammas = VectorType(undef, nelements)
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
-        aerocenters .= initial_aerocenters
+        aerocenters .= initial_aerodynamic_centers
 
         calc_horseshoes!(horseshoes, grid.nodes, linearindices, nelements,
                                                         aerocenters)
 
         calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
-                                                        initial_controlpoints)
+                                                 initial_controlpoint_positions)
 
         calc_normals!(normals, controlpoints, horseshoes, nelements)
 
         calc_Dinfs!(Dinfs, initial_Vinf, nelements)
 
-        # TODO: calc_Dinfs, and output horseshoes for verification, add normals for linear solver
-
-        
 
         new{R,
             eltype(elements),
@@ -143,13 +140,32 @@ end
 """
 Morph the lifting-line wing geometry into a new geometry
 """
-function remorph!(self::LiftingLine, args...; recenter=false, optargs...)
+function remorph!(self::LiftingLine, args...; 
+                    recenter=false, 
+                    aerodynamic_centers=1/4, controlpoint_positions=3/4, 
+                    Vinf=[1, 0, 0],
+                    optargs...)
 
+    # Discretize parameterization
     (; b, ypositions, chords, twists, 
     sweeps, dihedrals, spanaxiss, symmetric) = _discretize_wing_parameterization(args...; optargs...)
 
+    # Morph existing wing geometry into the new geometry
     _morph_grid_wing!(self.grid, b, ypositions, chords, twists, sweeps, dihedrals, 
                             spanaxiss, symmetric, self.linearindices; center=recenter)
+
+    # Update horseshoe geometries
+    self.aerocenters .= aerocenters
+
+    calc_horseshoes!(self)
+
+    calc_controlpoints!(self, controlpoint_positions)
+
+    calc_normals!(self)
+
+    calc_Dinfs!(self, Vinf)
+
+    return nothing
 end
 
 
@@ -255,6 +271,7 @@ function calc_horseshoes!(self::LiftingLine, args...; optargs...)
     return calc_horseshoes!(self.horseshoes, 
                                 self.grid.nodes, self.linearindices, 
                                 self.nelements, 
+                                self.aerocenters,
                                 args...; optargs...) 
 end
 
