@@ -44,11 +44,19 @@ struct LiftingLine{ R<:Number,
                                                 # j-th semi-infinite filament (1==a, 2==b) of the
                                                 # n-th horeseshoe
 
+    midpoints::MatrixType                       # Midpoint along bound vortex for probing the velocity
     controlpoints::MatrixType                   # Control point of each horseshoe
     normals::MatrixType                         # Normal of each horseshoe
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
     Gammas::VectorType                          # Circulation of each horseshoe
+
+    G::MatrixType                               # Geometry matrix in linear system of equations
+    RHS::VectorType                             # Right-hand-side vector in linear system of equations
+
+    # Solver settings
+    kerneloffset::Float64                       # Kernel offset to avoid singularities
+    kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
 
 
     function LiftingLine{R}(
@@ -57,7 +65,9 @@ struct LiftingLine{ R<:Number,
                             element_optargs=(), 
                             initial_aerodynamic_centers=1/4,
                             initial_controlpoint_positions=3/4,
-                            initial_Vinf=[1, 0, 0],
+                            initial_Uinf=[1, 0, 0],
+                            kerneloffset=1e-8,
+                            kernelcutoff=1e-14,
                             arraytype::Type=Array,
                             optargs...
                             ) where {R<:Number}
@@ -92,7 +102,7 @@ struct LiftingLine{ R<:Number,
         # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
 
-        elements = generate_stripwise_elements(airfoil_distribution, 
+        elements = _generate_stripwise_elements(airfoil_distribution, 
                                                 ypositions_elements; 
                                                 element_optargs...)
         nelements = length(elements)
@@ -101,10 +111,18 @@ struct LiftingLine{ R<:Number,
         aerocenters = VectorType(undef, nelements)
         horseshoes = TensorType(undef, 3, 4, nelements)
         Dinfs = TensorType(undef, 3, 2, nelements)
+        midpoints = MatrixType(undef, 3, nelements)
         controlpoints = MatrixType(undef, 3, nelements)
         normals = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
+        G = MatrixType(undef, nelements, nelements)
+        RHS = VectorType(undef, nelements)
+
+        aoas .= 0
+        Gammas .= 0
+        G .= 0
+        RHS .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
         aerocenters .= initial_aerodynamic_centers
@@ -112,12 +130,14 @@ struct LiftingLine{ R<:Number,
         calc_horseshoes!(horseshoes, grid.nodes, linearindices, nelements,
                                                         aerocenters)
 
+        calc_midpoints!(midpoints, horseshoes, nelements)
+
         calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
                                                  initial_controlpoint_positions)
 
         calc_normals!(normals, controlpoints, horseshoes, nelements)
 
-        calc_Dinfs!(Dinfs, initial_Vinf, nelements)
+        calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
 
         new{R,
@@ -128,8 +148,10 @@ struct LiftingLine{ R<:Number,
                                 ypositions, 
                                 nelements, elements,
                                 aerocenters, horseshoes, Dinfs, 
-                                controlpoints, normals,
-                                aoas, Gammas)
+                                midpoints, controlpoints, normals,
+                                aoas, Gammas,
+                                G, RHS,
+                                kerneloffset, kernelcutoff)
 
     end
 
@@ -143,7 +165,7 @@ Morph the lifting-line wing geometry into a new geometry
 function remorph!(self::LiftingLine, args...; 
                     recenter=false, 
                     aerodynamic_centers=1/4, controlpoint_positions=3/4, 
-                    Vinf=[1, 0, 0],
+                    Uinf=[1, 0, 0],
                     optargs...)
 
     # Discretize parameterization
@@ -159,11 +181,13 @@ function remorph!(self::LiftingLine, args...;
 
     calc_horseshoes!(self)
 
+    calc_midpoints!(self)
+
     calc_controlpoints!(self, controlpoint_positions)
 
     calc_normals!(self)
 
-    calc_Dinfs!(self, Vinf)
+    calc_Dinfs!(self, Uinf)
 
     return nothing
 end
@@ -172,7 +196,9 @@ end
 function save(self::LiftingLine, filename::AbstractString; 
                     format="vtk", 
                     horseshoe_suffix="_horseshoe",
-                    controlpoint_suffix="_cp", planar_suffix="_planar", 
+                    midpoint_suffix="_midp", 
+                    controlpoint_suffix="_cp", 
+                    planar_suffix="_planar", 
                     wake_length_factor=0.25,
                     optargs...)
 
@@ -232,6 +258,18 @@ function save(self::LiftingLine, filename::AbstractString;
     str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
                                 cell_data=horseshoes_data,
                                 override_cell_type=4, optargs...)
+
+    # ------------- OUTPUT MIDPOINTS -------------------------------------------
+    midpoints = eachcol(self.midpoints)
+
+    midpoints_data = [
+                            Dict(   "field_name"  => "angleofattack",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.aoas)
+                        ]
+
+    str *= gt.generateVTK(filename*midpoint_suffix, midpoints; 
+                                point_data=midpoints_data, optargs...)
 
     # ------------- OUTPUT CONTROL POINTS --------------------------------------
     controlpoints = eachcol(self.controlpoints)
@@ -305,6 +343,27 @@ function calc_horseshoes!(horseshoes::AbstractArray,
 
 end
 
+function calc_midpoints!(self::LiftingLine, args...; optargs...) 
+    return calc_midpoints!(self.midpoints, 
+                                self.horseshoes, 
+                                self.nelements, 
+                                args...; optargs...) 
+end
+
+function calc_midpoints!(midpoints::AbstractMatrix,
+                            horseshoes::AbstractArray,
+                            nelements::Int;
+                            position::Number = 0.5
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+        for i in 1:3                    # Iterate over coordinates
+
+            midpoints[i, ei] = position * (horseshoes[i, 2, ei] + horseshoes[i, 3, ei])
+
+        end
+    end
+
+end
 
 function calc_controlpoints!(self::LiftingLine, args...; optargs...) 
     return calc_controlpoints!(self.controlpoints, 
@@ -369,15 +428,15 @@ function calc_normals!(normals::AbstractMatrix,
 end
 
 
-function calc_Dinfs!(self::LiftingLine, Vinfs) 
-    return calc_Dinfs!(self.Dinfs, Vinfs, self.nelements)
+function calc_Dinfs!(self::LiftingLine, Uinfs) 
+    return calc_Dinfs!(self.Dinfs, Uinfs, self.nelements)
 end
 
-function calc_Dinfs!(Dinfs::AbstractArray, Vinf::AbstractVector, nelements::Int)
-    return calc_Dinfs!(Dinfs, repeat(Vinf, 1, nelements), nelements)
+function calc_Dinfs!(Dinfs::AbstractArray, Uinf::AbstractVector, nelements::Int)
+    return calc_Dinfs!(Dinfs, repeat(Uinf, 1, nelements), nelements)
 end
 
-function calc_Dinfs!(Dinfs::AbstractArray, Vinfs::AbstractMatrix, nelements::Int)
+function calc_Dinfs!(Dinfs::AbstractArray, Uinfs::AbstractMatrix, nelements::Int)
 
     for ei in 1:nelements               # Iterate over horseshoes
 
@@ -385,14 +444,14 @@ function calc_Dinfs!(Dinfs::AbstractArray, Vinfs::AbstractMatrix, nelements::Int
 
                                                     # Freestream at a and b sides
                                                     # NOTE: this assumes contiguous horseshoes
-            vinfa = ei==1 ?         Vinfs[i, ei] : (Vinfs[i, ei-1] + Vinfs[i, ei]  )/2
-            vinfb = ei==nelements ? Vinfs[i, ei] : (Vinfs[i, ei]   + Vinfs[i, ei+1])/2
+            Uinfa = ei==1 ?         Uinfs[i, ei] : (Uinfs[i, ei-1] + Uinfs[i, ei]  )/2
+            Uinfb = ei==nelements ? Uinfs[i, ei] : (Uinfs[i, ei]   + Uinfs[i, ei+1])/2
 
             # Semi-infite direction at Ap (non-unit vector)
-            Dinfs[i, 1, ei] = vinfa
+            Dinfs[i, 1, ei] = Uinfa
 
             # Semi-infite direction at Bp (non-unit vector)
-            Dinfs[i, 2, ei] = vinfb
+            Dinfs[i, 2, ei] = Uinfb
 
         end
 
@@ -403,6 +462,180 @@ function calc_Dinfs!(Dinfs::AbstractArray, Vinfs::AbstractMatrix, nelements::Int
     end
 
 end
+
+"""
+    Uind!(self::LiftingLine, targets, out, args...; optargs...)
+
+Returns the velocity induced by the wing on the targets `targets`, which is a
+3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
+"""
+function Uind!(self::LiftingLine, targets::AbstractMatrix, out::AbstractMatrix; optargs...)
+
+    # Add bound vortex contributions
+    for ei in 1:self.nelements                              # Iterates over horseshoes
+
+        # Velocity of i-th horseshoe on every target
+        U_vortexring(
+                            view(self.horseshoes, :, :, ei),   # All nodes
+                            1:4,                               # Indices of nodes that make this panel (closed ring)
+                            self.Gammas[ei],                   # Horseshoe circulation
+                            targets,                           # Targets
+                            out;                               # Outputs
+                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                            optargs...
+                         )
+    end
+
+    # Add wake contributions
+    TE = [1, size(self.horseshoes, 2)]                      # Indices of TE nodes in each horseshoe
+    
+    for ei in 1:self.nelements                              # Iterate over semi-infinite segments
+
+        da1 = self.Dinfs[1, 1, ei]
+        da2 = self.Dinfs[2, 1, ei]
+        da3 = self.Dinfs[3, 1, ei]
+        db1 = self.Dinfs[1, 2, ei]
+        db2 = self.Dinfs[2, 2, ei]
+        db3 = self.Dinfs[3, 2, ei]
+
+        U_semiinfinite_horseshoe(
+                          view(self.horseshoes, :, :, ei),                  # All nodes
+                          TE,                                # Indices of nodes that make the shedding edge
+                          da1, da2, da3,                     # Semi-infinite direction da
+                          db1, db2, db3,                     # Semi-infinite direction db
+                          self.Gammas[ei],                   # Filament circulation
+                          targets,                           # Targets
+                          out;                               # Outputs
+                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                          optargs...
+                         )
+
+    end
+end
+
+
+
+
+
+##### SOLVER ###################################################################
+
+function solve_linear(self::LiftingLine, Uinf::AbstractVector, 
+                                            args...; optargs...) 
+    solve_linear(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+end
+
+function solve_linear(self::LiftingLine, Uinfs::AbstractMatrix;
+                        controlpoint_positions=3/4, 
+                        solver=solve_ludiv!, solver_optargs=(),
+                        addfields=true, raise_warn=false,
+                        optargs...)
+
+    # Update semi-infinite wake to align with freestream
+    calc_Dinfs!(self, Uinfs)
+
+    # Update control point locations
+    calc_controlpoints!(self, controlpoint_positions)
+
+    # Update normals since control points where updated
+    calc_normals!(self)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    self.G .= 0
+    _G_U!(self; optargs...)
+
+    # Calculate boundary conditions (right-hand side of system of equations)
+    self.RHS .= 0
+    calc_bc_noflowthrough!(self.RHS, Uinfs, self.normals)
+
+    # Solve system of equations
+    solver(self.Gammas, self.G, self.RHS; solver_optargs...)
+
+    if addfields
+        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+    end
+
+    return nothing
+
+end
+
+function _G_U!(self::LiftingLine; optargs...)
+
+    # Build geometric matrix from panel contributions
+    elements = 1:self.nelements
+    chunks = collect(Iterators.partition(elements, max(length(elements) ÷ Threads.nthreads(), 3*Threads.nthreads())))
+
+    Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
+
+        for ei in chunk                       # Iterate over elements
+
+            U_vortexring(
+                              view(self.horseshoes, :, :, ei),   # All nodes
+                              1:4,                               # Indices of nodes that make this panel (closed ring)
+                              1.0,                               # Unitary strength
+                              self.controlpoints,                # Targets
+                              view(self.G, :, ei);               # Velocity of ei-th panel on every CP
+                              dot_with=self.normals,             # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+         end
+    end
+
+
+    # Add wake contributions
+    TE = [1, size(self.horseshoes, 2)]          # Indices of TE nodes in each horseshoe
+
+    Threads.@threads for chunk in chunks        # Distribute wake iteration among all CPU threads
+
+        for ei in chunk                          # Iterate horseshoes
+
+            da1 = self.Dinfs[1, 1, ei]
+            da2 = self.Dinfs[2, 1, ei]
+            da3 = self.Dinfs[3, 1, ei]
+            db1 = self.Dinfs[1, 2, ei]
+            db2 = self.Dinfs[2, 2, ei]
+            db3 = self.Dinfs[3, 2, ei]
+
+            U_semiinfinite_horseshoe(
+                              view(self.horseshoes, :, :, ei),   # All nodes
+                              TE,                                # Indices of nodes that make the shedding edge
+                              da1, da2, da3,                     # Semi-infinite direction da
+                              db1, db2, db3,                     # Semi-infinite direction db
+                              1.0,                               # Unitary strength
+                              self.controlpoints,                # Targets
+                              view(self.G, :, ei);                    # Velocity of wake panel on every CP
+                              dot_with=self.normals,                  # Normal of every CP
+                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                              optargs...
+                             )
+
+        end
+
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ##### INTERNAL FUNCTIONS #######################################################
@@ -576,7 +809,7 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
 end
 
-function generate_stripwise_elements(airfoil_distribution, ypositions; 
+function _generate_stripwise_elements(airfoil_distribution, ypositions; 
                                         extrapolated=true, plot_polars=true, 
                                         optargs...)
 
