@@ -14,20 +14,63 @@ import LaTeXStrings: @L_str
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################
-struct LiftingLine{S<:StripwiseElement}
+struct LiftingLine{ R<:Number, 
+                    S<:StripwiseElement, 
+                    VectorType<:AbstractVector{R}, 
+                    MatrixType<:AbstractMatrix{R}, 
+                    TensorType<:AbstractArray{R, 3},
+                    LI<:LinearIndices}
 
     # Internal properties
     grid::gt.Grid                               # Flat-geometry grid
+    linearindices::LI                           # Linear indices of grid.nodes where linearindices[i, j] 
+                                                # is TE (j==1) or LE (j==2) of the i-th row of nodes
+
     ypositions::Vector{Float64}                 # Non-dimensional y-position of nodes, 2*y/b
 
     nelements::Int                              # Number of stripwise elements
     elements::Vector{S}                         # Stripwise elements
 
-    function LiftingLine(airfoil_distribution, args...; element_optargs=(), optargs...)
+    # Pre-allocated memory for solver
+    aerocenters::VectorType                     # Aerodynamic center of each stripwise element
+
+    horseshoes::TensorType                      # Horseshoes nodes, where horseshoes[i, j, n] 
+                                                # is the i-th coordinate of the j-th node in 
+                                                # the n-th horseshoe
+
+    Dinfs::TensorType                           # Direction of each semi-infinite vortex filament
+                                                # (freestream direction at each TE), where
+                                                # Dinfs[i, j, n] is the i-th coordinate of the 
+                                                # j-th semi-infinite filament (1==a, 2==b) of the
+                                                # n-th horeseshoe
+
+    controlpoints::MatrixType                   # Control point of each horseshoe
+    normals::MatrixType                         # Normal of each horseshoe
+
+    aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
+    Gammas::VectorType                          # Circulation of each horseshoe
+
+
+    function LiftingLine{R}(
+                            airfoil_distribution, 
+                            args...;
+                            element_optargs=(), 
+                            initial_aerocenters=1/4,
+                            initial_controlpoints=3/4,
+                            initial_Vinf=[1, 0, 0],
+                            arraytype::Type=Array,
+                            optargs...
+                            ) where {R<:Number}
+
+        # Define concrete array types
+        VectorType = arraytype{R, 1}
+        MatrixType = arraytype{R, 2}
+        TensorType = arraytype{R, 3}
 
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
-        sweeps, dihedrals, spanaxiss, symmetric) = _discretize_wing_parameterization(args...; optargs...)
+        sweeps, dihedrals, spanaxiss, 
+        symmetric) = _discretize_wing_parameterization(args...; optargs...)
 
         # ------------------ PREALLOCATE GRID MEMORY ---------------------------
         P_min = [0, 0, 0]               # Lower boundary span, chord, dummy
@@ -37,10 +80,14 @@ struct LiftingLine{S<:StripwiseElement}
 
         # Generate parametric grid
         grid = gt.Grid(P_min, P_max, NDIVS)
+
+        # Linear indices of grid
+        linearindices = LinearIndices(grid._ndivsnodes)
         
         # ------------------ MORPH GRID INTO WING GEOMETRY ---------------------
         _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                                            spanaxiss, symmetric; center=true)
+                                            spanaxiss, symmetric, linearindices; 
+                                            center=true)
 
         # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
@@ -48,11 +95,48 @@ struct LiftingLine{S<:StripwiseElement}
         elements = generate_stripwise_elements(airfoil_distribution, 
                                                 ypositions_elements; 
                                                 element_optargs...)
+        nelements = length(elements)
 
-                                            
-        new{eltype(elements)}(grid, ypositions, length(elements), elements)
+        # ------------------ PRE-ALLOCATE SOLVER MEMORY ------------------------
+        aerocenters = VectorType(undef, nelements)
+        horseshoes = TensorType(undef, 3, 4, nelements)
+        Dinfs = TensorType(undef, 3, 2, nelements)
+        controlpoints = MatrixType(undef, 3, nelements)
+        normals = MatrixType(undef, 3, nelements)
+        aoas = VectorType(undef, nelements)
+        Gammas = VectorType(undef, nelements)
+
+        # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
+        aerocenters .= initial_aerocenters
+
+        calc_horseshoes!(horseshoes, grid.nodes, linearindices, nelements,
+                                                        aerocenters)
+
+        calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
+                                                        initial_controlpoints)
+
+        calc_normals!(normals, controlpoints, horseshoes, nelements)
+
+        calc_Dinfs!(Dinfs, initial_Vinf, nelements)
+
+        # TODO: calc_Dinfs, and output horseshoes for verification, add normals for linear solver
+
+        
+
+        new{R,
+            eltype(elements),
+            VectorType, MatrixType, TensorType, 
+            typeof(linearindices)}(
+                                grid, linearindices,
+                                ypositions, 
+                                nelements, elements,
+                                aerocenters, horseshoes, Dinfs, 
+                                controlpoints, normals,
+                                aoas, Gammas)
 
     end
+
+    LiftingLine(args...; optargs...) = LiftingLine{Float64}(args...; optargs...)
 
 end
 
@@ -65,11 +149,242 @@ function remorph!(self::LiftingLine, args...; recenter=false, optargs...)
     sweeps, dihedrals, spanaxiss, symmetric) = _discretize_wing_parameterization(args...; optargs...)
 
     _morph_grid_wing!(self.grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric; center=recenter)
+                            spanaxiss, symmetric, self.linearindices; center=recenter)
 end
 
-function save(self::LiftingLine, args...; format="vtk", optargs...)
-    return gt.save(self.grid, args...; format, optargs...)
+
+function save(self::LiftingLine, filename::AbstractString; 
+                    format="vtk", 
+                    horseshoe_suffix="_horseshoe",
+                    controlpoint_suffix="_cp", planar_suffix="_planar", 
+                    wake_length_factor=0.25,
+                    optargs...)
+
+    str = ""
+
+    # ------------- OUTPUT HORSESHOES ------------------------------------------
+
+    npoints = size(self.horseshoes, 2)                  # Number of points in a horseshoe
+    nhorseshoes = size(self.horseshoes, 3)
+
+    # Flatten the tensor of horseshoe point into a matrix of points
+    horseshoes = self.horseshoes
+    horseshoes = reshape(horseshoes, ( size(horseshoes, 1), npoints*nhorseshoes ))
+
+    # Connect the horseshoe points (0-indexed for VTK format)
+    lines = [ collect( (0:npoints-1) .+ (ei-1)*npoints ) for ei in 1:nhorseshoes]
+
+    # Determine a characteristic length for the wake
+    wake_length = norm( maximum(horseshoes; dims=2) - minimum(horseshoes; dims=2) )
+    wake_length *= wake_length_factor
+
+    # Add fictitious wake end points to the horseshoes
+    horseshoes = hcat(horseshoes, zeros(3, 2*nhorseshoes))
+
+    for ei in 1:nhorseshoes
+
+        # TE points
+        Ap = horseshoes[:, lines[ei][1]+1]
+        Bp = horseshoes[:, lines[ei][end]+1]
+
+        # Indices of wake end points
+        ai = npoints*nhorseshoes + 2*(ei-1) + 1
+        bi = npoints*nhorseshoes + 2*(ei-1) + 2
+
+        # Add wake end points
+        horseshoes[:, ai] .= Ap + wake_length*self.Dinfs[:, 1, ei]
+        horseshoes[:, bi] .= Bp + wake_length*self.Dinfs[:, 2, ei]
+
+        # Add points to the VTK line definition
+        lines[ei] = vcat(ai-1, lines[ei], bi-1)
+
+    end
+
+    # Format the points as a vector of vectors 
+    horseshoes = eachcol(horseshoes)
+
+    horseshoes_data = [
+                            Dict(   "field_name"  => "Gamma",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.Gammas)
+
+                            Dict(   "field_name"  => "angleofattack",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.aoas)
+                        ]
+
+    str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
+                                cell_data=horseshoes_data,
+                                override_cell_type=4, optargs...)
+
+    # ------------- OUTPUT CONTROL POINTS --------------------------------------
+    controlpoints = eachcol(self.controlpoints)
+
+    controlpoints_data = [
+                            Dict(   "field_name"  => "normal",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.normals)),
+
+                            Dict(   "field_name"  => "angleofattack",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.aoas)
+                        ]
+
+    str *= gt.generateVTK(filename*controlpoint_suffix, controlpoints; 
+                                point_data=controlpoints_data, optargs...)
+
+    #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
+    planar_data = [
+                            Dict(   "field_name"  => "Gamma",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.Gammas)
+
+                            Dict(   "field_name"  => "angleofattack",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.aoas)
+                        ]
+
+    str *= gt.save(self.grid, filename*planar_suffix; 
+                                cell_data=planar_data, format, optargs...)
+
+    return str
+end
+
+
+function calc_horseshoes!(self::LiftingLine, args...; optargs...) 
+    return calc_horseshoes!(self.horseshoes, 
+                                self.grid.nodes, self.linearindices, 
+                                self.nelements, 
+                                args...; optargs...) 
+end
+
+function calc_horseshoes!(horseshoes::AbstractArray,
+                            nodes::AbstractMatrix, linearindices::LinearIndices, 
+                            nelements::Int,
+                            aerocenters::AbstractVector
+                            )
+    
+    for ei in 1:nelements               # Iterate over horseshoes
+        for i in 1:3                    # Iterate over coordinates
+
+            TEa = nodes[i, linearindices[ei, 1]]    # TE at a-side
+            TEb = nodes[i, linearindices[ei+1, 1]]  # TE at b-side
+            LEa = nodes[i, linearindices[ei, 2]]    # LE at a-side
+            LEb = nodes[i, linearindices[ei+1, 2]]  # LE at b-side
+
+                                                    # Aerodynamic center at a and b sides
+                                                    # NOTE: this assumes contiguous horseshoes
+            ACa = ei==1 ?         aerocenters[ei] : (aerocenters[ei-1] + aerocenters[ei]  )/2
+            ACb = ei==nelements ? aerocenters[ei] : (aerocenters[ei]   + aerocenters[ei+1])/2
+
+            # Horseshoe are defined from Ap -> A -> B -> Bp
+            horseshoes[i, 1, ei] = TEa                      # Ap point
+            horseshoes[i, 2, ei] = LEa + ACa*(TEa-LEa)      # A point
+            horseshoes[i, 3, ei] = LEb + ACb*(TEb-LEb)      # B point
+            horseshoes[i, 4, ei] = TEb                      # Bp point
+
+        end
+    end
+
+end
+
+
+function calc_controlpoints!(self::LiftingLine, args...; optargs...) 
+    return calc_controlpoints!(self.controlpoints, 
+                                self.grid.nodes, self.linearindices, 
+                                self.nelements, 
+                                args...; optargs...) 
+end
+
+function calc_controlpoints!(controlpoints::AbstractMatrix,
+                            nodes::AbstractMatrix, linearindices::LinearIndices, 
+                            nelements::Int,
+                            position::Number
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+        for i in 1:3                    # Iterate over coordinates
+
+            TEa = nodes[i, linearindices[ei, 1]]    # TE at a-side
+            TEb = nodes[i, linearindices[ei+1, 1]]    # TE at b-side
+            LEa = nodes[i, linearindices[ei, 2]]    # LE at a-side
+            LEb = nodes[i, linearindices[ei+1, 2]]    # LE at b-side
+
+            controlpoints[i, ei] = LEa + position*(TEa-LEa)     # Chordwise position at a-side
+            controlpoints[i, ei] += LEb + position*(TEb-LEb)    # Chordwise position at b-side
+            controlpoints[i, ei] /= 2                           # Take the average of the two
+
+        end
+    end
+
+end
+
+
+function calc_normals!(self::LiftingLine) 
+    return calc_normals!(self.normals, self.controlpoints, self.horseshoes,
+                                                                self.nelements)
+end
+
+function calc_normals!(normals::AbstractMatrix, 
+                            controlpoints::AbstractMatrix, 
+                            horseshoes::AbstractArray,
+                            nelements::Int
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        # dX = CP - A
+        dX1 = controlpoints[1, ei] - horseshoes[1, 2, ei]
+        dX2 = controlpoints[2, ei] - horseshoes[2, 2, ei]
+        dX3 = controlpoints[3, ei] - horseshoes[3, 2, ei]
+
+        # dY = B - A
+        dY1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
+        dY2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
+        dY3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
+
+        # normal = dX × dY / ||dX × dY||
+        normals[1, ei] = dX2*dY3 - dX3*dY2
+        normals[2, ei] = dX3*dY1 - dX1*dY3
+        normals[3, ei] = dX1*dY2 - dX2*dY1
+        normals[:, ei] /= sqrt(normals[1, ei]^2 + normals[2, ei]^2 + normals[3, ei]^2)
+
+    end
+
+end
+
+
+function calc_Dinfs!(self::LiftingLine, Vinfs) 
+    return calc_Dinfs!(self.Dinfs, Vinfs, self.nelements)
+end
+
+function calc_Dinfs!(Dinfs::AbstractArray, Vinf::AbstractVector, nelements::Int)
+    return calc_Dinfs!(Dinfs, repeat(Vinf, 1, nelements), nelements)
+end
+
+function calc_Dinfs!(Dinfs::AbstractArray, Vinfs::AbstractMatrix, nelements::Int)
+
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        for i in 1:3                    # Iterate over coordinates
+
+                                                    # Freestream at a and b sides
+                                                    # NOTE: this assumes contiguous horseshoes
+            vinfa = ei==1 ?         Vinfs[i, ei] : (Vinfs[i, ei-1] + Vinfs[i, ei]  )/2
+            vinfb = ei==nelements ? Vinfs[i, ei] : (Vinfs[i, ei]   + Vinfs[i, ei+1])/2
+
+            # Semi-infite direction at Ap (non-unit vector)
+            Dinfs[i, 1, ei] = vinfa
+
+            # Semi-infite direction at Bp (non-unit vector)
+            Dinfs[i, 2, ei] = vinfb
+
+        end
+
+        # Normalize the unit vectors
+        Dinfs[:, 1, ei] /= sqrt(Dinfs[1, 1, ei]^2 + Dinfs[2, 1, ei]^2 + Dinfs[3, 1, ei]^2)
+        Dinfs[:, 2, ei] /= sqrt(Dinfs[1, 2, ei]^2 + Dinfs[2, 2, ei]^2 + Dinfs[3, 2, ei]^2)
+
+    end
+
 end
 
 
@@ -174,15 +489,13 @@ function _discretize_wing_parameterization(;
 end
 
 function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric; center=false)
+                            spanaxiss, symmetric, linearindices; center=false)
 
     @assert grid._ndivsnodes[1] == length(ypositions) ""*
         "Invalid grid! Received grid of $(grid._ndivsnodes[1]) spanwise nodes,"*
         " and $(ypositions) y-positions"
 
     # ------------------ MORPH GRID INTO WING GEOMETRY -------------------------
-
-    linearindices = LinearIndices(grid._ndivsnodes)
 
     ypos_prev = ypositions[1]
     x0_prev, y0_prev, z0_prev = 0, ypos_prev*(b/2), 0
