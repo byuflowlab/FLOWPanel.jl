@@ -47,14 +47,17 @@ struct LiftingLine{ R<:Number,
 
     midpoints::MatrixType                       # Midpoint along lifting line for probing the velocity
     controlpoints::MatrixType                   # Control point of each horseshoe
-    normals::MatrixType                         # Normal of each horseshoe
+    normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element)
+    tangents::MatrixType                        # Tangent of each horseshoe (direction of streamwise element)
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
     Gammas::VectorType                          # Circulation of each horseshoe
     Us::MatrixType                              # Velocity at each midpoint
+    chords::VectorType                          # Dimensional chord of each stripwise element
 
     G::MatrixType                               # Geometry matrix in linear system of equations
     RHS::VectorType                             # Right-hand-side vector in linear system of equations
+    residuals::VectorType                       # Non-linear solver residuals
 
     # Solver settings
     kerneloffset::Float64                       # Kernel offset to avoid singularities
@@ -116,17 +119,21 @@ struct LiftingLine{ R<:Number,
         midpoints = MatrixType(undef, 3, nelements)
         controlpoints = MatrixType(undef, 3, nelements)
         normals = MatrixType(undef, 3, nelements)
+        tangents = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
         Us = MatrixType(undef, 3, nelements)
+        chords = VectorType(undef, nelements)
         G = MatrixType(undef, nelements, nelements)
         RHS = VectorType(undef, nelements)
+        residuals = VectorType(undef, nelements)
 
         aoas .= 0
         Gammas .= 0
         Us .= 0
         G .= 0
         RHS .= 0
+        residuals .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
         aerocenters .= initial_aerodynamic_centers
@@ -136,10 +143,14 @@ struct LiftingLine{ R<:Number,
 
         calc_midpoints!(midpoints, horseshoes, nelements)
 
+        calc_chords!(chords, grid.nodes, linearindices, nelements)
+
         calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
                                                  initial_controlpoint_positions)
 
         calc_normals!(normals, controlpoints, horseshoes, nelements)
+
+        calc_tangents!(tangents, horseshoes, nelements)
 
         calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
@@ -152,9 +163,9 @@ struct LiftingLine{ R<:Number,
                                 ypositions, 
                                 nelements, elements,
                                 aerocenters, horseshoes, Dinfs, 
-                                midpoints, controlpoints, normals,
-                                aoas, Gammas, Us,
-                                G, RHS,
+                                midpoints, controlpoints, normals, tangents,
+                                aoas, Gammas, Us, chords,
+                                G, RHS, residuals,
                                 kerneloffset, kernelcutoff)
 
     end
@@ -187,9 +198,13 @@ function remorph!(self::LiftingLine, args...;
 
     calc_midpoints!(self)
 
+    calc_chords!(self)
+
     calc_controlpoints!(self, controlpoint_positions)
 
     calc_normals!(self)
+
+    calc_tangents!(self)
 
     calc_Dinfs!(self, Uinf)
 
@@ -273,6 +288,14 @@ function save(self::LiftingLine, filename::AbstractString;
     midpoints = eachcol(self.midpoints)
 
     midpoints_data = [
+                            Dict(   "field_name"  => "normal",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.normals)),
+
+                            Dict(   "field_name"  => "tangent",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.tangents)),
+                                    
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
                                     "field_data"  => self.aoas),
@@ -293,6 +316,10 @@ function save(self::LiftingLine, filename::AbstractString;
                                     "field_type"  => "vector",
                                     "field_data"  => eachcol(self.normals)),
 
+                            Dict(   "field_name"  => "tangent",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.tangents)),
+
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
                                     "field_data"  => self.aoas)
@@ -308,33 +335,6 @@ function save(self::LiftingLine, filename::AbstractString;
     return str
 end
 
-
-function add_field(self::LiftingLine, field_name::String, field_type::String,
-                    field_data, entry_type::String;
-                    raise_warn=false, collectfield=true)
-
-    # Add field to grid
-    gt.add_field(self.grid, field_name, field_type,
-                    collectfield ? collect(field_data) : field_data, entry_type;
-                    raise_warn=raise_warn)
-
-    # Register the field
-    if !(field_name in self.fields)
-        push!(self.fields, field_name)
-    end
-
-    nothing
-end
-
-check_field(self::LiftingLine, field_name::String) = field_name in self.fields
-
-function get_field(self::LiftingLine, field_name::String)
-
-    @assert check_field(self, field_name) ""*
-        "Field $field_name not found! Available fields: $(self.fields)"
-
-    return self.grid.field[field_name]
-end
 
 
 function calc_horseshoes!(self::LiftingLine, args...; optargs...) 
@@ -397,6 +397,37 @@ function calc_midpoints!(midpoints::AbstractMatrix,
 
 end
 
+function calc_chords!(self::LiftingLine, args...; optargs...) 
+    return calc_chords!(self.chords, 
+                                self.grid.nodes, self.linearindices, 
+                                self.nelements, 
+                                args...; optargs...) 
+end
+
+function calc_chords!(chords::AbstractVector,
+                            nodes::AbstractMatrix, linearindices::LinearIndices, 
+                            nelements::Int;
+                            position::Number = 0.5
+                            )
+
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        TEai = linearindices[ei, 1]             # Index of TE at a-side
+        TEbi = linearindices[ei+1, 1]           # Index of TE at b-side
+        LEai = linearindices[ei, 2]             # Index of LE at a-side
+        LEbi = linearindices[ei+1, 2]           # Index of LE at b-side
+
+        chorda = sqrt( (nodes[1, TEai]-nodes[1, LEai])^2 + (nodes[2, TEai]-nodes[2, LEai])^2 + (nodes[3, TEai]-nodes[3, LEai])^2 )
+        chordb = sqrt( (nodes[1, TEbi]-nodes[1, LEbi])^2 + (nodes[2, TEbi]-nodes[2, LEbi])^2 + (nodes[3, TEbi]-nodes[3, LEbi])^2 )
+
+        chord = chorda + position*(chordb - chorda)
+
+        chords[ei] = chord
+
+    end
+
+end
+
 function calc_controlpoints!(self::LiftingLine, args...; optargs...) 
     return calc_controlpoints!(self.controlpoints, 
                                 self.grid.nodes, self.linearindices, 
@@ -454,6 +485,37 @@ function calc_normals!(normals::AbstractMatrix,
         normals[2, ei] = dX3*dY1 - dX1*dY3
         normals[3, ei] = dX1*dY2 - dX2*dY1
         normals[:, ei] /= sqrt(normals[1, ei]^2 + normals[2, ei]^2 + normals[3, ei]^2)
+
+    end
+
+end
+
+
+function calc_tangents!(self::LiftingLine) 
+    return calc_tangents!(self.tangents, self.horseshoes, self.nelements)
+end
+
+function calc_tangents!(tangents::AbstractMatrix, 
+                            horseshoes::AbstractArray, nelements::Int;
+                            position::Number=0.5,
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        # dA = Ap - A
+        dA1 = horseshoes[1, 1, ei] - horseshoes[1, 2, ei]
+        dA2 = horseshoes[2, 1, ei] - horseshoes[2, 2, ei]
+        dA3 = horseshoes[3, 1, ei] - horseshoes[3, 2, ei]
+
+        # dB = Bp - B
+        dB1 = horseshoes[1, 4, ei] - horseshoes[1, 3, ei]
+        dB2 = horseshoes[2, 4, ei] - horseshoes[2, 3, ei]
+        dB3 = horseshoes[3, 4, ei] - horseshoes[3, 3, ei]
+
+        # tangent = normalized( dA + position*(dB - dA) )
+        tangents[1, ei] = dA1 + position*(dB1 - dA1)
+        tangents[2, ei] = dA2 + position*(dB2 - dA2)
+        tangents[3, ei] = dA3 + position*(dB3 - dA3)
+        tangents[:, ei] /= sqrt(tangents[1, ei]^2 + tangents[2, ei]^2 + tangents[3, ei]^2)
 
     end
 
@@ -549,9 +611,83 @@ end
 
 
 
-
-
 ##### SOLVER ###################################################################
+
+function solve(self::LiftingLine, Uinf::AbstractVector, 
+                                            args...; optargs...) 
+    solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+end
+
+function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                        Uinfs::AbstractMatrix;
+                        aoas_initial_guess=0.0,
+                        addfields=true, raise_warn=false,
+                        optargs...)
+
+    # Set AOA initial guess
+    self.aoas .= aoas_initial_guess
+
+    # Initiate iteration with no induced velocity
+    self.Us .= Uinfs
+
+    # Update semi-infinite wake to align with freestream
+    calc_Dinfs!(self, Uinfs)
+
+    # Solve system of equations
+    solver(self.Gammas, self.G, self.RHS; solver_optargs...)
+
+    # Calculate velocity at lifting-line midpoints
+    self.Us .= Uinfs
+    Uind!(self, self.midpoints, self.Us)
+
+    # if addfields
+    #     gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+    #     gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+    #     gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
+    # end
+
+    return nothing
+
+end
+
+function calc_residuals(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                                                    Uinfs::AbstractMatrix)
+
+    # NOTE: remember to update self.aoas and self.Us before calling this function
+
+    for ei in 1:self.nelements                  # Iterate over stripwise elements
+
+        # --------- Step 1: input aoa -> lookup cl -----------------------------
+        cl = calc_cl(self.elements[ei], self.aoas[ei])
+
+        # --------- Step 2: convert cl to Gamma --------------------------------
+        self.Gammas[ei] = cl * 0.5*self.Us[ei]*self.chords[ei]
+
+    end
+
+    # --------- Step 3: compute inflow velocity U at lifting line --------------
+    self.Us .= Uinfs
+    Uind!(self, self.midpoints, self.Us)
+
+    for ei in 1:self.nelements
+
+        # --------- Step 4: compute effective aoa from inflow velocity ---------
+
+        Uy = self.Us[1, ei]*self.normals[1, ei] + self.Us[2, ei]*self.normals[2, ei]  + self.Us[3, ei]*self.normals[3, ei]
+        Ux = self.Us[1, ei]*self.tangents[1, ei] + self.Us[2, ei]*self.tangents[2, ei]  + self.Us[3, ei]*self.tangents[3, ei]
+        aoa_effective = atand(Uy, Ux)
+
+        # --------- Step 5: residual = input aoa - effective aoa ---------------
+        aoa_input = self.aoas[ei]
+
+        self.residuals[ei] = aoa_input - aoa_effective
+
+    end
+
+end
+
+
+##### LINEAR SOLVER ############################################################
 
 function solve_linear(self::LiftingLine, Uinf::AbstractVector, 
                                             args...; optargs...) 
@@ -559,19 +695,12 @@ function solve_linear(self::LiftingLine, Uinf::AbstractVector,
 end
 
 function solve_linear(self::LiftingLine, Uinfs::AbstractMatrix;
-                        controlpoint_positions=3/4, 
                         solver=solve_ludiv!, solver_optargs=(),
                         addfields=true, raise_warn=false,
                         optargs...)
 
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Uinfs)
-
-    # Update control point locations
-    calc_controlpoints!(self, controlpoint_positions)
-
-    # Update normals since control points where updated
-    calc_normals!(self)
 
     # Compute geometric matrix (left-hand-side influence matrix)
     self.G .= 0
