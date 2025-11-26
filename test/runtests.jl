@@ -7,6 +7,7 @@ include("runtests_semiinfiniteelements.jl")
 include("runtests_grid.jl")
 include("runtests_solvers.jl")
 include("runtests_solvers2.jl")
+include("runtests_liftingline.jl")
 
 if VERSION >= v"1.9" && !("remote" in Test.ARGS)
     include("runtests_meshes.jl")
