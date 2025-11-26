@@ -13,7 +13,7 @@ import CSV
 import DataFrames: DataFrame
 import AirfoilPrep
 
-abstract type StripwiseElement end
+abstract type StripwiseElement <: AbstractElement end
 
 ################################################################################
 # JETFOIL ELEMENT STRUCT

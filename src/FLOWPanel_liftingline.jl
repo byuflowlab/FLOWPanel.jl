@@ -15,16 +15,17 @@ import LaTeXStrings: @L_str
 # LIFTING LINE STRUCT
 ################################################################################
 struct LiftingLine{ R<:Number, 
-                    S<:StripwiseElement, 
+                    S<:StripwiseElement, N,
                     VectorType<:AbstractVector{R}, 
                     MatrixType<:AbstractMatrix{R}, 
                     TensorType<:AbstractArray{R, 3},
-                    LI<:LinearIndices}
+                    LI<:LinearIndices} <: AbstractBody{S, N}
 
     # Internal properties
     grid::gt.Grid                               # Flat-geometry grid
     linearindices::LI                           # Linear indices of grid.nodes where linearindices[i, j] 
                                                 # is TE (j==1) or LE (j==2) of the i-th row of nodes
+    fields::Vector{String}                      # Available fields (solutions)
 
     ypositions::Vector{Float64}                 # Non-dimensional y-position of nodes, 2*y/b
 
@@ -44,12 +45,13 @@ struct LiftingLine{ R<:Number,
                                                 # j-th semi-infinite filament (1==a, 2==b) of the
                                                 # n-th horeseshoe
 
-    midpoints::MatrixType                       # Midpoint along bound vortex for probing the velocity
+    midpoints::MatrixType                       # Midpoint along lifting line for probing the velocity
     controlpoints::MatrixType                   # Control point of each horseshoe
     normals::MatrixType                         # Normal of each horseshoe
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
     Gammas::VectorType                          # Circulation of each horseshoe
+    Us::MatrixType                              # Velocity at each midpoint
 
     G::MatrixType                               # Geometry matrix in linear system of equations
     RHS::VectorType                             # Right-hand-side vector in linear system of equations
@@ -116,11 +118,13 @@ struct LiftingLine{ R<:Number,
         normals = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
+        Us = MatrixType(undef, 3, nelements)
         G = MatrixType(undef, nelements, nelements)
         RHS = VectorType(undef, nelements)
 
         aoas .= 0
         Gammas .= 0
+        Us .= 0
         G .= 0
         RHS .= 0
 
@@ -139,17 +143,17 @@ struct LiftingLine{ R<:Number,
 
         calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
-
+        S = eltype(elements)
         new{R,
-            eltype(elements),
+            S, _count(S),
             VectorType, MatrixType, TensorType, 
             typeof(linearindices)}(
-                                grid, linearindices,
+                                grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
                                 aerocenters, horseshoes, Dinfs, 
                                 midpoints, controlpoints, normals,
-                                aoas, Gammas,
+                                aoas, Gammas, Us,
                                 G, RHS,
                                 kerneloffset, kernelcutoff)
 
@@ -189,8 +193,14 @@ function remorph!(self::LiftingLine, args...;
 
     calc_Dinfs!(self, Uinf)
 
+    # Reset solution
+    self.aoas .= 0
+    self.Gammas .= 0
+    self.Us .= 0
+
     return nothing
 end
+
 
 
 function save(self::LiftingLine, filename::AbstractString; 
@@ -265,7 +275,11 @@ function save(self::LiftingLine, filename::AbstractString;
     midpoints_data = [
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.aoas)
+                                    "field_data"  => self.aoas),
+
+                            Dict(   "field_name"  => "U",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.Us))
                         ]
 
     str *= gt.generateVTK(filename*midpoint_suffix, midpoints; 
@@ -288,20 +302,38 @@ function save(self::LiftingLine, filename::AbstractString;
                                 point_data=controlpoints_data, optargs...)
 
     #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
-    planar_data = [
-                            Dict(   "field_name"  => "Gamma",
-                                    "field_type"  => "scalar",
-                                    "field_data"  => self.Gammas)
 
-                            Dict(   "field_name"  => "angleofattack",
-                                    "field_type"  => "scalar",
-                                    "field_data"  => self.aoas)
-                        ]
-
-    str *= gt.save(self.grid, filename*planar_suffix; 
-                                cell_data=planar_data, format, optargs...)
+    str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
 
     return str
+end
+
+
+function add_field(self::LiftingLine, field_name::String, field_type::String,
+                    field_data, entry_type::String;
+                    raise_warn=false, collectfield=true)
+
+    # Add field to grid
+    gt.add_field(self.grid, field_name, field_type,
+                    collectfield ? collect(field_data) : field_data, entry_type;
+                    raise_warn=raise_warn)
+
+    # Register the field
+    if !(field_name in self.fields)
+        push!(self.fields, field_name)
+    end
+
+    nothing
+end
+
+check_field(self::LiftingLine, field_name::String) = field_name in self.fields
+
+function get_field(self::LiftingLine, field_name::String)
+
+    @assert check_field(self, field_name) ""*
+        "Field $field_name not found! Available fields: $(self.fields)"
+
+    return self.grid.field[field_name]
 end
 
 
@@ -552,9 +584,14 @@ function solve_linear(self::LiftingLine, Uinfs::AbstractMatrix;
     # Solve system of equations
     solver(self.Gammas, self.G, self.RHS; solver_optargs...)
 
+    # Calculate velocity at lifting-line midpoints
+    self.Us .= Uinfs
+    Uind!(self, self.midpoints, self.Us)
+
     if addfields
         gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
         gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
     end
 
     return nothing
