@@ -557,13 +557,19 @@ function calc_Dinfs!(Dinfs::AbstractArray, Uinfs::AbstractMatrix, nelements::Int
 
 end
 
+
+function Uind!(self::LiftingLine, targets::AbstractMatrix, args...; optargs...)
+    Uind!(self, self.Gammas, targets, args...; optargs...)
+end
+
 """
     Uind!(self::LiftingLine, targets, out, args...; optargs...)
 
 Returns the velocity induced by the wing on the targets `targets`, which is a
 3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
 """
-function Uind!(self::LiftingLine, targets::AbstractMatrix, out::AbstractMatrix; optargs...)
+function Uind!(self::LiftingLine, Gammas::AbstractVector, 
+                    targets::AbstractMatrix, out::AbstractMatrix; optargs...)
 
     # Add bound vortex contributions
     for ei in 1:self.nelements                              # Iterates over horseshoes
@@ -572,7 +578,7 @@ function Uind!(self::LiftingLine, targets::AbstractMatrix, out::AbstractMatrix; 
         U_vortexring(
                             view(self.horseshoes, :, :, ei),   # All nodes
                             1:4,                               # Indices of nodes that make this panel (closed ring)
-                            self.Gammas[ei],                   # Horseshoe circulation
+                            Gammas[ei],                        # Horseshoe circulation
                             targets,                           # Targets
                             out;                               # Outputs
                             offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -598,7 +604,7 @@ function Uind!(self::LiftingLine, targets::AbstractMatrix, out::AbstractMatrix; 
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
-                          self.Gammas[ei],                   # Filament circulation
+                          Gammas[ei],                        # Filament circulation
                           targets,                           # Targets
                           out;                               # Outputs
                           offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -650,37 +656,42 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
 end
 
-function calc_residuals(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
-                                                    Uinfs::AbstractMatrix)
+function calc_residuals(residuals::AbstractVector, 
+                        ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                        Uinfs::AbstractMatrix, 
+                        aoas::AbstractVector, Gammas::AbstractVector, Us::AbstractMatrix,
+                        )
 
-    # NOTE: remember to update self.aoas and self.Us before calling this function
+    # NOTE: remember to update initial guess aoas and initial state Us before 
+    # calling this function
 
-    for ei in 1:self.nelements                  # Iterate over stripwise elements
+    for ei in 1:ll.nelements                  # Iterate over stripwise elements
 
         # --------- Step 1: input aoa -> lookup cl -----------------------------
-        cl = calc_cl(self.elements[ei], self.aoas[ei])
+        cl = calc_cl(ll.elements[ei], aoas[ei])
 
         # --------- Step 2: convert cl to Gamma --------------------------------
-        self.Gammas[ei] = cl * 0.5*self.Us[ei]*self.chords[ei]
+        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        Gammas[ei] = cl * 0.5*magU*ll.chords[ei]
 
     end
 
     # --------- Step 3: compute inflow velocity U at lifting line --------------
-    self.Us .= Uinfs
-    Uind!(self, self.midpoints, self.Us)
+    Us .= Uinfs
+    Uind!(ll, Gammas, ll.midpoints, Us)
 
-    for ei in 1:self.nelements
+    for ei in 1:ll.nelements
 
         # --------- Step 4: compute effective aoa from inflow velocity ---------
+        Uy = Us[1, ei]*ll.normals[1, ei] + Us[2, ei]*ll.normals[2, ei]  + Us[3, ei]*ll.normals[3, ei]
+        Ux = Us[1, ei]*ll.tangents[1, ei] + Us[2, ei]*ll.tangents[2, ei]  + Us[3, ei]*ll.tangents[3, ei]
 
-        Uy = self.Us[1, ei]*self.normals[1, ei] + self.Us[2, ei]*self.normals[2, ei]  + self.Us[3, ei]*self.normals[3, ei]
-        Ux = self.Us[1, ei]*self.tangents[1, ei] + self.Us[2, ei]*self.tangents[2, ei]  + self.Us[3, ei]*self.tangents[3, ei]
         aoa_effective = atand(Uy, Ux)
 
         # --------- Step 5: residual = input aoa - effective aoa ---------------
-        aoa_input = self.aoas[ei]
+        aoa_input = aoas[ei]
 
-        self.residuals[ei] = aoa_input - aoa_effective
+        residuals[ei] = aoa_input - aoa_effective
 
     end
 
