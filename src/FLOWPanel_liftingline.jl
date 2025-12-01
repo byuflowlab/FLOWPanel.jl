@@ -672,13 +672,38 @@ function calc_residuals(residuals::AbstractVector,
 
         # --------- Step 2: convert cl to Gamma --------------------------------
         magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        # magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
         Gammas[ei] = cl * 0.5*magU*ll.chords[ei]
 
     end
 
     # --------- Step 3: compute inflow velocity U at lifting line --------------
-    Us .= Uinfs
+    
+    # Dragging line component
+    for ei in 1:ll.nelements
+
+        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        # magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+
+        cd = calc_cd(ll.elements[ei], aoas[ei])
+        Lambda = cd * 0.5*magU*ll.chords[ei]        # Source filament strength
+        sigma = Lambda/ll.chords[ei]                # Equivalent constant source panel strength
+
+        for i in 1:3
+            # Here we approximate the velocity induced by the dragging line
+            # by using an approximation of only the self-induced velocity
+            Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
+        end
+
+    end
+
+    # Freestream component
+    Us .+= Uinfs
+    # Us .= Uinfs
+
+    # Lifting line component
     Uind!(ll, Gammas, ll.midpoints, Us)
+
 
     for ei in 1:ll.nelements
 
