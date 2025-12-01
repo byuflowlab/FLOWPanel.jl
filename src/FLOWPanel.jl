@@ -24,6 +24,7 @@ import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import SimpleNonlinearSolve
 import Requires: @require
 
 # ------------ FLOW LAB MODULES ------------------------------------------------

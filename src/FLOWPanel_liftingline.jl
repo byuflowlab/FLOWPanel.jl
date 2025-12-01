@@ -51,7 +51,8 @@ struct LiftingLine{ R<:Number,
     tangents::MatrixType                        # Tangent of each horseshoe (direction of streamwise element)
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
-    Gammas::VectorType                          # Circulation of each horseshoe
+    Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
+    sigmas::VectorType                          # Source strength of each horseshoe (dragging line)
     Us::MatrixType                              # Velocity at each midpoint
     chords::VectorType                          # Dimensional chord of each stripwise element
 
@@ -122,6 +123,7 @@ struct LiftingLine{ R<:Number,
         tangents = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
+        sigmas = VectorType(undef, nelements)
         Us = MatrixType(undef, 3, nelements)
         chords = VectorType(undef, nelements)
         G = MatrixType(undef, nelements, nelements)
@@ -130,6 +132,7 @@ struct LiftingLine{ R<:Number,
 
         aoas .= 0
         Gammas .= 0
+        sigmas .= 0
         Us .= 0
         G .= 0
         RHS .= 0
@@ -164,7 +167,7 @@ struct LiftingLine{ R<:Number,
                                 nelements, elements,
                                 aerocenters, horseshoes, Dinfs, 
                                 midpoints, controlpoints, normals, tangents,
-                                aoas, Gammas, Us, chords,
+                                aoas, Gammas, sigmas, Us, chords,
                                 G, RHS, residuals,
                                 kerneloffset, kernelcutoff)
 
@@ -211,6 +214,7 @@ function remorph!(self::LiftingLine, args...;
     # Reset solution
     self.aoas .= 0
     self.Gammas .= 0
+    self.sigmas .= 0
     self.Us .= 0
 
     return nothing
@@ -274,6 +278,10 @@ function save(self::LiftingLine, filename::AbstractString;
                             Dict(   "field_name"  => "Gamma",
                                     "field_type"  => "scalar",
                                     "field_data"  => self.Gammas)
+
+                            Dict(   "field_name"  => "sigma",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.sigmas)
 
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
@@ -628,64 +636,82 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
                         Uinfs::AbstractMatrix;
                         aoas_initial_guess=0.0,
                         addfields=true, raise_warn=false,
-                        optargs...)
+                        solver=SimpleNonlinearSolve.SimpleDFSane(),
+                        solver_optargs=(; abstol = 1e-9),
+                        solver_cache=Dict(),
+                        )
 
     # Set AOA initial guess
     self.aoas .= aoas_initial_guess
 
-    # Initiate iteration with no induced velocity
-    self.Us .= Uinfs
-
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Uinfs)
 
-    # Solve system of equations
-    solver(self.Gammas, self.G, self.RHS; solver_optargs...)
+    # Generate residual function
+    f! = generate_f_residual(self, Uinfs; cache=solver_cache)
+
+    # Define solver initial guess
+    u0 = self.aoas
+
+    # Define nonlinear problem
+    isinplace = true
+    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
+
+    # Call nonlinear solver
+    result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+
+    # Set solved AOA
+    self.aoas .= result.u
+
+    # Calculate Gamma from AOA
+    # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
+    #       calculating U without iterating on Gamma until convergence.
+    #       Just using Uinf might be good enough of an approximation?
+    # calc_Gammas!(self.Gammas, self, self.aoas, self.Us)
+    calc_Gammas!(self.Gammas, self, self.aoas, Uinfs) 
 
     # Calculate velocity at lifting-line midpoints
     self.Us .= Uinfs
     Uind!(self, self.midpoints, self.Us)
 
-    # if addfields
-    #     gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
-    #     gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
-    #     gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
-    # end
+    if addfields
+        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
+    end
 
-    return nothing
+    return result, solver_cache
 
 end
 
-function calc_residuals(residuals::AbstractVector, 
-                        ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
-                        Uinfs::AbstractMatrix, 
-                        aoas::AbstractVector, Gammas::AbstractVector, Us::AbstractMatrix,
-                        )
+"""
+Residual = aoa_input - aoa_effective
+"""
+function calc_residuals!(residuals::AbstractVector, 
+                            ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                            Uinfs::AbstractMatrix, 
+                            aoas::AbstractVector, 
+                            Gammas::AbstractVector, sigmas::AbstractVector, 
+                            Us::AbstractMatrix,
+                            )
 
     # NOTE: remember to update initial guess aoas and initial state Us before 
     # calling this function
 
-    for ei in 1:ll.nelements                  # Iterate over stripwise elements
-
-        # --------- Step 1: input aoa -> lookup cl -----------------------------
-        cl = calc_cl(ll.elements[ei], aoas[ei])
-
-        # --------- Step 2: convert cl to Gamma --------------------------------
-        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-        # magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
-        Gammas[ei] = cl * 0.5*magU*ll.chords[ei]
-
-    end
+    # --------- Steps 1 and 2: input aoa -> lookup cl, convert cl to Gamma -----
+    # calc_Gammas!(Gammas, ll, aoas, Us)
+    calc_Gammas!(Gammas, ll, aoas, Uinfs) # <--- We can use Uinf instead of U to reduce nonlinearity
 
     # --------- Step 3: compute inflow velocity U at lifting line --------------
     
     # Dragging line component
     for ei in 1:ll.nelements
 
-        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-        # magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
-
         cd = calc_cd(ll.elements[ei], aoas[ei])
+
+        # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2) # <--- We can use Uinf instead of U to reduce nonlinearity
+
         Lambda = cd * 0.5*magU*ll.chords[ei]        # Source filament strength
         sigma = Lambda/ll.chords[ei]                # Equivalent constant source panel strength
 
@@ -694,6 +720,8 @@ function calc_residuals(residuals::AbstractVector,
             # by using an approximation of only the self-induced velocity
             Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
         end
+
+        sigmas[ei] = sigma
 
     end
 
@@ -708,10 +736,7 @@ function calc_residuals(residuals::AbstractVector,
     for ei in 1:ll.nelements
 
         # --------- Step 4: compute effective aoa from inflow velocity ---------
-        Uy = Us[1, ei]*ll.normals[1, ei] + Us[2, ei]*ll.normals[2, ei]  + Us[3, ei]*ll.normals[3, ei]
-        Ux = Us[1, ei]*ll.tangents[1, ei] + Us[2, ei]*ll.tangents[2, ei]  + Us[3, ei]*ll.tangents[3, ei]
-
-        aoa_effective = atand(Uy, Ux)
+        aoa_effective = calc_aoa(ll, Us, ei)
 
         # --------- Step 5: residual = input aoa - effective aoa ---------------
         aoa_input = aoas[ei]
@@ -721,6 +746,93 @@ function calc_residuals(residuals::AbstractVector,
     end
 
 end
+
+"""
+Calculate effective angle of attack seen the ei-th stripwise element
+"""
+function calc_aoa(ll::LiftingLine, Us::AbstractMatrix, ei::Int)
+
+    Uy = Us[1, ei]*ll.normals[1, ei] + Us[2, ei]*ll.normals[2, ei]  + Us[3, ei]*ll.normals[3, ei]
+    Ux = Us[1, ei]*ll.tangents[1, ei] + Us[2, ei]*ll.tangents[2, ei]  + Us[3, ei]*ll.tangents[3, ei]
+
+    return atand(Uy, Ux)
+
+end
+
+function calc_aoas!(aoas::AbstractVector, ll::LiftingLine, Us::AbstractMatrix)
+
+    for ei in 1:ll.nelements
+        aoas[ei] = calc_aoa(ll, Us, ei)
+    end
+
+end
+
+"""
+Calculate nonlinear lifting line strengths from the given AOAs and inflow 
+velocities
+"""
+function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
+                        aoas::AbstractVector, Us::AbstractMatrix)
+
+    for ei in 1:ll.nelements
+
+        cl = calc_cl(ll.elements[ei], aoas[ei])
+
+        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+
+        Gammas[ei] = cl * 0.5*magU*ll.chords[ei]
+
+    end
+end
+
+"""
+Generate residual wrapper for NonlinerSolver methods
+"""
+function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                                Uinfs::AbstractMatrix; cache=Dict())
+
+    cache[:fcalls] = 0
+
+    function f_residual!(du, u::AbstractVector{T}, p; cache=cache) where T<:Number
+
+        # Fetch AOAs from input variables
+        aoas = u
+
+        # Initiate cache
+        if !(T in keys(cache))
+            cache[T] = (;   residuals = zeros(T, ll.nelements), 
+                            Gammas = zeros(T, ll.nelements),
+                            sigmas = zeros(T, ll.nelements),
+                            Us = zeros(T, 3, ll.nelements),
+                            fcalls = [0],
+                            Uinfs,
+                        )
+
+            # Set Uinf as the initial velocity
+            cache[T].Us .= Uinfs
+
+        end
+
+        # Increase function call counter
+        cache[:fcalls] += 1
+
+        cache[T].Us .= Uinfs  # <-- Force it to use only Uinfs to dimensionalize cl and cd reducing nonlinearity
+
+        # Calculate residual
+        calc_residuals!(cache[T].residuals, ll, cache[T].Uinfs, 
+                        aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us)
+
+        # Set residual as state
+        du .= cache[T].residuals
+
+    end
+
+    return f_residual!
+
+end
+
+
+
 
 
 ##### LINEAR SOLVER ############################################################
