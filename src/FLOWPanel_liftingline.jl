@@ -679,6 +679,7 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
+                        debug=false
                         )
 
     # Set AOA initial guess
@@ -688,7 +689,7 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
     calc_Dinfs!(self, Uinfs)
 
     # Generate residual function
-    f! = generate_f_residual(self, Uinfs; cache=solver_cache)
+    f! = generate_f_residual(self, Uinfs; cache=solver_cache, debug)
 
     # Define solver initial guess
     u0 = self.aoas
@@ -845,9 +846,13 @@ end
 Generate residual wrapper for NonlinerSolver methods
 """
 function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
-                                Uinfs::AbstractMatrix; cache=Dict())
+                                Uinfs::AbstractMatrix; cache=Dict(), debug=false)
 
     cache[:fcalls] = 0
+
+    if debug
+        cache[:residual_rms] = []
+    end
 
     function f_residual!(du, u::AbstractVector{T}, p; cache=cache) where T<:Number
 
@@ -880,6 +885,10 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
         # Set residual as state
         du .= cache[T].residuals
+
+        if debug
+            push!( cache[:residual_rms], sqrt(mean(du.^2)))
+        end
 
     end
 
