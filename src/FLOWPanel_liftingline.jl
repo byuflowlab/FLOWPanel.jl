@@ -750,8 +750,10 @@ function calc_residuals!(residuals::AbstractVector,
 
         cd = calc_cd(ll.elements[ei], aoas[ei])
 
+        magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+
         # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-        magU = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2) # <--- We can use Uinf instead of U to reduce nonlinearity
+        magU = magUinf # <--- We can use Uinf instead of U to reduce nonlinearity
 
         Lambda = cd * 0.5*magU*ll.chords[ei]        # Source filament strength
         sigma = Lambda/ll.chords[ei]                # Equivalent constant source panel strength
@@ -812,10 +814,56 @@ end
 Calculate nonlinear lifting line strengths from the given AOAs and inflow 
 velocities
 """
+# function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
+#                         aoas::AbstractVector, Us::AbstractMatrix)
+
+#     for ei in 1:ll.nelements
+
+#         # Lifting filament direction
+#         dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+#         dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+#         dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+#         magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+
+#         dl1 /= magdl
+#         dl2 /= magdl
+#         dl3 /= magdl
+
+#         # Velocity counter-projected on the filament direction
+#         Uxdl1 = Us[2, ei]*dl3 - Us[3, ei]*dl2
+#         Uxdl2 = Us[3, ei]*dl1 - Us[1, ei]*dl3
+#         Uxdl3 = Us[1, ei]*dl2 - Us[2, ei]*dl1
+#         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
+
+#         # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
+#         cl = calc_cl(ll.elements[ei], aoas[ei])
+#         magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+
+#         Gammas[ei] = cl * 0.5*magU^2*ll.chords[ei] / magUxdl
+
+#     end
+# end
 function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
-                        aoas::AbstractVector, Us::AbstractMatrix)
+                        aoas::AbstractVector, Uinfs::AbstractMatrix)
 
     for ei in 1:ll.nelements
+
+        cl = calc_cl(ll.elements[ei], aoas[ei])
+
+        magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+
+        # Calculate local geometric twist relative to freestream
+        beta = calc_aoa(ll, Uinfs, ei)
+
+        # Calculate inflow angle
+        phi = aoas[ei] - beta
+
+        # Calculate velocity magnitude from the inflow angle as in Algorithm 1 
+        # of Martinez 2025 ASME paper
+        # NOTE: this assumes that the lifting line induces no velocity in the 
+        #       direction of the freestream, which doesn't really hold for
+        #       dihedral or winglets
+        magU = magUinf / cosd(phi)
 
         # Lifting filament direction
         dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
@@ -828,15 +876,15 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         dl3 /= magdl
 
         # Velocity counter-projected on the filament direction
-        Uxdl1 = Us[2, ei]*dl3 - Us[3, ei]*dl2
-        Uxdl2 = Us[3, ei]*dl1 - Us[1, ei]*dl3
-        Uxdl3 = Us[1, ei]*dl2 - Us[2, ei]*dl1
+        Uxdl1 = Uinfs[2, ei]*dl3 - Uinfs[3, ei]*dl2
+        Uxdl2 = Uinfs[3, ei]*dl1 - Uinfs[1, ei]*dl3
+        Uxdl3 = Uinfs[1, ei]*dl2 - Uinfs[2, ei]*dl1
         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
 
-        # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
-        cl = calc_cl(ll.elements[ei], aoas[ei])
-        magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        # Apply the same assumption to calculate the total velocity counter-projected
+        magUxdl /= cosd(phi)
 
+        # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
         Gammas[ei] = cl * 0.5*magU^2*ll.chords[ei] / magUxdl
 
     end
