@@ -762,6 +762,7 @@ function calc_residuals!(residuals::AbstractVector,
             # Here we approximate the velocity induced by the dragging line
             # by using an approximation of only the self-induced velocity
             Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
+            # Us[i, ei] = 0
         end
 
         sigmas[ei] = sigma
@@ -785,6 +786,20 @@ function calc_residuals!(residuals::AbstractVector,
         aoa_input = aoas[ei]
 
         residuals[ei] = aoa_input - aoa_effective
+
+
+        # Martinez' residual
+
+        # # Calculate local geometric twist relative to freestream
+        # beta = calc_aoa(ll, Uinfs, ei)
+
+        # # Calculate inflow angle
+        # phi = aoas[ei] - beta
+
+        # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        # magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+
+        # residuals[ei] = magU*cosd(phi) - magUinf*sind(phi)
 
     end
 
