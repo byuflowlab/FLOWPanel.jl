@@ -816,11 +816,27 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
 
     for ei in 1:ll.nelements
 
-        cl = calc_cl(ll.elements[ei], aoas[ei])
+        # Lifting filament direction
+        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
 
+        dl1 /= magdl
+        dl2 /= magdl
+        dl3 /= magdl
+
+        # Velocity counter-projected on the filament direction
+        Uxdl1 = Us[2, ei]*dl3 - Us[3, ei]*dl2
+        Uxdl2 = Us[3, ei]*dl1 - Us[1, ei]*dl3
+        Uxdl3 = Us[1, ei]*dl2 - Us[2, ei]*dl1
+        magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
+
+        # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
+        cl = calc_cl(ll.elements[ei], aoas[ei])
         magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
 
-        Gammas[ei] = cl * 0.5*magU*ll.chords[ei]
+        Gammas[ei] = cl * 0.5*magU^2*ll.chords[ei] / magUxdl
 
     end
 end
