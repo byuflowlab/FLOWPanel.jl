@@ -47,10 +47,12 @@ struct LiftingLine{ R<:Number,
 
     midpoints::MatrixType                       # Midpoint along lifting line for probing the velocity
     controlpoints::MatrixType                   # Control point of each horseshoe
-    normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element)
-    tangents::MatrixType                        # Tangent of each horseshoe (direction of streamwise element)
+    tangents::MatrixType                        # Tangent of each horseshoe (direction of streamwise element). Orthogonal bases: span x normal = tangent
+    spans::MatrixType                           # Spanwise unit vector of each horseshoe (direction of span at each streamwise element). Orthogonal bases: normal x tangent = span
+    normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element). Orthogonal bases: tangent x span = normal
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
+    claeros::VectorType                         # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
     Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
     sigmas::VectorType                          # Source strength of each horseshoe (dragging line)
     Us::MatrixType                              # Velocity at each midpoint
@@ -119,9 +121,12 @@ struct LiftingLine{ R<:Number,
         Dinfs = TensorType(undef, 3, 2, nelements)
         midpoints = MatrixType(undef, 3, nelements)
         controlpoints = MatrixType(undef, 3, nelements)
-        normals = MatrixType(undef, 3, nelements)
         tangents = MatrixType(undef, 3, nelements)
+        spans = MatrixType(undef, 3, nelements)
+        normals = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
+        claeros = VectorType(undef, nelements)
+        Gammas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
         sigmas = VectorType(undef, nelements)
         Us = MatrixType(undef, 3, nelements)
@@ -131,6 +136,7 @@ struct LiftingLine{ R<:Number,
         residuals = VectorType(undef, nelements)
 
         aoas .= 0
+        claeros .= 0
         Gammas .= 0
         sigmas .= 0
         Us .= 0
@@ -151,9 +157,11 @@ struct LiftingLine{ R<:Number,
         calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
                                                  initial_controlpoint_positions)
 
-        calc_normals!(normals, controlpoints, horseshoes, nelements)
-
         calc_tangents!(tangents, horseshoes, nelements)
+
+        calc_normals!(normals, tangents, horseshoes, nelements)
+
+        calc_spans!(spans, normals, tangents, nelements)
 
         calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
@@ -166,8 +174,8 @@ struct LiftingLine{ R<:Number,
                                 ypositions, 
                                 nelements, elements,
                                 aerocenters, horseshoes, Dinfs, 
-                                midpoints, controlpoints, normals, tangents,
-                                aoas, Gammas, sigmas, Us, chords,
+                                midpoints, controlpoints, tangents, spans, normals,
+                                aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, residuals,
                                 kerneloffset, kernelcutoff)
 
@@ -205,14 +213,17 @@ function remorph!(self::LiftingLine, args...;
 
     calc_controlpoints!(self, controlpoint_positions)
 
+    calc_tangents!(self)
+
     calc_normals!(self)
 
-    calc_tangents!(self)
+    calc_spans!(self)
 
     calc_Dinfs!(self, Uinf)
 
     # Reset solution
     self.aoas .= 0
+    self.claeros .= 0
     self.Gammas .= 0
     self.sigmas .= 0
     self.Us .= 0
@@ -286,6 +297,10 @@ function save(self::LiftingLine, filename::AbstractString;
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
                                     "field_data"  => self.aoas)
+                                    
+                            Dict(   "field_name"  => "claero",
+                                    "field_type"  => "scalar",
+                                    "field_data"  => self.claeros)
                         ]
 
     str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
@@ -296,13 +311,17 @@ function save(self::LiftingLine, filename::AbstractString;
     midpoints = eachcol(self.midpoints)
 
     midpoints_data = [
-                            Dict(   "field_name"  => "normal",
-                                    "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.normals)),
-
                             Dict(   "field_name"  => "tangent",
                                     "field_type"  => "vector",
                                     "field_data"  => eachcol(self.tangents)),
+
+                            Dict(   "field_name"  => "span",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.spans)),
+
+                            Dict(   "field_name"  => "normal",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.normals)),
                                     
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
@@ -323,10 +342,6 @@ function save(self::LiftingLine, filename::AbstractString;
                             Dict(   "field_name"  => "normal",
                                     "field_type"  => "vector",
                                     "field_data"  => eachcol(self.normals)),
-
-                            Dict(   "field_name"  => "tangent",
-                                    "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.tangents)),
 
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
@@ -465,40 +480,6 @@ function calc_controlpoints!(controlpoints::AbstractMatrix,
 
 end
 
-
-function calc_normals!(self::LiftingLine) 
-    return calc_normals!(self.normals, self.controlpoints, self.horseshoes,
-                                                                self.nelements)
-end
-
-function calc_normals!(normals::AbstractMatrix, 
-                            controlpoints::AbstractMatrix, 
-                            horseshoes::AbstractArray,
-                            nelements::Int
-                            )
-    for ei in 1:nelements               # Iterate over horseshoes
-
-        # dX = CP - A
-        dX1 = controlpoints[1, ei] - horseshoes[1, 2, ei]
-        dX2 = controlpoints[2, ei] - horseshoes[2, 2, ei]
-        dX3 = controlpoints[3, ei] - horseshoes[3, 2, ei]
-
-        # dY = B - A
-        dY1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
-        dY2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
-        dY3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
-
-        # normal = dX × dY / ||dX × dY||
-        normals[1, ei] = dX2*dY3 - dX3*dY2
-        normals[2, ei] = dX3*dY1 - dX1*dY3
-        normals[3, ei] = dX1*dY2 - dX2*dY1
-        normals[:, ei] /= sqrt(normals[1, ei]^2 + normals[2, ei]^2 + normals[3, ei]^2)
-
-    end
-
-end
-
-
 function calc_tangents!(self::LiftingLine) 
     return calc_tangents!(self.tangents, self.horseshoes, self.nelements)
 end
@@ -524,6 +505,65 @@ function calc_tangents!(tangents::AbstractMatrix,
         tangents[2, ei] = dA2 + position*(dB2 - dA2)
         tangents[3, ei] = dA3 + position*(dB3 - dA3)
         tangents[:, ei] /= sqrt(tangents[1, ei]^2 + tangents[2, ei]^2 + tangents[3, ei]^2)
+
+    end
+
+end
+
+function calc_normals!(self::LiftingLine) 
+    return calc_normals!(self.normals, self.tangents, self.horseshoes,
+                                                                self.nelements)
+end
+
+function calc_normals!(normals::AbstractMatrix, 
+                            tangents::AbstractMatrix, 
+                            horseshoes::AbstractArray,
+                            nelements::Int
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        # # dX = CP - A
+        # dX1 = controlpoints[1, ei] - horseshoes[1, 2, ei]
+        # dX2 = controlpoints[2, ei] - horseshoes[2, 2, ei]
+        # dX3 = controlpoints[3, ei] - horseshoes[3, 2, ei]
+
+        # dX = tangent
+        dX1 = tangents[1, ei]
+        dX2 = tangents[2, ei]
+        dX3 = tangents[3, ei]
+
+        # dY = B - A
+        dY1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
+        dY2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
+        dY3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
+
+        # normal = dX × dY / ||dX × dY||
+        normals[1, ei] = dX2*dY3 - dX3*dY2
+        normals[2, ei] = dX3*dY1 - dX1*dY3
+        normals[3, ei] = dX1*dY2 - dX2*dY1
+        normals[:, ei] /= sqrt(normals[1, ei]^2 + normals[2, ei]^2 + normals[3, ei]^2)
+
+    end
+
+end
+
+
+function calc_spans!(self::LiftingLine) 
+    return calc_spans!(self.spans, self.normals, self.tangents, self.nelements)
+end
+
+function calc_spans!(spans::AbstractMatrix,
+                            normals::AbstractMatrix,
+                            tangents::AbstractMatrix,
+                            nelements::Int
+                            )
+    for ei in 1:nelements               # Iterate over horseshoes
+
+        # span = normal x tangent
+        spans[1, ei] = normals[2, ei]*tangents[3, ei] - normals[3, ei]*tangents[2, ei]
+        spans[2, ei] = normals[3, ei]*tangents[1, ei] - normals[1, ei]*tangents[3, ei]
+        spans[3, ei] = normals[1, ei]*tangents[2, ei] - normals[2, ei]*tangents[1, ei]
+        spans[:, ei] /= sqrt(spans[1, ei]^2 + spans[2, ei]^2 + spans[3, ei]^2)
 
     end
 

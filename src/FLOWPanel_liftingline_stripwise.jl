@@ -103,6 +103,7 @@ end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))
 
+calc_claero(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
 calc_cl(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
 calc_cd(self::SimpleAirfoil, alpha) = self.spl_cd(alpha)
 calc_cm(self::SimpleAirfoil, alpha) = self.spl_cm(alpha)
