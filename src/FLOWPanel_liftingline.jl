@@ -33,7 +33,8 @@ struct LiftingLine{ R<:Number,
     nelements::Int                              # Number of stripwise elements
     elements::Vector{S}                         # Stripwise elements
 
-    deltasb::Float64                            # Blending distance
+    deltasb::Float64                            # Blending distance, deltasb = 2*dy/b
+    deltajoint::Float64                         # Joint distance, deltajoint = dx/c
 
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
@@ -59,6 +60,8 @@ struct LiftingLine{ R<:Number,
     spans::MatrixType                           # Spanwise unit vector of each horseshoe (direction of span at each streamwise element). Orthogonal bases: normal x tangent = span
     normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element). Orthogonal bases: tangent x span = normal
 
+    auxtangents::MatrixType                     # Auxiliary memory for calculating tangents of effective lifting line
+
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
     claeros::VectorType                         # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
     Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
@@ -83,6 +86,7 @@ struct LiftingLine{ R<:Number,
                             strip_positions=0.5,
                             controlpoint_position=3/4,
                             deltasb=1.0,
+                            deltajoint=0.15,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
                             kernelcutoff=1e-14,
@@ -137,6 +141,7 @@ struct LiftingLine{ R<:Number,
         tangents = MatrixType(undef, 3, nelements)
         spans = MatrixType(undef, 3, nelements)
         normals = MatrixType(undef, 3, nelements)
+        auxtangents = MatrixType(undef, 3, nelements)
         aoas = VectorType(undef, nelements)
         claeros = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
@@ -172,7 +177,7 @@ struct LiftingLine{ R<:Number,
                                                 strippositions, nelements,
                                                 controlpoint_position)
 
-        calc_tangents!(tangents, horseshoes, nelements)
+        calc_tangents!(tangents, horseshoes, strippositions, nelements)
 
         calc_normals!(normals, tangents, horseshoes, nelements)
 
@@ -185,6 +190,10 @@ struct LiftingLine{ R<:Number,
                                                 ypositions, strippositions, 
                                                 nelements; deltasb)
 
+        jointerize!(effective_horseshoes, auxtangents,
+                                                strippositions, nelements,
+                                                normals, chords; deltajoint)
+
         S = eltype(elements)
         new{R,
             S, _count(S),
@@ -193,10 +202,11 @@ struct LiftingLine{ R<:Number,
                                 grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
-                                deltasb,
+                                deltasb, deltajoint,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, tangents, spans, normals,
+                                auxtangents,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, residuals,
                                 kerneloffset, kernelcutoff)
@@ -244,6 +254,8 @@ function remorph!(self::LiftingLine, args...;
     calc_Dinfs!(self, Uinf)
     
     calc_effective_horseshoes!(self)
+
+    jointerize!(self)
 
     # Reset solution
     self.aoas .= 0
@@ -517,8 +529,8 @@ Calculate Reid's effective lifting line of horseshoes as explained in Goates
 2022, JoA, "Modern Implementation and Evaluation of Lifting-Line Theory
 for Complex Geometries".
 """
-function calc_effective_horseshoes!(effective_horseshoes::AbstractArray, 
-                                            horseshoes::AbstractArray,
+function calc_effective_horseshoes!(effective_horseshoes::AbstractArray{<:Number, 4}, 
+                                            horseshoes::AbstractArray{<:Number, 3},
                                             midpoints::AbstractMatrix,
                                             tangents::AbstractMatrix,
                                             spans::AbstractMatrix,
@@ -591,6 +603,144 @@ function calc_effective_horseshoes!(effective_horseshoes::AbstractArray,
         end
     end
 
+end
+
+
+"""
+Convert Weissenger VLM horseshoes into Reid's joint horseshoes as explained in
+Reid (2022), "A General Approach to Lifting-Line Theory, Applied to Wings With
+Sweep", Sec. 2.2.3. 
+"""
+function jointerize!(self::LiftingLine; optargs...)
+
+    jointerize!(self.effective_horseshoes, self.auxtangents, 
+                    self.strippositions, self.nelements,
+                    self.normals, self.chords; 
+                    deltajoint=self.deltajoint, 
+                    optargs...)
+end
+
+function jointerize!(effective_horseshoes::AbstractArray{<:Number, 4}, 
+                        auxtangents::AbstractMatrix, 
+                        strippositions::AbstractVector, nelements::Int,
+                        args...; optargs...)
+
+    for ei in 1:nelements                   # Iterate over stripwise elements
+
+        # Fetch effective horseshoes seen by this element
+        horseshoes = view(effective_horseshoes, :, :, :, ei)
+
+        # Calculate tangent vectors of the effective lifting line
+        tangents = auxtangents
+        calc_tangents!(tangents, horseshoes, strippositions, nelements)
+
+        # Modify the effective horseshoes to be joint
+        jointerize!(horseshoes, tangents, args..., nelements; optargs...)
+    end
+
+end
+
+function jointerize!(horseshoes::AbstractArray{R, 3}, tangents::AbstractMatrix, 
+                        normals::AbstractMatrix, chords::AbstractVector,
+                        nelements::Int;
+                        deltajoint=0.15) where {R}
+
+    if deltajoint < 0
+        return
+    end
+
+    prev_tangent1::R = zero(R)
+    prev_tangent2::R = zero(R)
+    prev_tangent3::R = zero(R)
+
+    this_tangent1::R = zero(R)
+    this_tangent2::R = zero(R)
+    this_tangent3::R = zero(R)
+
+    prev_chord::R = zero(R)
+    this_chord::R = zero(R)
+
+    for ei in 0:nelements                   # Iterate over horseshoes
+
+        if ei != nelements
+
+            # Lifting filament direction of the next horseshoe
+            dl1 = horseshoes[1, 3, ei+1] - horseshoes[1, 2, ei+1]
+            dl2 = horseshoes[2, 3, ei+1] - horseshoes[2, 2, ei+1]
+            dl3 = horseshoes[3, 3, ei+1] - horseshoes[3, 2, ei+1]
+            magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+
+            dl1 /= magdl
+            dl2 /= magdl
+            dl3 /= magdl
+
+            # Calculate the tangent vector that is orthonormal to the filament
+            next_tangent1 = dl2*normals[3, ei+1] - dl3*normals[2, ei+1]
+            next_tangent2 = dl3*normals[1, ei+1] - dl1*normals[3, ei+1]
+            next_tangent3 = dl1*normals[2, ei+1] - dl2*normals[1, ei+1]
+            magtangent = sqrt(next_tangent1^2 + next_tangent2^2 + next_tangent3^2)
+
+            next_tangent1 /= magtangent
+            next_tangent2 /= magtangent
+            next_tangent3 /= magtangent
+
+            next_chord = chords[ei+1]
+
+        else
+            next_tangent1 = this_tangent1
+            next_tangent2 = this_tangent2
+            next_tangent3 = this_tangent3
+
+            next_chord = this_chord
+        end
+
+        # Proceed to jointerize this horseshoe if it is not the initialization step
+        if ei != 0
+
+            # Tangent and chord on a-side
+            tangenta1 = (prev_tangent1 + this_tangent1)/2
+            tangenta2 = (prev_tangent2 + this_tangent2)/2
+            tangenta3 = (prev_tangent3 + this_tangent3)/2
+            chorda = (prev_chord + this_chord)/2
+
+            # Tangent and chord on b-side
+            tangentb1 = (this_tangent1 + next_tangent1)/2
+            tangentb2 = (this_tangent2 + next_tangent2)/2
+            tangentb3 = (this_tangent3 + next_tangent3)/2
+            chordb = (this_chord + next_chord)/2
+
+            # Override original Ap and Bp with joint Ap and joint Bp
+            horseshoes[1, 1, ei] = horseshoes[1, 2, ei] + (deltajoint*chorda)*tangenta1
+            horseshoes[2, 1, ei] = horseshoes[2, 2, ei] + (deltajoint*chorda)*tangenta2
+            horseshoes[3, 1, ei] = horseshoes[3, 2, ei] + (deltajoint*chorda)*tangenta3
+
+            horseshoes[1, 4, ei] = horseshoes[1, 3, ei] + (deltajoint*chordb)*tangentb1
+            horseshoes[2, 4, ei] = horseshoes[2, 3, ei] + (deltajoint*chordb)*tangentb2
+            horseshoes[3, 4, ei] = horseshoes[3, 3, ei] + (deltajoint*chordb)*tangentb3
+
+        end
+
+        if ei == 0
+            this_tangent1 = next_tangent1
+            this_tangent2 = next_tangent2
+            this_tangent3 = next_tangent3
+
+            this_chord = next_chord
+        end
+
+        # Shift tangents
+        prev_tangent1 = this_tangent1
+        prev_tangent2 = this_tangent2
+        prev_tangent3 = this_tangent3
+
+        this_tangent1 = next_tangent1
+        this_tangent2 = next_tangent2
+        this_tangent3 = next_tangent3
+
+        prev_chord = this_chord
+        this_chord = next_chord
+        
+    end
 end
 
 function calc_midpoints!(self::LiftingLine, args...; optargs...) 
@@ -681,13 +831,12 @@ function calc_controlpoints!(controlpoints::AbstractMatrix,
 end
 
 function calc_tangents!(self::LiftingLine) 
-    return calc_tangents!(self.tangents, self.horseshoes, self.nelements)
+    return calc_tangents!(self.tangents, self.horseshoes, 
+                                    self.strippositions, self.nelements)
 end
 
-function calc_tangents!(tangents::AbstractMatrix, 
-                            horseshoes::AbstractArray, nelements::Int;
-                            position::Number=0.5,
-                            )
+function calc_tangents!(tangents::AbstractMatrix, horseshoes::AbstractArray, 
+                            positions::AbstractVector, nelements::Int)
     for ei in 1:nelements               # Iterate over horseshoes
 
         # dA = Ap - A
@@ -701,9 +850,9 @@ function calc_tangents!(tangents::AbstractMatrix,
         dB3 = horseshoes[3, 4, ei] - horseshoes[3, 3, ei]
 
         # tangent = normalized( dA + position*(dB - dA) )
-        tangents[1, ei] = dA1 + position*(dB1 - dA1)
-        tangents[2, ei] = dA2 + position*(dB2 - dA2)
-        tangents[3, ei] = dA3 + position*(dB3 - dA3)
+        tangents[1, ei] = dA1 + positions[ei]*(dB1 - dA1)
+        tangents[2, ei] = dA2 + positions[ei]*(dB2 - dA2)
+        tangents[3, ei] = dA3 + positions[ei]*(dB3 - dA3)
         tangents[:, ei] /= sqrt(tangents[1, ei]^2 + tangents[2, ei]^2 + tangents[3, ei]^2)
 
     end
