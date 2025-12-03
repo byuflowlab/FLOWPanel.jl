@@ -107,6 +107,10 @@ v_lvl = 0
                                     )
 
 
+    # Test sweep calculation
+    @test abs(-pnl.calc_sweep(liftingline, 1) - sweep_distribution[1, 2]) < 1e-6
+    @test abs(pnl.calc_sweep(liftingline, liftingline.nelements) - sweep_distribution[end, 2]) < 1e-6
+
 
     # ------------------ CALL SOLVER ----------------------------------
     t = @elapsed pnl.solve_linear(liftingline, Uinf)

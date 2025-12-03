@@ -19,6 +19,7 @@ struct LiftingLine{ R<:Number,
                     VectorType<:AbstractVector{R}, 
                     MatrixType<:AbstractMatrix{R}, 
                     TensorType<:AbstractArray{R, 3},
+                    TensorType2<:AbstractArray{R, 4},
                     LI<:LinearIndices} <: AbstractBody{S, N}
 
     # Internal properties
@@ -34,10 +35,15 @@ struct LiftingLine{ R<:Number,
 
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
+    strippositions::VectorType                  # Position of each stripwise element within the bound vortex (0==a, 1==b)
 
     horseshoes::TensorType                      # Horseshoes nodes, where horseshoes[i, j, n] 
                                                 # is the i-th coordinate of the j-th node in 
                                                 # the n-th horseshoe
+
+    effective_horseshoes::TensorType2           # Horseshoes nodes of the effective lift line,
+                                                # where effective_horseshoes[:, :, :, ei] is the
+                                                # effective horseshoes seen by the ei-th stripwise element
 
     Dinfs::TensorType                           # Direction of each semi-infinite vortex filament
                                                 # (freestream direction at each TE), where
@@ -71,8 +77,9 @@ struct LiftingLine{ R<:Number,
                             airfoil_distribution, 
                             args...;
                             element_optargs=(), 
-                            initial_aerodynamic_centers=1/4,
-                            initial_controlpoint_positions=3/4,
+                            aerodynamic_centers=1/4,
+                            strip_positions=0.5,
+                            controlpoint_position=3/4,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
                             kernelcutoff=1e-14,
@@ -84,6 +91,7 @@ struct LiftingLine{ R<:Number,
         VectorType = arraytype{R, 1}
         MatrixType = arraytype{R, 2}
         TensorType = arraytype{R, 3}
+        TensorType2 = arraytype{R, 4}
 
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
@@ -117,7 +125,9 @@ struct LiftingLine{ R<:Number,
 
         # ------------------ PRE-ALLOCATE SOLVER MEMORY ------------------------
         aerocenters = VectorType(undef, nelements)
+        strippositions = VectorType(undef, nelements)
         horseshoes = TensorType(undef, 3, 4, nelements)
+        effective_horseshoes = TensorType2(undef, 3, 4, nelements, nelements)
         Dinfs = TensorType(undef, 3, 2, nelements)
         midpoints = MatrixType(undef, 3, nelements)
         controlpoints = MatrixType(undef, 3, nelements)
@@ -145,17 +155,19 @@ struct LiftingLine{ R<:Number,
         residuals .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
-        aerocenters .= initial_aerodynamic_centers
+        aerocenters .= aerodynamic_centers
+        strippositions .= strip_positions
 
         calc_horseshoes!(horseshoes, grid.nodes, linearindices, nelements,
                                                         aerocenters)
 
-        calc_midpoints!(midpoints, horseshoes, nelements)
+        calc_midpoints!(midpoints, horseshoes, strippositions, nelements)
 
-        calc_chords!(chords, grid.nodes, linearindices, nelements)
+        calc_chords!(chords, grid.nodes, linearindices, strippositions, nelements)
 
-        calc_controlpoints!(controlpoints, grid.nodes, linearindices, nelements,
-                                                 initial_controlpoint_positions)
+        calc_controlpoints!(controlpoints, grid.nodes, linearindices, 
+                                                strippositions, nelements,
+                                                controlpoint_position)
 
         calc_tangents!(tangents, horseshoes, nelements)
 
@@ -165,15 +177,21 @@ struct LiftingLine{ R<:Number,
 
         calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
+        calc_effective_horseshoes!(effective_horseshoes, horseshoes, midpoints,
+                                                tangents, spans, 
+                                                ypositions, strippositions, 
+                                                nelements)
+
         S = eltype(elements)
         new{R,
             S, _count(S),
-            VectorType, MatrixType, TensorType, 
+            VectorType, MatrixType, TensorType, TensorType2,
             typeof(linearindices)}(
                                 grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
-                                aerocenters, horseshoes, Dinfs, 
+                                aerocenters, strippositions,
+                                horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, tangents, spans, normals,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, residuals,
@@ -190,7 +208,7 @@ Morph the lifting-line wing geometry into a new geometry
 """
 function remorph!(self::LiftingLine, args...; 
                     recenter=false, 
-                    aerodynamic_centers=1/4, controlpoint_positions=3/4, 
+                    controlpoint_positions=3/4, 
                     Uinf=[1, 0, 0],
                     optargs...)
 
@@ -220,6 +238,8 @@ function remorph!(self::LiftingLine, args...;
     calc_spans!(self)
 
     calc_Dinfs!(self, Uinf)
+    
+    calc_effective_horseshoes!(self)
 
     # Reset solution
     self.aoas .= 0
@@ -240,6 +260,7 @@ function save(self::LiftingLine, filename::AbstractString;
                     controlpoint_suffix="_cp", 
                     planar_suffix="_planar", 
                     wake_length_factor=0.25,
+                    debug=false,
                     optargs...)
 
     str = ""
@@ -304,8 +325,85 @@ function save(self::LiftingLine, filename::AbstractString;
                         ]
 
     str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
-                                cell_data=horseshoes_data,
+                                cell_data=horseshoes_data, num=debug ? 0 : nothing,
                                 override_cell_type=4, optargs...)
+
+
+    # ------------- OUTPUT EFFECTIVE LIFTING LINE HORSESHOES -------------------
+    if debug
+        for ei in 1:self.nelements
+
+            # Flatten the tensor of horseshoe point into a matrix of points
+            horseshoes = view(self.effective_horseshoes, :, :, :, ei)
+            horseshoes = reshape(horseshoes, ( size(horseshoes, 1), npoints*nhorseshoes ))
+
+            # Connect the horseshoe points (0-indexed for VTK format)
+            lines = [ collect( (0:npoints-1) .+ (ni-1)*npoints ) for ni in 1:nhorseshoes]
+
+            # Determine a characteristic length for the wake
+            wake_length = norm( maximum(horseshoes; dims=2) - minimum(horseshoes; dims=2) )
+            wake_length *= wake_length_factor
+
+            # Add fictitious wake end points to the horseshoes
+            horseshoes = hcat(horseshoes, zeros(3, 2*nhorseshoes))
+
+            for ni in 1:nhorseshoes
+
+                # TE points
+                Ap = horseshoes[:, lines[ni][1]+1]
+                Bp = horseshoes[:, lines[ni][end]+1]
+
+                # Indices of wake end points
+                ai = npoints*nhorseshoes + 2*(ni-1) + 1
+                bi = npoints*nhorseshoes + 2*(ni-1) + 2
+
+                # Add wake end points
+                horseshoes[:, ai] .= Ap + wake_length*self.Dinfs[:, 1, ni]
+                horseshoes[:, bi] .= Bp + wake_length*self.Dinfs[:, 2, ni]
+
+                # Add points to the VTK line definition
+                lines[ni] = vcat(ai-1, lines[ni], bi-1)
+
+            end
+
+            # Format the points as a vector of vectors 
+            horseshoes = eachcol(horseshoes)
+
+            str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; 
+                                        cells=lines, num=ei,
+                                        override_cell_type=4, optargs...)
+
+            # Output associated midpoint
+            midpoints = [self.midpoints[:, ei]]
+
+            midpoints_data = [
+                                    Dict(   "field_name"  => "tangent",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.tangents[:, ei]]),
+
+                                    Dict(   "field_name"  => "span",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.spans[:, ei]]),
+
+                                    Dict(   "field_name"  => "normal",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.normals[:, ei]]),
+
+                                    Dict(   "field_name"  => "angleofattack",
+                                            "field_type"  => "scalar",
+                                            "field_data"  => [self.aoas[ei]]),
+
+                                    Dict(   "field_name"  => "U",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.Us[:, ei]])
+                                ]
+
+            str *= gt.generateVTK(filename*midpoint_suffix, midpoints;
+                                        num=ei, 
+                                        point_data=midpoints_data, optargs...)
+
+        end
+    end
 
     # ------------- OUTPUT MIDPOINTS -------------------------------------------
     midpoints = eachcol(self.midpoints)
@@ -333,6 +431,7 @@ function save(self::LiftingLine, filename::AbstractString;
                         ]
 
     str *= gt.generateVTK(filename*midpoint_suffix, midpoints; 
+                                num = debug ? 0 : nothing,
                                 point_data=midpoints_data, optargs...)
 
     # ------------- OUTPUT CONTROL POINTS --------------------------------------
@@ -398,22 +497,109 @@ function calc_horseshoes!(horseshoes::AbstractArray,
 
 end
 
+
+function calc_effective_horseshoes!(self::LiftingLine, args...; optargs...) 
+    return calc_effective_horseshoes!(self.effective_horseshoes,
+                                            self.horseshoes, self.midpoints,
+                                            self.tangents, self.spans,
+                                            self.ypositions, 
+                                            self.strippositions,
+                                            self.nelements, args...; optargs...) 
+end
+
+function calc_effective_horseshoes!(effective_horseshoes::AbstractArray, 
+                                            horseshoes::AbstractArray,
+                                            midpoints::AbstractMatrix,
+                                            tangents::AbstractMatrix,
+                                            spans::AbstractMatrix,
+                                            ypositions::AbstractVector,
+                                            strippositions::AbstractVector,
+                                            nelements::Int;
+                                            deltasb=1.0     # Blending distance
+                                            )
+    
+    for ei in 1:nelements               # Iterate over stripwise elements
+
+        # Lifting filament direction
+        dl1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
+        dl2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
+        dl3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
+        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+
+        dl1 /= magdl
+        dl2 /= magdl
+        dl3 /= magdl
+
+        # TE direction
+        dTE1 = horseshoes[1, 4, ei] - horseshoes[1, 1, ei]
+        dTE2 = horseshoes[2, 4, ei] - horseshoes[2, 1, ei]
+        dTE3 = horseshoes[3, 4, ei] - horseshoes[3, 1, ei]
+        magdTE = sqrt(dTE1^2 + dTE2^2 + dTE3^2)
+
+        dTE1 /= magdTE
+        dTE2 /= magdTE
+        dTE3 /= magdTE
+
+        # TE midpoint
+        midTE1 = horseshoes[1, 1, ei] + strippositions[ei]*(horseshoes[1, 4, ei] - horseshoes[1, 1, ei])
+        midTE2 = horseshoes[2, 1, ei] + strippositions[ei]*(horseshoes[2, 4, ei] - horseshoes[2, 1, ei])
+        midTE3 = horseshoes[3, 1, ei] + strippositions[ei]*(horseshoes[3, 4, ei] - horseshoes[3, 1, ei])
+
+        # Estimate semi-span length to dimensionalize ypos
+        semispan = magdl*abs( dl1*spans[1, ei] + dl2*spans[2, ei] + dl3*spans[3, ei] ) / (ypositions[ei+1] - ypositions[ei])
+
+        sweep = calc_sweep(horseshoes, tangents, spans, ei)     # Sweep of this (original) horseshoe. NOTE: should this use ei or ni?
+        sigma = (2 / (deltasb*cosd(sweep)) )^2   # Blending parameter
+
+        # Non-dimensional y-position of stripwise element
+        ypos_e = ypositions[ei] + strippositions[ei]*(ypositions[ei+1] - ypositions[ei])
+
+        for ni in 1:nelements           # Iterate over effective horseshoes
+
+            # Non-dimensional y-position of a and b sides
+            ypos_a = ypositions[ni]
+            ypos_b = ypositions[ni+1]
+            w_a = exp(-sigma * (ypos_a - ypos_e)^2) # Blending weight on a-side
+            w_b = exp(-sigma * (ypos_b - ypos_e)^2) # Blending weight on b-side
+
+            for (i, dl, dTE, midTE) in zip(1:3, (dl1, dl2, dl3), (dTE1, dTE2, dTE3), (midTE1, midTE2, midTE3))
+                
+                # Effective Ap
+                effective_horseshoes[i, 1, ni, ei] = (1-w_a)*horseshoes[i, 1, ni] + w_a*(midTE + dTE*semispan*(ypositions[ni] - ypos_e)/cosd(sweep))
+
+                # Effective A
+                effective_horseshoes[i, 2, ni, ei] = (1-w_a)*horseshoes[i, 2, ni] + w_a*(midpoints[i, ei] + dl*semispan*(ypositions[ni] - ypos_e)/cosd(sweep))
+
+                # Effective B
+                effective_horseshoes[i, 3, ni, ei] = (1-w_b)*horseshoes[i, 3, ni] + w_b*(midpoints[i, ei] + dl*semispan*(ypositions[ni+1] - ypos_e)/cosd(sweep))
+
+                # Effective Bp
+                effective_horseshoes[i, 4, ni, ei] = (1-w_b)*horseshoes[i, 4, ni] + w_b*(midTE + dTE*semispan*(ypositions[ni+1] - ypos_e)/cosd(sweep))
+
+            end
+
+        end
+    end
+
+end
+
 function calc_midpoints!(self::LiftingLine, args...; optargs...) 
     return calc_midpoints!(self.midpoints, 
                                 self.horseshoes, 
+                                self.strippositions,
                                 self.nelements, 
                                 args...; optargs...) 
 end
 
 function calc_midpoints!(midpoints::AbstractMatrix,
                             horseshoes::AbstractArray,
-                            nelements::Int;
-                            position::Number = 0.5
+                            positions::AbstractVector,
+                            nelements::Int,
                             )
     for ei in 1:nelements               # Iterate over horseshoes
         for i in 1:3                    # Iterate over coordinates
 
-            midpoints[i, ei] = position * (horseshoes[i, 2, ei] + horseshoes[i, 3, ei])
+            midpoints[i, ei] = horseshoes[i, 2, ei] + positions[ei]*(horseshoes[i, 3, ei] - horseshoes[i, 2, ei])
 
         end
     end
@@ -422,15 +608,16 @@ end
 
 function calc_chords!(self::LiftingLine, args...; optargs...) 
     return calc_chords!(self.chords, 
-                                self.grid.nodes, self.linearindices, 
+                                self.grid.nodes, self.linearindices,
+                                self.strippositions,
                                 self.nelements, 
                                 args...; optargs...) 
 end
 
 function calc_chords!(chords::AbstractVector,
                             nodes::AbstractMatrix, linearindices::LinearIndices, 
-                            nelements::Int;
-                            position::Number = 0.5
+                            positions::AbstractVector,
+                            nelements::Int
                             )
 
     for ei in 1:nelements               # Iterate over horseshoes
@@ -443,7 +630,7 @@ function calc_chords!(chords::AbstractVector,
         chorda = sqrt( (nodes[1, TEai]-nodes[1, LEai])^2 + (nodes[2, TEai]-nodes[2, LEai])^2 + (nodes[3, TEai]-nodes[3, LEai])^2 )
         chordb = sqrt( (nodes[1, TEbi]-nodes[1, LEbi])^2 + (nodes[2, TEbi]-nodes[2, LEbi])^2 + (nodes[3, TEbi]-nodes[3, LEbi])^2 )
 
-        chord = chorda + position*(chordb - chorda)
+        chord = chorda + positions[ei]*(chordb - chorda)
 
         chords[ei] = chord
 
@@ -454,26 +641,29 @@ end
 function calc_controlpoints!(self::LiftingLine, args...; optargs...) 
     return calc_controlpoints!(self.controlpoints, 
                                 self.grid.nodes, self.linearindices, 
+                                self.strippositions,
                                 self.nelements, 
                                 args...; optargs...) 
 end
 
 function calc_controlpoints!(controlpoints::AbstractMatrix,
                             nodes::AbstractMatrix, linearindices::LinearIndices, 
+                            positionsy::AbstractVector,
                             nelements::Int,
-                            position::Number
+                            positionx::Number
                             )
     for ei in 1:nelements               # Iterate over horseshoes
         for i in 1:3                    # Iterate over coordinates
 
-            TEa = nodes[i, linearindices[ei, 1]]    # TE at a-side
-            TEb = nodes[i, linearindices[ei+1, 1]]    # TE at b-side
-            LEa = nodes[i, linearindices[ei, 2]]    # LE at a-side
-            LEb = nodes[i, linearindices[ei+1, 2]]    # LE at b-side
+            TEa = nodes[i, linearindices[ei, 1]]        # TE at a-side
+            TEb = nodes[i, linearindices[ei+1, 1]]      # TE at b-side
+            LEa = nodes[i, linearindices[ei, 2]]        # LE at a-side
+            LEb = nodes[i, linearindices[ei+1, 2]]      # LE at b-side
 
-            controlpoints[i, ei] = LEa + position*(TEa-LEa)     # Chordwise position at a-side
-            controlpoints[i, ei] += LEb + position*(TEb-LEb)    # Chordwise position at b-side
-            controlpoints[i, ei] /= 2                           # Take the average of the two
+            posx_a = LEa + positionx*(TEa-LEa)           # Chordwise position at a-side
+            posx_b = LEb + positionx*(TEb-LEb)           # Chordwise position at b-side
+
+            controlpoints[i, ei] = posx_a + positionsy[ei]*(posx_b - posx_a) # Blend a and b sides
 
         end
     end
@@ -567,6 +757,27 @@ function calc_spans!(spans::AbstractMatrix,
 
     end
 
+end
+
+function calc_sweep(self::LiftingLine, args...)
+    
+    return calc_sweep(self.horseshoes, self.tangents, self.spans, 
+                                                        args...; optargs...)
+end
+
+function calc_sweep(horseshoes::AbstractArray, 
+                    tangents::AbstractMatrix, spans::AbstractMatrix, ei::Int)
+    
+    # Lifting filament
+    dl1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
+    dl2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
+    dl3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
+
+    # Projections on to span and tangent directions
+    dy = dl1*spans[1, ei] + dl2*spans[2, ei] + dl3*spans[3, ei]
+    dx = dl1*tangents[1, ei] + dl2*tangents[2, ei] + dl3*tangents[3, ei]
+
+    return atand(dx, dy)
 end
 
 
