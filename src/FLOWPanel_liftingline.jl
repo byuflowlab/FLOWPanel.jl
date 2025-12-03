@@ -33,6 +33,8 @@ struct LiftingLine{ R<:Number,
     nelements::Int                              # Number of stripwise elements
     elements::Vector{S}                         # Stripwise elements
 
+    deltasb::Float64                            # Blending distance
+
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
     strippositions::VectorType                  # Position of each stripwise element within the bound vortex (0==a, 1==b)
@@ -80,6 +82,7 @@ struct LiftingLine{ R<:Number,
                             aerodynamic_centers=1/4,
                             strip_positions=0.5,
                             controlpoint_position=3/4,
+                            deltasb=1.0,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
                             kernelcutoff=1e-14,
@@ -180,7 +183,7 @@ struct LiftingLine{ R<:Number,
         calc_effective_horseshoes!(effective_horseshoes, horseshoes, midpoints,
                                                 tangents, spans, 
                                                 ypositions, strippositions, 
-                                                nelements)
+                                                nelements; deltasb)
 
         S = eltype(elements)
         new{R,
@@ -190,6 +193,7 @@ struct LiftingLine{ R<:Number,
                                 grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
+                                deltasb,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, tangents, spans, normals,
@@ -504,9 +508,15 @@ function calc_effective_horseshoes!(self::LiftingLine, args...; optargs...)
                                             self.tangents, self.spans,
                                             self.ypositions, 
                                             self.strippositions,
-                                            self.nelements, args...; optargs...) 
+                                            self.nelements, args...; 
+                                            deltasb=self.deltasb, optargs...) 
 end
 
+"""
+Calculate Reid's effective lifting line of horseshoes as explained in Goates
+2022, JoA, "Modern Implementation and Evaluation of Lifting-Line Theory
+for Complex Geometries".
+"""
 function calc_effective_horseshoes!(effective_horseshoes::AbstractArray, 
                                             horseshoes::AbstractArray,
                                             midpoints::AbstractMatrix,
@@ -817,8 +827,28 @@ function calc_Dinfs!(Dinfs::AbstractArray, Uinfs::AbstractMatrix, nelements::Int
 end
 
 
-function Uind!(self::LiftingLine, targets::AbstractMatrix, args...; optargs...)
-    Uind!(self, self.Gammas, targets, args...; optargs...)
+"""
+Self-induced velocity using the effective lifting line geometry for each 
+stripwise element
+"""
+function selfUind!(self::LiftingLine, out; optargs...)
+    selfUind!(self, self.Gammas, out; optargs...)
+end
+
+function selfUind!(self::LiftingLine, Gammas::AbstractVector, 
+                    out::AbstractMatrix; optargs...)
+
+    for ei in 1:self.nelements                      # Iterate over stripwise elements
+
+        targets = view(self.midpoints, :, ei:ei)
+        this_out = view(out, :, ei:ei)
+        effective_horseshoes = view(self.effective_horseshoes, :, :, :, ei)
+
+        # Velocity of all the effective horseshoes on this stripwise element
+        Uind!(self::LiftingLine, Gammas, targets, this_out; 
+                                    horseshoes=effective_horseshoes, optargs...)
+    end
+
 end
 
 """
@@ -827,15 +857,21 @@ end
 Returns the velocity induced by the wing on the targets `targets`, which is a
 3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
 """
+function Uind!(self::LiftingLine, targets::AbstractMatrix, args...; optargs...)
+    Uind!(self, self.Gammas, targets, args...; optargs...)
+end
+
 function Uind!(self::LiftingLine, Gammas::AbstractVector, 
-                    targets::AbstractMatrix, out::AbstractMatrix; optargs...)
+                    targets::AbstractMatrix, out::AbstractMatrix; 
+                    horseshoes::AbstractArray=self.horseshoes,
+                    optargs...)
 
     # Add bound vortex contributions
-    for ei in 1:self.nelements                              # Iterates over horseshoes
+    for ei in 1:self.nelements                              # Iterate over horseshoes
 
         # Velocity of i-th horseshoe on every target
         U_vortexring(
-                            view(self.horseshoes, :, :, ei),   # All nodes
+                            view(horseshoes, :, :, ei),        # All nodes
                             1:4,                               # Indices of nodes that make this panel (closed ring)
                             Gammas[ei],                        # Horseshoe circulation
                             targets,                           # Targets
@@ -847,7 +883,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
     end
 
     # Add wake contributions
-    TE = [1, size(self.horseshoes, 2)]                      # Indices of TE nodes in each horseshoe
+    TE = [1, size(horseshoes, 2)]                           # Indices of TE nodes in each horseshoe
     
     for ei in 1:self.nelements                              # Iterate over semi-infinite segments
 
@@ -859,7 +895,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
         db3 = self.Dinfs[3, 2, ei]
 
         U_semiinfinite_horseshoe(
-                          view(self.horseshoes, :, :, ei),                  # All nodes
+                          view(horseshoes, :, :, ei),        # All nodes
                           TE,                                # Indices of nodes that make the shedding edge
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
@@ -924,7 +960,8 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
     # Calculate velocity at lifting-line midpoints
     self.Us .= Uinfs
-    Uind!(self, self.midpoints, self.Us)
+    # Uind!(self, self.midpoints, self.Us)
+    selfUind!(self, self.Us)
 
     if addfields
         gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
@@ -985,7 +1022,8 @@ function calc_residuals!(residuals::AbstractVector,
     # Us .= Uinfs
 
     # Lifting line component
-    Uind!(ll, Gammas, ll.midpoints, Us)
+    # Uind!(ll, Gammas, ll.midpoints, Us)
+    selfUind!(ll, Gammas, Us)
 
 
     for ei in 1:ll.nelements
