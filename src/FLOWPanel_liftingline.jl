@@ -60,6 +60,10 @@ struct LiftingLine{ R<:Number,
     spans::MatrixType                           # Spanwise unit vector of each horseshoe (direction of span at each streamwise element). Orthogonal bases: normal x tangent = span
     normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element). Orthogonal bases: tangent x span = normal
 
+    swepttangents::MatrixType                   # Unit vector in the direction of the effective swept chord (u_aΛ in Goates 2022 notation). line x sweptnormal = swepttangent
+    lines::MatrixType                           # Unit vector in the direction of the lifting line (u_sΛ in Goates 2022 notation). sweptnormal x swepttangent = line
+    sweptnormals::MatrixType                    # Unit vector in the normal to the lifting line and effective swep chord (-u_nΛ in Goates 2022 notation). swepttangent x line = sweptnormal
+
     auxtangents::MatrixType                     # Auxiliary memory for calculating tangents of effective lifting line
 
     aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
@@ -136,12 +140,20 @@ struct LiftingLine{ R<:Number,
         horseshoes = TensorType(undef, 3, 4, nelements)
         effective_horseshoes = TensorType2(undef, 3, 4, nelements, nelements)
         Dinfs = TensorType(undef, 3, 2, nelements)
+
         midpoints = MatrixType(undef, 3, nelements)
         controlpoints = MatrixType(undef, 3, nelements)
+
         tangents = MatrixType(undef, 3, nelements)
         spans = MatrixType(undef, 3, nelements)
         normals = MatrixType(undef, 3, nelements)
+
+        swepttangents = MatrixType(undef, 3, nelements)
+        lines = MatrixType(undef, 3, nelements)
+        sweptnormals = MatrixType(undef, 3, nelements)
+
         auxtangents = MatrixType(undef, 3, nelements)
+
         aoas = VectorType(undef, nelements)
         claeros = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
@@ -178,10 +190,12 @@ struct LiftingLine{ R<:Number,
                                                 controlpoint_position)
 
         calc_tangents!(tangents, horseshoes, strippositions, nelements)
-
         calc_normals!(normals, tangents, horseshoes, nelements)
-
         calc_spans!(spans, normals, tangents, nelements)
+
+        calc_lines!(lines, horseshoes, nelements)
+        calc_swepttangents!(swepttangents, lines, tangents, nelements)
+        calc_sweptnormals!(sweptnormals, swepttangents, lines, nelements)
 
         calc_Dinfs!(Dinfs, initial_Uinf, nelements)
 
@@ -205,7 +219,9 @@ struct LiftingLine{ R<:Number,
                                 deltasb, deltajoint,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
-                                midpoints, controlpoints, tangents, spans, normals,
+                                midpoints, controlpoints, 
+                                tangents, spans, normals,
+                                swepttangents, lines, sweptnormals,
                                 auxtangents,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, residuals,
@@ -222,8 +238,11 @@ Morph the lifting-line wing geometry into a new geometry
 """
 function remorph!(self::LiftingLine, args...; 
                     recenter=false, 
+                    aerodynamic_centers=1/4,
                     controlpoint_positions=3/4, 
                     Uinf=[1, 0, 0],
+                    deltasb=self.deltasb,
+                    deltajoint=self.deltajoint,
                     optargs...)
 
     # Discretize parameterization
@@ -235,27 +254,27 @@ function remorph!(self::LiftingLine, args...;
                             spanaxiss, symmetric, self.linearindices; center=recenter)
 
     # Update horseshoe geometries
-    self.aerocenters .= aerocenters
+    self.aerocenters .= aerodynamic_centers
 
     calc_horseshoes!(self)
 
     calc_midpoints!(self)
-
     calc_chords!(self)
-
     calc_controlpoints!(self, controlpoint_positions)
 
     calc_tangents!(self)
-
     calc_normals!(self)
-
     calc_spans!(self)
+
+    calc_lines!(self)
+    calc_swepttangents!(self)
+    calc_sweptnormals!(self)
 
     calc_Dinfs!(self, Uinf)
     
-    calc_effective_horseshoes!(self)
+    calc_effective_horseshoes!(self; deltasb)
 
-    jointerize!(self)
+    jointerize!(self; deltajoint)
 
     # Reset solution
     self.aoas .= 0
@@ -405,6 +424,18 @@ function save(self::LiftingLine, filename::AbstractString;
                                             "field_type"  => "vector",
                                             "field_data"  => [self.normals[:, ei]]),
 
+                                    Dict(   "field_name"  => "swepttangent",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.swepttangents[:, ei]]),
+
+                                    Dict(   "field_name"  => "line",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.lines[:, ei]]),
+
+                                    Dict(   "field_name"  => "sweptnormal",
+                                            "field_type"  => "vector",
+                                            "field_data"  => [self.sweptnormals[:, ei]]),
+
                                     Dict(   "field_name"  => "angleofattack",
                                             "field_type"  => "scalar",
                                             "field_data"  => [self.aoas[ei]]),
@@ -436,6 +467,18 @@ function save(self::LiftingLine, filename::AbstractString;
                             Dict(   "field_name"  => "normal",
                                     "field_type"  => "vector",
                                     "field_data"  => eachcol(self.normals)),
+
+                            Dict(   "field_name"  => "swepttangent",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.swepttangents)),
+
+                            Dict(   "field_name"  => "line",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.lines)),
+
+                            Dict(   "field_name"  => "sweptnormal",
+                                    "field_type"  => "vector",
+                                    "field_data"  => eachcol(self.sweptnormals)),
                                     
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
@@ -918,6 +961,80 @@ function calc_spans!(spans::AbstractMatrix,
 
 end
 
+
+function calc_lines!(self::LiftingLine)
+    calc_lines!(self.lines, self.horseshoes, self.nelements)
+end
+
+function calc_lines!(lines::AbstractMatrix, 
+                        horseshoes::AbstractArray, nelements::Int)
+    for ei in 1:nelements
+
+        # Lifting filament direction
+        dl1 = horseshoes[1, 3, ei] - horseshoes[1, 2, ei]
+        dl2 = horseshoes[2, 3, ei] - horseshoes[2, 2, ei]
+        dl3 = horseshoes[3, 3, ei] - horseshoes[3, 2, ei]
+        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+
+        lines[1, ei] = dl1/magdl
+        lines[2, ei] = dl2/magdl
+        lines[3, ei] = dl3/magdl
+
+    end
+end
+
+
+function calc_swepttangents!(self::LiftingLine)
+    calc_swepttangents!(self.swepttangents, self.lines, self.tangents, self.nelements)
+end
+
+function calc_swepttangents!(swepttangents::AbstractMatrix, 
+                                lines::AbstractMatrix, tangents::AbstractMatrix, 
+                                nelements::Int)
+    for ei in 1:nelements
+
+        # Project tangent onto lifting line
+        tline = tangents[1, ei]*lines[1, ei] + tangents[2, ei]*lines[2, ei] + tangents[3, ei]*lines[3, ei]
+
+        # Substract projected component
+        t1 = tangents[1, ei] - tline*lines[1, ei]
+        t2 = tangents[2, ei] - tline*lines[2, ei]
+        t3 = tangents[3, ei] - tline*lines[3, ei]
+        magt = sqrt(t1^2 + t2^2 + t3^2)
+
+        # Save unit vector
+        swepttangents[1, ei] = t1/magt
+        swepttangents[2, ei] = t2/magt
+        swepttangents[3, ei] = t3/magt
+
+    end                   
+end
+
+
+function calc_sweptnormals!(self::LiftingLine)
+    calc_sweptnormals(self.sweptnormals, self.swepttangents, self.lines, self.nelements)
+end
+
+function calc_sweptnormals!(sweptnormals::AbstractMatrix, 
+                                swepttangents::AbstractMatrix, 
+                                lines::AbstractMatrix,
+                                nelements::Int)
+    for ei in 1:nelements
+
+        # n = t x l
+        n1 = swepttangents[2, ei]*lines[3, ei] - swepttangents[3, ei]*lines[2, ei]
+        n2 = swepttangents[3, ei]*lines[1, ei] - swepttangents[1, ei]*lines[3, ei]
+        n3 = swepttangents[1, ei]*lines[2, ei] - swepttangents[2, ei]*lines[1, ei]
+        magn = sqrt(n1^2 + n2^2 + n3^2)
+
+        # Save unit vector
+        sweptnormals[1, ei] = t=n1/magn
+        sweptnormals[2, ei] = t=n2/magn
+        sweptnormals[3, ei] = t=n3/magn
+
+    end                   
+end
+
 function calc_sweep(self::LiftingLine, args...)
     
     return calc_sweep(self.horseshoes, self.tangents, self.spans, 
@@ -1099,6 +1216,7 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
     # Set solved AOA
     self.aoas .= result.u
+    # self.aoas .= result.u*1.7
 
     # Calculate Gamma from AOA
     # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
@@ -1302,6 +1420,7 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
 
     end
 end
+
 
 """
 Generate residual wrapper for NonlinerSolver methods
