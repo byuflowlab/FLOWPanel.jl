@@ -66,7 +66,7 @@ struct LiftingLine{ R<:Number,
 
     auxtangents::MatrixType                     # Auxiliary memory for calculating tangents of effective lifting line
 
-    aoas::VectorType                            # (deg) angle of attack seen by each stripwise element
+    aoas::VectorType                            # (deg) swept angle of attack seen by each stripwise element (𝛼_Λ in Goates 2022 notation)
     claeros::VectorType                         # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
     Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
     sigmas::VectorType                          # Source strength of each horseshoe (dragging line)
@@ -1036,9 +1036,7 @@ function calc_sweptnormals!(sweptnormals::AbstractMatrix,
 end
 
 function calc_sweep(self::LiftingLine, args...)
-    
-    return calc_sweep(self.horseshoes, self.tangents, self.spans, 
-                                                        args...; optargs...)
+    return calc_sweep(self.horseshoes, self.tangents, self.spans, args...)
 end
 
 function calc_sweep(horseshoes::AbstractArray, 
@@ -1276,8 +1274,8 @@ function calc_residuals!(residuals::AbstractVector,
         for i in 1:3
             # Here we approximate the velocity induced by the dragging line
             # by using an approximation of only the self-induced velocity
-            Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
-            # Us[i, ei] = 0
+            # Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
+            Us[i, ei] = 0
         end
 
         sigmas[ei] = sigma
@@ -1292,11 +1290,14 @@ function calc_residuals!(residuals::AbstractVector,
     # Uind!(ll, Gammas, ll.midpoints, Us)
     selfUind!(ll, Gammas, Us)
 
+    # Convert U to U_Λ (effective velocity seen by the swept sections)
+    calc_UΛs!(ll, Us)
+
 
     for ei in 1:ll.nelements
 
-        # --------- Step 4: compute effective aoa from inflow velocity ---------
-        aoa_effective = calc_aoa(ll, Us, ei)
+        # --------- Step 4: compute effective swept aoa from swept inflow velocity ---
+        aoa_effective = calc_sweptaoa(ll, Us, ei)
 
         # --------- Step 5: residual = input aoa - effective aoa ---------------
         aoa_input = aoas[ei]
@@ -1332,6 +1333,14 @@ function calc_aoa(ll::LiftingLine, Us::AbstractMatrix, ei::Int)
     return atand(Uy, Ux)
 
 end
+function calc_aoa(ll::LiftingLine, U1::Number, U2::Number, U3::Number, ei::Int)
+
+    Uy = U1*ll.normals[1, ei] + U2*ll.normals[2, ei]  + U3*ll.normals[3, ei]
+    Ux = U1*ll.tangents[1, ei] + U2*ll.tangents[2, ei]  + U3*ll.tangents[3, ei]
+
+    return atand(Uy, Ux)
+
+end
 
 function calc_aoas!(aoas::AbstractVector, ll::LiftingLine, Us::AbstractMatrix)
 
@@ -1354,51 +1363,49 @@ function calc_sweptaoa(ll::LiftingLine, UΛs::AbstractMatrix, ei::Int)
 
     return atand(Uy, Ux)
 end
+function calc_sweptaoa(ll::LiftingLine, UΛ1::Number, UΛ2::Number, UΛ3::Number, ei::Int)
+
+    Uy = UΛ1*ll.sweptnormals[1, ei] + UΛ2*ll.sweptnormals[2, ei]  + UΛ3*ll.sweptnormals[3, ei]
+    Ux = UΛ1*ll.swepttangents[1, ei] + UΛ2*ll.swepttangents[2, ei]  + UΛ3*ll.swepttangents[3, ei]
+
+    return atand(Uy, Ux)
+end
 
 """
 Calculate nonlinear lifting line strengths from the given AOAs and inflow 
-velocities
+velocities.
+
+* `aoas` are the effective AOAs seen by the swept sections (𝛼_Λ in Goates' 2022 
+    notation).
+
+* `Uinfs` is the undisturbed freestream seen by each unswept section.
+
 """
-# function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
-#                         aoas::AbstractVector, Us::AbstractMatrix)
-
-#     for ei in 1:ll.nelements
-
-#         # Lifting filament direction
-#         dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
-#         dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
-#         dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
-#         magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
-
-#         dl1 /= magdl
-#         dl2 /= magdl
-#         dl3 /= magdl
-
-#         # Velocity counter-projected on the filament direction
-#         Uxdl1 = Us[2, ei]*dl3 - Us[3, ei]*dl2
-#         Uxdl2 = Us[3, ei]*dl1 - Us[1, ei]*dl3
-#         Uxdl3 = Us[1, ei]*dl2 - Us[2, ei]*dl1
-#         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
-
-#         # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
-#         cl = calc_cl(ll.elements[ei], aoas[ei])
-#         magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-
-#         Gammas[ei] = cl * 0.5*magU^2*ll.chords[ei] / magUxdl
-
-#     end
-# end
 function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
                         aoas::AbstractVector, Uinfs::AbstractMatrix)
 
     for ei in 1:ll.nelements
 
-        cl = calc_cl(ll.elements[ei], aoas[ei])
+        sweep = calc_sweep(ll, ei)
 
-        magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+        # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
+        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei])
+
+        # Project the velocity onto the filament direction
+        UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
+
+        # Substract filament-component from the velocity
+        UinfΛ1 = Uinfs[1, ei] - UsΛ*ll.lines[1, ei]
+        UinfΛ2 = Uinfs[2, ei] - UsΛ*ll.lines[2, ei]
+        UinfΛ3 = Uinfs[3, ei] - UsΛ*ll.lines[3, ei]
+        magUinfΛ = sqrt(UinfΛ1^2 + UinfΛ2^2 + UinfΛ3^2)
 
         # Calculate local geometric twist relative to freestream
-        beta = calc_aoa(ll, Uinfs, ei)
+        # NOTE: Do I need to convert Uinfs to swept Uinfs and calculate beta as
+        #       a swept AOA?
+        # beta = calc_aoa(ll, Uinfs, ei)
+
+        beta = calc_sweptaoa(ll, UinfΛ1, UinfΛ2, UinfΛ3, ei)
 
         # Calculate inflow angle
         phi = aoas[ei] - beta
@@ -1408,29 +1415,27 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         # NOTE: this assumes that the lifting line induces no velocity in the 
         #       direction of the freestream, which doesn't really hold for
         #       dihedral or winglets
-        magU = magUinf / cosd(phi)
+        magUΛ = magUinfΛ / cosd(phi)
 
         # Lifting filament direction
-        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
-        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
-        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
-        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
-
-        dl1 /= magdl
-        dl2 /= magdl
-        dl3 /= magdl
+        dl1 = ll.lines[1, ei]
+        dl2 = ll.lines[2, ei]
+        dl3 = ll.lines[3, ei]
 
         # Velocity counter-projected on the filament direction
-        Uxdl1 = Uinfs[2, ei]*dl3 - Uinfs[3, ei]*dl2
-        Uxdl2 = Uinfs[3, ei]*dl1 - Uinfs[1, ei]*dl3
-        Uxdl3 = Uinfs[1, ei]*dl2 - Uinfs[2, ei]*dl1
+        # Uxdl1 = Uinfs[2, ei]*dl3 - Uinfs[3, ei]*dl2
+        # Uxdl2 = Uinfs[3, ei]*dl1 - Uinfs[1, ei]*dl3
+        # Uxdl3 = Uinfs[1, ei]*dl2 - Uinfs[2, ei]*dl1
+        Uxdl1 = UinfΛ2*dl3 - UinfΛ3*dl2
+        Uxdl2 = UinfΛ3*dl1 - UinfΛ1*dl3
+        Uxdl3 = UinfΛ1*dl2 - UinfΛ2*dl1
         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
 
         # Apply the same assumption to calculate the total velocity counter-projected
         magUxdl /= cosd(phi)
 
         # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
-        Gammas[ei] = cl * 0.5*magU^2*ll.chords[ei] / magUxdl
+        Gammas[ei] = clΛ * 0.5*magUΛ^2*ll.chords[ei] / magUxdl
 
     end
 end
@@ -1439,9 +1444,11 @@ end
 Calculate the effective velocity seeing by the swept section as in Goates 2022,
 Eq. 22. This is calculated in-place, converting the velocities given in Us.
 """
-function calc_UΛs!(ll::LiftingLine)
+calc_UΛs!(ll::LiftingLine) = calc_UΛs!(ll, ll.Us)
+
+function calc_UΛs!(ll::LiftingLine, Us::AbstractMatrix)
     for ei in 1:ll.nelements
-        calc_UΛs!(ll.Us, ll.lines, ei)
+        calc_UΛs!(Us, ll.lines, ei)
     end
 end
 
