@@ -1322,7 +1322,7 @@ function calc_residuals!(residuals::AbstractVector,
 end
 
 """
-Calculate effective angle of attack seen the ei-th stripwise element
+Calculate effective angle of attack seen by the ei-th stripwise element
 """
 function calc_aoa(ll::LiftingLine, Us::AbstractMatrix, ei::Int)
 
@@ -1339,6 +1339,20 @@ function calc_aoas!(aoas::AbstractVector, ll::LiftingLine, Us::AbstractMatrix)
         aoas[ei] = calc_aoa(ll, Us, ei)
     end
 
+end
+
+"""
+Calculate effective swept angle of attack at the ei-th stripwise element as in
+Goates 2022, Eq. (24).
+This function must be called after calc_UΛs! (Us must have been converted to 
+swept velocities).
+"""
+function calc_sweptaoa(ll::LiftingLine, UΛs::AbstractMatrix, ei::Int)
+
+    Uy = UΛs[1, ei]*ll.sweptnormals[1, ei] + UΛs[2, ei]*ll.sweptnormals[2, ei]  + UΛs[3, ei]*ll.sweptnormals[3, ei]
+    Ux = UΛs[1, ei]*ll.swepttangents[1, ei] + UΛs[2, ei]*ll.swepttangents[2, ei]  + UΛs[3, ei]*ll.swepttangents[3, ei]
+
+    return atand(Uy, Ux)
 end
 
 """
@@ -1421,6 +1435,27 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
     end
 end
 
+"""
+Calculate the effective velocity seeing by the swept section as in Goates 2022,
+Eq. 22. This is calculated in-place, converting the velocities given in Us.
+"""
+function calc_UΛs!(ll::LiftingLine)
+    for ei in 1:ll.nelements
+        calc_UΛs!(ll.Us, ll.lines, ei)
+    end
+end
+
+function calc_UΛs!(Us::AbstractMatrix, lines::AbstractMatrix, ei::Int)
+
+    # Project the velocity onto the filament direction
+    UsΛ = Us[1, ei]*lines[1, ei] + Us[2, ei]*lines[2, ei] + Us[3, ei]*lines[3, ei]
+
+    # Substract filament-component from the velocity
+    Us[1, ei] -= UsΛ*lines[1, ei]
+    Us[2, ei] -= UsΛ*lines[2, ei]
+    Us[3, ei] -= UsΛ*lines[3, ei]
+
+end
 
 """
 Generate residual wrapper for NonlinerSolver methods
@@ -1874,6 +1909,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
         fmt = fmt_org
 
         axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
         axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
         axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
 
@@ -1886,6 +1922,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
         fmt = fmt_extrap
 
         axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
+        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
         axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
         axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
 
@@ -1924,6 +1961,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
         fmt = fmt_blnd
 
         axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
         axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
         axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
 

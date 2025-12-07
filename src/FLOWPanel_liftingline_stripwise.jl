@@ -65,6 +65,7 @@ struct SimpleAirfoil{TA<:AbstractVector,
                         Tl<:AbstractArray{<:Number, 1}, 
                         Td<:AbstractArray{<:Number, 1}, 
                         Tm<:AbstractArray{<:Number, 1},
+                        R<:Number,
                         Sl<:math.Akima, Sd<:math.Akima, Sm<:math.Akima
                         } <: StripwiseElement
 
@@ -74,6 +75,8 @@ struct SimpleAirfoil{TA<:AbstractVector,
     cd::Td                              # Drag coefficient
     cm::Tm                              # Pitching moment coefficient
 
+    alpha0::R                           # (deg) AOA at zero lift
+
     # Pre-computed Akima spline
     spl_cl::Sl
     spl_cd::Sd
@@ -81,11 +84,22 @@ struct SimpleAirfoil{TA<:AbstractVector,
 
     function SimpleAirfoil(alpha::TA, cl::Tl, cd::Td, cm::Tm) where {TA, Tl, Td, Tm}
 
+        # Spline data
         spl_cl = math.Akima(alpha, cl)
         spl_cd = math.Akima(alpha, cd)
         spl_cm = math.Akima(alpha, cm)
 
-        new{TA, Tl, Td, Tm, typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)}(alpha, cl, cd, cm, spl_cl, spl_cd, spl_cm)
+        # Find AOA at zero lift
+        f(u, p) = [spl_cl(u[1])]
+        u0 = [0.0]
+        prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
+        result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
+        alpha0 = result.u[1]
+
+        new{TA, Tl, Td, Tm, 
+            typeof(alpha0),
+            typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)
+            }(alpha, cl, cd, cm, alpha0, spl_cl, spl_cd, spl_cm)
     end
 
 end
@@ -136,6 +150,18 @@ end
 
 
 ##### INTERNAL/COMMON FUNCTIONS ################################################
+
+"""
+Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
+"""
+function calc_sweptcl(airfoil::StripwiseElement, sweep::Number, alpha_Λ::Number, 
+                                                            args...; optargs...)
+
+    alpha = alpha_Λ + airfoil.alpha0*( 1 - 1/cosd(sweep) )
+
+    return calc_cl(airfoil, alpha, args...; optargs...)
+
+end
 
 """
     viterna(alpha, cl, cd, cr75, nalpha=50)
