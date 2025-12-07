@@ -1259,7 +1259,7 @@ end
 function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
                         Uinfs::AbstractMatrix;
                         aoas_initial_guess=0.0,
-                        align_joints_with_Uinfs=false,
+                        align_joints_with_Uinfs=true,
                         addfields=true, raise_warn=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
@@ -1499,10 +1499,11 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         #       dihedral or winglets
         magUΛ = magUinfΛ / cosd(phi)
 
-        # Lifting filament direction
-        dl1 = ll.lines[1, ei]
-        dl2 = ll.lines[2, ei]
-        dl3 = ll.lines[3, ei]
+        # Lifting filament
+        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
 
         # Velocity counter-projected on the filament direction
         # Uxdl1 = Uinfs[2, ei]*dl3 - Uinfs[3, ei]*dl2
@@ -1516,8 +1517,12 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         # Apply the same assumption to calculate the total velocity counter-projected
         magUxdl /= cosd(phi)
 
+
+        # Area of this section
+        area = ll.chords[ei] * abs( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei] )
+
         # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
-        Gammas[ei] = clΛ * 0.5*magUΛ^2*ll.chords[ei] / magUxdl
+        Gammas[ei] = clΛ * 0.5*magUΛ^2*area / magUxdl
 
     end
 end
