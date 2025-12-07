@@ -786,6 +786,79 @@ function jointerize!(horseshoes::AbstractArray{R, 3}, tangents::AbstractMatrix,
     end
 end
 
+"Rotate joint segments to align with freestream rather than surface"
+function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
+
+    for ei in 1:ll.nelements                   # Iterate over stripwise elements
+
+        # Fetch effective horseshoes seen by this element
+        horseshoes = view(ll.effective_horseshoes, :, :, :, ei)
+
+        # Calculate tangent vectors of the effective lifting line
+        tangents = ll.auxtangents
+        calc_tangents!(tangents, horseshoes, ll.strippositions, ll.nelements)
+
+        # Modify the effective horseshoes to aling joints with freestream
+        align_joints_with_Uinfs!(horseshoes, ll.normals, ll.tangents, ll.lines, Uinfs, ll.nelements)
+    end
+
+end
+
+function align_joints_with_Uinfs!(horseshoes::AbstractArray{R, 3}, 
+                                    normals::AbstractMatrix,
+                                    tangents::AbstractMatrix,
+                                    lines::AbstractMatrix,
+                                    Uinfs::AbstractMatrix, 
+                                    nelements::Int) where {R}
+
+    M = zeros(R, 3, 3)
+
+    for ei in 1:nelements
+
+        # Calculate freestream angle relative to the surface
+        aoa_uinf = calc_aoa(Uinfs, normals, tangents, ei)
+
+        for ji in (1, 4)
+            # Calculate current joint angle relative to the surface
+            aoa_joint = calc_aoa(horseshoes[1, ji, ei], horseshoes[2, ji, ei], horseshoes[3, ji, ei], 
+                                                        normals, tangents, ei)
+            
+            # Rotation matrix
+            gt.axis_rotation!(M, view(lines, :, ei), aoa_joint - aoa_uinf)
+
+            # Rotate joint node
+            X1 = horseshoes[1, ji, ei]
+            X2 = horseshoes[2, ji, ei]
+            X3 = horseshoes[3, ji, ei]
+
+            X01 = horseshoes[1, ji==1 ? 2 : 3, ei]
+            X02 = horseshoes[2, ji==1 ? 2 : 3, ei]
+            X03 = horseshoes[3, ji==1 ? 2 : 3, ei]
+
+            new_X1 = M[1, 1]*(X1-X01) + M[1, 2]*(X2-X02) + M[1, 3]*(X3-X03) + X01
+            new_X2 = M[2, 1]*(X1-X01) + M[2, 2]*(X2-X02) + M[2, 3]*(X3-X03) + X02
+            new_X3 = M[3, 1]*(X1-X01) + M[3, 2]*(X2-X02) + M[3, 3]*(X3-X03) + X03
+
+            horseshoes[1, ji, ei] = new_X1
+            horseshoes[2, ji, ei] = new_X2
+            horseshoes[3, ji, ei] = new_X3
+        end
+        
+    end
+
+    # Take the average of overlaping joints
+    for ei in 1:nelements-1
+        for i in 1:3
+            
+            new_X = (horseshoes[i, 4, ei] + horseshoes[i, 1, ei+1])/2
+
+            horseshoes[i, 4, ei] = new_X
+            horseshoes[i, 1, ei+1] = new_X
+        end
+    end
+
+end
+
 function calc_midpoints!(self::LiftingLine, args...; optargs...) 
     return calc_midpoints!(self.midpoints, 
                                 self.horseshoes, 
@@ -1186,12 +1259,18 @@ end
 function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
                         Uinfs::AbstractMatrix;
                         aoas_initial_guess=0.0,
+                        align_joints_with_Uinfs=false,
                         addfields=true, raise_warn=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
                         debug=false
                         )
+
+    # Align joint nodes with freestream
+    if align_joints_with_Uinfs
+        align_joints_with_Uinfs!(self, Uinfs)
+    end
 
     # Set AOA initial guess
     self.aoas .= aoas_initial_guess
@@ -1325,21 +1404,24 @@ end
 """
 Calculate effective angle of attack seen by the ei-th stripwise element
 """
-function calc_aoa(ll::LiftingLine, Us::AbstractMatrix, ei::Int)
+function calc_aoa(U1::Number, U2::Number, U3::Number, 
+                    normals::AbstractMatrix, tangents::AbstractMatrix,
+                    ei::Int)
 
-    Uy = Us[1, ei]*ll.normals[1, ei] + Us[2, ei]*ll.normals[2, ei]  + Us[3, ei]*ll.normals[3, ei]
-    Ux = Us[1, ei]*ll.tangents[1, ei] + Us[2, ei]*ll.tangents[2, ei]  + Us[3, ei]*ll.tangents[3, ei]
+    Uy = U1*normals[1, ei] + U2*normals[2, ei]  + U3*normals[3, ei]
+    Ux = U1*tangents[1, ei] + U2*tangents[2, ei]  + U3*tangents[3, ei]
 
     return atand(Uy, Ux)
 
 end
+function calc_aoa(Us::AbstractMatrix, normals::AbstractMatrix, tangents::AbstractMatrix, ei::Int)
+    return calc_aoa(Us[1, ei], Us[2, ei], Us[3, ei], normals, tangents, ei)
+end
 function calc_aoa(ll::LiftingLine, U1::Number, U2::Number, U3::Number, ei::Int)
-
-    Uy = U1*ll.normals[1, ei] + U2*ll.normals[2, ei]  + U3*ll.normals[3, ei]
-    Ux = U1*ll.tangents[1, ei] + U2*ll.tangents[2, ei]  + U3*ll.tangents[3, ei]
-
-    return atand(Uy, Ux)
-
+    return calc_aoa(U1, U2, U3, ll.normals, ll.tangents, ei)
+end
+function calc_aoa(ll::LiftingLine, Us::AbstractMatrix, args...)
+    return calc_aoa(Us, ll.normals, ll.tangents, args...)
 end
 
 function calc_aoas!(aoas::AbstractVector, ll::LiftingLine, Us::AbstractMatrix)
