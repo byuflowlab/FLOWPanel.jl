@@ -9,10 +9,6 @@
   * License     : MIT License
 =###############################################################################
 
-import CSV
-import DataFrames: DataFrame
-import AirfoilPrep
-
 abstract type StripwiseElement <: AbstractElement end
 
 ################################################################################

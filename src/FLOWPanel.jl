@@ -65,7 +65,7 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
-                    "liftingline_stripwise", "liftingline", "liftingline_postprocess",
+                    "liftingline",
                     "utils", "postprocess",
                     # "fmm"
                     ]
