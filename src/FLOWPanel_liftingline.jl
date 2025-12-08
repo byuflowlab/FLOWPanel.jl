@@ -1340,21 +1340,61 @@ function calc_residuals!(residuals::AbstractVector,
     # Dragging line component
     for ei in 1:ll.nelements
 
+        sweep = calc_sweep(ll, ei)
+
+        # Calculate drag coefficient
         cd = calc_cd(ll.elements[ei], aoas[ei])
 
-        magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+        # Project the velocity onto the filament direction
+        UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
 
-        # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-        magU = magUinf # <--- We can use Uinf instead of U to reduce nonlinearity
+        # Substract filament-component from the velocity
+        # NOTE: We can use Uinf instead of U to reduce nonlinearity
+        UinfΛ1 = Uinfs[1, ei] - UsΛ*ll.lines[1, ei]
+        UinfΛ2 = Uinfs[2, ei] - UsΛ*ll.lines[2, ei]
+        UinfΛ3 = Uinfs[3, ei] - UsΛ*ll.lines[3, ei]
+        magUinfΛ = sqrt(UinfΛ1^2 + UinfΛ2^2 + UinfΛ3^2)
 
-        Lambda = cd * 0.5*magU*ll.chords[ei]        # Source filament strength
-        sigma = Lambda/ll.chords[ei]                # Equivalent constant source panel strength
+        # Calculate local geometric twist relative to freestream
+        beta = calc_sweptaoa(ll, UinfΛ1, UinfΛ2, UinfΛ3, ei)
+
+        # Calculate inflow angle
+        phi = aoas[ei] - beta
+
+        # Calculate velocity magnitude from the inflow angle as in Algorithm 1 
+        # of Martinez 2025 ASME paper
+        # NOTE: this assumes that the lifting line induces no velocity in the 
+        #       direction of the freestream, which doesn't really hold for
+        #       dihedral or winglets
+        magUΛ = magUinfΛ / cosd(phi)
+
+        # Lifting filament
+        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+        magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+
+        # Velocity counter-projected on the filament direction
+        Uxdl1 = UinfΛ2*dl3 - UinfΛ3*dl2
+        Uxdl2 = UinfΛ3*dl1 - UinfΛ1*dl3
+        Uxdl3 = UinfΛ1*dl2 - UinfΛ2*dl1
+        magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
+
+        # Apply the same assumption to calculate the total velocity counter-projected
+        magUxdl /= cosd(phi)
+
+        # Area of this section
+        area = ll.chords[ei] * abs( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei] )
+
+        # Calculate Lmabda just like Gamma (using Eq. 41 in Goates 2022 JoA paper)
+        Lambda = cd * 0.5*magUΛ^2*area / magUxdl    # Source filament strength
+        sigma = Lambda/(ll.chords[ei]*cosd(sweep))   # Equivalent constant source panel strength
 
         for i in 1:3
             # Here we approximate the velocity induced by the dragging line
             # by using an approximation of only the self-induced velocity
-            # Us[i, ei] = -0.5 * sigma/2 * ll.tangents[i, ei]
-            Us[i, ei] = 0
+            Us[i, ei] = -0.5 * sigma/2 * ll.swepttangents[i, ei]
+            # Us[i, ei] *= 0
         end
 
         sigmas[ei] = sigma
