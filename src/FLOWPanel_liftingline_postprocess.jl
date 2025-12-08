@@ -152,6 +152,16 @@ Calculate drag coefficient cd. ``cd`` is saved as a field named `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
+
+**NOTE:** cd is most accurate when `calcfield_cd!` is called on the velocity 
+    induced by the effective horseshoes as follows:
+
+```julia
+ll.Us .= Uinfs
+selfUind!(ll, ll.Us)
+
+calcfield_cd(ll)
+```
 """
 function calcfield_cd!(out::AbstractVector, 
                         ll::LiftingLine{<:Number, <:SimpleAirfoil};
@@ -267,12 +277,18 @@ starts with all zeroes).
 
 NOTE: Make sure that the following has been run on the lifting line solution to
 calculate the effective swept velocity before calling this function:
+
 ```julia
 ll.Us .= Uinfs
-selfUind!(ll, ll.Us)
+Uind!(ll, ll.midpoints, ll.Us)
 calc_UΛs!(ll, ll.Us)
+
+calcfield_F(liftingline, rho)
 ```
 
+This is equivalent to computing the velocity on the original horseshoes (not the
+effective ones) which is then converted to effective velocity on the swept 
+sections.
 """
 function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R}, 
                         cls::AbstractVector, cds::AbstractVector, rho::Number;
@@ -290,8 +306,6 @@ function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R},
     @assert length(cds)==ll.nelements ""*
         "Invalid `cds` vector."*
         " Expected size $((ll.nelements, )); got $(size(cds))."
-
-    M = zeros(R, 3, 3)
 
     for ei in 1:ll.nelements                # Iterate over stripwise elements
 
@@ -316,18 +330,10 @@ function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R},
         L = cls[ei] * q * ll.chords[ei] * ds
         D = cds[ei] * q * ll.chords[ei] * ds
 
-        # Drag direction: Tangent vector rotated by effective AOA
-        # gt.axis_rotation!(M, view(ll.spans, :, ei), ll.aoas[ei])
-
-        # hatD1 = M[1, 1]*U1 + M[1, 2]*U2 + M[1, 3]*U3
-        # hatD2 = M[2, 1]*U1 + M[2, 2]*U2 + M[2, 3]*U3
-        # hatD3 = M[3, 1]*U1 + M[3, 2]*U2 + M[3, 3]*U3
-
-        gt.axis_rotation!(M, view(ll.lines, :, ei), -ll.aoas[ei])
-
-        hatD1 = M[1, 1]*ll.swepttangents[1, ei] + M[1, 2]*ll.swepttangents[2, ei] + M[1, 3]*ll.swepttangents[3, ei]
-        hatD2 = M[2, 1]*ll.swepttangents[1, ei] + M[2, 2]*ll.swepttangents[2, ei] + M[2, 3]*ll.swepttangents[3, ei]
-        hatD3 = M[3, 1]*ll.swepttangents[1, ei] + M[3, 2]*ll.swepttangents[2, ei] + M[3, 3]*ll.swepttangents[3, ei]
+        # Drag direction: direction of freestream
+        hatD1 = U1
+        hatD2 = U2
+        hatD3 = U3
 
         aux = sqrt(hatD1^2 + hatD2^2 + hatD3^2)
 
@@ -335,11 +341,7 @@ function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R},
         hatD2 /= aux
         hatD3 /= aux
 
-        # Lift direction: hatD x span
-        # hatL1 = hatD2*ll.spans[3, ei] - hatD3*ll.spans[2, ei]
-        # hatL2 = hatD3*ll.spans[1, ei] - hatD1*ll.spans[3, ei]
-        # hatL3 = hatD1*ll.spans[2, ei] - hatD2*ll.spans[1, ei]
-
+        # Lift direction: hatD x bound vortex
         hatL1 = hatD2*ll.lines[3, ei] - hatD3*ll.lines[2, ei]
         hatL2 = hatD3*ll.lines[1, ei] - hatD1*ll.lines[3, ei]
         hatL3 = hatD1*ll.lines[2, ei] - hatD2*ll.lines[1, ei]
