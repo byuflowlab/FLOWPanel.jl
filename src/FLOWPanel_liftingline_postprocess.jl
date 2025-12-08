@@ -97,7 +97,8 @@ end
 """
     calcfield_cl!(out::Vector, liftingline::LiftingLine; fieldname="cl")
 
-Calculate lift coefficient cl. ``cl`` is saved as a field named `fieldname`.
+Calculate effective lift coefficient cl on the swept section (C_𝐿Λ in Goates 
+2022 nomenclature). ``cl`` is saved as a field named `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -113,7 +114,12 @@ function calcfield_cl!(out::AbstractVector,
 
     for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
 
-        out[ei] = calc_cl(element, aoa)
+        sweep = calc_sweep(ll, ei)
+
+        # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
+        clΛ = calc_sweptcl(element, sweep, aoa)
+
+        out[ei] = clΛ
 
     end
 
@@ -140,9 +146,9 @@ function calcfield_cl(ll::LiftingLine{R}, args...; fieldname="cl", optargs...) w
 end
 
 """
-    calcfield_cl!(out::Vector, liftingline::LiftingLine; fieldname="cl")
+    calcfield_cd!(out::Vector, liftingline::LiftingLine; fieldname="cl")
 
-Calculate lift coefficient cl. ``cl`` is saved as a field named `fieldname`.
+Calculate drag coefficient cd. ``cd`` is saved as a field named `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -157,8 +163,17 @@ function calcfield_cd!(out::AbstractVector,
         " Expected size $((ll.nelements, )); got $(size(out))."
 
     for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
+        
+        # out[ei] = calc_cd(element, aoa)
 
-        out[ei] = calc_cd(element, aoa)
+        # NOTE: Goates 2022 JoA, Sec. V.E, recommends using the effective swept
+        #       AOA, but we are getting too high of a cd. Hence, here we switch
+        #       to the unswept AOA, assumming that Us is the unswept velocity.
+
+        # Calculate unswept AOA
+        aoa_unswept = calc_aoa(ll, ll.Us, ei)
+
+        out[ei] = calc_cd(element, aoa_unswept)
 
     end
 
@@ -187,7 +202,8 @@ end
 """
     calcfield_cm!(out::Vector, liftingline::LiftingLine; fieldname="cm")
 
-Calculate lift coefficient cm. ``cm`` is saved as a field named `fieldname`.
+Calculate effective pitching moment cm on the swept section (C_mc/4Λ in Goates 
+2022 nomenclature). ``cm`` is saved as a field named `fieldname`.
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
@@ -203,7 +219,12 @@ function calcfield_cm!(out::AbstractVector,
 
     for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
 
-        out[ei] = calc_cm(element, aoa)
+        sweep = calc_sweep(ll, ei)
+
+        # Calculate swept sectional cm (C_mc/4Λ in Goates 2022, Eq. (30))
+        cmΛ = calc_sweptcm(element, sweep, aoa)
+
+        out[ei] = cmΛ
 
     end
 
@@ -243,6 +264,15 @@ theorem,
 
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
+
+NOTE: Make sure that the following has been run on the lifting line solution to
+calculate the effective swept velocity before calling this function:
+```julia
+ll.Us .= Uinfs
+selfUind!(ll, ll.Us)
+calc_UΛs!(ll, ll.Us)
+```
+
 """
 function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R}, 
                         cls::AbstractVector, cds::AbstractVector, rho::Number;
@@ -287,11 +317,18 @@ function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R},
         D = cds[ei] * q * ll.chords[ei] * ds
 
         # Drag direction: Tangent vector rotated by effective AOA
-        gt.axis_rotation!(M, view(ll.spans, :, ei), ll.aoas[ei])
+        # gt.axis_rotation!(M, view(ll.spans, :, ei), ll.aoas[ei])
 
-        hatD1 = M[1, 1]*U1 + M[1, 2]*U2 + M[1, 3]*U3
-        hatD2 = M[2, 1]*U1 + M[2, 2]*U2 + M[2, 3]*U3
-        hatD3 = M[3, 1]*U1 + M[3, 2]*U2 + M[3, 3]*U3
+        # hatD1 = M[1, 1]*U1 + M[1, 2]*U2 + M[1, 3]*U3
+        # hatD2 = M[2, 1]*U1 + M[2, 2]*U2 + M[2, 3]*U3
+        # hatD3 = M[3, 1]*U1 + M[3, 2]*U2 + M[3, 3]*U3
+
+        gt.axis_rotation!(M, view(ll.lines, :, ei), -ll.aoas[ei])
+
+        hatD1 = M[1, 1]*ll.swepttangents[1, ei] + M[1, 2]*ll.swepttangents[2, ei] + M[1, 3]*ll.swepttangents[3, ei]
+        hatD2 = M[2, 1]*ll.swepttangents[1, ei] + M[2, 2]*ll.swepttangents[2, ei] + M[2, 3]*ll.swepttangents[3, ei]
+        hatD3 = M[3, 1]*ll.swepttangents[1, ei] + M[3, 2]*ll.swepttangents[2, ei] + M[3, 3]*ll.swepttangents[3, ei]
+
         aux = sqrt(hatD1^2 + hatD2^2 + hatD3^2)
 
         hatD1 /= aux
@@ -299,9 +336,14 @@ function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R},
         hatD3 /= aux
 
         # Lift direction: hatD x span
-        hatL1 = hatD2*ll.spans[3, ei] - hatD3*ll.spans[2, ei]
-        hatL2 = hatD3*ll.spans[1, ei] - hatD1*ll.spans[3, ei]
-        hatL3 = hatD1*ll.spans[2, ei] - hatD2*ll.spans[1, ei]
+        # hatL1 = hatD2*ll.spans[3, ei] - hatD3*ll.spans[2, ei]
+        # hatL2 = hatD3*ll.spans[1, ei] - hatD1*ll.spans[3, ei]
+        # hatL3 = hatD1*ll.spans[2, ei] - hatD2*ll.spans[1, ei]
+
+        hatL1 = hatD2*ll.lines[3, ei] - hatD3*ll.lines[2, ei]
+        hatL2 = hatD3*ll.lines[1, ei] - hatD1*ll.lines[3, ei]
+        hatL3 = hatD1*ll.lines[2, ei] - hatD2*ll.lines[1, ei]
+
         aux = sqrt(hatL1^2 + hatL2^2 + hatL3^2)
 
         hatL1 /= aux

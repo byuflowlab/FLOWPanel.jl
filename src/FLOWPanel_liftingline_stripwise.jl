@@ -164,6 +164,17 @@ function calc_sweptcl(airfoil::StripwiseElement, sweep::Number, alpha_Λ::Number
 end
 
 """
+Calculate swept sectional pitching moment coefficient as in Goates 2022, Eq. 
+(30).
+"""
+function calc_sweptcm(airfoil::StripwiseElement, sweep::Number, alpha_Λ::Number, 
+                                                            args...; optargs...)
+
+    return calc_cm(airfoil, alpha_Λ, args...; optargs...) / cosd(sweep)
+
+end
+
+"""
     viterna(alpha, cl, cd, cr75, nalpha=50)
 
 **COPY/PASTE FROM DuctAPE.jl, modified to also return cm**
