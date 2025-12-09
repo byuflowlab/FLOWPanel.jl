@@ -51,8 +51,8 @@ v_lvl = 0
     # Chord distribution (nondim y-position, nondim chord)
     chord_distribution = [
     #   2*y/b   c/b
-        0.0     1/5.0
-        1.0     1/5.0
+        0.0     0.2
+        1.0     0.2
     ]
 
     # Twist distribution (nondim y-position, twist)
@@ -90,15 +90,32 @@ v_lvl = 0
         (1.00, "rae101-Re1p7e6.csv",     pnl.SimpleAirfoil)
     ]
 
+    # ------------------ SOLVER PARAMETERS -------------------------------------
+    deltasb         = 1.0                           # Blending distance, deltasb = 2*dy/b
 
-    # ------------------ GENERATE LIFTING LINE ---------------------------
-    liftingline = pnl.LiftingLine{Float64}(
+    # deltajoint    = 0.15                          # Joint distance, deltajoint = dx/c
+    deltajoint      = 1.0
+                                                    # Nonlinear solver
+    solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()
+    solver_optargs  = (; abstol = 1e-9)
+
+    Dhat            = Uinf/norm(Uinf)               # Drag direction
+    Shat            = [0, 1, 0]                     # Span direction
+    Lhat            = cross(Dhat, Shat)             # Lift direction
+
+    cref            = mean(chord_distribution[:, 2]*b) # Reference chord
+    nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
+
+
+    # ------------------ GENERATE LIFTING LINE ---------------------------------
+    ll = pnl.LiftingLine{Float64}(
                                     airfoil_distribution; 
                                     b, chord_distribution, twist_distribution,
                                     sweep_distribution, dihedral_distribution,
                                     spanaxis_distribution,
                                     discretization,
                                     symmetric,
+                                    deltasb, deltajoint,
                                     plot_discretization = false,
                                     element_optargs = (; 
                                         path = airfoil_path, 
@@ -108,33 +125,29 @@ v_lvl = 0
 
 
     # Test sweep calculation
-    @test abs(-pnl.calc_sweep(liftingline, 1) - sweep_distribution[1, 2]) < 1e-6
-    @test abs(pnl.calc_sweep(liftingline, liftingline.nelements) - sweep_distribution[end, 2]) < 1e-6
+    @test abs(-pnl.calc_sweep(ll, 1) - sweep_distribution[1, 2]) < 1e-6
+    @test abs(pnl.calc_sweep(ll, ll.nelements) - sweep_distribution[end, 2]) < 1e-6
 
 
-    # ------------------ CALL SOLVER ----------------------------------
-    t = @elapsed pnl.solve_linear(liftingline, Uinf)
+    # ------------------ CALL LINEAR SOLVER ------------------------------------
+    t_linear = @elapsed pnl.solve_linear(ll, Uinf)
 
 
-    # ------------------ POSTPROCESSING -------------------------------
+    # ------------------ POSTPROCESS LINEAR SOLUTION ---------------------------
     # Force per stripwise element using Kutta-Joukowski theorem
-    Fkj = pnl.calcfield_Fkj(liftingline, rho; fieldname="Fkj")
+    Fkj = pnl.calcfield_Fkj(ll, rho; fieldname="Fkj")
 
     # Integrated force
-    Ftot = pnl.calcfield_Ftot(liftingline; F_fieldname="Fkj")
+    Ftot = pnl.calcfield_Ftot(ll; F_fieldname="Fkj")
 
-    # Integrated force decomposed into lift and drag
-    Dhat = Uinf/norm(Uinf)    # Drag direction
-    Shat = [0, 1, 0]              # Span direction
-    Lhat = cross(Dhat, Shat)  # Lift direction
-
-    LDS = pnl.calcfield_LDS(liftingline, Lhat, Dhat, Shat; F_fieldname="Fkj")
+    # Decompose integrated force into lift and drag
+    LDS = pnl.calcfield_LDS(ll, Lhat, Dhat, Shat; F_fieldname="Fkj")
 
     L = LDS[:, 1]
     D = LDS[:, 2]
 
     # # Loading distribution (force per unit span) using Kutta-Joukowski theorem
-    # fs = pnl.calcfield_fkj(liftingline, rho)
+    # fs = pnl.calcfield_fkj(ll, rho)
 
     # lds = pnl.decompose(fs, Lhat, Dhat)
 
@@ -142,12 +155,71 @@ v_lvl = 0
     # d = lds[2, :]
 
     # Force coefficients
-    cref = mean(chord_distribution[:, 2]*b)
-    nondim = 0.5*rho*magUinf^2*b*cref   # Normalization factor
+    CL_linear = sign(dot(L, Lhat)) * norm(L) / nondim
+    CD_linear = sign(dot(D, Dhat)) * norm(D) / nondim
 
-    CL = sign(dot(L, Lhat)) * norm(L) / nondim
-    CD = sign(dot(D, Dhat)) * norm(D) / nondim
-    err = abs(CL-CLexp)/CLexp
+    err_CL_linear = abs(CL_linear-CLexp)/CLexp
+    err_CD_linear = abs(CD_linear-CDexp)/CDexp
+
+    # cl = l / (nondim/b)
+    # cd = d / (nondim/b)
+
+    # ------------------ CALL NONLINEAR SOLVER ---------------------------------
+    Uinfs = repeat(Uinf, 1, ll.nelements)
+
+    t_nonlinear = @elapsed begin 
+        result, solver_cache = pnl.solve(ll, Uinfs; solver, solver_optargs)
+    end
+
+    # Check solver success
+    # pnl.SimpleNonlinearSolve.SciMLBase.successful_retcode(result)
+
+    # ------------------ POSTPROCESSING NONLINEAR SOLUTION ---------------------
+
+    # NOTE: Coefficients must be evaluated on using the velocity from 
+    #       the effective horseshoes as shown below, which is automatically
+    #       computed by the solver already
+    # ll.Us .= Uinfs
+    # pnl.selfUind!(ll, ll.Us)
+
+    # Calculate stripwise coefficients
+    pnl.calcfield_cl(ll)
+    pnl.calcfield_cd(ll)
+    pnl.calcfield_cm(ll)
+
+    # Convert velocity to effective swept velocity
+    # NOTE: Forces must use the velocity from the original horseshoes for
+    #       best accuracy, as done here
+    ll.Us .= Uinfs
+    pnl.Uind!(ll, ll.midpoints, ll.Us)
+    pnl.calc_UΛs!(ll, ll.Us)
+
+    # Force per stripwise element integrating lift and drag coefficient
+    pnl.calcfield_F(ll, rho)
+
+    # Integrated force
+    Ftot = pnl.calcfield_Ftot(ll)
+
+    # Integrated force decomposed into lift and drag
+    LDS = pnl.calcfield_LDS(ll, Lhat, Dhat, Shat)
+
+    L = LDS[:, 1]
+    D = LDS[:, 2]
+
+    # Loading distribution (force per unit span)
+    # fs = pnl.calcfield_f(ll)
+
+    # lds = pnl.decompose(fs, Lhat, Dhat)
+
+    # l = lds[1, :]
+    # d = lds[2, :]
+
+    # Coefficients
+    CL_nonlinear = sign(dot(L, Lhat)) * norm(L) / nondim
+    CD_nonlinear = sign(dot(D, Dhat)) * norm(D) / nondim
+
+    err_CL_nonlinear = abs(CL_nonlinear-CLexp)/CLexp
+    err_CD_nonlinear = abs(CD_nonlinear-CDexp)/CDexp
 
     # cl = l / (nondim/b)
     # cd = d / (nondim/b)
@@ -155,14 +227,16 @@ v_lvl = 0
 
     if verbose
         println()
-        @printf "%s%15.15s %-7s %-7s %-12s\t%-10s\n" "\t"^(v_lvl+1) "" "CL" "CD" "Time" "CL error"
-        @printf "%s%15.15s %-7s %-7s %-12s\t%-10s\n" "\t"^(v_lvl+1) "Experimental" CLexp CDexp "-" "-"
-        @printf "%s%15.15s %-7.4f %-7.4f %-3.0f msecs   \t%4.3g﹪\n" "\t"^(v_lvl+1) "Linear LL" CL CD t*1000 err*100
+        @printf "%s%15.15s %-7s %-7s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "CL" "CD" "Time" "CL error" "CD error"
+        @printf "%s%15.15s %-7s %-7s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "Experimental" CLexp CDexp "-" "-" "-"
+        @printf "%s%15.15s %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Nonlinear LL" CL_nonlinear CD_nonlinear t_nonlinear*1000 err_CL_nonlinear*100 err_CD_nonlinear*100
+        @printf "%s%15.15s %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Linear LL" CL_linear CD_linear t_linear*1000 err_CL_linear*100 err_CD_linear*100
     end
 
-    res = err <= 0.03
-
     # Test result
-    @test res
+    @test err_CL_linear <= 0.03
+    @test err_CD_nonlinear <= 0.50
+    @test err_CL_nonlinear <= 0.04
+    @test err_CD_nonlinear <= 0.03
 
 end
