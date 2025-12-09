@@ -49,6 +49,9 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Uinfs)
 
+    # Precompute self-induced velocity geometric matrix
+    calc_Geff!(self)
+
     # Generate residual function
     f! = generate_f_residual(self, Uinfs; cache=solver_cache, debug)
 

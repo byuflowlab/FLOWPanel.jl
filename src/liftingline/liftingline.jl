@@ -211,7 +211,7 @@ struct LiftingLine{ R<:Number,
                                                 strippositions, nelements,
                                                 normals, chords; deltajoint)
 
-        calc_Geff!(Geff, effective_horseshoes,
+        calc_Geff!(Geff, effective_horseshoes, Dinfs,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
@@ -954,11 +954,11 @@ effective horseshoes on each midpoint.
 Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced 
 by the ei-th effective horseshoe on the mi-th midpoint.
 
-NOTE: this precomputation does not include the velocity induced by the 
-semi-infinite vortex wake.
+NOTE: this precomputation includes both the surface and wake induced velocity.
 """
 function calc_Geff!(self::LiftingLine; optargs...)
     calc_Geff!(self.Geff, self.effective_horseshoes, 
+                self.Dinfs,
                 self.midpoints,
                 self.swepttangents, self.lines, self.sweptnormals, 
                 self.nelements; 
@@ -969,6 +969,7 @@ end
 
 function calc_Geff!(Geff::AbstractArray{<:Number, 3}, 
                     effective_horseshoes::AbstractArray{<:Number, 4}, 
+                    Dinfs::AbstractArray{<:Number, 3},
                     midpoints::AbstractMatrix,
                     tangents::AbstractMatrix, 
                     spans::AbstractMatrix, 
@@ -977,55 +978,75 @@ function calc_Geff!(Geff::AbstractArray{<:Number, 3},
                     optargs...)
 
     # Velocity projected on the tangent unit vector
-    calc_Geff!(view(Geff, :, :, 1), 
-                effective_horseshoes, midpoints, tangents, nelements; optargs...)
+    calc_Geff!(view(Geff, :, :, 1), effective_horseshoes, Dinfs, 
+                            midpoints, tangents, nelements; optargs...)
 
     # Velocity projected on the spanwise unit vector
-    calc_Geff!(view(Geff, :, :, 2), 
-                effective_horseshoes, midpoints, spans, nelements; optargs...)
+    calc_Geff!(view(Geff, :, :, 2), effective_horseshoes, Dinfs, 
+                            midpoints, spans, nelements; optargs...)
 
     # Velocity projected on the normal unit vector
-    calc_Geff!(view(Geff, :, :, 3), 
-                effective_horseshoes, midpoints, normals, nelements; optargs...)
+    calc_Geff!(view(Geff, :, :, 3), effective_horseshoes, Dinfs, 
+                            midpoints, normals, nelements; optargs...)
 
 end
 
 function calc_Geff!(Geff::AbstractMatrix, 
                     effective_horseshoes::AbstractArray{<:Number, 4}, 
+                    Dinfs::AbstractArray{<:Number, 3},
                     midpoints::AbstractMatrix,
                     dot_with::AbstractMatrix, 
                     nelements::Int;
                     optargs...)
 
+    Geff .= 0                                   # Erase previous values
+
+    TE = [1, size(effective_horseshoes, 2)]     # Indices of TE nodes in each horseshoe
+
     # Build geometric matrix from panel contributions
-    elements = 1:nelements
-    chunks = collect(Iterators.partition(elements, max(length(elements) ÷ Threads.nthreads(), 3*Threads.nthreads())))
+    Threads.@threads for mi in 1:nelements                         # Iterate over midpoints (iterations distributed among all CPU threads)
 
-    # Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
-    for chunk in chunks      # Distribute panel iteration among all CPU threads
+        # Fetch this midpoints
+        targets = view(midpoints, :, mi:mi)
 
-        for mi in chunk                       # Iterate over midpoints
+        # Fetch effective horseshoes seen by this middle point
+        horseshoes = view(effective_horseshoes, :, :, :, mi)
 
-            # Fetch this midpoints
-            targets = view(midpoints, :, mi:mi)
+        for ei in 1:nelements               # Iterate over the effective horseshoes seen by this middle point
 
-            # Fetch effective horseshoes seen by this middle point
-            horseshoes = view(effective_horseshoes, :, :, :, mi)
+            # Add surface contribution
+            U_vortexring(
+                            view(horseshoes, :, :, ei),   # All nodes in this horseshoe
+                            1:4,                          # Indices of nodes that make this horseshoe (closed ring)
+                            1.0,                          # Unitary strength
+                            targets,                      # Midpoint as the target
+                            view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
+                            dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
+                            optargs...
+                            )
+            
+            # Add wake contribution
+            da1 = Dinfs[1, 1, ei]
+            da2 = Dinfs[2, 1, ei]
+            da3 = Dinfs[3, 1, ei]
+            db1 = Dinfs[1, 2, ei]
+            db2 = Dinfs[2, 2, ei]
+            db3 = Dinfs[3, 2, ei]
 
-            for ei in 1:nelements           # Iterate over the effective horseshoes seen by this middle point
+            U_semiinfinite_horseshoe(
+                            view(horseshoes, :, :, ei),   # All nodes in this horseshoe
+                            TE,                           # Indices of nodes that make the shedding edge
+                            da1, da2, da3,                # Semi-infinite direction da
+                            db1, db2, db3,                # Semi-infinite direction db
+                            1.0,                          # Unitary strength
+                            targets,                      # Midpoint as the target
+                            view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
+                            dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
+                            optargs...
+                            )
 
-                U_vortexring(
-                                view(horseshoes, :, :, ei),   # All nodes in this horseshoe
-                                1:4,                          # Indices of nodes that make this horseshoe (closed ring)
-                                1.0,                          # Unitary strength
-                                targets,                      # Midpoint as the target
-                                view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
-                                dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
-                                optargs...
-                                )
-            end
+        end
 
-         end
     end
 
 end
@@ -1068,7 +1089,7 @@ function _selfUind_lazy!(self::LiftingLine, Gammas::AbstractVector,
 end
 
 function _selfUind_precomputed!(self::LiftingLine, Gammas::AbstractVector, 
-                                out::AbstractMatrix; optargs...)
+                                out::AbstractMatrix)
 
     # Convert current velocity in out from global to local coordinates
     for ei in 1:self.nelements
@@ -1105,9 +1126,6 @@ function _selfUind_precomputed!(self::LiftingLine, Gammas::AbstractVector,
         end
 
     end
-
-    # Add semi-infinite wake
-    _selfUind_lazy!(self, Gammas, out; add_boundvortices=false, optargs...)
 
 end
 
