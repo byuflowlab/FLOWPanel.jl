@@ -377,6 +377,8 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
         cache[:residual_rms] = []
     end
 
+    reset_cache(cache, Uinfs)
+
     function f_residual!(du, u::AbstractVector{T}, p; cache=cache) where T<:Number
 
         # Fetch AOAs from input variables
@@ -419,4 +421,18 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
 end
 
+function reset_cache(cache, Uinfs)
 
+    for (T, data) in cache
+        if T != :fcalls && T != :residual_rms
+
+            data.residuals .= 0
+            data.Gammas .= 0
+            data.sigmas .= 0
+            data.Uinfs .= Uinfs
+            data.Us .= data.Uinfs
+
+        end
+    end
+
+end
