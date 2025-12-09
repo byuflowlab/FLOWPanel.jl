@@ -72,10 +72,12 @@ struct LiftingLine{ R<:Number,
     Us::MatrixType                              # Velocity at each midpoint
     chords::VectorType                          # Dimensional chord of each stripwise element
 
-    G::MatrixType                               # Geometry matrix in linear system of equations
+    G::MatrixType                               # Geometry matrix in linear system of equations (matrix in left-hand side)
     RHS::VectorType                             # Right-hand-side vector in linear system of equations
-    residuals::VectorType                       # Non-linear solver residuals
 
+    residuals::VectorType                       # Non-linear solver residuals
+    Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
+                                                # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
     # Solver settings
     kerneloffset::Float64                       # Kernel offset to avoid singularities
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
@@ -163,6 +165,7 @@ struct LiftingLine{ R<:Number,
         G = MatrixType(undef, nelements, nelements)
         RHS = VectorType(undef, nelements)
         residuals = VectorType(undef, nelements)
+        Geff = TensorType(undef, nelements, nelements, 3)
 
         aoas .= 0
         claeros .= 0
@@ -172,6 +175,7 @@ struct LiftingLine{ R<:Number,
         G .= 0
         RHS .= 0
         residuals .= 0
+        Geff .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
         aerocenters .= aerodynamic_centers
@@ -207,6 +211,12 @@ struct LiftingLine{ R<:Number,
                                                 strippositions, nelements,
                                                 normals, chords; deltajoint)
 
+        calc_Geff!(Geff, effective_horseshoes,
+                    midpoints,
+                    swepttangents, lines, sweptnormals,
+                    nelements;
+                    offset=kerneloffset, cutoff=kernelcutoff)
+
         S = eltype(elements)
         new{R,
             S, _count(S),
@@ -223,7 +233,8 @@ struct LiftingLine{ R<:Number,
                                 swepttangents, lines, sweptnormals,
                                 auxtangents,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
-                                G, RHS, residuals,
+                                G, RHS, 
+                                residuals, Geff,
                                 kerneloffset, kernelcutoff)
 
     end
@@ -274,6 +285,8 @@ function remorph!(self::LiftingLine, args...;
     calc_effective_horseshoes!(self; deltasb)
 
     jointerize!(self; deltajoint)
+
+    calc_Geff!(self)
 
     # Reset solution
     self.aoas .= 0
@@ -932,15 +945,113 @@ function calc_Dinfs!(Dinfs::AbstractArray, Uinfs::AbstractMatrix, nelements::Int
 end
 
 
+
+
+"""
+Precompute geometric matrix for evaluating the self-induced velocity by the 
+effective horseshoes on each midpoint. 
+
+Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced 
+by the ei-th effective horseshoe on the mi-th midpoint.
+
+NOTE: this precomputation does not include the velocity induced by the 
+semi-infinite vortex wake.
+"""
+function calc_Geff!(self::LiftingLine; optargs...)
+    calc_Geff!(self.Geff, self.effective_horseshoes, 
+                self.midpoints,
+                self.swepttangents, self.lines, self.sweptnormals, 
+                self.nelements; 
+                offset=self.kerneloffset, 
+                cutoff=self.kernelcutoff,
+                optargs...)
+end
+
+function calc_Geff!(Geff::AbstractArray{<:Number, 3}, 
+                    effective_horseshoes::AbstractArray{<:Number, 4}, 
+                    midpoints::AbstractMatrix,
+                    tangents::AbstractMatrix, 
+                    spans::AbstractMatrix, 
+                    normals::AbstractMatrix,
+                    nelements::Int;
+                    optargs...)
+
+    # Velocity projected on the tangent unit vector
+    calc_Geff!(view(Geff, :, :, 1), 
+                effective_horseshoes, midpoints, tangents, nelements; optargs...)
+
+    # Velocity projected on the spanwise unit vector
+    calc_Geff!(view(Geff, :, :, 2), 
+                effective_horseshoes, midpoints, spans, nelements; optargs...)
+
+    # Velocity projected on the normal unit vector
+    calc_Geff!(view(Geff, :, :, 3), 
+                effective_horseshoes, midpoints, normals, nelements; optargs...)
+
+end
+
+function calc_Geff!(Geff::AbstractMatrix, 
+                    effective_horseshoes::AbstractArray{<:Number, 4}, 
+                    midpoints::AbstractMatrix,
+                    dot_with::AbstractMatrix, 
+                    nelements::Int;
+                    optargs...)
+
+    # Build geometric matrix from panel contributions
+    elements = 1:nelements
+    chunks = collect(Iterators.partition(elements, max(length(elements) ÷ Threads.nthreads(), 3*Threads.nthreads())))
+
+    # Threads.@threads for chunk in chunks      # Distribute panel iteration among all CPU threads
+    for chunk in chunks      # Distribute panel iteration among all CPU threads
+
+        for mi in chunk                       # Iterate over midpoints
+
+            # Fetch this midpoints
+            targets = view(midpoints, :, mi:mi)
+
+            # Fetch effective horseshoes seen by this middle point
+            horseshoes = view(effective_horseshoes, :, :, :, mi)
+
+            for ei in 1:nelements           # Iterate over the effective horseshoes seen by this middle point
+
+                U_vortexring(
+                                view(horseshoes, :, :, ei),   # All nodes in this horseshoe
+                                1:4,                          # Indices of nodes that make this horseshoe (closed ring)
+                                1.0,                          # Unitary strength
+                                targets,                      # Midpoint as the target
+                                view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
+                                dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
+                                optargs...
+                                )
+            end
+
+         end
+    end
+
+end
+
+
 """
 Self-induced velocity using the effective lifting line geometry for each 
 stripwise element
 """
+function selfUind!(self::LiftingLine; optargs...)
+    selfUind!(self, self.Us; optargs...)
+end
 function selfUind!(self::LiftingLine, out; optargs...)
     selfUind!(self, self.Gammas, out; optargs...)
 end
 
 function selfUind!(self::LiftingLine, Gammas::AbstractVector, 
+                    out::AbstractMatrix; precomputed=true, optargs...)
+    if precomputed
+        _selfUind_precomputed!(self, Gammas, out; optargs...)
+    else
+        _selfUind_lazy!(self, Gammas, out; optargs...)
+    end
+end
+
+function _selfUind_lazy!(self::LiftingLine, Gammas::AbstractVector, 
                     out::AbstractMatrix; optargs...)
 
     for ei in 1:self.nelements                      # Iterate over stripwise elements
@@ -950,9 +1061,53 @@ function selfUind!(self::LiftingLine, Gammas::AbstractVector,
         effective_horseshoes = view(self.effective_horseshoes, :, :, :, ei)
 
         # Velocity of all the effective horseshoes on this stripwise element
-        Uind!(self::LiftingLine, Gammas, targets, this_out; 
+        Uind!(self, Gammas, targets, this_out; 
                                     horseshoes=effective_horseshoes, optargs...)
     end
+
+end
+
+function _selfUind_precomputed!(self::LiftingLine, Gammas::AbstractVector, 
+                                out::AbstractMatrix; optargs...)
+
+    # Convert current velocity in out from global to local coordinates
+    for ei in 1:self.nelements
+
+        # Global coordinates
+        U1 = out[1, ei]
+        U2 = out[2, ei]
+        U3 = out[3, ei]
+
+        # Local coordinates
+        out[1, ei] = U1*self.swepttangents[1, ei] + U2*self.swepttangents[2, ei] + U3*self.swepttangents[3, ei]
+        out[2, ei] = U1*self.lines[1, ei] + U2*self.lines[2, ei] + U3*self.lines[3, ei]
+        out[3, ei] = U1*self.sweptnormals[1, ei] + U2*self.sweptnormals[2, ei] + U3*self.sweptnormals[3, ei]
+
+    end
+
+    # Calculate velocity by horseshoes in local coordinates, adding them to out
+    # without overwritting
+    LA.mul!(view(out, 1, :), view(self.Geff, :, :, 1), Gammas, 1, 1)
+    LA.mul!(view(out, 2, :), view(self.Geff, :, :, 2), Gammas, 1, 1)
+    LA.mul!(view(out, 3, :), view(self.Geff, :, :, 3), Gammas, 1, 1)
+
+    # Re-project the velocity from local coordinates to global
+    for ei in 1:self.nelements
+
+        # Local coordinates
+        U1 = out[1, ei]
+        U2 = out[2, ei]
+        U3 = out[3, ei]
+
+        # Global coordinates
+        for i in 1:3
+            out[i, ei] = U1*self.swepttangents[i, ei] + U2*self.lines[i, ei] + U3*self.sweptnormals[i, ei]
+        end
+
+    end
+
+    # Add semi-infinite wake
+    _selfUind_lazy!(self, Gammas, out; add_boundvortices=false, optargs...)
 
 end
 
@@ -969,22 +1124,27 @@ end
 function Uind!(self::LiftingLine, Gammas::AbstractVector, 
                     targets::AbstractMatrix, out::AbstractMatrix; 
                     horseshoes::AbstractArray=self.horseshoes,
+                    add_boundvortices=true,
                     optargs...)
 
-    # Add bound vortex contributions
-    for ei in 1:self.nelements                              # Iterate over horseshoes
+    if add_boundvortices
 
-        # Velocity of i-th horseshoe on every target
-        U_vortexring(
-                            view(horseshoes, :, :, ei),        # All nodes
-                            1:4,                               # Indices of nodes that make this panel (closed ring)
-                            Gammas[ei],                        # Horseshoe circulation
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                            optargs...
-                         )
+        # Add bound vortex contributions
+        for ei in 1:self.nelements                              # Iterate over horseshoes
+
+            # Velocity of i-th horseshoe on every target
+            U_vortexring(
+                                view(horseshoes, :, :, ei),        # All nodes
+                                1:4,                               # Indices of nodes that make this panel (closed ring)
+                                Gammas[ei],                        # Horseshoe circulation
+                                targets,                           # Targets
+                                out;                               # Outputs
+                                offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                                cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
+                                optargs...
+                            )
+        end
+
     end
 
     # Add wake contributions
@@ -1014,13 +1174,6 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
 
     end
 end
-
-
-
-
-
-
-
 
 
 

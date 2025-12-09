@@ -123,10 +123,30 @@ v_lvl = 0
                                         )
                                     )
 
+    # Test unit vectors
+    for unit in (ll.tangents, ll.spans, ll.normals,
+                    ll.swepttangents, ll.lines, ll.sweptnormals)
+
+        @test maximum(abs.(norm.(eachcol(unit)) .- 1)) <= eps(10.0)
+
+    end
+
 
     # Test sweep calculation
     @test abs(-pnl.calc_sweep(ll, 1) - sweep_distribution[1, 2]) < 1e-6
     @test abs(pnl.calc_sweep(ll, ll.nelements) - sweep_distribution[end, 2]) < 1e-6
+
+
+    # Test precomputation of velocity geometric matrix
+    ll.Gammas .= 1.0
+
+    Us_lazy = repeat(Uinf, 1, ll.nelements)
+    pnl.selfUind!(ll, Us_lazy; precomputed=false)
+
+    Us_precomputed = repeat(Uinf, 1, ll.nelements)
+    pnl.selfUind!(ll, Us_precomputed; precomputed=true)
+
+    @test maximum(abs.(Us_lazy - Us_precomputed)) <= eps(5e2)
 
 
     # ------------------ CALL LINEAR SOLVER ------------------------------------
@@ -180,7 +200,7 @@ v_lvl = 0
     #       the effective horseshoes as shown below, which is automatically
     #       computed by the solver already
     # ll.Us .= Uinfs
-    # pnl.selfUind!(ll, ll.Us)
+    # pnl.selfUind!(ll)
 
     # Calculate stripwise coefficients
     pnl.calcfield_cl(ll)
