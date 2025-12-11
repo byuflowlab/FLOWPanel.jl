@@ -40,7 +40,10 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
+        jointerize!(self)
         align_joints_with_Uinfs!(self, Uinfs)
+    else
+        jointerize!(self)
     end
 
     # Set AOA initial guess

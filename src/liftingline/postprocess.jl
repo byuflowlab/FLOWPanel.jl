@@ -174,16 +174,16 @@ function calcfield_cd!(out::AbstractVector,
 
     for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
         
-        # out[ei] = calc_cd(element, aoa)
+        out[ei] = calc_cd(element, aoa)
 
         # NOTE: Goates 2022 JoA, Sec. V.E, recommends using the effective swept
         #       AOA, but we are getting too high of a cd. Hence, here we switch
         #       to the unswept AOA, assumming that Us is the unswept velocity.
 
-        # Calculate unswept AOA
-        aoa_unswept = calc_aoa(ll, ll.Us, ei)
+        # # Calculate unswept AOA
+        # aoa_unswept = calc_aoa(ll, ll.Us, ei)
 
-        out[ei] = calc_cd(element, aoa_unswept)
+        # out[ei] = calc_cd(element, aoa_unswept)
 
     end
 
