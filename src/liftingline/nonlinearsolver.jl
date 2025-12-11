@@ -38,13 +38,13 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
                         debug=false
                         )
 
-    # Align joint nodes with freestream
-    if align_joints_with_Uinfs
-        jointerize!(self)
-        align_joints_with_Uinfs!(self, Uinfs)
-    else
-        jointerize!(self)
-    end
+    # # Align joint nodes with freestream
+    # if align_joints_with_Uinfs
+    #     jointerize!(self)
+    #     align_joints_with_Uinfs!(self, Uinfs)
+    # else
+    #     jointerize!(self)
+    # end
 
     # Set AOA initial guess
     self.aoas .= aoas_initial_guess
@@ -56,7 +56,7 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
     calc_Geff!(self)
 
     # Generate residual function
-    f! = generate_f_residual(self, Uinfs; cache=solver_cache, debug)
+    f! = generate_f_residual(self, Uinfs; align_joints_with_Uinfs, cache=solver_cache, debug)
 
     # Define solver initial guess
     u0 = self.aoas
@@ -102,8 +102,23 @@ function calc_residuals!(residuals::AbstractVector,
                             Uinfs::AbstractMatrix, 
                             aoas::AbstractVector, 
                             Gammas::AbstractVector, sigmas::AbstractVector, 
-                            Us::AbstractMatrix,
+                            Us::AbstractMatrix, 
+                            effective_horseshoes::AbstractArray{<:Number, 4};
+                            align_joints_with_Uinfs=true
                             )
+
+    if align_joints_with_Uinfs
+        for ei in 1:ll.nelements                   # Iterate over stripwise elements
+
+            # Fetch effective horseshoes seen by this element
+            horseshoes = view(effective_horseshoes, :, :, :, ei)
+
+            # Modify the effective horseshoes to aling joints with freestream
+            align_joints_with_Uinfs!(horseshoes, ll.chords, 
+                                        ll.swepttangents, ll.lines, ll.sweptnormals,
+                                        aoas, ll.nelements, ll.deltajoint)
+        end
+    end
 
     # NOTE: remember to update initial guess aoas and initial state Us before 
     # calling this function
@@ -184,7 +199,8 @@ function calc_residuals!(residuals::AbstractVector,
 
     # Lifting line component
     # Uind!(ll, Gammas, ll.midpoints, Us)
-    selfUind!(ll, Gammas, Us)
+    # selfUind!(ll, Gammas, Us)
+    selfUind!(ll, Gammas, effective_horseshoes, Us; precomputed=!align_joints_with_Uinfs)
 
     # Convert U to U_Λ (effective velocity seen by the swept sections)
     calc_UΛs!(ll, Us)
@@ -372,7 +388,9 @@ end
 Generate residual wrapper for NonlinerSolver methods
 """
 function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
-                                Uinfs::AbstractMatrix; cache=Dict(), debug=false)
+                                Uinfs::AbstractMatrix; 
+                                align_joints_with_Uinfs=true, 
+                                cache=Dict(), debug=false)
 
     cache[:fcalls] = 0
 
@@ -389,7 +407,9 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
         # Initiate cache
         if !(T in keys(cache))
+            println("New type $(T)")
             cache[T] = (;   residuals = zeros(T, ll.nelements), 
+                            effective_horseshoes = zeros(T, size(ll.effective_horseshoes)...),
                             Gammas = zeros(T, ll.nelements),
                             sigmas = zeros(T, ll.nelements),
                             Us = zeros(T, 3, ll.nelements),
@@ -400,6 +420,9 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
             # Set Uinf as the initial velocity
             cache[T].Us .= Uinfs
 
+            # Copy effective horseshoes
+            cache[T].effective_horseshoes .= ll.effective_horseshoes
+
         end
 
         # Increase function call counter
@@ -409,7 +432,9 @@ function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
         # Calculate residual
         calc_residuals!(cache[T].residuals, ll, cache[T].Uinfs, 
-                        aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us)
+                        aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us,
+                        cache[T].effective_horseshoes;
+                        align_joints_with_Uinfs)
 
         # Set residual as state
         du .= cache[T].residuals
