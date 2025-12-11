@@ -34,6 +34,8 @@ struct LiftingLine{ R<:Number,
 
     deltasb::Float64                            # Blending distance, deltasb = 2*dy/b
     deltajoint::Float64                         # Joint distance, deltajoint = dx/c
+    sigmafactor::Float64                        # Dragging line amplification factor
+    sigmaexponent::Float64                      # Dragging line amplification exponent
 
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
@@ -92,6 +94,8 @@ struct LiftingLine{ R<:Number,
                             controlpoint_position=3/4,
                             deltasb=1.0,
                             deltajoint=0.15,
+                            sigmafactor=1.0,
+                            sigmaexponent=1.0,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
                             kernelcutoff=1e-14,
@@ -225,7 +229,7 @@ struct LiftingLine{ R<:Number,
                                 grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
-                                deltasb, deltajoint,
+                                deltasb, deltajoint, sigmafactor, sigmaexponent,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, 
@@ -567,129 +571,129 @@ function jointerize!(horseshoes::AbstractArray{R, 3}, tangents::AbstractMatrix,
     end
 end
 
-# "Rotate joint segments to align with freestream rather than surface"
-# function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
+"Rotate joint segments to align with freestream rather than surface"
+function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
 
-#     for ei in 1:ll.nelements                   # Iterate over stripwise elements
+    for ei in 1:ll.nelements                   # Iterate over stripwise elements
 
-#         # Fetch effective horseshoes seen by this element
-#         horseshoes = view(ll.effective_horseshoes, :, :, :, ei)
+        # Fetch effective horseshoes seen by this element
+        horseshoes = view(ll.effective_horseshoes, :, :, :, ei)
 
-#         # Modify the effective horseshoes to aling joints with freestream
-#         align_joints_with_Uinfs!(horseshoes, ll.chords, ll.lines, Uinfs, ll.nelements, ll.deltajoint)
-#     end
+        # Modify the effective horseshoes to aling joints with freestream
+        align_joints_with_Uinfs!(horseshoes, ll.chords, ll.lines, Uinfs, ll.nelements, ll.deltajoint)
+    end
 
-# end
+end
 
-# function align_joints_with_Uinfs!(horseshoes::AbstractArray{R, 3}, 
-#                                     chords::AbstractVector,
-#                                     lines::AbstractMatrix,
-#                                     Uinfs::AbstractMatrix, 
-#                                     nelements::Int,
-#                                     deltajoint::Number) where {R}
+function align_joints_with_Uinfs!(horseshoes::AbstractArray{R, 3}, 
+                                    chords::AbstractVector,
+                                    lines::AbstractMatrix,
+                                    Uinfs::AbstractMatrix, 
+                                    nelements::Int,
+                                    deltajoint::Number) where {R}
 
-#     if deltajoint < 0
-#         return
-#     end
+    if deltajoint < 0
+        return
+    end
 
-#     prev_DinfΛ1::R = zero(R)
-#     prev_DinfΛ2::R = zero(R)
-#     prev_DinfΛ3::R = zero(R)
+    prev_DinfΛ1::R = zero(R)
+    prev_DinfΛ2::R = zero(R)
+    prev_DinfΛ3::R = zero(R)
 
-#     this_DinfΛ1::R = zero(R)
-#     this_DinfΛ2::R = zero(R)
-#     this_DinfΛ3::R = zero(R)
+    this_DinfΛ1::R = zero(R)
+    this_DinfΛ2::R = zero(R)
+    this_DinfΛ3::R = zero(R)
 
-#     prev_chord::R = zero(R)
-#     this_chord::R = zero(R)
+    prev_chord::R = zero(R)
+    this_chord::R = zero(R)
 
-#     for ei in 0:nelements                   # Iterate over horseshoes
+    for ei in 0:nelements                   # Iterate over horseshoes
 
-#         if ei != nelements
+        if ei != nelements
             
-#             # Lifting filament direction
-#             dl1 = horseshoes[1, 3, ei+1] - horseshoes[1, 2, ei+1]
-#             dl2 = horseshoes[2, 3, ei+1] - horseshoes[2, 2, ei+1]
-#             dl3 = horseshoes[3, 3, ei+1] - horseshoes[3, 2, ei+1]
-#             magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
+            # Lifting filament direction
+            dl1 = horseshoes[1, 3, ei+1] - horseshoes[1, 2, ei+1]
+            dl2 = horseshoes[2, 3, ei+1] - horseshoes[2, 2, ei+1]
+            dl3 = horseshoes[3, 3, ei+1] - horseshoes[3, 2, ei+1]
+            magdl = sqrt(dl1^2 + dl2^2 + dl3^2)
 
-#             lines1 = dl1/magdl
-#             lines2 = dl2/magdl
-#             lines3 = dl3/magdl
+            lines1 = dl1/magdl
+            lines2 = dl2/magdl
+            lines3 = dl3/magdl
 
-#             # Project the velocity onto the filament direction
-#             UsΛ = Uinfs[1, ei+1]*lines1
+            # Project the velocity onto the filament direction
+            UsΛ = Uinfs[1, ei+1]*lines1
 
-#             # Substract filament-component from the velocity
-#             UinfΛ1 = Uinfs[1, ei+1] - UsΛ*lines1
-#             UinfΛ2 = Uinfs[2, ei+1] - UsΛ*lines2
-#             UinfΛ3 = Uinfs[3, ei+1] - UsΛ*lines3
-#             magUinfΛ = sqrt(UinfΛ1^2 + UinfΛ2^2 + UinfΛ3^2)
+            # Substract filament-component from the velocity
+            UinfΛ1 = Uinfs[1, ei+1] - UsΛ*lines1
+            UinfΛ2 = Uinfs[2, ei+1] - UsΛ*lines2
+            UinfΛ3 = Uinfs[3, ei+1] - UsΛ*lines3
+            magUinfΛ = sqrt(UinfΛ1^2 + UinfΛ2^2 + UinfΛ3^2)
 
-#             # Counter-projected freestream direction
-#             next_DinfΛ1 = UinfΛ1 / magUinfΛ
-#             next_DinfΛ2 = UinfΛ2 / magUinfΛ
-#             next_DinfΛ3 = UinfΛ3 / magUinfΛ
+            # Counter-projected freestream direction
+            next_DinfΛ1 = UinfΛ1 / magUinfΛ
+            next_DinfΛ2 = UinfΛ2 / magUinfΛ
+            next_DinfΛ3 = UinfΛ3 / magUinfΛ
 
-#             next_chord = chords[ei+1]
+            next_chord = chords[ei+1]
 
-#         else
-#             next_DinfΛ1 = this_DinfΛ1
-#             next_DinfΛ2 = this_DinfΛ2
-#             next_DinfΛ3 = this_DinfΛ3
+        else
+            next_DinfΛ1 = this_DinfΛ1
+            next_DinfΛ2 = this_DinfΛ2
+            next_DinfΛ3 = this_DinfΛ3
 
-#             next_chord = this_chord
-#         end
+            next_chord = this_chord
+        end
 
-#         # Proceed to jointerize this horseshoe if it is not the initialization step
-#         if ei != 0
+        # Proceed to jointerize this horseshoe if it is not the initialization step
+        if ei != 0
 
-#             # Tangent and chord on a-side
-#             DinfΛa1 = (prev_DinfΛ1 + this_DinfΛ1)/2
-#             DinfΛa2 = (prev_DinfΛ2 + this_DinfΛ2)/2
-#             DinfΛa3 = (prev_DinfΛ3 + this_DinfΛ3)/2
-#             chorda = (prev_chord + this_chord)/2
+            # Tangent and chord on a-side
+            DinfΛa1 = (prev_DinfΛ1 + this_DinfΛ1)/2
+            DinfΛa2 = (prev_DinfΛ2 + this_DinfΛ2)/2
+            DinfΛa3 = (prev_DinfΛ3 + this_DinfΛ3)/2
+            chorda = (prev_chord + this_chord)/2
 
-#             # Tangent and chord on b-side
-#             DinfΛb1 = (this_DinfΛ1 + next_DinfΛ1)/2
-#             DinfΛb2 = (this_DinfΛ2 + next_DinfΛ2)/2
-#             DinfΛb3 = (this_DinfΛ3 + next_DinfΛ3)/2
-#             chordb = (this_chord + next_chord)/2
+            # Tangent and chord on b-side
+            DinfΛb1 = (this_DinfΛ1 + next_DinfΛ1)/2
+            DinfΛb2 = (this_DinfΛ2 + next_DinfΛ2)/2
+            DinfΛb3 = (this_DinfΛ3 + next_DinfΛ3)/2
+            chordb = (this_chord + next_chord)/2
 
-#             # Override original Ap and Bp with joint Ap and joint Bp
-#             horseshoes[1, 1, ei] = horseshoes[1, 2, ei] + (deltajoint*chorda)*DinfΛa1
-#             horseshoes[2, 1, ei] = horseshoes[2, 2, ei] + (deltajoint*chorda)*DinfΛa2
-#             horseshoes[3, 1, ei] = horseshoes[3, 2, ei] + (deltajoint*chorda)*DinfΛa3
+            # Override original Ap and Bp with joint Ap and joint Bp
+            horseshoes[1, 1, ei] = horseshoes[1, 2, ei] + (deltajoint*chorda)*DinfΛa1
+            horseshoes[2, 1, ei] = horseshoes[2, 2, ei] + (deltajoint*chorda)*DinfΛa2
+            horseshoes[3, 1, ei] = horseshoes[3, 2, ei] + (deltajoint*chorda)*DinfΛa3
 
-#             horseshoes[1, 4, ei] = horseshoes[1, 3, ei] + (deltajoint*chordb)*DinfΛb1
-#             horseshoes[2, 4, ei] = horseshoes[2, 3, ei] + (deltajoint*chordb)*DinfΛb2
-#             horseshoes[3, 4, ei] = horseshoes[3, 3, ei] + (deltajoint*chordb)*DinfΛb3
+            horseshoes[1, 4, ei] = horseshoes[1, 3, ei] + (deltajoint*chordb)*DinfΛb1
+            horseshoes[2, 4, ei] = horseshoes[2, 3, ei] + (deltajoint*chordb)*DinfΛb2
+            horseshoes[3, 4, ei] = horseshoes[3, 3, ei] + (deltajoint*chordb)*DinfΛb3
 
-#         end
+        end
 
-#         if ei == 0
-#             this_DinfΛ1 = next_DinfΛ1
-#             this_DinfΛ2 = next_DinfΛ2
-#             this_DinfΛ3 = next_DinfΛ3
+        if ei == 0
+            this_DinfΛ1 = next_DinfΛ1
+            this_DinfΛ2 = next_DinfΛ2
+            this_DinfΛ3 = next_DinfΛ3
 
-#             this_chord = next_chord
-#         end
+            this_chord = next_chord
+        end
 
-#         # Shift DinfΛs
-#         prev_DinfΛ1 = this_DinfΛ1
-#         prev_DinfΛ2 = this_DinfΛ2
-#         prev_DinfΛ3 = this_DinfΛ3
+        # Shift DinfΛs
+        prev_DinfΛ1 = this_DinfΛ1
+        prev_DinfΛ2 = this_DinfΛ2
+        prev_DinfΛ3 = this_DinfΛ3
 
-#         this_DinfΛ1 = next_DinfΛ1
-#         this_DinfΛ2 = next_DinfΛ2
-#         this_DinfΛ3 = next_DinfΛ3
+        this_DinfΛ1 = next_DinfΛ1
+        this_DinfΛ2 = next_DinfΛ2
+        this_DinfΛ3 = next_DinfΛ3
 
-#         prev_chord = this_chord
-#         this_chord = next_chord
+        prev_chord = this_chord
+        this_chord = next_chord
         
-#     end
+    end
 
-# end
+end
 
 # function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
 
@@ -764,78 +768,78 @@ end
 # end
 
 
-"Rotate joint segments to align with freestream rather than surface"
-function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
+# "Rotate joint segments to align with freestream rather than surface"
+# function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
 
-    for ei in 1:ll.nelements                   # Iterate over stripwise elements
+#     for ei in 1:ll.nelements                   # Iterate over stripwise elements
 
-        # Fetch effective horseshoes seen by this element
-        horseshoes = view(ll.effective_horseshoes, :, :, :, ei)
+#         # Fetch effective horseshoes seen by this element
+#         horseshoes = view(ll.effective_horseshoes, :, :, :, ei)
 
-        # Calculate tangent vectors of the effective lifting line
-        tangents = ll.auxtangents
-        calc_tangents!(tangents, horseshoes, ll.strippositions, ll.nelements)
+#         # Calculate tangent vectors of the effective lifting line
+#         tangents = ll.auxtangents
+#         calc_tangents!(tangents, horseshoes, ll.strippositions, ll.nelements)
 
-        # Modify the effective horseshoes to aling joints with freestream
-        align_joints_with_Uinfs!(horseshoes, ll.normals, ll.tangents, ll.lines, Uinfs, ll.nelements)
-    end
+#         # Modify the effective horseshoes to aling joints with freestream
+#         align_joints_with_Uinfs!(horseshoes, ll.normals, ll.tangents, ll.lines, Uinfs, ll.nelements)
+#     end
 
-end
+# end
 
-function align_joints_with_Uinfs!(horseshoes::AbstractArray{R, 3}, 
-                                    normals::AbstractMatrix,
-                                    tangents::AbstractMatrix,
-                                    lines::AbstractMatrix,
-                                    Uinfs::AbstractMatrix, 
-                                    nelements::Int) where {R}
+# function align_joints_with_Uinfs!(horseshoes::AbstractArray{R, 3}, 
+#                                     normals::AbstractMatrix,
+#                                     tangents::AbstractMatrix,
+#                                     lines::AbstractMatrix,
+#                                     Uinfs::AbstractMatrix, 
+#                                     nelements::Int) where {R}
 
-    M = zeros(R, 3, 3)
+#     M = zeros(R, 3, 3)
 
-    for ei in 1:nelements
+#     for ei in 1:nelements
 
-        # Calculate freestream angle relative to the surface
-        aoa_uinf = calc_aoa(Uinfs, normals, tangents, ei)
+#         # Calculate freestream angle relative to the surface
+#         aoa_uinf = calc_aoa(Uinfs, normals, tangents, ei)
 
-        for ji in (1, 4)
-            # Calculate current joint angle relative to the surface
-            aoa_joint = calc_aoa(horseshoes[1, ji, ei], horseshoes[2, ji, ei], horseshoes[3, ji, ei], 
-                                                        normals, tangents, ei)
+#         for ji in (1, 4)
+#             # Calculate current joint angle relative to the surface
+#             aoa_joint = calc_aoa(horseshoes[1, ji, ei], horseshoes[2, ji, ei], horseshoes[3, ji, ei], 
+#                                                         normals, tangents, ei)
             
-            # Rotation matrix
-            gt.axis_rotation!(M, view(lines, :, ei), aoa_joint - aoa_uinf)
+#             # Rotation matrix
+#             gt.axis_rotation!(M, view(lines, :, ei), aoa_joint - aoa_uinf)
 
-            # Rotate joint node
-            X1 = horseshoes[1, ji, ei]
-            X2 = horseshoes[2, ji, ei]
-            X3 = horseshoes[3, ji, ei]
+#             # Rotate joint node
+#             X1 = horseshoes[1, ji, ei]
+#             X2 = horseshoes[2, ji, ei]
+#             X3 = horseshoes[3, ji, ei]
 
-            X01 = horseshoes[1, ji==1 ? 2 : 3, ei]
-            X02 = horseshoes[2, ji==1 ? 2 : 3, ei]
-            X03 = horseshoes[3, ji==1 ? 2 : 3, ei]
+#             X01 = horseshoes[1, ji==1 ? 2 : 3, ei]
+#             X02 = horseshoes[2, ji==1 ? 2 : 3, ei]
+#             X03 = horseshoes[3, ji==1 ? 2 : 3, ei]
 
-            new_X1 = M[1, 1]*(X1-X01) + M[1, 2]*(X2-X02) + M[1, 3]*(X3-X03) + X01
-            new_X2 = M[2, 1]*(X1-X01) + M[2, 2]*(X2-X02) + M[2, 3]*(X3-X03) + X02
-            new_X3 = M[3, 1]*(X1-X01) + M[3, 2]*(X2-X02) + M[3, 3]*(X3-X03) + X03
+#             new_X1 = M[1, 1]*(X1-X01) + M[1, 2]*(X2-X02) + M[1, 3]*(X3-X03) + X01
+#             new_X2 = M[2, 1]*(X1-X01) + M[2, 2]*(X2-X02) + M[2, 3]*(X3-X03) + X02
+#             new_X3 = M[3, 1]*(X1-X01) + M[3, 2]*(X2-X02) + M[3, 3]*(X3-X03) + X03
 
-            horseshoes[1, ji, ei] = new_X1
-            horseshoes[2, ji, ei] = new_X2
-            horseshoes[3, ji, ei] = new_X3
-        end
+#             horseshoes[1, ji, ei] = new_X1
+#             horseshoes[2, ji, ei] = new_X2
+#             horseshoes[3, ji, ei] = new_X3
+#         end
         
-    end
+#     end
 
-    # Take the average of overlaping joints
-    for ei in 1:nelements-1
-        for i in 1:3
+#     # Take the average of overlaping joints
+#     for ei in 1:nelements-1
+#         for i in 1:3
             
-            new_X = (horseshoes[i, 4, ei] + horseshoes[i, 1, ei+1])/2
+#             new_X = (horseshoes[i, 4, ei] + horseshoes[i, 1, ei+1])/2
 
-            horseshoes[i, 4, ei] = new_X
-            horseshoes[i, 1, ei+1] = new_X
-        end
-    end
+#             horseshoes[i, 4, ei] = new_X
+#             horseshoes[i, 1, ei+1] = new_X
+#         end
+#     end
 
-end
+# end
 
 function calc_midpoints!(self::LiftingLine, args...; optargs...) 
     return calc_midpoints!(self.midpoints, 
@@ -1572,7 +1576,7 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 end
 
 function _generate_stripwise_elements(airfoil_distribution, ypositions; 
-                                        extrapolate=true, plot_polars=true, 
+                                        extrapolatepolar=true, plot_polars=true, 
                                         optargs...)
 
     # Create baseline stripwise elements from polars
@@ -1583,7 +1587,7 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions;
     element_types = Union{element_types...}
 
     # Extrapolate polars to +-180 deg
-    if extrapolate
+    if extrapolatepolar
         airfoils_extrapolated = [(ypos, extrapolate(airfoil)) for (ypos, airfoil) in airfoils]
     else
         airfoils_extrapolated = airfoils

@@ -40,7 +40,7 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
-        jointerize!(self)
+        # jointerize!(self)
         align_joints_with_Uinfs!(self, Uinfs)
     else
         jointerize!(self)
@@ -70,7 +70,6 @@ function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1},
 
     # Set solved AOA
     self.aoas .= result.u
-    # self.aoas .= result.u*1.7
 
     # Calculate Gamma from AOA
     # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
@@ -158,20 +157,20 @@ function calc_residuals!(residuals::AbstractVector,
         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
 
         # Apply the same assumption to calculate the total velocity counter-projected
-        magUxdl /= cosd(phi)
+        magUxdl /= abs(cosd(phi))
 
         # Area of this section
         area = ll.chords[ei] * abs( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei] )
 
         # Calculate Lmabda just like Gamma (using Eq. 41 in Goates 2022 JoA paper)
         Lambda = cd * 0.5*magUΛ^2*area / magUxdl    # Source filament strength
-        sigma = Lambda/(ll.chords[ei]*cosd(sweep))   # Equivalent constant source panel strength
+        sigma = Lambda/abs(ll.chords[ei]*cosd(sweep))   # Equivalent constant source panel strength
 
         for i in 1:3
             # Here we approximate the velocity induced by the dragging line
             # by using an approximation of only the self-induced velocity
-            Us[i, ei] = -0.5 * sigma/2 * ll.swepttangents[i, ei]
-            # Us[i, ei] *= 0
+            Us[i, ei] = -0.5 * sigma^ll.sigmaexponent/2 * ll.swepttangents[i, ei]
+            Us[i, ei] *= ll.sigmafactor
         end
 
         sigmas[ei] = sigma
@@ -201,18 +200,32 @@ function calc_residuals!(residuals::AbstractVector,
         residuals[ei] = aoa_input - aoa_effective
 
 
-        # Martinez' residual
+        # # Martinez' residual
 
         # # Calculate local geometric twist relative to freestream
-        # beta = calc_aoa(ll, Uinfs, ei)
+        # # beta = calc_aoa(ll, Uinfs, ei)
+
+        # # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+        # # magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
+
+        # # residuals[ei] = magU*cosd(phi) - magUinf*sind(phi)
+
+        # # Project the velocity onto the filament direction
+        # UinfsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
+        # UinfΛ1 = Uinfs[1, ei] - UinfsΛ*ll.lines[1, ei]
+        # UinfΛ2 = Uinfs[2, ei] - UinfsΛ*ll.lines[2, ei]
+        # UinfΛ3 = Uinfs[3, ei] - UinfsΛ*ll.lines[3, ei]
+        # magUinfΛ = sqrt(UinfΛ1^2 + UinfΛ2^2 + UinfΛ3^2)
+
+        # # magUΛind = sqrt((Us[1, ei]-UinfΛ1)^2 + (Us[2, ei]-UinfΛ2)^2 + (Us[3, ei]-UinfΛ3)^2)
+        # magUΛind = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
+
+        # beta = calc_sweptaoa(ll, UinfΛ1, UinfΛ2, UinfΛ3, ei)
 
         # # Calculate inflow angle
         # phi = aoas[ei] - beta
 
-        # magU = sqrt(Us[1, ei]^2 + Us[2, ei]^2 + Us[3, ei]^2)
-        # magUinf = sqrt(Uinfs[1, ei]^2 + Uinfs[2, ei]^2 + Uinfs[3, ei]^2)
-
-        # residuals[ei] = magU*cosd(phi) - magUinf*sind(phi)
+        # residuals[ei] = magUΛind*cosd(phi) - magUinfΛ*sind(phi)
 
     end
 
