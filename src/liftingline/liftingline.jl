@@ -1676,7 +1676,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
 
     for (ypos, airfoil) in airfoils
         
-        clr = plt.cm.gnuplot(ypos)
+        clr = plt.cm.gnuplot(0.9*ypos)
         stl = stl_org
         fmt = fmt_org
 
@@ -1689,7 +1689,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
 
     for (ypos, airfoil) in airfoils_extrapolated
         
-        clr = plt.cm.gnuplot(ypos)
+        clr = plt.cm.gnuplot(0.9*ypos)
         stl = stl_extrap
         fmt = fmt_extrap
 
@@ -1728,7 +1728,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
 
     for (ypos, airfoil) in airfoils_blended
         
-        clr = plt.cm.gnuplot(ypos)
+        clr = plt.cm.gnuplot(0.9*ypos)
         stl = stl_blnd
         fmt = fmt_blnd
 

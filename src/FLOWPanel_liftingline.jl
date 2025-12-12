@@ -37,7 +37,6 @@
 
 import CSV
 import DataFrames: DataFrame
-import AirfoilPrep
 
 import LaTeXStrings: @L_str
 

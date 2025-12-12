@@ -268,10 +268,58 @@ function extrapolate(alpha, cl, cd, cm, AR=5.0, nalpha=50, mincd=0.0001)
     # don't allow negative drag
     cdfull = max.(cdfull, mincd)
 
-    # Obtain extrapolated cm from AirfoilPrep
-    ap = AirfoilPrep.prepy.Polar(-1, alpha*180/pi, cl, cd, cm)
-    ap_extrap = ap.extrapolate(cdmax, nalpha=nalpha)
-    cmfull = math.akima(ap_extrap.alpha, ap_extrap.cm, alphafull*180/pi)
+    # --- Begin Julia replacement for AirfoilPrep cm extrapolation ---
+
+    # Build alpha_cm and cm_ext (degrees)
+    cm1_alpha = floor(alpha[1]*180.0/pi / 10.0) * 10.0
+    cm2_alpha = ceil(alpha[end]*180.0/pi  / 10.0) * 10.0
+
+    alpha_num = abs(Int((-180.0 - cm1_alpha) / 10.0 - 1))
+    alpha_cm1 = collect(range(-180.0, stop=cm1_alpha, length=max(alpha_num, 0)))
+    alpha_cm2_len = Int((180.0 - cm2_alpha)/10.0 + 1)
+    alpha_cm2 = collect(range(cm2_alpha, stop=180.0, length=max(alpha_cm2_len, 0)))
+
+    # alpha_cm in degrees, include original alpha converted to degrees
+    alpha_cm = vcat(alpha_cm1, (alpha .* 180.0/pi), alpha_cm2)
+
+    cm1 = zeros(length(alpha_cm1))
+    cm2 = zeros(length(alpha_cm2))
+    cm_ext = vcat(cm1, cm, cm2)
+
+    cl_high = cl[end]
+    cd_high = cd[end]
+    cm_high = cm[end]
+
+    # Only attempt extrapolation if there are any non-zero cm entries
+    if count(x -> x != 0, cm) > 0
+        # compute cmCoef and cm0
+        cmCoef, cm0 = _cm_coeff(alpha .* 180.0/pi, cl, cm, cl_high, cd_high, cm_high)
+
+        # Interpolate cl and cd onto the alpha_cm grid (degrees)
+        cl_cm = math.linear(alpha .* 180.0/pi, cl, alpha_cm)
+        cd_cm = math.linear(alpha .* 180.0/pi, cd, alpha_cm)
+
+        alpha_low_deg = alpha[1] * 180.0/pi
+        alpha_high_deg = alpha[end] * 180.0/pi
+
+        for i in 1:length(alpha_cm)
+            cm_new = _get_cm(i, cmCoef, alpha_cm, cl_cm, cd_cm, alpha_low_deg, alpha_high_deg, cm0)
+            if cm_new === nothing
+                # skip (mirrors Python 'None' handling)
+            else
+                cm_ext[i] = cm_new
+            end
+        end
+    end
+
+    # Interpolate cm_ext onto alphafull (alphafull is radians); convert alphafull to degrees
+    cmfull = nothing
+    try
+        cmfull = math.akima(alpha_cm, cm_ext, alphafull .* 180.0/pi)
+    catch
+        cmfull = zeros(length(clfull))
+    end
+    # --- End Julia replacement ---
 
     return alphafull, clfull, cdfull, cmfull
 end
@@ -304,5 +352,89 @@ function blend(alphas1::AbstractArray,
     new_cms = new_cms1 + weight*(new_cms2 - new_cms1)
 
     return new_alphas, new_cls, new_cds, new_cms
+end
+
+
+
+# Helper: compute cm value for a single alpha index (port of Python __getCM)
+function _get_cm(i::Integer, cmCoef::Number, alpha_cm::AbstractVector,
+                cl_ext::AbstractVector, cd_ext::AbstractVector,
+                alpha_low_deg::Number, alpha_high_deg::Number,
+                cm0::Number)
+
+    a = alpha_cm[i]
+
+    # If inside the original cm-provided range -> nothing to do
+    if a >= alpha_low_deg && a <= alpha_high_deg
+        return nothing
+    end
+
+    # Typical region
+    if a > -165.0 && a < 165.0
+        if abs(a) < 0.01
+            return cm0
+        else
+            if a > 0.0
+                x = cmCoef * tan((a * pi/180.0) - pi/2) + 0.25
+                return cm0 - x * (cl_ext[i] * cos(a * pi/180.0) + cd_ext[i] * sin(a * pi/180.0))
+            else
+                x = cmCoef * tan((-a * pi/180.0) - pi/2) + 0.25
+                return -(cm0 - x * (-cl_ext[i] * cos(-a * pi/180.0) + cd_ext[i] * sin(-a * pi/180.0)))
+            end
+        end
+    else
+        if isapprox(a, 165.0; atol=1e-8)
+            return -0.4
+        elseif isapprox(a, 170.0; atol=1e-8)
+            return -0.5
+        elseif isapprox(a, 175.0; atol=1e-8)
+            return -0.25
+        elseif isapprox(a, 180.0; atol=1e-8)
+            return 0.0
+        elseif isapprox(a, -165.0; atol=1e-8)
+            return 0.35
+        elseif isapprox(a, -170.0; atol=1e-8)
+            return 0.4
+        elseif isapprox(a, -175.0; atol=1e-8)
+            return 0.2
+        elseif isapprox(a, -180.0; atol=1e-8)
+            return 0.0
+        else
+            @warn "Angle encountered for which there is no CM table value (near +/-180 deg): $a"
+            return nothing
+        end
+    end
+end
+
+# Helper: compute cmCoef and cm0 (port of Python __CMCoeff)
+function _cm_coeff(alpha_deg::AbstractVector, cl_vec::AbstractVector, cm_vec::AbstractVector,
+                    cl_high::Number, cd_high::Number, cm_high::Number)
+
+    found_zero_lift = false
+    cm0 = 0.0
+
+    for i in 1:(length(cm_vec)-1)
+        try
+            if abs(alpha_deg[i]) < 20.0 && cl_vec[i] <= 0 && cl_vec[i+1] >= 0
+                p = -cl_vec[i] / (cl_vec[i+1] - cl_vec[i])
+                cm0 = cm_vec[i] + p * (cm_vec[i+1] - cm_vec[i])
+                found_zero_lift = true
+                break
+            end
+        catch
+            # ignore indexing issues (mirrors Python 'try/except')
+        end
+    end
+
+    if !found_zero_lift
+        p = -cl_vec[1] / (cl_vec[2] - cl_vec[1])
+        cm0 = cm_vec[1] + p * (cm_vec[2] - cm_vec[1])
+    end
+
+    alpha_high_rad = alpha_deg[end] * pi / 180.0
+    XM = (-cm_high + cm0) / (cl_high * cos(alpha_high_rad) + cd_high * sin(alpha_high_rad))
+    cmCoef = (XM - 0.25) / tan(alpha_high_rad - pi/2)
+
+    return cmCoef, cm0
 end
 ##### END OF STRIPWISE ELEMENTS ################################################
