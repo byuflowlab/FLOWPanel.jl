@@ -467,3 +467,228 @@ function calcfield_f(ll::LiftingLine{R}, args...; F_fieldname="F", fieldname="f"
     return calcfield_f!(out, ll, Fs, args...; fieldname, optargs...)
 
 end
+
+
+
+
+
+
+
+
+
+################################################################################
+# MOMENT FIELDS
+################################################################################
+"""
+    calcfield_Mtot!(out::AbstractVector, liftingline::LiftingLine,
+                                X0::AbstractVector, midpoints::AbstractMatrix,
+                                Fs::AbstractMatrix,
+                                cmΛs::AbstractVector, chords::AbstractVector;
+                                fieldname="Mtot", addfield=true)
+
+Calculate the integrated moment of this lifting line (which is a 
+three-dimensional vector) with respect to the center `X0`.
+This is calculated from the force and position of each element given in `Fs` at
+`midpoints`, respectively, in addition to the pitching moment of the stripwise
+element, and saved as a field named `fieldname`.
+
+The field is calculated in-place and added to `out`.
+
+NOTE: Make sure that the following has been run on the lifting line solution to
+calculate the effective swept velocity before calling this function:
+
+```julia
+ll.Us .= Uinfs
+Uind!(ll, ll.midpoints, ll.Us)
+calc_UΛs!(ll, ll.Us)
+
+calcfield_Mtot(liftingline, X0, rho)
+```
+
+This is equivalent to computing the velocity on the original horseshoes (not the
+effective ones) which is then converted to effective velocity on the swept 
+sections.
+"""
+function calcfield_Mtot!(out::AbstractVector, ll::LiftingLine,
+                            X0::AbstractVector, midpoints::AbstractMatrix,
+                            Fs::AbstractMatrix, 
+                            cmΛs::AbstractVector, chords::AbstractVector,
+                            rho::Number;
+                            fieldname="Mtot", addfield=true)
+    # Error case
+    @assert length(out)==3 ""*
+        "Invalid `out` vector. Expected length 3; got $(length(out))."
+    @assert length(X0)==3 ""*
+        "Invalid `X0` vector. Expected length 3; got $(length(X0))."
+    @assert size(midpoints, 1)==3 && size(midpoints, 2)==ll.nelements ""*
+        "Invalid `midpoints` matrix."*
+        " Expected size $((3, ll.nelements)); got $(size(midpoints))."
+    @assert size(Fs, 1)==3 && size(Fs, 2)==ll.nelements ""*
+        "Invalid `Fs` matrix."*
+        " Expected size $((3, ll.nelements)); got $(size(Fs))."
+    @assert length(cmΛs)==ll.nelements ""*
+        "Invalid `cmΛs` vector. Expected length $(ll.nelements); got $(length(cmΛs))."
+    @assert length(chords)==ll.nelements ""*
+        "Invalid `chords` vector. Expected length $(ll.nelements); got $(length(chords))."
+
+    # Calculate moment from force component
+    for (X, F) in zip(eachcol(midpoints), eachcol(Fs))
+        out[1] += (X[2] - X0[2])*F[3] - (X[3] - X0[3])*F[2]
+        out[2] += (X[3] - X0[3])*F[1] - (X[1] - X0[1])*F[3]
+        out[3] += (X[1] - X0[1])*F[2] - (X[2] - X0[2])*F[1]
+    end
+
+    # Calculate moment from stripwise pitching moment coefficient
+    for ei in 1:ll.nelements
+
+        sweep = calc_sweep(ll, ei)
+
+        # Velocity
+        U1 = ll.Us[1, ei]
+        U2 = ll.Us[2, ei]
+        U3 = ll.Us[3, ei]
+        magU = sqrt(U1^2 + U2^2 + U3^2)
+
+        # Lifting filament length
+        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+
+        # Span length of this element
+        ds = abs(dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei])
+
+        # Dynamic pressure
+        q = 0.5*rho*magU^2
+
+        # Integrated pitching moment over this span section
+        area = ll.chords[ei] * ds
+        M = cmΛs[ei] * q * ll.chords[ei]*cosd(sweep) * area
+
+        # Add pitching moment as aligned with the lifting line
+        out[1] += M*ll.lines[1, ei]
+        out[2] += M*ll.lines[2, ei]
+        out[3] += M*ll.lines[3, ei]
+    end
+
+
+    # Save field in lifting line
+    if addfield
+        add_field(ll, fieldname, "vector", out, "system")
+    end
+
+    return out
+end
+
+"""
+    calcfield_Mtot!(out, liftingline, X0; F_fieldname="F", cm_fieldname="cm",
+                                                                    optargs...)
+
+Calculate the integrated moment of this body (which is a three-dimensional
+vector) with respect to the center `X0`.
+This is calculated from the force field `F_fieldname` and sectional pitching 
+moment coefficient `cm_fieldname` and saved as a field named `fieldname`.
+
+The field is calculated in-place and added to `out`.
+"""
+function calcfield_Mtot!(out, ll::LiftingLine, X0, rho; 
+                            F_fieldname="F", cm_fieldname="cm", optargs...)
+    # Error case
+    @assert check_field(ll, F_fieldname) ""*
+        "Field $(F_fieldname) not found;"*
+        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+
+    @assert check_field(ll, cm_fieldname) ""*
+        "Field $(cm_fieldname) not found;"*
+        " Please run `calcfield_cm(args...; fieldname=$(cm_fieldname), optargs...)`"
+
+    Fs = hcat(get_field(ll, F_fieldname)["field_data"]...)
+    cmΛs = get_field(ll, cm_fieldname)["field_data"]
+
+    return calcfield_Mtot!(out, ll, X0, ll.midpoints, Fs, cmΛs, ll.chords, rho; optargs...)
+end
+
+
+
+
+"""
+    calcfield_lmn!(out::Matrix, liftingline::LiftingLine,
+                    Mtot:Vector, lhat::Vector, mhat::Vector, nhat::Vector)
+
+Decompose the integrated moment `Mtot` as rolling, pitching, and yawing moments 
+according to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
+
+`out[:, 1]` is the rolling moment vector and is saved as the field "Mroll".
+`out[:, 2]` is the pitching moment vector and is saved as the field "Mpitch".
+`out[:, 3]` is the yawing moment vector and is saved as the field "Myaw".
+
+The field is calculated in-place on `out`.
+"""
+function calcfield_lmn!(out::AbstractMatrix, ll::LiftingLine,
+                        Mtot::AbstractVector,
+                        lhat::AbstractVector, mhat::AbstractVector,
+                        nhat::AbstractVector;
+                        addfield=true)
+    # Error case
+    @assert size(out, 1)==3 && size(out, 2)==3 ""*
+        "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
+    @assert length(Mtot)==3 ""*
+        "Invalid `Mtot` vector. Expected length 3; got $(length(Mtot))."
+    @assert abs(norm(lhat) - 1) <= eps(10.0) ""*
+        "lhat=$(lhat) is not a unitary vector"
+    @assert abs(norm(mhat) - 1) <= eps(10.0) ""*
+        "mhat=$(mhat) is not a unitary vector"
+    @assert abs(norm(nhat) - 1) <= eps(10.0) ""*
+        "nhat=$(nhat) is not a unitary vector"
+
+    # Project Mtot in each direction
+    Ml = dot(Mtot, lhat)
+    Mm = dot(Mtot, mhat)
+    Mn = dot(Mtot, nhat)
+    
+    for i in 1:3
+        out[i, 1] += Ml * lhat[i]
+        out[i, 2] += Mm * mhat[i]
+        out[i, 3] += Mn * nhat[i]
+    end
+
+    # Save field in liftingline
+    if addfield
+        add_field(ll, "Mroll", "vector", view(out, :, 1), "system")
+        add_field(ll, "Mpitch", "vector", view(out, :, 2), "system")
+        add_field(ll, "Myaw", "vector", view(out, :, 3), "system")
+    end
+
+    return out
+end
+
+
+"""
+    calcfield_lmn!(out, liftingline, lhat, mhat, nhat; Mtot_fieldname="Mtot",
+                                                                    optargs...)
+
+Decompose the integrated moment `Mtot` as rolling, pitching, and yawing moments 
+according to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
+This is calculated from the total moment field `Mtot_fieldname`.
+
+The field is calculated in-place on `out`.
+"""
+function calcfield_lmn!(out, ll::LiftingLine, lhat, mhat, nhat; Mtot_fieldname="Mtot",
+                            optargs...)
+    # Error case
+    @assert check_field(ll, Mtot_fieldname) ""*
+        "Field $(Mtot_fieldname) not found;"*
+        " Please run `calcfield_Mtot(args...; fieldname=$(Mtot_fieldname), optargs...)`"
+
+    Mtot = get_field(ll, Mtot_fieldname)["field_data"]
+
+    return calcfield_lmn!(out, ll, Mtot, lhat, mhat, nhat; optargs...)
+end
+
+"""
+    calcfield_lmn!(out, liftingline, lhat, mhat; optargs...)
+
+`nhat` is calculated automatically from `lhat` and `mhat`,
+"""
+function calcfield_lmn!(out, ll::LiftingLine, lhat, mhat; optargs...)
+    return calcfield_lmn!(out, ll, lhat, mhat, cross(lhat, mhat); optargs...)
+end
