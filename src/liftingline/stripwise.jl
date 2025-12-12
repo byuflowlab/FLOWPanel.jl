@@ -133,14 +133,13 @@ returns `airfoil0` and `weight=1` returns `airfoil1`
 """
 function blend(airfoil0::SimpleAirfoil, airfoil1::SimpleAirfoil, weight::Number)
 
-    # Convert StripwiseElements to Polar objects
-    polar0 = AirfoilPrep.prepy.Polar(-1, airfoil0.alpha, airfoil0.cl, airfoil0.cd, airfoil0.cm)
-    polar1 = AirfoilPrep.prepy.Polar(-1, airfoil1.alpha, airfoil1.cl, airfoil1.cd, airfoil1.cm)
+    alphas, cls, cds, cms = blend(airfoil0.alpha, 
+                                        airfoil0.cl, airfoil0.cd, airfoil0.cm, 
+                                        airfoil1.alpha, 
+                                        airfoil1.cl, airfoil1.cd, airfoil1.cm, 
+                                        weight)
 
-    # Blend the two polars
-    polar2 = polar0.blend(polar1, weight)
-
-    return SimpleAirfoil(polar2.alpha, polar2.cl, polar2.cd, polar2.cm)
+    return SimpleAirfoil(alphas, cls, cds, cms)
 end
 
 
@@ -275,5 +274,35 @@ function extrapolate(alpha, cl, cd, cm, AR=5.0, nalpha=50, mincd=0.0001)
     cmfull = math.akima(ap_extrap.alpha, ap_extrap.cm, alphafull*180/pi)
 
     return alphafull, clfull, cdfull, cmfull
+end
+
+function blend(alphas1::AbstractArray, 
+                cls1::AbstractArray, cds1::AbstractArray, cms1::AbstractArray, 
+                alphas2::AbstractArray, 
+                cls2::AbstractArray, cds2::AbstractArray, cms2::AbstractArray, 
+                weight::Number)
+
+    # Determine bounds of minimum set
+    alpha_min = max(minimum(alphas1), minimum(alphas2))
+    alpha_max = min(maximum(alphas1), maximum(alphas2))
+
+    # Reduce alphas to minimum unique set
+    new_alphas = unique!(sort!(vcat([[a for a in alphas if alpha_min <= a && a<=alpha_max] for alphas in (alphas1, alphas2)]...)))
+
+    # Interpolate data to new alphas
+    new_cls1 = math.linear(alphas1, cls1, new_alphas)
+    new_cds1 = math.linear(alphas1, cds1, new_alphas)
+    new_cms1 = math.linear(alphas1, cms1, new_alphas)
+
+    new_cls2 = math.linear(alphas2, cls2, new_alphas)
+    new_cds2 = math.linear(alphas2, cds2, new_alphas)
+    new_cms2 = math.linear(alphas2, cms2, new_alphas)
+
+    # Linearly interpolate data
+    new_cls = new_cls1 + weight*(new_cls2 - new_cls1)
+    new_cds = new_cds1 + weight*(new_cds2 - new_cds1)
+    new_cms = new_cms1 + weight*(new_cms2 - new_cms1)
+
+    return new_alphas, new_cls, new_cds, new_cms
 end
 ##### END OF STRIPWISE ELEMENTS ################################################
