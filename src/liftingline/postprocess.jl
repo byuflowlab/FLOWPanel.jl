@@ -104,7 +104,7 @@ The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_cl!(out::AbstractVector, 
-                        ll::LiftingLine{<:Number, <:SimpleAirfoil};
+                        ll::LiftingLine;
                         addfield=true, fieldname="cl")
 
     # Error cases
@@ -117,7 +117,7 @@ function calcfield_cl!(out::AbstractVector,
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
-        clΛ = calc_sweptcl(element, sweep, aoa)
+        clΛ = calc_sweptcl(element, sweep, aoa, view(ll.elements_settings, ei, :)...)
 
         out[ei] = clΛ
 
@@ -164,7 +164,7 @@ calcfield_cd(ll)
 ```
 """
 function calcfield_cd!(out::AbstractVector, 
-                        ll::LiftingLine{<:Number, <:SimpleAirfoil};
+                        ll::LiftingLine;
                         addfield=true, fieldname="cd")
 
     # Error cases
@@ -174,7 +174,7 @@ function calcfield_cd!(out::AbstractVector,
 
     for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
         
-        out[ei] = calc_cd(element, aoa)
+        out[ei] = calc_cd(element, aoa, view(ll.elements_settings, ei, :)...)
 
         # NOTE: Goates 2022 JoA, Sec. V.E, recommends using the effective swept
         #       AOA, but we are getting too high of a cd. Hence, here we switch
@@ -219,7 +219,7 @@ The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
 function calcfield_cm!(out::AbstractVector, 
-                        ll::LiftingLine{<:Number, <:SimpleAirfoil};
+                        ll::LiftingLine;
                         addfield=true, fieldname="cm")
 
     # Error cases
@@ -232,7 +232,7 @@ function calcfield_cm!(out::AbstractVector,
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cm (C_mc/4Λ in Goates 2022, Eq. (30))
-        cmΛ = calc_sweptcm(element, sweep, aoa)
+        cmΛ = calc_sweptcm(element, sweep, aoa, view(ll.elements_settings, ei, :)...)
 
         out[ei] = cmΛ
 

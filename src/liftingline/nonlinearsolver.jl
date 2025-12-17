@@ -27,7 +27,7 @@ function solve(self::LiftingLine, Uinf::AbstractVector,
     solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
 end
 
-function solve(self::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+function solve(self::LiftingLine, 
                         Uinfs::AbstractMatrix;
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=true,
@@ -97,7 +97,7 @@ end
 Residual = aoa_input - aoa_effective
 """
 function calc_residuals!(residuals::AbstractVector, 
-                            ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+                            ll::LiftingLine, 
                             Uinfs::AbstractMatrix, 
                             aoas::AbstractVector, 
                             Gammas::AbstractVector, sigmas::AbstractVector, 
@@ -115,11 +115,12 @@ function calc_residuals!(residuals::AbstractVector,
     
     # Dragging line component
     for ei in 1:ll.nelements
+    # Threads.@threads for ei in 1:ll.nelements
 
         sweep = calc_sweep(ll, ei)
 
         # Calculate drag coefficient
-        cd = calc_cd(ll.elements[ei], aoas[ei])
+        cd = calc_cd(ll.elements[ei], aoas[ei], view(ll.elements_settings, ei, :)...)
 
         # Project the velocity onto the filament direction
         UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
@@ -301,7 +302,7 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
-        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei])
+        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei], view(ll.elements_settings, ei, :)...)
 
         # Project the velocity onto the filament direction
         UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
@@ -384,7 +385,7 @@ end
 """
 Generate residual wrapper for NonlinerSolver methods
 """
-function generate_f_residual(ll::LiftingLine{<:Number, <:SimpleAirfoil, 1}, 
+function generate_f_residual(ll::LiftingLine, 
                                 Uinfs::AbstractMatrix; cache=Dict(), debug=false)
 
     cache[:fcalls] = 0

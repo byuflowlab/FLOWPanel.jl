@@ -9,7 +9,7 @@
   * License     : MIT License
 =###############################################################################
 
-abstract type StripwiseElement <: AbstractElement end
+abstract type StripwiseElement{N} <: AbstractElement where {N} end
 
 
 ################################################################################
@@ -23,7 +23,7 @@ struct GeneralAirfoil{N,
                         Td<:AbstractArray{<:Number, N}, 
                         Tm<:AbstractArray{<:Number, N},
                         R<:Number
-                        } <: StripwiseElement
+                        } <: StripwiseElement{N}
 
     dims::Tdim                          # Number of grid nodes in each dimension
     parameters::Tp                      # Axes of uniform grid where `parameters[i]` contains the values of the i-th dimension
@@ -442,13 +442,14 @@ end
 ################################################################################
 # SIMPLE AIRFOIL ELEMENT STRUCT
 ################################################################################
-struct SimpleAirfoil{Ta<:AbstractVector,
+struct SimpleAirfoil{N,
+                        Ta<:AbstractVector,
                         Tl<:AbstractArray{<:Number, 1}, 
                         Td<:AbstractArray{<:Number, 1}, 
                         Tm<:AbstractArray{<:Number, 1},
                         R<:Number,
                         Sl<:math.Akima, Sd<:math.Akima, Sm<:math.Akima
-                        } <: StripwiseElement
+                        } <: StripwiseElement{N}
 
     alpha::Ta                           # (deg) angle of attack
 
@@ -477,7 +478,8 @@ struct SimpleAirfoil{Ta<:AbstractVector,
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
         alpha0 = result.u[1]
 
-        new{Ta, Tl, Td, Tm, 
+        new{1, 
+            Ta, Tl, Td, Tm, 
             typeof(alpha0),
             typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)
             }(alpha, cl, cd, cm, alpha0, spl_cl, spl_cd, spl_cm)

@@ -84,6 +84,9 @@ struct LiftingLine{ R<:Number,
     kerneloffset::Float64                       # Kernel offset to avoid singularities
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
 
+    # Stripwise element settings
+    elements_settings::MatrixType               # Additional settings for each element
+
 
     function LiftingLine{R}(
                             airfoil_distribution, 
@@ -139,6 +142,8 @@ struct LiftingLine{ R<:Number,
                                                 element_optargs...)
         nelements = length(elements)
 
+        S = eltype(elements)
+
         # ------------------ PRE-ALLOCATE SOLVER MEMORY ------------------------
         aerocenters = VectorType(undef, nelements)
         strippositions = VectorType(undef, nelements)
@@ -170,6 +175,7 @@ struct LiftingLine{ R<:Number,
         RHS = VectorType(undef, nelements)
         residuals = VectorType(undef, nelements)
         Geff = TensorType(undef, nelements, nelements, 3)
+        elements_settings = MatrixType(undef, nelements, S.parameters[1]-1)
 
         aoas .= 0
         claeros .= 0
@@ -180,6 +186,7 @@ struct LiftingLine{ R<:Number,
         RHS .= 0
         residuals .= 0
         Geff .= 0
+        elements_settings .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
         aerocenters .= aerodynamic_centers
@@ -221,7 +228,6 @@ struct LiftingLine{ R<:Number,
                     nelements;
                     offset=kerneloffset, cutoff=kernelcutoff)
 
-        S = eltype(elements)
         new{R,
             S, _count(S),
             VectorType, MatrixType, TensorType, TensorType2,
@@ -239,7 +245,9 @@ struct LiftingLine{ R<:Number,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, 
                                 residuals, Geff,
-                                kerneloffset, kernelcutoff)
+                                kerneloffset, kernelcutoff,
+                                elements_settings
+                                )
 
     end
 
