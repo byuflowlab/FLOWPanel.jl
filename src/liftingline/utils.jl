@@ -128,9 +128,13 @@ function save(self::LiftingLine, filename::AbstractString;
             # Format the points as a vector of vectors 
             horseshoes = eachcol(horseshoes)
 
-            str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; 
+            this_str = gt.generateVTK(filename*horseshoe_suffix, horseshoes; 
                                         cells=lines, num=ei,
                                         override_cell_type=4, optargs...)
+
+            if ei==1
+                str *= replace(this_str, ".$ei." => ".*.")
+            end
 
             # Output associated midpoint
             midpoints = [self.midpoints[:, ei]]
@@ -169,11 +173,17 @@ function save(self::LiftingLine, filename::AbstractString;
                                             "field_data"  => [self.Us[:, ei]])
                                 ]
 
-            str *= gt.generateVTK(filename*midpoint_suffix, midpoints;
+            this_str = gt.generateVTK(filename*midpoint_suffix, midpoints;
                                         num=ei, 
                                         point_data=midpoints_data, optargs...)
 
+            if ei==1
+                str *= replace(this_str, ".$ei." => ".*.")
+            end
+
         end
+
+
     end
 
     # ------------- OUTPUT MIDPOINTS -------------------------------------------

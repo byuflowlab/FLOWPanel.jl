@@ -22,6 +22,7 @@ struct GeneralAirfoil{N,
                         Tl<:AbstractArray{<:Number, N}, 
                         Td<:AbstractArray{<:Number, N}, 
                         Tm<:AbstractArray{<:Number, N},
+                        R<:Number
                         } <: StripwiseElement
 
     dims::Tdim                          # Number of grid nodes in each dimension
@@ -34,21 +35,26 @@ struct GeneralAirfoil{N,
 
     interp1d::Function                  # Base 1D interpolator function
 
+    alpha0::R                           # (deg) characteristic AOA at zero lift for sweep effects
+
     function GeneralAirfoil(parameters::NTuple{N, <:AbstractVector},
                             names::NTuple{N, <:AbstractString},
                             cl::AbstractArray{<:Number, N}, 
                             cd::AbstractArray{<:Number, N}, 
                             cm::AbstractArray{<:Number, N};
-                            interp1d=math.akima) where {N}
+                            interp1d::Function=math.akima, 
+                            alpha0::R=0.0
+                            ) where {N, R}
 
         dims = Tuple(length(values) for values in parameters)
                             
         return new{N, 
                     typeof(dims), typeof(parameters), typeof(names), 
-                    typeof(cl), typeof(cd), typeof(cm)}(
+                    typeof(cl), typeof(cd), typeof(cm), R}(
                         dims, parameters, names,
                         cl, cd, cm, 
-                        interp1d
+                        interp1d,
+                        alpha0
                     )
 
     end
@@ -72,7 +78,7 @@ function GeneralAirfoil(sweep_name::String; path::String="",
                             cd_name = "cd",
                             cm_name = "cm",
                             file_extension = ".csv",
-                            verbose=true, tab_lvl=0, optargs...)
+                            verbose=false, tab_lvl=0, optargs...)
 
     sweep_path = joinpath(path, sweep_name)                 # Where to read sweep from
     data_names = (cl_name, cd_name, cm_name)                # Names of data columns
@@ -114,18 +120,20 @@ function GeneralAirfoil(sweep_name::String; path::String="",
     # Discard any single-valued parameters
     to_discard = [i for (i, (name, vals)) in enumerate(zip(parameter_names, parameters)) if length(vals) <= 1]
 
-    if verbose
+    if length(to_discard) != 0
 
-        println("\t"^tab_lvl * "Discarding the following parameters due to"*
-                " being single-valued: " * join((parameter_names[i] for i in to_discard), ", "))
+        if verbose
+            println("\t"^tab_lvl * "Discarding the following parameters due to"*
+                    " being single-valued: " * join((parameter_names[i] for i in to_discard), ", "))
+        end
 
-    end
+        reverse!(to_discard)
 
-    reverse!(to_discard)
+        for i in to_discard
+            deleteat!(parameter_names, i)
+            parameters = tuple(deleteat!(collect(parameters), i)...)
+        end
 
-    for i in to_discard
-        deleteat!(parameter_names, i)
-        parameters = tuple(deleteat!(collect(parameters), i)...)
     end
 
     # Format list of parameters into a matrix
@@ -160,6 +168,21 @@ function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
         println(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
     end
 
+end
+
+function Base.:(==)(x::GeneralAirfoil{N}, y::GeneralAirfoil{M}) where {N, M}
+
+    equal = N == M
+
+    equal *= prod( x.dims .== y.dims)
+    equal *= prod(prod(xvalues .== yvalues) for (xvalues, yvalues) in zip(x.parameters, y.parameters))
+    equal *= prod( x.names .== y.names)
+
+    equal *= prod( x.cl .== y.cl)
+    equal *= prod( x.cd .== y.cd)
+    equal *= prod( x.cm .== y.cm)
+
+    return equal
 end
 
 
@@ -306,6 +329,11 @@ Blend two stripwise elements using a given weight, where `weight=0` simply
 returns `airfoil0` and `weight=1` returns `airfoil1`
 """
 function blend(airfoil1::GeneralAirfoil, airfoil2::GeneralAirfoil, weight::Number)
+
+    # Case that we are blending the same airfoil: return one of the two
+    if airfoil1 == airfoil2
+        return airfoil1
+    end
 
     # Blend the parameters
     parameters = blend(airfoil1.parameters, airfoil2.parameters)
@@ -466,6 +494,13 @@ function SimpleAirfoil(file_name::String; path::String="")
     cm = data[:, 4]
 
     return SimpleAirfoil(alpha, cl, cd, cm)
+end
+
+
+function Base.show(io::IO, self::SimpleAirfoil)
+
+    println(io, "SimpleAirfoil with $(length(self.alpha)) data points")
+
 end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))

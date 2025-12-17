@@ -1582,22 +1582,19 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions;
     # Create baseline stripwise elements from polars
     airfoils = _read_polars(airfoil_distribution; optargs...)
 
+    for airfoil in airfoils
+        display(airfoil)
+    end
+
     # Identify StripwiseElement types
     element_types = unique([typeof(airfoil) for (ypos, airfoil) in airfoils])
     element_types = Union{element_types...}
-
-    # Extrapolate polars to +-180 deg
-    if extrapolatepolar
-        airfoils_extrapolated = [(ypos, extrapolate(airfoil)) for (ypos, airfoil) in airfoils]
-    else
-        airfoils_extrapolated = airfoils
-    end
+    elements = element_types[]
 
     # Blend the elements along the span
     lo_i = 1                                        # Index of lower-bound element
-    airfoils_to_blend = airfoils_extrapolated
+    airfoils_to_blend = airfoils
     airfoils_blended = []
-    elements = element_types[]
 
     for ypos in ypositions
 
@@ -1636,15 +1633,27 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions;
         # Blend elements
         blended_airfoil = blend(airfoil_lo, airfoil_up, weight)
 
-        push!(elements, blended_airfoil)
-        plot_polars && push!(airfoils_blended, (ypos, blended_airfoil))
+        push!(airfoils_blended, (ypos, blended_airfoil))
         
+    end
+
+    # Extrapolate polars to +-180 deg
+    if extrapolatepolar
+        airfoils_extrapolated = [(ypos, extrapolate(airfoil)) for (ypos, airfoil) in airfoils_blended]
+    else
+        airfoils_extrapolated = airfoils_blended
     end
 
     # Plot polars for verification
     if plot_polars
         _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
     end
+
+    for (ypos, airfoil) in airfoils_extrapolated
+        push!(elements, airfoil)
+    end
+    
+    display(elements[1])
 
     return elements
 
