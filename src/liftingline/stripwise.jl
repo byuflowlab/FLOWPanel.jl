@@ -141,17 +141,6 @@ function GeneralAirfoil(sweep_name::String; path::String="",
     cd = [df[broadcast(&, [getproperty(df, Symbol(name)) .== val for (name, val) in zip(parameter_names, entry)]...), cd_name][1] for entry in parameters_matrix]
     cm = [df[broadcast(&, [getproperty(df, Symbol(name)) .== val for (name, val) in zip(parameter_names, entry)]...), cm_name][1] for entry in parameters_matrix]
 
-    # Format data as a uniform grid
-    
-    # cl = [df[I, cl_name] for I in LinearIndices(dims)]
-    # cl = reshape(cl, dims)
-
-    # cd = [df[I, cd_name] for I in LinearIndices(dims)]
-    # cd = reshape(cd, dims)
-
-    # cm = [df[I, cm_name] for I in LinearIndices(dims)]
-    # cm = reshape(cm, dims)
-
 
     return GeneralAirfoil(parameters, tuple(parameter_names...), cl, cd, cm; optargs...)
 end
@@ -160,7 +149,7 @@ end
 
 function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
 
-    println(io, "GeneralAirfoil with $(N) dimensional parameters")
+    println(io, "GeneralAirfoil with $(N) parameter dimensions and $(prod(self.dims)) data points")
 
     for (i, (name, vals, dim)) in enumerate(zip(self.names, self.parameters, self.dims))
         if i != N
@@ -316,88 +305,63 @@ end
 Blend two stripwise elements using a given weight, where `weight=0` simply
 returns `airfoil0` and `weight=1` returns `airfoil1`
 """
-function blend(airfoil0::GeneralAirfoil, airfoil1::GeneralAirfoil, weight::Number)
+function blend(airfoil1::GeneralAirfoil, airfoil2::GeneralAirfoil, weight::Number)
 
-    alphas, cls, cds, cms = blend(airfoil0.parameters[1], 
-                                        airfoil0.cl, airfoil0.cd, airfoil0.cm, 
-                                        airfoil1.parameters[1], 
-                                        airfoil1.cl, airfoil1.cd, airfoil1.cm, 
-                                        weight)
+    # Blend the parameters
+    parameters = blend(airfoil1.parameters, airfoil2.parameters)
 
-    return SimpleAirfoil(alphas, cls, cds, cms)
-end
+    # Format list of parameters into a matrix
+    dims = Tuple(length(values) for values in parameters)
+    parameters_matrix = Array{NTuple{length(dims), Float64}, length(dims)}(undef, dims...)
 
-function blend_ndim(parameters1::NTuple{N, <:AbstractVector}, 
-                            cl1::AbstractArray{R1, N},
-                            cd1::AbstractArray{R2, N},
-                            cm1::AbstractArray{R3, N},
-                    parameters2::NTuple{N, <:AbstractVector}, 
-                            cl2::AbstractArray{R4, N},
-                            cd2::AbstractArray{R5, N},
-                            cm2::AbstractArray{R6, N},
-                            args...; optargs...) where {N, R1, R2, R3, R4, R5, R6}
-
-    
-    R = promote_type(R1, R2, R3, R4, R5, R6)
-
-    # Base case
-    if N == 1
-
-        alpha, cl, cd, cm = blend(parameters1[1], cl1, cd1, cm1, 
-                                    parameters2[1], cl2, cd2, cm2, 
-                                    args...; optargs...)
-
-        return (alpha, ), cl, cd, cm
-
-    # Recursively blend cl, cd, and cm curves along inner dimensions
-    else
-
-        dims = Tuple(length(values) for values in parameters)
-
-        # Slice the parameters along the outer inner dimension (d==2)
-        sliced_parameters = parameters[[i for i in eachindex(parameters) if i != 2]]
-
-        # Iterate over the values of the outer inner dimension blending it
-        new_alphas = nothing
-        new_cl, new_cd, new_cm = nothing, nothing, nothing
-
-        for (i, val) in enumerate(parameters[2])
-
-            # blend this slice
-            (this_parameters,
-                    this_cl, this_cd, this_cm) = extrapolate_ndim(
-                                                            sliced_parameters, 
-                                                            selectdim(cl, 2, i), 
-                                                            selectdim(cd, 2, i), 
-                                                            selectdim(cm, 2, i), 
-                                                            args...; optargs...)
-
-            # Initialize storage memory
-            if i==1
-                new_alphas = this_parameters[1]
-                new_cl = zeros(R, length(new_alphas), dims[2:end]...)
-                new_cd = zeros(R, length(new_alphas), dims[2:end]...)
-                new_cm = zeros(R, length(new_alphas), dims[2:end]...)
-            end
-
-            # Store extrapolation at this slice
-            selectdim(new_cl, 2, i) .= this_cl
-            selectdim(new_cd, 2, i) .= this_cd
-            selectdim(new_cm, 2, i) .= this_cm
-
-        end
-
-        new_parameters = (new_alphas, parameters[2:end]...)
-
-        return new_parameters, new_cl, new_cd, new_cm
-
+    for I in CartesianIndices(dims)
+        parameters_matrix[I] = Tuple(parameters[di][i] for (di, i) in enumerate(Tuple(I)))
     end
 
+    # Interpolate the data from both airfoils unto the new parameters
+    cl1 = [calc_cl(airfoil1, entry...) for entry in parameters_matrix]
+    cd1 = [calc_cd(airfoil1, entry...) for entry in parameters_matrix]
+    cm1 = [calc_cm(airfoil1, entry...) for entry in parameters_matrix]
+
+    cl2 = [calc_cl(airfoil2, entry...) for entry in parameters_matrix]
+    cd2 = [calc_cd(airfoil2, entry...) for entry in parameters_matrix]
+    cm2 = [calc_cm(airfoil2, entry...) for entry in parameters_matrix]
+
+    # Linearly blend the datasets
+    cl = cl1 + weight*(cl2 - cl1)
+    cd = cd1 + weight*(cd2 - cd1)
+    cm = cm1 + weight*(cm2 - cm1)
+    
+
+    return GeneralAirfoil(parameters, airfoil1.names, cl, cd, cm; 
+                                    interp1d=airfoil1.interp1d)
 end
+
+function blend(parameters1::NTuple{N, <:AbstractVector}, 
+                parameters2::NTuple{N, <:AbstractVector}) where N
+
+    new_parameters = []
+
+    for (values1, values2) in zip(parameters1, parameters2)
+
+        # Determine bounds of minimum set
+        value_min = max(minimum(values1), minimum(values2))
+        value_max = min(maximum(values1), maximum(values2))
+
+        # Reduce values to minimum unique set
+        new_values = unique!(sort!(vcat([[a for a in values if value_min <= a && a<=value_max] for values in (values1, values2)]...)))
+
+        push!(new_parameters, new_values)
+    end
+
+    return tuple(new_parameters...)
+    
+end
+
 
 
 function plot_slice(self::GeneralAirfoil{N}, slice; 
-                        alphas = range(-180, 180, step=1)
+                        alphas = range(self.parameters[1][1], self.parameters[1][end], step=1)
                         ) where N
 
     @assert length(slice) == N-1 ""*
