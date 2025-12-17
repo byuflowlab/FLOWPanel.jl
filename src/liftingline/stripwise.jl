@@ -11,53 +11,446 @@
 
 abstract type StripwiseElement <: AbstractElement end
 
-################################################################################
-# JETFOIL ELEMENT STRUCT
-################################################################################
-struct Jetfoil{TA<:AbstractVector, TDu<:AbstractVector, TDl<:AbstractVector, 
-                TR<:AbstractVector, TM<:AbstractVector, TT<:AbstractVector, 
-                Tl<:AbstractArray{<:Number, 6}, 
-                Td<:AbstractArray{<:Number, 6}, 
-                Tm<:AbstractArray{<:Number, 6}} <: StripwiseElement
-
-    alpha::TA                           # (deg) angle of attack
-    deltau::TDu                         # (deg) upper flap deflection
-    deltal::TDl                         # (deg) lower flap deflection
-
-    Re::TR                              # Reynolds number
-    Mach::TM                            # Mach number
-    CT::TT                              # Thrust coefficient
-
-    cl::Tl                              # Lift coefficient
-    cd::Td                              # Drag coefficient
-    cm::Tm                              # Pitching moment coefficient
-
-end
-
 
 ################################################################################
 # AIRFOIL ELEMENT STRUCT
 ################################################################################
-struct Airfoil{TA<:AbstractVector, TR<:AbstractVector, TM<:AbstractVector,
-                    Tl<:AbstractArray{<:Number, 3}, 
-                    Td<:AbstractArray{<:Number, 3}, 
-                    Tm<:AbstractArray{<:Number, 3}} <: StripwiseElement
+struct GeneralAirfoil{N,
+                        Tdim<:NTuple{N, Int},
+                        Tp<:NTuple{N, <:AbstractVector},
+                        Tn<:NTuple{N, <:AbstractString},
+                        Tl<:AbstractArray{<:Number, N}, 
+                        Td<:AbstractArray{<:Number, N}, 
+                        Tm<:AbstractArray{<:Number, N},
+                        } <: StripwiseElement
 
-    alpha::TA                           # (deg) angle of attack
+    dims::Tdim                          # Number of grid nodes in each dimension
+    parameters::Tp                      # Axes of uniform grid where `parameters[i]` contains the values of the i-th dimension
+    names::Tn                           # Name of each parameter dimension
 
-    Re::TR                              # Reynolds number
-    Mach::TM                            # Mach number
+    cl::Tl                              # Lift coefficient grid data
+    cd::Td                              # Drag coefficient grid data
+    cm::Tm                              # Pitching moment coefficient grid data
 
-    cl::Tl                              # Lift coefficient
-    cd::Td                              # Drag coefficient
-    cm::Tm                              # Pitching moment coefficient
+    interp1d::Function                  # Base 1D interpolator function
 
+    function GeneralAirfoil(parameters::NTuple{N, <:AbstractVector},
+                            names::NTuple{N, <:AbstractString},
+                            cl::AbstractArray{<:Number, N}, 
+                            cd::AbstractArray{<:Number, N}, 
+                            cm::AbstractArray{<:Number, N};
+                            interp1d=math.akima) where {N}
+
+        dims = Tuple(length(values) for values in parameters)
+                            
+        return new{N, 
+                    typeof(dims), typeof(parameters), typeof(names), 
+                    typeof(cl), typeof(cd), typeof(cm)}(
+                        dims, parameters, names,
+                        cl, cd, cm, 
+                        interp1d
+                    )
+
+    end
+
+end
+
+"""
+
+## Arguments
+* `sweep_name`          :   Sweep name (folder to read CSV files from)
+* `path`                :   Where to read sweep from (rest of path to sweep)
+* `cl_name`             :   Name of cl column
+* `cd_name`             :   Name of cd column
+* `cm_name`             :   Name of cm column
+
+NOTE: Here we assume that the first column in each CSV file corresponds to the 
+angle of attack (deg).
+"""
+function GeneralAirfoil(sweep_name::String; path::String="",
+                            cl_name = "cl",
+                            cd_name = "cd",
+                            cm_name = "cm",
+                            file_extension = ".csv",
+                            verbose=true, tab_lvl=0, optargs...)
+
+    sweep_path = joinpath(path, sweep_name)                 # Where to read sweep from
+    data_names = (cl_name, cd_name, cm_name)                # Names of data columns
+    ndata = length(data_names)                              # Number of data columns
+
+    # Read sweep
+    files = [f for f in readdir(sweep_path) if splitext(f)[end]==file_extension]
+
+    df = DataFrame()
+    for f in files
+        data = CSV.read(joinpath(sweep_path, f), DataFrame)
+
+        append!(df, data)
+    end
+
+    # Determine parameters                                  # Names of parameter columns
+    parameter_names = [n for n in names(df) if !(n in data_names)]
+    nparameters = length(parameter_names)                   # Number of parameters
+
+    # Fetch table of parameter values
+    df_parameters = df[!, parameter_names]
+
+    # Reduce parameters to ranges of full coverage across the dataset
+    # NOTE: this is needed to ensure the data is on a uniform grid
+    parameters = reduce_parameters(df_parameters)
+
+    # Display parameter ranges for user to verify
+    if verbose
+
+        println("\t"^tab_lvl * "Read sweep under $(sweep_path) and found "*
+                "the following parameter ranges of full coverage")
+
+        for (name, vals) in zip(parameter_names, parameters)
+            println("\t"^(tab_lvl+1) * "$(name): $(vals)")
+        end
+
+    end
+
+    # Discard any single-valued parameters
+    to_discard = [i for (i, (name, vals)) in enumerate(zip(parameter_names, parameters)) if length(vals) <= 1]
+
+    if verbose
+
+        println("\t"^tab_lvl * "Discarding the following parameters due to"*
+                " being single-valued: " * join((parameter_names[i] for i in to_discard), ", "))
+
+    end
+
+    reverse!(to_discard)
+
+    for i in to_discard
+        deleteat!(parameter_names, i)
+        parameters = tuple(deleteat!(collect(parameters), i)...)
+    end
+
+    # Format list of parameters into a matrix
+    dims = Tuple(length(values) for values in parameters)
+    parameters_matrix = Array{NTuple{length(dims), Float64}, length(dims)}(undef, dims...)
+
+    for I in CartesianIndices(dims)
+        parameters_matrix[I] = Tuple(parameters[di][i] for (di, i) in enumerate(Tuple(I)))
+    end
+
+    # Fetch data as a uniform grid
+    cl = [df[broadcast(&, [getproperty(df, Symbol(name)) .== val for (name, val) in zip(parameter_names, entry)]...), cl_name][1] for entry in parameters_matrix]
+    cd = [df[broadcast(&, [getproperty(df, Symbol(name)) .== val for (name, val) in zip(parameter_names, entry)]...), cd_name][1] for entry in parameters_matrix]
+    cm = [df[broadcast(&, [getproperty(df, Symbol(name)) .== val for (name, val) in zip(parameter_names, entry)]...), cm_name][1] for entry in parameters_matrix]
+
+    # Format data as a uniform grid
+    
+    # cl = [df[I, cl_name] for I in LinearIndices(dims)]
+    # cl = reshape(cl, dims)
+
+    # cd = [df[I, cd_name] for I in LinearIndices(dims)]
+    # cd = reshape(cd, dims)
+
+    # cm = [df[I, cm_name] for I in LinearIndices(dims)]
+    # cm = reshape(cm, dims)
+
+
+    return GeneralAirfoil(parameters, tuple(parameter_names...), cl, cd, cm; optargs...)
+end
+
+
+
+function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
+
+    println(io, "GeneralAirfoil with $(N) dimensional parameters")
+
+    for (i, (name, vals, dim)) in enumerate(zip(self.names, self.parameters, self.dims))
+        if i != N
+            print(io, "├─")
+        else
+            print(io, "└─")
+        end
+        println(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
+    end
+
+end
+
+
+(self::GeneralAirfoil)(args...; optargs...) = (
+    calc_cl(self, args...; optargs...), 
+    calc_cd(self, args...; optargs...), 
+    calc_cm(self, args...; optargs...)
+)
+
+calc_claero(self::GeneralAirfoil, args...; optargs...) = calc_cl(self, args...; optargs...)
+
+function calc_cl(self::GeneralAirfoil{1}, args...; optargs...)
+    self.interp1d(self.parameters..., self.cl, args...; optargs...)
+end
+function calc_cd(self::GeneralAirfoil{1}, args...; optargs...)
+    self.interp1d(self.parameters..., self.cd, args...; optargs...)
+end
+function calc_cm(self::GeneralAirfoil{1}, args...; optargs...)
+    self.interp1d(self.parameters..., self.cm, args...; optargs...)
+end
+
+function calc_cl(self::GeneralAirfoil{2}, args...; optargs...)
+    math.interp2d(self.interp1d, self.parameters..., self.cl, args...; optargs...)[1]
+end
+function calc_cd(self::GeneralAirfoil{2}, args...; optargs...)
+    math.interp2d(self.interp1d, self.parameters..., self.cd, args...; optargs...)[1]
+end
+function calc_cm(self::GeneralAirfoil{2}, args...; optargs...)
+    math.interp2d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
+end
+
+function calc_cl(self::GeneralAirfoil{3}, args...; optargs...)
+    math.interp3d(self.interp1d, self.parameters..., self.cl, args...; optargs...)[1]
+end
+function calc_cd(self::GeneralAirfoil{3}, args...; optargs...)
+    math.interp3d(self.interp1d, self.parameters..., self.cd, args...; optargs...)[1]
+end
+function calc_cm(self::GeneralAirfoil{3}, args...; optargs...)
+    math.interp3d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
+end
+
+function calc_cl(self::GeneralAirfoil{4}, args...; optargs...)
+    math.interp4d(self.interp1d, self.parameters..., self.cl, args...; optargs...)[1]
+end
+function calc_cd(self::GeneralAirfoil{4}, args...; optargs...)
+    math.interp4d(self.interp1d, self.parameters..., self.cd, args...; optargs...)[1]
+end
+function calc_cm(self::GeneralAirfoil{4}, args...; optargs...)
+    math.interp4d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
+end
+
+function calc_cl(self::GeneralAirfoil{5}, args...; optargs...)
+    interp5d(self.interp1d, self.parameters..., self.cl, args...; optargs...)[1]
+end
+function calc_cd(self::GeneralAirfoil{5}, args...; optargs...)
+    interp5d(self.interp1d, self.parameters..., self.cd, args...; optargs...)[1]
+end
+function calc_cm(self::GeneralAirfoil{5}, args...; optargs...)
+    interp4d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
+end
+
+function extrapolate(self::GeneralAirfoil, args...; optargs...)
+
+    new_parameters, new_cl, new_cd, new_cm = extrapolate_ndim(self.parameters,
+                                                                self.cl,
+                                                                self.cd,
+                                                                self.cm,
+                                                                args...; 
+                                                                optargs...)
+    return GeneralAirfoil(new_parameters, self.names,
+                            new_cl, new_cd, new_cm;
+                            interp1d=self.interp1d)
+end
+
+"""
+Apply Viterna extrapolation to N-dimensional lookup tables
+"""
+function extrapolate_ndim(parameters::NTuple{N, <:AbstractVector}, 
+                            cl::AbstractArray{R1, N},
+                            cd::AbstractArray{R2, N},
+                            cm::AbstractArray{R3, N}, 
+                            args...; 
+                            optargs...) where {N, R1, R2, R3}
+
+    R = promote_type(R1, R2, R3)
+
+    # Base case
+    if N == 1
+
+        alpha, cl, cd, cm = extrapolate(parameters[1]*pi/180, cl, cd, cm, args...; optargs...)
+
+        alpha *= 180/pi
+
+        return (alpha, ), cl, cd, cm
+
+    # Recursively extrapolate cl, cd, and cm curves along inner dimensions
+    else
+
+        dims = Tuple(length(values) for values in parameters)
+
+        # Slice the parameters along the outer inner dimension (d==2)
+        sliced_parameters = parameters[[i for i in eachindex(parameters) if i != 2]]
+
+        # Iterate over the values of the outer inner dimension extrapolating
+        new_alphas = nothing
+        new_cl, new_cd, new_cm = nothing, nothing, nothing
+
+        for (i, val) in enumerate(parameters[2])
+
+            # Extrapolate this slice
+            (this_parameters,
+                    this_cl, this_cd, this_cm) = extrapolate_ndim(
+                                                            sliced_parameters, 
+                                                            selectdim(cl, 2, i), 
+                                                            selectdim(cd, 2, i), 
+                                                            selectdim(cm, 2, i), 
+                                                            args...; optargs...)
+
+            # Initialize storage memory
+            if i==1
+                new_alphas = this_parameters[1]
+                new_cl = zeros(R, length(new_alphas), dims[2:end]...)
+                new_cd = zeros(R, length(new_alphas), dims[2:end]...)
+                new_cm = zeros(R, length(new_alphas), dims[2:end]...)
+            end
+
+            # Store extrapolation at this slice
+            selectdim(new_cl, 2, i) .= this_cl
+            selectdim(new_cd, 2, i) .= this_cd
+            selectdim(new_cm, 2, i) .= this_cm
+
+        end
+
+        new_parameters = (new_alphas, parameters[2:end]...)
+
+        return new_parameters, new_cl, new_cd, new_cm
+
+    end
+
+end
+
+"""
+Blend two stripwise elements using a given weight, where `weight=0` simply
+returns `airfoil0` and `weight=1` returns `airfoil1`
+"""
+function blend(airfoil0::GeneralAirfoil, airfoil1::GeneralAirfoil, weight::Number)
+
+    alphas, cls, cds, cms = blend(airfoil0.parameters[1], 
+                                        airfoil0.cl, airfoil0.cd, airfoil0.cm, 
+                                        airfoil1.parameters[1], 
+                                        airfoil1.cl, airfoil1.cd, airfoil1.cm, 
+                                        weight)
+
+    return SimpleAirfoil(alphas, cls, cds, cms)
+end
+
+function blend_ndim(parameters1::NTuple{N, <:AbstractVector}, 
+                            cl1::AbstractArray{R1, N},
+                            cd1::AbstractArray{R2, N},
+                            cm1::AbstractArray{R3, N},
+                    parameters2::NTuple{N, <:AbstractVector}, 
+                            cl2::AbstractArray{R4, N},
+                            cd2::AbstractArray{R5, N},
+                            cm2::AbstractArray{R6, N},
+                            args...; optargs...) where {N, R1, R2, R3, R4, R5, R6}
+
+    
+    R = promote_type(R1, R2, R3, R4, R5, R6)
+
+    # Base case
+    if N == 1
+
+        alpha, cl, cd, cm = blend(parameters1[1], cl1, cd1, cm1, 
+                                    parameters2[1], cl2, cd2, cm2, 
+                                    args...; optargs...)
+
+        return (alpha, ), cl, cd, cm
+
+    # Recursively blend cl, cd, and cm curves along inner dimensions
+    else
+
+        dims = Tuple(length(values) for values in parameters)
+
+        # Slice the parameters along the outer inner dimension (d==2)
+        sliced_parameters = parameters[[i for i in eachindex(parameters) if i != 2]]
+
+        # Iterate over the values of the outer inner dimension blending it
+        new_alphas = nothing
+        new_cl, new_cd, new_cm = nothing, nothing, nothing
+
+        for (i, val) in enumerate(parameters[2])
+
+            # blend this slice
+            (this_parameters,
+                    this_cl, this_cd, this_cm) = extrapolate_ndim(
+                                                            sliced_parameters, 
+                                                            selectdim(cl, 2, i), 
+                                                            selectdim(cd, 2, i), 
+                                                            selectdim(cm, 2, i), 
+                                                            args...; optargs...)
+
+            # Initialize storage memory
+            if i==1
+                new_alphas = this_parameters[1]
+                new_cl = zeros(R, length(new_alphas), dims[2:end]...)
+                new_cd = zeros(R, length(new_alphas), dims[2:end]...)
+                new_cm = zeros(R, length(new_alphas), dims[2:end]...)
+            end
+
+            # Store extrapolation at this slice
+            selectdim(new_cl, 2, i) .= this_cl
+            selectdim(new_cd, 2, i) .= this_cd
+            selectdim(new_cm, 2, i) .= this_cm
+
+        end
+
+        new_parameters = (new_alphas, parameters[2:end]...)
+
+        return new_parameters, new_cl, new_cd, new_cm
+
+    end
+
+end
+
+
+function plot_slice(self::GeneralAirfoil{N}, slice; 
+                        alphas = range(-180, 180, step=1)
+                        ) where N
+
+    @assert length(slice) == N-1 ""*
+        "Invalid slice dimensions; expected $(N-1) dimension, got $(length(slice))"
+
+    for (si, i) in enumerate(slice)
+        @assert 0 < i <= self.dims[si+1] ""*
+            "Slice $(slice) out of bounds $(self.dims[2:end])"
+    end
+
+    fig = plt.figure(figsize = [7, 0.75*5*3]*7/9)
+    axs = fig.subplots(3, 1)
+
+    fig.suptitle("Data slice at " * 
+                join(("$(name) = $(self.parameters[ni][slice[ni-1]])" for (ni, name) in enumerate(self.names) if ni != 1), ", "))
+
+    slice_parameters = (self.parameters[si+1][i] for (si, i) in enumerate(slice))
+
+    ax = axs[1]
+    ax.plot(self.parameters[1], self.cl[:, slice...], "ok", label="Data")
+    ax.plot(alphas, [calc_cl(self, a, slice_parameters...) for a in alphas], "-", label="N-dimensional spline")
+
+    ax.set_ylabel(L"c_\ell")
+
+    ax = axs[2]
+    ax.plot(self.parameters[1], self.cd[:, slice...], "ok", label="Data")
+    ax.plot(alphas, [calc_cd(self, a, slice_parameters...) for a in alphas], "-", label="N-dimensional spline")
+
+    ax.set_ylabel(L"c_d")
+
+    ax = axs[3]
+    ax.plot(self.parameters[1], self.cm[:, slice...], "ok", label="Data")
+    ax.plot(alphas, [calc_cm(self, a, slice_parameters...) for a in alphas], "-", label="N-dimensional spline")
+
+    ax.set_ylabel(L"c_m")
+
+
+    for ax in axs
+        ax.set_xlabel(self.names[1])
+        ax.spines["top"].set_visible(false)
+        ax.spines["right"].set_visible(false)
+        ax.legend(loc="best", frameon=false, fontsize=8)
+    end
+        
+    fig.tight_layout()
+
+    return fig, axs
 end
 
 ################################################################################
 # SIMPLE AIRFOIL ELEMENT STRUCT
 ################################################################################
-struct SimpleAirfoil{TA<:AbstractVector,
+struct SimpleAirfoil{Ta<:AbstractVector,
                         Tl<:AbstractArray{<:Number, 1}, 
                         Td<:AbstractArray{<:Number, 1}, 
                         Tm<:AbstractArray{<:Number, 1},
@@ -65,7 +458,7 @@ struct SimpleAirfoil{TA<:AbstractVector,
                         Sl<:math.Akima, Sd<:math.Akima, Sm<:math.Akima
                         } <: StripwiseElement
 
-    alpha::TA                           # (deg) angle of attack
+    alpha::Ta                           # (deg) angle of attack
 
     cl::Tl                              # Lift coefficient
     cd::Td                              # Drag coefficient
@@ -78,7 +471,7 @@ struct SimpleAirfoil{TA<:AbstractVector,
     spl_cd::Sd
     spl_cm::Sm
 
-    function SimpleAirfoil(alpha::TA, cl::Tl, cd::Td, cm::Tm) where {TA, Tl, Td, Tm}
+    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm) where {Ta, Tl, Td, Tm}
 
         # Spline data
         spl_cl = math.Akima(alpha, cl)
@@ -92,7 +485,7 @@ struct SimpleAirfoil{TA<:AbstractVector,
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
         alpha0 = result.u[1]
 
-        new{TA, Tl, Td, Tm, 
+        new{Ta, Tl, Td, Tm, 
             typeof(alpha0),
             typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)
             }(alpha, cl, cd, cm, alpha0, spl_cl, spl_cd, spl_cm)
@@ -436,5 +829,40 @@ function _cm_coeff(alpha_deg::AbstractVector, cl_vec::AbstractVector, cm_vec::Ab
     cmCoef = (XM - 0.25) / tan(alpha_high_rad - pi/2)
 
     return cmCoef, cm0
+end
+
+
+"""
+Determine the minimum sets of overlapping parameters (meaning, it gets
+rid of any parameter entries that are not available across the datapoints).
+This reduces the parameter values to have full coverage over the dataset.
+"""
+function reduce_parameters(df)
+
+    # Base case
+    if size(df, 2) == 1
+
+        return (unique(df[!, 1]), )
+
+    # Recursively intersect the range of parameter values of each parameter
+    # to find full coverage
+    else
+
+        outer_layer = unique(df[!, 1])
+        reduced_values = (unique(df[!, 2]), )
+        
+        for val in outer_layer
+            
+            df_at_this_value = df[df[!, 1] .== val, 2:end]
+
+            aux = reduce_parameters(df_at_this_value)
+            
+            reduced_values = (intersect(reduced_values[1], aux[1]), aux[2:end]...)
+            
+        end
+
+        return (outer_layer, reduced_values...)
+    end
+    
 end
 ##### END OF STRIPWISE ELEMENTS ################################################
