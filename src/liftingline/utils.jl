@@ -32,6 +32,31 @@ function calc_area(ll::LiftingLine{R}) where {R}
     return area
 end
 
+function calc_noseposition(ll::LiftingLine)
+
+    nodes = ll.grid.nodes
+    lin = ll.linearindices
+
+    if ll.nelements % 2 == 0
+
+        # Nose element
+        ei1 = ceil(Int, ll.nelements / 2)
+        ei2 = ceil(Int, ll.nelements / 2) + 1
+
+        # Average of a and b LE
+        return (nodes[:, lin[ei1, 2]] .+ nodes[:, lin[ei1+1, 2]]
+                + nodes[:, lin[ei2, 2]] .+ nodes[:, lin[ei2+1, 2]]) / 4
+
+    else
+
+        # Nose element
+        ei = Int(ll.nelements/2)
+        
+        # LE on b-side
+        return nodes[:, lin[ei+1, 2]] 
+    end
+end
+
 function save(self::LiftingLine, filename::AbstractString; 
                     format="vtk", 
                     horseshoe_suffix="_horseshoe",
