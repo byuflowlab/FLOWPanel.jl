@@ -10,7 +10,27 @@
 =###############################################################################
 
 
+function calc_area(ll::LiftingLine{R}) where {R}
 
+    nodes = ll.grid.nodes
+    linearindices = ll.linearindices
+
+    area = zero(R)
+
+    for ei in 1:ll.nelements
+
+        TEa = view(nodes, :, linearindices[ei, 1])    # TE at a-side
+        TEb = view(nodes, :, linearindices[ei+1, 1])  # TE at b-side
+        LEa = view(nodes, :, linearindices[ei, 2])    # LE at a-side
+        LEb = view(nodes, :, linearindices[ei+1, 2])  # LE at b-side
+
+        area += 0.5*norm(cross(TEa-LEa, LEb-LEa))
+        area += 0.5*norm(cross(LEb-TEb, TEa-TEb))
+
+    end
+
+    return area
+end
 
 function save(self::LiftingLine, filename::AbstractString; 
                     format="vtk", 

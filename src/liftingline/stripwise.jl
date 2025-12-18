@@ -165,7 +165,7 @@ function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
         else
             print(io, "└─")
         end
-        println(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
+        print(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
     end
 
 end
@@ -487,6 +487,10 @@ struct SimpleAirfoil{N,
 
 end
 
+function SimpleAirfoil(args::NTuple{4, <:AbstractVector}; optargs...)
+    return SimpleAirfoil(args...; optargs...)
+end
+
 function SimpleAirfoil(file_name::String; path::String="")
     data = Matrix(CSV.read(joinpath(path, file_name), DataFrame))
     
@@ -498,11 +502,8 @@ function SimpleAirfoil(file_name::String; path::String="")
     return SimpleAirfoil(alpha, cl, cd, cm)
 end
 
-
 function Base.show(io::IO, self::SimpleAirfoil)
-
-    println(io, "SimpleAirfoil with $(length(self.alpha)) data points")
-
+    print(io, "SimpleAirfoil with $(length(self.alpha)) data points")
 end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))

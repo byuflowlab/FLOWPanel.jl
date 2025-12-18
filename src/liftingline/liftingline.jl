@@ -138,7 +138,8 @@ struct LiftingLine{ R<:Number,
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
 
         elements = _generate_stripwise_elements(airfoil_distribution, 
-                                                ypositions_elements; 
+                                                ypositions_elements, 
+                                                symmetric; 
                                                 element_optargs...)
         nelements = length(elements)
 
@@ -252,6 +253,18 @@ struct LiftingLine{ R<:Number,
     end
 
     LiftingLine(args...; optargs...) = LiftingLine{Float64}(args...; optargs...)
+
+end
+
+
+function Base.show(io::IO, self::LiftingLine{R, S, N}) where {R, S, N}
+
+    element_str = S <: SimpleAirfoil ? "SimpleAirfoil" : S <: GeneralAirfoil ? "GeneralAirfoil" : "$S"
+    println(io, "LiftingLine with $(self.nelements) $(element_str) elements (type $(N)) and $(R) numbers")
+    println(io, "├─ blending Δs_b:\t$(self.deltasb)")
+    println(io, "├─ joint Δx:\t\t$(self.deltajoint)")
+    println(io, "├─ Dragging line amplification factor:\t\t$(self.sigmafactor)")
+    print(io, "└─ Dragging line amplification exponent:\t$(self.sigmaexponent)")
 
 end
 
@@ -1583,7 +1596,8 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
 end
 
-function _generate_stripwise_elements(airfoil_distribution, ypositions; 
+function _generate_stripwise_elements(airfoil_distribution, ypositions, 
+                                        symmetric::Bool; 
                                         extrapolatepolar=true, plot_polars=true, 
                                         optargs...)
 
@@ -1592,6 +1606,17 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions;
 
     for airfoil in airfoils
         display(airfoil)
+    end
+
+    # Mirror airfoils to the other side of span if symmetric
+    if symmetric
+
+        # Mirror them and get rid of root to avoid duplicate
+        mirrored_airfoils = [(-ypos, airfoil) for (ypos, airfoil) in reverse(airfoils) if ypos != 0]
+
+        # Concatenate them together
+        airfoils = vcat(mirrored_airfoils, airfoils)
+
     end
 
     # Identify StripwiseElement types
@@ -1654,7 +1679,8 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions;
 
     # Plot polars for verification
     if plot_polars
-        _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
+        _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended; 
+                                        plot_extrapolated=extrapolatepolar)
     end
 
     for (ypos, airfoil) in airfoils_extrapolated
@@ -1673,7 +1699,8 @@ function _read_polars(airfoil_distribution; optargs...)
 
 end
 
-function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
+function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
+                                                    plot_extrapolated=true)
 
     stl_org = ""
     stl_extrap = "-"
@@ -1683,57 +1710,59 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
     fmt_extrap = (; linewidth=1, alpha=0.5)
     fmt_blnd = (; linewidth=1, alpha=0.25)
 
-    # Compare raw vs extrapolated
-    fig1 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
-    axs1 = fig1.subplots(3, 1)
+    if plot_extrapolated
+        # Compare raw vs extrapolated
+        fig1 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
+        axs1 = fig1.subplots(3, 1)
 
-    fig = fig1
-    axs = axs1
-    fig.suptitle("Extrapolation comparison")
+        fig = fig1
+        axs = axs1
+        fig.suptitle("Extrapolation comparison")
 
-    for (ypos, airfoil) in airfoils
-        
-        clr = plt.cm.gnuplot(0.9*ypos)
-        stl = stl_org
-        fmt = fmt_org
+        for (ypos, airfoil) in airfoils
+            
+            clr = plt.cm.gnuplot(0.9*ypos)
+            stl = stl_org
+            fmt = fmt_org
 
-        axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-        axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+            axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
 
+        end
+
+        for (ypos, airfoil) in airfoils_extrapolated
+            
+            clr = plt.cm.gnuplot(0.9*ypos)
+            stl = stl_extrap
+            fmt = fmt_extrap
+
+            axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
+            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+            axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
+            axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+
+        end
+
+        ax = axs[1]
+        ax.set_ylabel(L"Lift $c_\ell$")
+
+        ax = axs[2]
+        ax.set_ylabel(L"Drag $c_d$")
+
+        ax = axs[3]
+        ax.set_ylabel(L"Pitching moment $c_m$")
+
+        for ax in axs
+            ax.set_xlabel(L"Angle of attack ($^\circ$)")
+            ax.spines["top"].set_visible(false)
+            ax.spines["right"].set_visible(false)
+            ax.legend(loc="best", frameon=false, fontsize=8)
+        end
+            
+        fig.tight_layout()
     end
-
-    for (ypos, airfoil) in airfoils_extrapolated
-        
-        clr = plt.cm.gnuplot(0.9*ypos)
-        stl = stl_extrap
-        fmt = fmt_extrap
-
-        axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
-        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-        axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
-        axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
-
-    end
-
-    ax = axs[1]
-    ax.set_ylabel(L"Lift $c_\ell$")
-
-    ax = axs[2]
-    ax.set_ylabel(L"Drag $c_d$")
-
-    ax = axs[3]
-    ax.set_ylabel(L"Pitching moment $c_m$")
-
-    for ax in axs
-        ax.set_xlabel(L"Angle of attack ($^\circ$)")
-        ax.spines["top"].set_visible(false)
-        ax.spines["right"].set_visible(false)
-        ax.legend(loc="best", frameon=false, fontsize=8)
-    end
-        
-    fig.tight_layout()
 
     # Compare blends
     fig2 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
@@ -1774,6 +1803,10 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended)
         
     fig.tight_layout()
 
-    return (fig1, axs1), (fig2, axs2)
+    if plot_extrapolated
+        return (fig1, axs1), (fig2, axs2)
+    else
+        return fig2, axs2
+    end
 end
 ##### END OF LIFTING LINE ######################################################
