@@ -103,6 +103,7 @@ struct LiftingLine{ R<:Number,
                             kerneloffset=1e-8,
                             kernelcutoff=1e-14,
                             arraytype::Type=Array,
+                            plots=nothing,
                             optargs...
                             ) where {R<:Number}
 
@@ -115,7 +116,7 @@ struct LiftingLine{ R<:Number,
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
         sweeps, dihedrals, spanaxiss, 
-        symmetric) = _discretize_wing_parameterization(args...; optargs...)
+        symmetric) = _discretize_wing_parameterization(args...; plots, optargs...)
 
         # ------------------ PREALLOCATE GRID MEMORY ---------------------------
         P_min = [0, 0, 0]               # Lower boundary span, chord, dummy
@@ -139,7 +140,8 @@ struct LiftingLine{ R<:Number,
 
         elements = _generate_stripwise_elements(airfoil_distribution, 
                                                 ypositions_elements, 
-                                                symmetric; 
+                                                symmetric;
+                                                plots,
                                                 element_optargs...)
         nelements = length(elements)
 
@@ -1443,8 +1445,8 @@ function _discretize_wing_parameterization(;
                         ypos_up::Number = 1.0,                                  # Upper bound of non-dimensional span to discretize
                         interpolation::Function = math.linear,                  # Interpolation scheme. Example: `FLOWMath.linear` or `FLOWMath.akima`
                         symmetric::Bool = true,                                  # Whether the wing is symmetric
-                        plot_discretization::Bool = true
-
+                        plot_discretization::Bool = true,
+                        plots=nothing,
                         ) where {R0, R1, R2, R3, R4, R5}
 
     R = promote_type(R0, R1, R2, R3, R4, R5)
@@ -1520,6 +1522,10 @@ function _discretize_wing_parameterization(;
         end
             
         fig.tight_layout()
+
+        if !isnothing(plots)
+            push!(plots, (fig, axs))
+        end
     end
 
     return (; b, ypositions, chords, twists, sweeps, dihedrals, spanaxiss, symmetric)
@@ -1599,13 +1605,17 @@ end
 function _generate_stripwise_elements(airfoil_distribution, ypositions, 
                                         symmetric::Bool; 
                                         extrapolatepolar=true, plot_polars=true, 
+                                        verbose=true,
+                                        plots=nothing,
                                         optargs...)
 
     # Create baseline stripwise elements from polars
     airfoils = _read_polars(airfoil_distribution; optargs...)
 
-    for airfoil in airfoils
-        display(airfoil)
+    if verbose
+        for airfoil in airfoils
+            display(airfoil)
+        end
     end
 
     # Mirror airfoils to the other side of span if symmetric
@@ -1679,15 +1689,24 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions,
 
     # Plot polars for verification
     if plot_polars
-        _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended; 
-                                        plot_extrapolated=extrapolatepolar)
+        these_figs = _plot_polars(airfoils, 
+                                    airfoils_extrapolated, airfoils_blended; 
+                                    plot_extrapolated=extrapolatepolar)
+
+        if !isnothing(plots)
+            for (fig, axs) in these_figs
+                push!(plots, (fig, axs))
+            end
+        end
     end
 
     for (ypos, airfoil) in airfoils_extrapolated
         push!(elements, airfoil)
     end
     
-    display(elements[1])
+    if verbose
+        display(elements[1])
+    end
 
     return elements
 
@@ -1806,7 +1825,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
     if plot_extrapolated
         return (fig1, axs1), (fig2, axs2)
     else
-        return fig2, axs2
+        return ((fig2, axs2), )
     end
 end
 ##### END OF LIFTING LINE ######################################################
