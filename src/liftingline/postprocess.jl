@@ -597,12 +597,17 @@ function calcfield_Mtot!(out, ll::LiftingLine, X0, rho;
         "Field $(F_fieldname) not found;"*
         " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
 
-    @assert check_field(ll, cm_fieldname) ""*
+    @assert isnothing(cm_fieldname) || check_field(ll, cm_fieldname) ""*
         "Field $(cm_fieldname) not found;"*
         " Please run `calcfield_cm(args...; fieldname=$(cm_fieldname), optargs...)`"
 
     Fs = hcat(get_field(ll, F_fieldname)["field_data"]...)
-    cmΛs = get_field(ll, cm_fieldname)["field_data"]
+
+    if isnothing(cm_fieldname)
+        cmΛs = zeros(ll.nelements)
+    else
+        cmΛs = get_field(ll, cm_fieldname)["field_data"]
+    end
 
     return calcfield_Mtot!(out, ll, X0, ll.midpoints, Fs, cmΛs, ll.chords, rho; optargs...)
 end

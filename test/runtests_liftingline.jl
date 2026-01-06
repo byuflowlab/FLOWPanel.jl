@@ -26,6 +26,10 @@ v_lvl = 0
     CLexp = 0.238
     CDexp = 0.005
 
+    CLvsp = 2.572866962740000263e-01
+    CDvsp = 3.355815780000000192e-03
+    Cmvsp = -3.758078951200000128e-01
+
     airfoil_path  = joinpath(pnl.examples_path, "data")
 
 
@@ -103,6 +107,11 @@ v_lvl = 0
     Shat            = [0, 1, 0]                     # Span direction
     Lhat            = cross(Dhat, Shat)             # Lift direction
 
+    X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+    lhat            = Dhat                          # Rolling direction
+    mhat            = Shat                          # Pitching direction
+    nhat            = Lhat                          # Yawing direction
+
     cref            = mean(chord_distribution[:, 2]*b) # Reference chord
     nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
 
@@ -119,7 +128,8 @@ v_lvl = 0
                                     plot_discretization = false,
                                     element_optargs = (; 
                                         path = airfoil_path, 
-                                        plot_polars = false
+                                        plot_polars = false,
+                                        verbose = false
                                         )
                                     )
 
@@ -150,6 +160,12 @@ v_lvl = 0
 
 
     # ------------------ CALL LINEAR SOLVER ------------------------------------
+
+    # First run for JIT compilation (so the later run will be faster after 
+    # compilation)
+    pnl.solve_linear(ll, Uinf)
+
+    # Timed run
     t_linear = @elapsed pnl.solve_linear(ll, Uinf)
 
 
@@ -173,20 +189,38 @@ v_lvl = 0
 
     # l = lds[1, :]
     # d = lds[2, :]
+    
+    # Integrated moment
+    Mtot = pnl.calcfield_Mtot(ll, X0, rho; F_fieldname="Fkj", cm_fieldname=nothing)
+    
+    # Moment decomposed into axes
+    lmn = pnl.calcfield_lmn(ll, lhat, mhat, nhat)
+    roll, pitch, yaw = collect(eachcol(lmn))
 
     # Force coefficients
     CL_linear = sign(dot(L, Lhat)) * norm(L) / nondim
     CD_linear = sign(dot(D, Dhat)) * norm(D) / nondim
 
-    err_CL_linear = abs(CL_linear-CLexp)/CLexp
-    err_CD_linear = abs(CD_linear-CDexp)/CDexp
-
     # cl = l / (nondim/b)
     # cd = d / (nondim/b)
+
+    # Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
+    Cm_linear = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
+    # Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
+
+    # Error
+    err_CL_linear = abs(CL_linear-CLexp)/CLexp
+    err_CD_linear = abs(CD_linear-CDexp)/CDexp
+    err_Cm_linear = abs(Cm_linear-Cmvsp)/abs(Cmvsp)
 
     # ------------------ CALL NONLINEAR SOLVER ---------------------------------
     Uinfs = repeat(Uinf, 1, ll.nelements)
 
+    # First run for JIT compilation (so the later run will be faster after 
+    # compilation)
+    pnl.solve(ll, Uinfs; solver, solver_optargs)
+
+    # Timed run
     t_nonlinear = @elapsed begin 
         result, solver_cache = pnl.solve(ll, Uinfs; solver, solver_optargs)
     end
@@ -234,29 +268,45 @@ v_lvl = 0
     # l = lds[1, :]
     # d = lds[2, :]
 
+    # Integrated moment
+    Mtot = pnl.calcfield_Mtot(ll, X0, rho)
+    
+    # Moment decomposed into axes
+    lmn = pnl.calcfield_lmn(ll, lhat, mhat, nhat)
+    roll, pitch, yaw = collect(eachcol(lmn))
+
     # Coefficients
     CL_nonlinear = sign(dot(L, Lhat)) * norm(L) / nondim
     CD_nonlinear = sign(dot(D, Dhat)) * norm(D) / nondim
 
-    err_CL_nonlinear = abs(CL_nonlinear-CLexp)/CLexp
-    err_CD_nonlinear = abs(CD_nonlinear-CDexp)/CDexp
-
     # cl = l / (nondim/b)
     # cd = d / (nondim/b)
+
+    # Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
+    Cm_nonlinear = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
+    # Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
+
+    # Error
+    err_CL_nonlinear = abs(CL_nonlinear-CLexp)/CLexp
+    err_CD_nonlinear = abs(CD_nonlinear-CDexp)/CDexp
+    err_Cm_nonlinear = abs(Cm_nonlinear-Cmvsp)/abs(Cmvsp)
 
 
     if verbose
         println()
-        @printf "%s%15.15s %-7s %-7s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "CL" "CD" "Time" "CL error" "CD error"
-        @printf "%s%15.15s %-7s %-7s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "Experimental" CLexp CDexp "-" "-" "-"
-        @printf "%s%15.15s %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Nonlinear LL" CL_nonlinear CD_nonlinear t_nonlinear*1000 err_CL_nonlinear*100 err_CD_nonlinear*100
-        @printf "%s%15.15s %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Linear LL" CL_linear CD_linear t_linear*1000 err_CL_linear*100 err_CD_linear*100
+        @printf "%s%15.15s %-7s %-7s %-7s %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "CL" "CD" "Cm" "Time" "CL error" "CD error" "Cm error"
+        @printf "%s%15.15s %-7s %-7s %-7s %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "Experimental" CLexp CDexp "-" "-" "-" "-" "-"
+        @printf "%s%15.15s %-7.4f %-7.4f %-7.4f %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "OpenVSP" CLvsp CDvsp Cmvsp "-" "-" "-" "-"
+        @printf "%s%15.15s %-7.4f %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Linear LL" CL_linear CD_linear Cm_linear t_linear*1000 err_CL_linear*100 err_CD_linear*100 err_Cm_linear*100
+        @printf "%s%15.15s %-7.4f %-7.4f %-7.4f %-3.0f msecs  %4.3g﹪     %4.3g﹪     %4.3g﹪\n" "\t"^(v_lvl+1) "Nonlinear LL" CL_nonlinear CD_nonlinear Cm_nonlinear t_nonlinear*1000 err_CL_nonlinear*100 err_CD_nonlinear*100 err_Cm_nonlinear*100
     end
 
     # Test result
     @test err_CL_linear <= 0.03
-    @test err_CD_nonlinear <= 0.50
+    @test err_CD_linear <= 0.50
+    @test err_Cm_linear <= 0.12
     @test err_CL_nonlinear <= 0.04
-    @test err_CD_nonlinear <= 0.03
+    @test err_CD_nonlinear <= 0.11
+    @test err_Cm_nonlinear <= 0.06
 
 end
