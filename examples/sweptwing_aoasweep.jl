@@ -111,7 +111,7 @@ fig4 = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
 axs = fig4.subplots(1, 2)
 
 
-for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web]))
+for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
 
     first = true
 

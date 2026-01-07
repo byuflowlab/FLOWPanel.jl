@@ -14,6 +14,7 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import PyPlot as plt
 
 run_name        = "sweptwing000"                # Name of this run
 
@@ -285,7 +286,7 @@ end
 
 
 # ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
-sweep_aoa = !true                       # Whether to run AOA sweep
+sweep_aoa = false                       # Whether to run AOA sweep
 
 if sweep_aoa
     println("Running AOA sweep...")
@@ -293,8 +294,7 @@ if sweep_aoa
 end
 
 # ----------------- SOLVER BENCHMARK -------------------------------------------
-solver_benchmark = !true                # Whether to run solver benchmark
-save_outputs2 = !true
+solver_benchmark = false                # Whether to run solver benchmark
 
 if solver_benchmark
     println("Running solver benchmark...")
