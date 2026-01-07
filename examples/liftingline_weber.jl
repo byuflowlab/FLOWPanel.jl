@@ -20,15 +20,7 @@ import FLOWPanel: mean, norm, dot, cross
 
 import PyPlot as plt
 import PyPlot: @L_str
-plt.rc("font", family="STIXGeneral")            # Text font
-plt.rc("mathtext", fontset="stix")                  # Math font
-plt.rc("font", size=12)          # controls default text sizes
-plt.rc("axes", titlesize=12)     # fontsize of the axes title
-plt.rc("axes", labelsize=14)     # fontsize of the x and y labels
-plt.rc("xtick", labelsize=12)    # fontsize of the tick labels
-plt.rc("ytick", labelsize=12)    # fontsize of the tick labels
-plt.rc("legend", fontsize=12)    # legend fontsize
-plt.rc("figure", titlesize=18)   # fontsize of the figure title
+include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 
 run_name        = "ll-weber"                    # Name of this run
@@ -425,3 +417,228 @@ if save_outputs
     fig.savefig(joinpath(fig_path, "$(run_name)-loading.png"),
                                                 dpi=300, transparent=true)
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ----------------- AOA SWEEP --------------------------------------------------
+
+# Sequence of sweeps to run
+# NOTE: To help convergence and speed it up the sweep, we recommend starting
+#       each sweep at 0deg AOA since the sweep steps over points using the last
+#       converged solution as the initial guess
+sweep1 = [0, 2.1, 4.2, 6.3, 8.4, 10.5]      # Same AOAs than Weber's experiment
+sweep2 = range(0, -50, step=-0.5)           # Sweep from 0 into deep negative stall (-50deg)
+sweep3 = range(0, 50, step=0.5)             # Sweep from 0 into deep positive stall (50deg)
+
+distributions = []
+
+@time wingpolar = pnl.run_polarsweep(ll,
+                            magUinf, rho, X0, cref, b;
+                            aoa_sweeps = (sweep1, sweep2, sweep3),
+                            sweepname = run_name,
+                            plots_path= save_outputs ? fig_path : nothing,
+                            extraplots_path = save_outputs ? fig_path : nothing,
+                            output_distributions=distributions,
+                            solver,
+                            solver_optargs,
+                            align_joints_with_Uinfs, 
+                            use_Uind_for_force
+                        )
+
+
+# ----------------- COMPARISON TO EXPERIMENTAL SWEEP ---------------------------
+
+# --------- Load distribution
+
+fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
+axs = fig.subplots(1, 2)
+
+ypos = distributions[1].yposition
+aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
+cls = [cl for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
+cds = [cd for (aoa, cd) in zip(distributions[1].AOA, distributions[1].cd) if aoa in sweep1]
+
+for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
+
+    first = true
+
+    for (AOA, cl, cd) in zip(aoas, cls, cds)
+
+        rowi = findfirst(a -> a==AOA, alphas_web)
+
+        if rowi != nothing && AOA in (axi==1 ? [2.1, 4.2, 6.3, 8.4] : [4.2, 6.3, 8.4])
+
+            @show AOA
+
+            # Filter out NaNs
+            ys = vals_exp[rowi, :]
+            xs = [val for (vali, val) in enumerate(y2b_web) if !isnan(ys[vali])]
+            ys = [val for (vali, val) in enumerate(ys) if !isnan(ys[vali])]
+
+            # Plot experimental
+            for f in [-1, 1]
+                ax.plot(f*xs, ys, "o--k",
+                            label=("Experimental"^(f==1))^first,
+                            linewidth=0.5, markersize=5, alpha=1.0)
+            end
+
+            # Plot FLOWPanel
+            ax.plot(ypos, axi==1 ? cl : cd, "-", label=lbl_ll^first,
+                            color=color_ll, markersize=8, linewidth=1)
+
+            first = false
+        end
+
+    end
+
+    xlims = [0, 1]
+    ax.set_xlim(xlims)
+    ax.set_xticks(xlims[1]:0.2:xlims[end])
+    ax.set_xlabel(L"Span position $2y/b$")
+
+    if axi==1
+        ylims = [0, 0.6]
+        ax.set_ylim(ylims)
+        ax.set_yticks(ylims[1]:0.2:ylims[end])
+        ax.set_ylabel(L"Sectional lift $c_\ell$")
+
+        ax.legend(loc="best", frameon=false, fontsize=6)
+
+        ax.annotate(L"\alpha=8.4^\circ", [0.38, 0.53], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+        ax.annotate(L"\alpha=6.3^\circ", [0.38, 0.402], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+        ax.annotate(L"\alpha=4.2^\circ", [0.38, 0.275], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+        ax.annotate(L"\alpha=2.1^\circ", [0.38, 0.145], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+    else
+        ylims = [-0.04, 0.12]
+        ax.set_ylim(ylims)
+        ax.set_yticks(ylims[1]:0.04:ylims[end])
+        ax.set_ylabel(L"Sectional drag $c_d$")
+
+
+        ax.annotate(L"\alpha=8.4^\circ", [0.25, 0.030], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-10)
+        ax.annotate(L"\alpha=4.2^\circ", [0.25, -0.005], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-5)
+
+        ax.annotate(L"\alpha=6.3^\circ", [0.5, 0.035], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+
+        ax.annotate("", [0.4, 0.0145], xycoords="data",
+                    xytext=[0.5, 0.035], textcoords="data",
+                    arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
+                                    :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
+    end
+
+    ax.spines["right"].set_visible(false)
+    ax.spines["top"].set_visible(false)
+end
+
+fig.tight_layout()
+
+if save_outputs
+    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-loading.png"),
+                                                dpi=300, transparent=true)
+end
+
+# # --------- Integrated forces: lift and drag
+# nondim = 0.5*rho*magVinf^2*b^2/ar   # Normalization factor
+
+# CLs = sign.(dot.(Ls, Lhats)) .* norm.(Ls) / nondim
+# CDs = sign.(dot.(Ds, Dhats)) .* norm.(Ds) / nondim
+
+# # VSPAERO CL and CD
+# data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
+# alphas_vsp = [val for val in data_vsp[1, 2:end]]
+# CDi_vsp = [val for val in data_vsp[3, 2:end]]
+# CDtot_vsp = [val for val in data_vsp[6, 2:end]]
+# CL_vsp = [val for val in data_vsp[11, 2:end]]
+# CMy_vsp = [val for val in data_vsp[16, 2:end]]
+
+# fig5 = plt.figure(figsize=[7*2, 5*1*0.75]*2/3)
+# axs = fig5.subplots(1, 2)
+
+# ax = axs[1]
+# ax.plot(alphas_web, CLs_web, "-ok", label="Experimental")
+# ax.plot(alphas_vsp, CL_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+# ax.plot(AOAs, CLs, ":^", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
+
+# ylims = [0, 0.8]
+# ax.set_ylim(ylims)
+# ax.set_yticks(ylims[1]:0.2:ylims[end])
+# ax.set_ylabel(L"Lift coefficient $C_L$")
+
+# ax.legend(loc="lower right", fontsize=10, frameon=false, reverse=true)
+
+# ax = axs[2]
+# ax.plot(alphas_web, CDs_web, "-ok", label="Experimental")
+# ax.plot(alphas_vsp, CDtot_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+# ax.plot(AOAs, CDs, ":^", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
+
+# ylims = [0, 0.04]
+# ax.set_ylim(ylims)
+# ax.set_yticks(ylims[1]:0.01:ylims[end])
+# ax.set_ylabel(L"Drag coefficient $C_D$")
+
+# for ax in axs
+#     xlims = [0, 12]
+#     xticks = xlims[1]:2:xlims[2]
+#     ax.set_xlim(xlims)
+#     ax.set_xticks(xticks)
+#     ax.set_xticklabels(["$val"*L"^\circ" for val in xticks])
+#     ax.set_xlabel(L"Angle of attack $\alpha$")
+
+#     ax.spines["right"].set_visible(false)
+#     ax.spines["top"].set_visible(false)
+# end
+
+# fig5.tight_layout()
+
+# # --------- Integrated moment: Pitching moment
+# nondim = 0.5*rho*magVinf^2*b*(b/ar)^2 # Normalization factor
+
+# Cls = sign.(dot.(rolls, lhats)) .* norm.(rolls) / nondim
+# Cms = sign.(dot.(pitchs, mhats)) .* norm.(pitchs) / nondim
+# Cns = sign.(dot.(yaws, nhats)) .* norm.(yaws) / nondim
+
+# fig6 = plt.figure(figsize=[7*1, 5*1*0.75]*2/3)
+# ax = fig6.gca()
+
+# ax.plot(alphas_vsp, CMy_vsp, ":v", color=color_vsp, alpha=0.9, label="VSPAERO")
+# ax.plot(AOAs, Cms, ":o", label="FLOWPanel", color="steelblue", markersize=8, alpha=0.7)
+
+# xlims = [0, 16]
+# xticks = xlims[1]:2:xlims[2]
+# ax.set_xlim(xlims)
+# ax.set_xticks(xticks)
+# ax.set_xticklabels(["$val"*L"^\circ" for val in xticks])
+# ax.set_xlabel(L"Angle of attack $\alpha$")
+
+# ylims = [-1.2, 0.2]
+# ax.set_ylim(ylims)
+# ax.set_yticks(ylims[1]:0.2:ylims[end])
+# ax.set_ylabel(L"Pitching moment $C_m$")
+
+# ax.spines["right"].set_visible(false)
+# ax.spines["top"].set_visible(false)
+
+# ax.legend(loc="best", frameon=false, fontsize=10, reverse=true)
+
+# fig6.tight_layout()
+
+
+# # --------- Save figures
+# if save_outputs
+#     fig4.savefig(joinpath(fig_path, "$(run_name)-sweep-loading.png"),
+#                                                 dpi=300, transparent=true)
+#     fig5.savefig(joinpath(fig_path, "$(run_name)-sweep-CLCD.png"),
+#                                                 dpi=300, transparent=true)
+#     fig6.savefig(joinpath(fig_path, "$(run_name)-sweep-Cm.png"),
+#                                                 dpi=300, transparent=true)
+# end

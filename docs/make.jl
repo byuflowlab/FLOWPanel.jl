@@ -75,6 +75,7 @@ makedocs(
                                                                 "Weber Wing" => [
                                                                     "4.2° Angle of Attack" => 
                                                                         "examples/ll-weber-4p2aoa.md",
+                                                                    "examples/ll-weber-aoasweep.md"
                                                                 ]
                                                             ],
                                        ],

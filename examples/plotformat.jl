@@ -4,7 +4,7 @@
 =###############################################################################
 
 # Fonts
-plt.rc("font", family="Times New Roman")            # Text font
+plt.rc("font", family="STIXGeneral")                # Text font
 plt.rc("mathtext", fontset="stix")                  # Math font
 
 # Sizes

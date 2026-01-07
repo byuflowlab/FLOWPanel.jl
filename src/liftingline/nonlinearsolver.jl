@@ -429,7 +429,7 @@ function generate_f_residual(ll::LiftingLine,
         du .= cache[T].residuals
 
         if debug
-            push!( cache[:residual_rms], sqrt(mean(du.^2)))
+            push!( cache[:residual_rms], FD.value(sqrt(mean(du.^2))))
         end
 
     end
