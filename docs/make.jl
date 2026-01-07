@@ -71,6 +71,12 @@ makedocs(
                                                                 "examples/cessna-aero.md",
                                                                 "examples/cessna-vspgeom.md",
                                                             ],
+                                        "Lifting Line" => [
+                                                                "Weber Wing" => [
+                                                                    "4.2° Angle of Attack" => 
+                                                                        "examples/ll-weber-4p2aoa.md",
+                                                                ]
+                                                            ],
                                        ],
                 # "API Reference"     => ["api.md",
                 #                         "api-elements.md",

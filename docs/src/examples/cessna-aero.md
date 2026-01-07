@@ -58,7 +58,7 @@ rotation        = RotX(0*pi/180) * RotY(0*pi/180) * RotX(0*pi/180) # Rotation to
 scaling         = 0.3048                    # Factor to scale mesh dimensions (ft -> m)
 
 trailingedges   = [                         # Gmsh files with trailing edges
-#   (  Gmsh file,                    span sorting function,   junction criterion,     closed )
+#   (  Gmsh file,                    span sorting function,   junction criterion,    closed )
     ( "cessna-TE-leftwing.msh",      X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
     ( "cessna-TE-rightwing.msh",     X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.67, false  ),
     ( "cessna-TE-leftelevator.msh",  X -> dot(X, [0, 1, 0]),  X -> abs(X[2]) - 0.23, false  ),
@@ -93,7 +93,8 @@ bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
 
 # ----------------- GENERATE BODY ----------------------------------------------
 body, elsprescribe = pnl.generate_multibody(bodytype, meshfiles, trailingedges, meshreader;
-                                tolerance=0.001*bref,
+                                tolerance=0.001,
+                                lengthscale=bref,
                                 read_path=read_path,
                                 offset=offset, rotation=rotation, scaling=scaling,
                                 )

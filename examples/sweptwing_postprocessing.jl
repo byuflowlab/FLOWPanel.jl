@@ -442,7 +442,7 @@ cts_web = [
             0.03 -0.025 -0.045 -0.067 -0.071 -0.074 -0.075 -0.082 -0.067 -0.069
          ]
 
-# Add the zero-AOA drag that they substracted in the experiment
+# Add the zero-AOA drag that they say they substracted in the experiment
 cds_web = mapslices(x-> x .+ cds_web[1, :], cds_web[2:end, :]; dims=2)
 cts_web = mapslices(x-> x .+ cts_web[1, :], cts_web[2:end, :]; dims=2)
 
