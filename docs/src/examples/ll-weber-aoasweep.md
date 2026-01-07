@@ -26,6 +26,12 @@ sweep3 = range(0, 50, step=0.5)             # Sweep from 0 into deep positive st
 
 
 ```
+```@raw html
+<span style="font-size: 0.9em; color:gray;"><i>
+    Run time: ~5 seconds, evaluated 208 AOAs with 45% success rate. <br>
+</i></span>
+<br><br>
+```
 (see the complete example under
 [examples/liftingline_weber.jl](https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/liftingline_weber.jl)
 to see how to postprocess the solution as plotted here below)
@@ -35,8 +41,22 @@ to see how to postprocess the solution as plotted here below)
     <br><b>Spanwise loading distribution</b>
     <img src="../../assets/images/ll-weber-sweep-loading.png" alt="Pic here" style="width: 100%;"/>
 
+    <br><br><b>Wing Polar in linear region</b><br>
+    <img src="../../assets/images/ll-weber-sweep-CLCDCm.png" alt="Pic here" style="width: 100%;"/>
+
+    <br><br><b>Wing Polar post-stall</b><br>
+    <img src="../../assets/images/ll-weber-sweep-CLCDCm-zoomout.png" alt="Pic here" style="width: 100%;"/>
+</center>
+```
+
+
+```@raw html
+<center>
+    <br><b>Spanwise loading distribution</b>
+    <img src="../../assets/images/ll-weber-sweep-loading2.png" alt="Pic here" style="width: 100%;"/>
+
     <br><br><b>Wing Polar</b><br>
-    <img src="../../assets/images/ll-weber-sweep.png" alt="Pic here" style="width: 100%;"/>
+    <img src="../../assets/images/ll-weber-sweep-CLCDCm2.png" alt="Pic here" style="width: 100%;"/>
 </center>
 ```
 

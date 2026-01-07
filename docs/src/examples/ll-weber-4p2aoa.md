@@ -27,6 +27,7 @@ import FLOWPanel: mean, norm, dot, cross
 import PyPlot as plt
 
 
+
 run_name        = "ll-weber"                    # Name of this run
 
 save_path       = run_name                      # Where to save outputs
@@ -122,8 +123,8 @@ solver_optargs  = (;
 
 align_joints_with_Uinfs = false                 # Whether to align joint bound vortices with the freestream
 
-
 use_Uind_for_force = true                       # Whether to use Uind as opposed to selfUind for force postprocessing
+                                                # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
 Dhat            = Uinf/norm(Uinf)               # Drag direction
 Shat            = [0, 1, 0]                     # Span direction

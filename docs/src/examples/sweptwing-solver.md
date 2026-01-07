@@ -57,21 +57,25 @@ function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl="")
         str *= "| --------------: | :-----: | :-----: |\n"
     end
 
-    # Calculate velocity away from the body
-    Us = pnl.calcfield_U(body, body; fieldname="Uoff",
-                            offset=0.02, characteristiclength=(args...)->b/ar)
+    # Calculate surface velocity induced by the body on itself
+    Us = pnl.calcfield_U(body, body)
+
+    # NOTE: Since the boundary integral equation of the potential flow has a
+    #       discontinuity at the boundary, we need to add the gradient of the
+    #       doublet strength to get an accurate surface velocity
 
     # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
     UDeltaGamma = pnl.calcfield_Ugradmu(body)
 
     # Add both velocities together
-    pnl.addfields(body, "Ugradmu", "Uoff")
+    pnl.addfields(body, "Ugradmu", "U")
 
-    # Calculate pressure coeffiecient
-    Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
+    # Calculate pressure coefficient
+    Cps = pnl.calcfield_Cp(body, magVinf)
 
     # Calculate the force of each panel
-    Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
+    Fs = pnl.calcfield_F(body, magVinf, rho)
+    
     # Calculate total force of the vehicle decomposed as lfit, drag, and sideslip
     Dhat = Vinf/pnl.norm(Vinf)        # Drag direction
     Shat = [0, 1, 0]              # Span direction
@@ -99,20 +103,16 @@ function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl="")
 end
 
 
-# ----- Linear solver test: backslash \ operator
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_backslash!)
-
-CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="Backslash")
 ```
 
 
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|       Backslash | 0.2335  | 0.0132  |
+|       Backslash | 0.2716  | 0.0066  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	1.89﹪
-	Run time:	0.44 seconds
+	CL Error:	14.1﹪
+	Run time:	0.33 seconds
 
 ## LU decomposition
 
@@ -128,17 +128,17 @@ FLOWPanel.solve_ludiv!
 Running the solver:
 
 ```julia
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_ludiv!)
+println(str)
 
-CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="LUdiv")
+
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|           LUdiv | 0.2335  | 0.0132  |
+|           LUdiv | 0.2716  | 0.0066  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	1.89﹪
-	Run time:	0.44 seconds
+	CL Error:	14.1﹪
+	Run time:	0.29 seconds
 
 ## Iterative Krylov Solver
 
@@ -158,13 +158,13 @@ FLOWPanel.solve_gmres!
 
 Running the solver with tolerance $10^{-8}$:
 ```julia
+println(str)
+
+
+# ----- Linear solver test: GMRES tol=1e-8
 stats = []                      # Stats of GMRES get stored here
 
 t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-8, rtol=1e-8, out=stats))
-
-CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-8")
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
@@ -186,13 +186,13 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 
 Running the solver with tolerance $10^{-2}$:
 ```julia
+println(str)
+
+
+# ----- Linear solver test: GMRES tol=1e-2
 stats = []                      # Stats of GMRES get stored here
 
 t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-2, rtol=1e-2, out=stats))
-
-CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-2")
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
@@ -214,13 +214,13 @@ CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-
 
 Running the solver with tolerance $10^{-1}$:
 ```julia
+
+
+
+# ----- Linear solver test: GMRES tol=1e-1
 stats = []                      # Stats of GMRES get stored here
 
 t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-1, rtol=1e-1, out=stats))
-
-CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-1")
 ```
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |

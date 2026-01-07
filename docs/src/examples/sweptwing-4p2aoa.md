@@ -25,6 +25,7 @@ angle of attack of $4.2^\circ$ using a rigid wake model.
 =###############################################################################
 
 import FLOWPanel as pnl
+import PyPlot as plt
 
 run_name        = "sweptwing000"                # Name of this run
 
@@ -206,8 +207,8 @@ distribution and spanwise loading that is plotted here below)
 ```
 
 
-|           | Experimental  | FLOWPanel                 | Error | `OPENVSP` |
-| --------: | :-----------: | :-----------------------: | :---- |  :----: |
+|           | Experimental  | FLOWPanel                 | Error | `VSPAERO` |
+| --------: | :-----------: | :-----------------------: | :---- |  :----:   |
 | $C_L$   | 0.238         | 0.272    | 14.1% | *`0.257`* |
 | $C_D$   | 0.005         | 0.0066    | 32.0% | *`0.0033`* |
 
