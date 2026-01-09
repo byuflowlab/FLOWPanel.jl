@@ -30,7 +30,7 @@ end
 function solve(self::LiftingLine, 
                         Uinfs::AbstractMatrix;
                         aoas_initial_guess=0.0,
-                        align_joints_with_Uinfs=true,
+                        align_joints_with_Uinfs=false,
                         addfields=true, raise_warn=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),

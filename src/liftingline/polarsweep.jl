@@ -26,7 +26,7 @@ function run_polarsweep(liftingline::LiftingLine,
                     solver_optargs  = (; abstol = 1e-9, maxiters = 200),
                     align_joints_with_Uinfs = false,                                    # Whether to align joint bound vortices with the freestream
                     reattempt_align_method = false,                                     # Re-attempt joint alingment if first option fails (`true` for more robust polars, but might take longer)
-                    use_Uind_for_force = true,                                          # Whether to use Uind as opposed to selfUind for force postprocessing
+                    use_Uind_for_force = false,                                         # Whether to use Uind as opposed to selfUind for force postprocessing
         
                     # ------- OUTPUTS ------------------------------------------
                     output_distributions = nothing,                                     # Give it an array and it will output spanwise distributions here
