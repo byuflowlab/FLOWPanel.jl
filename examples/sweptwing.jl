@@ -14,6 +14,7 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import PyPlot as plt
 
 run_name        = "sweptwing000"                # Name of this run
 
@@ -271,8 +272,8 @@ println("CD error:\t$(round(abs(CD-CDexp)/CDexp*100, digits=2))%")
 
 if save_outputs
     str = """
-    |           | Experimental  | FLOWPanel                 | Error | `OPENVSP` |
-    | --------: | :-----------: | :-----------------------: | :---- |  :----: |
+    |           | Experimental  | FLOWPanel                 | Error | `VSPAERO` |
+    | --------: | :-----------: | :-----------------------: | :---- |  :----:   |
     | \$C_L\$   | 0.238         | $(round(CL, digits=3))    | $(round(abs(CL-CLexp)/CLexp*100, digits=1))% | *`0.257`* |
     | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=1))% | *`0.0033`* |
     """
@@ -285,7 +286,7 @@ end
 
 
 # ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
-sweep_aoa = !true                       # Whether to run AOA sweep
+sweep_aoa = false                       # Whether to run AOA sweep
 
 if sweep_aoa
     println("Running AOA sweep...")
@@ -293,8 +294,7 @@ if sweep_aoa
 end
 
 # ----------------- SOLVER BENCHMARK -------------------------------------------
-solver_benchmark = !true                # Whether to run solver benchmark
-save_outputs2 = !true
+solver_benchmark = false                # Whether to run solver benchmark
 
 if solver_benchmark
     println("Running solver benchmark...")

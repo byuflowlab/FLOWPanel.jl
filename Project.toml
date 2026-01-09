@@ -14,6 +14,11 @@ LinearOperators = "5c8ed15e-5a4c-59e4-a42b-c7e8811fb125"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
+FLOWMath = "6cb5d3fb-0fe8-4cc2-bd89-9fe0b19a99d3"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+SimpleNonlinearSolve = "727e6d20-b764-4bd8-a329-72de5adea6c7"
 
 # [sources]
 # FastMultipole = {url = "https://github.com/byuflowlab/FastMultipole", rev = "d21d242d081ea8c9c19655097d83413b1f783d2d"}
@@ -28,6 +33,7 @@ LinearOperators = "2"
 StaticArrays = "1"
 WriteVTK = "1"
 Requires = "1"
+FLOWMath = "1"
 
 [extras]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
