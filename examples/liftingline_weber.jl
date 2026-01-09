@@ -32,6 +32,7 @@ save_path       = run_name                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find 2D polars
 
 paraview        = false                         # Whether to visualize with Paraview
+save_outputs    = false                         # Whether to save outputs for docs or not
 
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
@@ -92,7 +93,7 @@ spanaxis_distribution = [
 
 # Airfoil contour distribution (nondim y-position, polar, airfoil type)
 airfoil_distribution = [
-#    2*y/b  polar file            airfoil type
+#    2*y/b  polar file                        airfoil type
     (0.00, "rae101-Re1p7e6-smooth180-2.csv",  pnl.SimpleAirfoil),
     (1.00, "rae101-Re1p7e6-smooth180-2.csv",  pnl.SimpleAirfoil)
 ]
@@ -133,7 +134,7 @@ lhat            = Dhat                          # Rolling direction
 mhat            = Shat                          # Pitching direction
 nhat            = Lhat                          # Yawing direction
 
-cref            = chord_distribution[1, 2]*b    # Reference chord
+cref            = chord_distribution[1, 2]*b    # (m) reference chord
 nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
 
 
@@ -267,8 +268,6 @@ end
 
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
-
-save_outputs = true                        # Whether to save outputs or not
 
 # Where to save figures (default to re-generating the figures that are used
 # in the docs)
@@ -579,8 +578,6 @@ function plot_distribution(distributions, sweep1; suffix="loading")
             rowi = findfirst(a -> a==AOA, alphas_web)
 
             if rowi != nothing && AOA in (axi==1 ? [2.1, 4.2, 6.3, 8.4] : [4.2, 6.3, 8.4])
-
-                @show AOA
 
                 # Filter out NaNs
                 ys = vals_exp[rowi, :]

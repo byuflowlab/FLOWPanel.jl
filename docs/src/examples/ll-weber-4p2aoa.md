@@ -1,4 +1,4 @@
-In this example we solve the flow around Weber's $45^\circ$ swept-back 
+In this example we solve the aerodynamics of Weber's $45^\circ$ swept-back 
 wing at an angle of attack of $4.2^\circ$ using a the lifting line solver
 with a rigid wake model.
 
@@ -94,7 +94,7 @@ spanaxis_distribution = [
 
 # Airfoil contour distribution (nondim y-position, polar, airfoil type)
 airfoil_distribution = [
-#    2*y/b  polar file            airfoil type
+#    2*y/b  polar file                        airfoil type
     (0.00, "rae101-Re1p7e6-smooth180-2.csv",  pnl.SimpleAirfoil),
     (1.00, "rae101-Re1p7e6-smooth180-2.csv",  pnl.SimpleAirfoil)
 ]
@@ -135,7 +135,7 @@ lhat            = Dhat                          # Rolling direction
 mhat            = Shat                          # Pitching direction
 nhat            = Lhat                          # Yawing direction
 
-cref            = chord_distribution[1, 2]*b    # Reference chord
+cref            = chord_distribution[1, 2]*b    # (m) reference chord
 nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
 
 

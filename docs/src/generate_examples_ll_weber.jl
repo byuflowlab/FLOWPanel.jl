@@ -10,7 +10,7 @@ data_path = joinpath(module_path, "..", "resources", "data")
 open(joinpath(output_path, output_name*"-4p2aoa.md"), "w") do fout
 
     println(fout, """
-    In this example we solve the flow around Weber's \$45^\\circ\$ swept-back 
+    In this example we solve the aerodynamics of Weber's \$45^\\circ\$ swept-back 
     wing at an angle of attack of \$4.2^\\circ\$ using a the lifting line solver
     with a rigid wake model.
     """)
@@ -30,7 +30,8 @@ open(joinpath(output_path, output_name*"-4p2aoa.md"), "w") do fout
 
             if (
                     contains(l, "plotformat.jl") || contains(l, "@L_str") ||
-                    contains(l, "import CSV") || contains(l, "import DataFrames")
+                    contains(l, "import CSV") || contains(l, "import DataFrames") ||
+                    contains(l, "save_outputs    =")
                 )
                 nothing
             else
@@ -133,7 +134,7 @@ open(joinpath(output_path, output_name*"-aoasweep.md"), "w") do fout
     println(fout, """
     ```@raw html
     <span style="font-size: 0.9em; color:gray;"><i>
-        Run time: ~5 seconds, evaluated 208 AOAs with 45% success rate. <br>
+        Run time: ~5 seconds, evaluated 208 AOAs with 47% success rate. <br>
     </i></span>
     <br><br>
     ```
@@ -215,9 +216,9 @@ open(joinpath(output_path, output_name*"-aoasweep.md"), "w") do fout
     We have added the option of superimpossing a dragging line in order to make 
     the lifting line method more robust post-stall, which is activated using 
     `sigmafactor=-1.0`. Re-running the sweep with that option increases the
-    success rate from 45% to 65%.
+    success rate from 47% to 63%.
     Furthermore, we can use `align_joints_with_Uinfs = true` to further increase
-    the success rate to 80%.
+    the success rate to 78%.
 
     Here are the polars zoomed out to post-stall using `sigmafactor=-1.0` and
     `align_joints_with_Uinfs=true`:

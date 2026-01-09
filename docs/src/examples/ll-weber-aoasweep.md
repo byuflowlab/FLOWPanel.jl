@@ -27,7 +27,7 @@ sweep3 = range(0, 50, step=0.5)             # Sweep from 0 into deep positive st
 ```
 ```@raw html
 <span style="font-size: 0.9em; color:gray;"><i>
-    Run time: ~5 seconds, evaluated 208 AOAs with 45% success rate. <br>
+    Run time: ~5 seconds, evaluated 208 AOAs with 47% success rate. <br>
 </i></span>
 <br><br>
 ```
@@ -78,9 +78,9 @@ spanwise drag distribution), we recommend using `use_Uind_for_force = false` as 
 We have added the option of superimpossing a dragging line in order to make 
 the lifting line method more robust post-stall, which is activated using 
 `sigmafactor=-1.0`. Re-running the sweep with that option increases the
-success rate from 45% to 65%.
+success rate from 47% to 63%.
 Furthermore, we can use `align_joints_with_Uinfs = true` to further increase
-the success rate to 80%.
+the success rate to 78%.
 
 Here are the polars zoomed out to post-stall using `sigmafactor=-1.0` and
 `align_joints_with_Uinfs=true`:

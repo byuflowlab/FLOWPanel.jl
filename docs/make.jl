@@ -77,6 +77,7 @@ makedocs(
                                                                         "examples/ll-weber-4p2aoa.md",
                                                                     "examples/ll-weber-aoasweep.md"
                                                                 ]
+                                                                "A50K27 Wing" => "examples/ll-a50k27.md"
                                                             ],
                                        ],
                 # "API Reference"     => ["api.md",
