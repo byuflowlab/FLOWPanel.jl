@@ -1440,7 +1440,7 @@ function _discretize_wing_parameterization(;
 
                         # -------- Discretization parameters -------------------
                         nelements::Int = 40,                                    # Number of stripwise elements per semi-span (ignored if `discretization` is provided)
-                        discretization = [(1.0, nelements, 10.0, true)],        # Multi-discretization of wing (seg length, ndivs, expansion, central)
+                        discretization = [(1.0, nelements, 1/10, false)],       # Multi-discretization of wing (seg length, ndivs, expansion, central)
                         ypos_lo::Number = 0.0,                                  # Lower bound of non-dimensional span to discretize
                         ypos_up::Number = 1.0,                                  # Upper bound of non-dimensional span to discretize
                         interpolation::Function = math.linear,                  # Interpolation scheme. Example: `FLOWMath.linear` or `FLOWMath.akima`

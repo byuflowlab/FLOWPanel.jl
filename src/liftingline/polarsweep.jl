@@ -15,6 +15,7 @@ function run_polarsweep(liftingline::LiftingLine,
                         X0::AbstractVector,                 # (m) center about which to calculate moments
                         cref::Number,                       # (m) reference chord
                         bref::Number;                       # (m) reference span
+                        Aref = cref*bref,                   # (m^2) reference area
 
                     # ------- SWEEP PARAMETERS ---------------------------------
                     aoa_sweeps = [range(0, -50, step=-0.5), range(0.5, 50, step=0.5)],  # Set of AOA sweeps to run
@@ -54,7 +55,8 @@ function run_polarsweep(liftingline::LiftingLine,
 
     )
 
-    nondim = 0.5*rho*magUinf^2*bref*cref      # Normalization factor
+    nondim = 0.5*rho*magUinf^2*Aref      # Normalization factor
+
     ll = liftingline
 
     ############################################################################
