@@ -97,7 +97,8 @@ v_lvl = 0
                                 rfl_NDIVS=NDIVS_rfl,
                                 delim=",",
                                 span_NDIVS=NDIVS_span_l,
-                                b_low=-1.0, b_up=0.0
+                                b_low=-1.0, b_up=0.0,
+                                verify_rflspline=false, verify_spline=false
                                )
 
     # Loft right side of the wing from right to left
@@ -109,6 +110,7 @@ v_lvl = 0
                                 delim=",",
                                 span_NDIVS=NDIVS_span_r,
                                 b_low=1.0, b_up=0.0,
+                                verify_rflspline=false, verify_spline=false
                                )
 
     # Put both sides together to make a wing with symmetric discretization

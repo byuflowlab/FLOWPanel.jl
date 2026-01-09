@@ -23,21 +23,25 @@ function calc_lift_drag(body, b, ar, Vinf, magVinf, rho; verbose=true, lbl="")
         str *= "| --------------: | :-----: | :-----: |\n"
     end
 
-    # Calculate velocity away from the body
-    Us = pnl.calcfield_U(body, body; fieldname="Uoff",
-                            offset=0.02, characteristiclength=(args...)->b/ar)
+    # Calculate surface velocity induced by the body on itself
+    Us = pnl.calcfield_U(body, body)
+
+    # NOTE: Since the boundary integral equation of the potential flow has a
+    #       discontinuity at the boundary, we need to add the gradient of the
+    #       doublet strength to get an accurate surface velocity
 
     # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
     UDeltaGamma = pnl.calcfield_Ugradmu(body)
 
     # Add both velocities together
-    pnl.addfields(body, "Ugradmu", "Uoff")
+    pnl.addfields(body, "Ugradmu", "U")
 
-    # Calculate pressure coeffiecient
-    Cps = pnl.calcfield_Cp(body, magVinf; U_fieldname="Uoff")
+    # Calculate pressure coefficient
+    Cps = pnl.calcfield_Cp(body, magVinf)
 
     # Calculate the force of each panel
-    Fs = pnl.calcfield_F(body, magVinf, rho; U_fieldname="Uoff")
+    Fs = pnl.calcfield_F(body, magVinf, rho)
+    
     # Calculate total force of the vehicle decomposed as lfit, drag, and sideslip
     Dhat = Vinf/pnl.norm(Vinf)        # Drag direction
     Shat = [0, 1, 0]              # Span direction

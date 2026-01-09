@@ -1,8 +1,8 @@
 |          Solver | CL      | CD      |
 | --------------: | :-----: | :-----: |
-|       Backslash | 0.2335  | 0.0132  |
+|       Backslash | 0.2716  | 0.0066  |
 |    Experimental | 0.238   | 0.005   |
 
-	CL Error:	1.89﹪
-	Run time:	0.44 seconds
+	CL Error:	14.1﹪
+	Run time:	0.33 seconds
 

@@ -24,6 +24,7 @@ import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import SimpleNonlinearSolve
 import Requires: @require
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
@@ -33,6 +34,7 @@ const gt = GeometricTools
 import GeometricTools: Meshes
 import ImplicitAD as IAD
 import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
+import FLOWMath as math
 
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module
@@ -63,6 +65,7 @@ for header_name in ["elements", "linearsolver",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
+                    "liftingline",
                     "utils", "postprocess",
                     # "fmm"
                     ]
@@ -78,7 +81,7 @@ function __init__()
         @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
             import .PyPlot as plt
-            import .PyPlot: @L_str
+            # import .PyPlot: @L_str
 
             for header_name in ["monitor"]
               include("FLOWPanel_"*header_name*".jl")
