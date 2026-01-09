@@ -116,7 +116,7 @@ solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()              # Indiffe
 
 solver_optargs  = (; 
                     abstol = 1e-9,  
-                    maxiters = 400,
+                    maxiters = 800,
                     )
 
 align_joints_with_Uinfs = false                 # Whether to align joint bound vortices with the freestream
@@ -458,7 +458,6 @@ distributions = []
                             use_Uind_for_force
                         )
 
-
 # ----------------- COMPARISON TO EXPERIMENTAL SWEEP ---------------------------
 
 
@@ -561,107 +560,110 @@ data_aerosandbox = Dict(
 
 # --------- Load distribution
 
-fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
-axs = fig.subplots(1, 2)
+function plot_distribution(distributions, sweep1; suffix="loading")
 
-ypos = distributions[1].yposition
-aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
-cls = [cl for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
-cds = [cd for (aoa, cd) in zip(distributions[1].AOA, distributions[1].cd) if aoa in sweep1]
+    fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
+    axs = fig.subplots(1, 2)
 
-for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
+    ypos = distributions[1].yposition
+    aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
+    cls = [cl for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
+    cds = [cd for (aoa, cd) in zip(distributions[1].AOA, distributions[1].cd) if aoa in sweep1]
 
-    first = true
+    for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
 
-    for (AOA, cl, cd) in zip(aoas, cls, cds)
+        first = true
 
-        rowi = findfirst(a -> a==AOA, alphas_web)
+        for (AOA, cl, cd) in zip(aoas, cls, cds)
 
-        if rowi != nothing && AOA in (axi==1 ? [2.1, 4.2, 6.3, 8.4] : [4.2, 6.3, 8.4])
+            rowi = findfirst(a -> a==AOA, alphas_web)
 
-            @show AOA
+            if rowi != nothing && AOA in (axi==1 ? [2.1, 4.2, 6.3, 8.4] : [4.2, 6.3, 8.4])
 
-            # Filter out NaNs
-            ys = vals_exp[rowi, :]
-            xs = [val for (vali, val) in enumerate(y2b_web) if !isnan(ys[vali])]
-            ys = [val for (vali, val) in enumerate(ys) if !isnan(ys[vali])]
+                @show AOA
 
-            # Plot experimental
-            for f in [-1, 1]
-                ax.plot(f*xs, ys, "o--k",
-                            label=("Experimental"^(f==1))^first,
-                            linewidth=0.5, markersize=5, alpha=1.0)
+                # Filter out NaNs
+                ys = vals_exp[rowi, :]
+                xs = [val for (vali, val) in enumerate(y2b_web) if !isnan(ys[vali])]
+                ys = [val for (vali, val) in enumerate(ys) if !isnan(ys[vali])]
+
+                # Plot experimental
+                for f in [-1, 1]
+                    ax.plot(f*xs, ys, "o--k",
+                                label=("Experimental"^(f==1))^first,
+                                linewidth=0.5, markersize=5, alpha=1.0)
+                end
+
+                # Plot FLOWPanel
+                ax.plot(ypos, axi==1 ? cl : cd, "-", label=lbl_ll^first,
+                                color=color_ll, markersize=8, linewidth=1)
+
+                first = false
             end
 
-            # Plot FLOWPanel
-            ax.plot(ypos, axi==1 ? cl : cd, "-", label=lbl_ll^first,
-                            color=color_ll, markersize=8, linewidth=1)
-
-            first = false
         end
 
+        xlims = [0, 1]
+        ax.set_xlim(xlims)
+        ax.set_xticks(xlims[1]:0.2:xlims[end])
+        ax.set_xlabel(L"Span position $2y/b$")
+
+        if axi==1
+            ylims = [0, 0.6]
+            ax.set_ylim(ylims)
+            ax.set_yticks(ylims[1]:0.2:ylims[end])
+            ax.set_ylabel(L"Sectional lift $c_\ell$")
+
+            ax.legend(loc="best", frameon=false, fontsize=6)
+
+            ax.annotate(L"\alpha=8.4^\circ", [0.38, 0.53], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+            ax.annotate(L"\alpha=6.3^\circ", [0.38, 0.402], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+            ax.annotate(L"\alpha=4.2^\circ", [0.38, 0.275], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+            ax.annotate(L"\alpha=2.1^\circ", [0.38, 0.145], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+        else
+            ylims = [-0.04, 0.12]
+            ax.set_ylim(ylims)
+            ax.set_yticks(ylims[1]:0.04:ylims[end])
+            ax.set_ylabel(L"Sectional drag $c_d$")
+
+
+            ax.annotate(L"\alpha=8.4^\circ", [0.25, 0.030], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-10)
+            ax.annotate(L"\alpha=4.2^\circ", [0.25, -0.005], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-5)
+
+            ax.annotate(L"\alpha=6.3^\circ", [0.5, 0.035], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
+
+            ax.annotate("", [0.4, 0.0145], xycoords="data",
+                        xytext=[0.5, 0.035], textcoords="data",
+                        arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
+                                        :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
+        end
+
+        ax.spines["right"].set_visible(false)
+        ax.spines["top"].set_visible(false)
     end
 
-    xlims = [0, 1]
-    ax.set_xlim(xlims)
-    ax.set_xticks(xlims[1]:0.2:xlims[end])
-    ax.set_xlabel(L"Span position $2y/b$")
+    fig.tight_layout()
 
-    if axi==1
-        ylims = [0, 0.6]
-        ax.set_ylim(ylims)
-        ax.set_yticks(ylims[1]:0.2:ylims[end])
-        ax.set_ylabel(L"Sectional lift $c_\ell$")
-
-        ax.legend(loc="best", frameon=false, fontsize=6)
-
-        ax.annotate(L"\alpha=8.4^\circ", [0.38, 0.53], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=6.3^\circ", [0.38, 0.402], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=4.2^\circ", [0.38, 0.275], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=2.1^\circ", [0.38, 0.145], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-    else
-        ylims = [-0.04, 0.12]
-        ax.set_ylim(ylims)
-        ax.set_yticks(ylims[1]:0.04:ylims[end])
-        ax.set_ylabel(L"Sectional drag $c_d$")
-
-
-        ax.annotate(L"\alpha=8.4^\circ", [0.25, 0.030], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-10)
-        ax.annotate(L"\alpha=4.2^\circ", [0.25, -0.005], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-5)
-
-        ax.annotate(L"\alpha=6.3^\circ", [0.5, 0.035], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-
-        ax.annotate("", [0.4, 0.0145], xycoords="data",
-                    xytext=[0.5, 0.035], textcoords="data",
-                    arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
-                                    :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
+    if save_outputs
+        fig.savefig(joinpath(fig_path, "$(run_name)-sweep-$(suffix).png"),
+                                                    dpi=300, transparent=true)
     end
-
-    ax.spines["right"].set_visible(false)
-    ax.spines["top"].set_visible(false)
 end
 
-fig.tight_layout()
+plot_distribution(distributions, sweep1; suffix="loading")
 
-if save_outputs
-    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-loading.png"),
-                                                dpi=300, transparent=true)
-end
+
 
 # --------- Integrated forces and moment: lift, drag, and pitching moment
-AOAs = wingpolar.AOA
-CLs = wingpolar.CL
-CDs = wingpolar.CD
-Cms = wingpolar.Cm
 
 stl_web = "-o"
 fmt_web = (; label=lbl_web, color="k")
 
 stl_asb = "-^"
-fmt_asb = (; label="AeroSandbox", color="green", markersize=3, alpha=0.2)
+fmt_asb = (; label="AeroSandbox LL", color="green", markersize=3, alpha=0.2)
 
 stl_mux = "-s"
-fmt_mux = (; label="MachUpX", color="orchid", markersize=3, alpha=0.3)
+fmt_mux = (; label="MachUpX LL", color="orchid", markersize=3, alpha=0.3)
 
 stl_vsp = "-o"
 fmt_vsp = (; label=lbl_vsp, color="goldenrod", markersize=4, alpha=0.6)
@@ -669,333 +671,163 @@ fmt_vsp = (; label=lbl_vsp, color="goldenrod", markersize=4, alpha=0.6)
 stl_ll = ".-"
 fmt_ll = (; label=lbl_ll, color=color_ll, markersize=4, alpha=1.0)
 
-# VSPAERO CL and CD
-data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
-alphas_vsp = [val for val in data_vsp[1, 2:end]]
-CDi_vsp = [val for val in data_vsp[3, 2:end]]
-CDtot_vsp = [val for val in data_vsp[6, 2:end]]
-CL_vsp = [val for val in data_vsp[11, 2:end]]
-CMy_vsp = [val for val in data_vsp[16, 2:end]]
+function plot_polars(wingpolar; suffix="CLCDCm", 
+                        aoalims=[-17, 17], aoaticks=-15:5:15,
+                        CLlims=[-0.75, 1.0], CLticks=-0.5:0.5:CLlims[end],
+                        CDlims=[0, 0.06], CDticks=CDlims[1]:0.02:CDlims[end],
+                        Cmlims=[-1.5, 1.5], Cmticks=Cmlims[1]:0.5:Cmlims[end]
+                        )
+    AOAs = wingpolar.AOA
+    CLs = wingpolar.CL
+    CDs = wingpolar.CD
+    Cms = wingpolar.Cm
 
-fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
-axs = fig.subplots(2, 2)
+    # VSPAERO CL and CD
+    data_vsp = CSV.read(vsp_file, DataFrame; skipto=397, limit=419-397+1)
+    alphas_vsp = [val for val in data_vsp[1, 2:end]]
+    CDi_vsp = [val for val in data_vsp[3, 2:end]]
+    CDtot_vsp = [val for val in data_vsp[6, 2:end]]
+    CL_vsp = [val for val in data_vsp[11, 2:end]]
+    CMy_vsp = [val for val in data_vsp[16, 2:end]]
 
-axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
+    fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
+    axs = fig.subplots(2, 2)
 
-# CL vs AOA
-ax = axs[1]
-ax.plot(alphas_web, CLs_web, stl_web; fmt_web...)
-ax.plot(alphas_vsp, CL_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
-ax.plot(data_machupx["alphas"], data_machupx["CLs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, CLs, stl_ll; fmt_ll...)
+    axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
 
-CLlims = ylims = [-0.75, 1.0]
-ax.set_ylim(ylims)
-ax.set_yticks(-0.5:0.5:ylims[end])
-ax.set_ylabel(L"Lift coeff. $C_L$")
+    # CL vs AOA
+    ax = axs[1]
+    ax.plot(alphas_web, CLs_web, stl_web; fmt_web...)
+    ax.plot(alphas_vsp, CL_vsp, stl_vsp; fmt_vsp...)
+    ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
+    ax.plot(data_machupx["alphas"], data_machupx["CLs"], stl_mux; fmt_mux...)
+    ax.plot(AOAs, CLs, stl_ll; fmt_ll...)
 
-# CD vs AOA
-ax = axs[2]
-ax.plot(alphas_web, CDs_web, stl_web; fmt_web...)
-ax.plot(alphas_vsp, CDtot_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CD"], stl_asb; fmt_asb...)
-# ax.plot(data_machupx["alphas"], data_machupx["CDs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, CDs, stl_ll; fmt_ll...)
+    if !isnothing(CLlims)
+        ax.set_ylim(CLlims)
+    end
+    if !isnothing(CLticks)
+        ax.set_yticks(CLticks)
+    end
+    ax.set_ylabel(L"Lift coeff. $C_L$")
 
-CDlims = ylims = [0, 0.06]
-ax.set_ylim(ylims)
-ax.set_yticks(ylims[1]:0.02:ylims[end])
-ax.set_ylabel(L"Drag coeff. $C_D$")
+    # CD vs AOA
+    ax = axs[2]
+    ax.plot(alphas_web, CDs_web, stl_web; fmt_web...)
+    ax.plot(alphas_vsp, CDtot_vsp, stl_vsp; fmt_vsp...)
+    ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CD"], stl_asb; fmt_asb...)
+    # ax.plot(data_machupx["alphas"], data_machupx["CDs"], stl_mux; fmt_mux...)
+    ax.plot(AOAs, CDs, stl_ll; fmt_ll...)
 
-# CL vs CD
-ax = axs[3]
-ax.plot(CDs_web, CLs_web, stl_web; fmt_web...)
-ax.plot(CDtot_vsp, CL_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["CD"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
-# ax.plot(data_machupx["CDs"], data_machupx["CLs"], stl_mux; fmt_mux...)
-ax.plot(CDs, CLs, stl_ll; fmt_ll...)
+    if !isnothing(CDlims)
+        ax.set_ylim(CDlims)
+    end
+    if !isnothing(CDticks)
+        ax.set_yticks(CDticks)
+    end
+    ax.set_ylabel(L"Drag coeff. $C_D$")
 
-ylims = CLlims
-xlims = CDlims
-ax.set_ylim(ylims)
-ax.set_yticks(-0.5:0.5:ylims[end])
-ax.set_ylabel(L"Lift coeff. $C_L$")
-ax.set_xlim(xlims)
-ax.set_xticks(xlims[1]:0.02:xlims[end])
-ax.set_xlabel(L"Drag coeff. $C_D$")
+    # CL vs CD
+    ax = axs[3]
+    ax.plot(CDs_web, CLs_web, stl_web; fmt_web...)
+    ax.plot(CDtot_vsp, CL_vsp, stl_vsp; fmt_vsp...)
+    ax.plot(data_aerosandbox["CD"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
+    # ax.plot(data_machupx["CDs"], data_machupx["CLs"], stl_mux; fmt_mux...)
+    ax.plot(CDs, CLs, stl_ll; fmt_ll...)
 
-# Cm vs AOA
-ax = axs[4]
-ax.plot(alphas_vsp, CMy_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["Cm"], stl_asb; fmt_asb...)
-ax.plot(data_machupx["alphas"], data_machupx["CMs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, Cms, stl_ll; fmt_ll...)
+    if !isnothing(CLlims)
+        ax.set_ylim(CLlims)
+    end
+    if !isnothing(CLticks)
+        ax.set_yticks(CLticks)
+    end
+    ax.set_ylabel(L"Lift coeff. $C_L$")
+    if !isnothing(CDlims)
+        ax.set_xlim(CDlims)
+    end
+    if !isnothing(CDticks)
+        ax.set_xticks(CDticks)
+    end
+    ax.set_xlabel(L"Drag coeff. $C_D$")
 
-ylims = [-1.5, 1.5]
-ax.set_ylim(ylims)
-ax.set_yticks(ylims[1]:0.5:ylims[end])
-ax.set_ylabel(L"Pitching moment $C_m$")
+    # Cm vs AOA
+    ax = axs[4]
+    ax.plot(alphas_vsp, CMy_vsp, stl_vsp; fmt_vsp...)
+    ax.plot(data_aerosandbox["alpha"], data_aerosandbox["Cm"], stl_asb; fmt_asb...)
+    ax.plot(data_machupx["alphas"], data_machupx["CMs"], stl_mux; fmt_mux...)
+    ax.plot(AOAs, Cms, stl_ll; fmt_ll...)
 
-for (axi, ax) in enumerate(axs)
-    xlims = [-17, 17]
-    xticks = -15:5:15
+    ax.set_ylim(Cmlims)
+    ax.set_yticks(Cmticks)
+    ax.set_ylabel(L"Pitching moment $C_m$")
 
-    if axi != 3
-        ax.set_xlim(xlims)
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(["$val"*L"^\circ" for val in xticks])
-        ax.set_xlabel(L"Angle of attack $\alpha$")
+    for (axi, ax) in enumerate(axs)
+
+        if axi != 3
+            ax.set_xlim(aoalims)
+            ax.set_xticks(aoaticks)
+            ax.set_xticklabels(["$val"*L"^\circ" for val in aoaticks])
+            ax.set_xlabel(L"Angle of attack $\alpha$")
+        end
+
+        ax.spines["right"].set_visible(false)
+        ax.spines["top"].set_visible(false)
+
+        ax.legend(loc="best", frameon=false, fontsize=8, reverse=true)
     end
 
-    ax.spines["right"].set_visible(false)
-    ax.spines["top"].set_visible(false)
+    fig.tight_layout()
 
-    ax.legend(loc="best", frameon=false, fontsize=8, reverse=true)
-end
-
-fig.tight_layout()
-
-if save_outputs
-    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-CLCDCm.png"),
-                                                dpi=300, transparent=true)
-end
-
-
-
-
-# CD vs AOA
-ax = axs[2]
-CDlims = ylims = [0, 0.4]
-ax.set_ylim(ylims)
-ax.set_yticks(ylims[1]:0.1:ylims[end])
-ax.set_ylabel(L"Drag coeff. $C_D$")
-
-# CL vs CD
-ax = axs[3]
-ylims = CLlims
-xlims = CDlims
-ax.set_xlim(xlims)
-ax.set_xticks(xlims[1]:0.1:xlims[end])
-ax.set_xlabel(L"Drag coeff. $C_D$")
-
-for (axi, ax) in enumerate(axs)
-    xlims = [-40, 40]
-    xticks = xlims[1]:20:xlims[2]
-
-    if axi != 3
-        ax.set_xticks(xticks)
-        ax.set_xlim(xlims)
-        ax.set_xticklabels(["$val"*L"^\circ" for val in xticks])
-        ax.set_xlabel(L"Angle of attack $\alpha$")
+    if save_outputs
+        fig.savefig(joinpath(fig_path, "$(run_name)-sweep-$(suffix).png"),
+                                                    dpi=300, transparent=true)
     end
 
-    ax.legend(loc="best", frameon=false, fontsize=8, reverse=true)
 end
 
-fig.tight_layout()
+plot_polars(wingpolar; suffix="CLCDCm")
 
-if save_outputs
-    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-CLCDCm-zoomout.png"),
-                                                dpi=300, transparent=true)
-end
-
-
-
-# ----------------- AOA SWEEP 2 --------------------------------------------------
-
-distributions = []
-
-@time wingpolar2 = pnl.run_polarsweep(ll,
-                            magUinf, rho, X0, cref, b;
-                            use_Uind_for_force = false,
-                            aoa_sweeps = (sweep1, sweep2, sweep3),
-                            # sweepname = run_name,
-                            # plots_path= save_outputs ? fig_path : nothing,
-                            # extraplots_path = save_outputs ? fig_path : nothing,
-                            output_distributions=distributions,
-                            solver,
-                            solver_optargs,
-                            align_joints_with_Uinfs, 
+plot_polars(wingpolar; suffix="CLCDCm-zoomout", 
+                        aoalims=[-40, 40], aoaticks=-40:20:40,
+                        CDlims=[0, 0.4], CDticks=0:0.1:0.4,
                         )
 
 
-# --------- Load distribution
 
-fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
-axs = fig.subplots(1, 2)
-
-ypos = distributions[1].yposition
-aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
-cls = [cl for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
-cds = [cd for (aoa, cd) in zip(distributions[1].AOA, distributions[1].cd) if aoa in sweep1]
-
-for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
-
-    first = true
-
-    for (AOA, cl, cd) in zip(aoas, cls, cds)
-
-        rowi = findfirst(a -> a==AOA, alphas_web)
-
-        if rowi != nothing && AOA in (axi==1 ? [2.1, 4.2, 6.3, 8.4] : [4.2, 6.3, 8.4])
-
-            @show AOA
-
-            # Filter out NaNs
-            ys = vals_exp[rowi, :]
-            xs = [val for (vali, val) in enumerate(y2b_web) if !isnan(ys[vali])]
-            ys = [val for (vali, val) in enumerate(ys) if !isnan(ys[vali])]
-
-            # Plot experimental
-            for f in [-1, 1]
-                ax.plot(f*xs, ys, "o--k",
-                            label=("Experimental"^(f==1))^first,
-                            linewidth=0.5, markersize=5, alpha=1.0)
-            end
-
-            # Plot FLOWPanel
-            ax.plot(ypos, axi==1 ? cl : cd, "-", label=lbl_ll^first,
-                            color=color_ll, markersize=8, linewidth=1)
-
-            first = false
-        end
-
-    end
-
-    xlims = [0, 1]
-    ax.set_xlim(xlims)
-    ax.set_xticks(xlims[1]:0.2:xlims[end])
-    ax.set_xlabel(L"Span position $2y/b$")
-
-    if axi==1
-        ylims = [0, 0.6]
-        ax.set_ylim(ylims)
-        ax.set_yticks(ylims[1]:0.2:ylims[end])
-        ax.set_ylabel(L"Sectional lift $c_\ell$")
-
-        ax.legend(loc="best", frameon=false, fontsize=6)
-
-        ax.annotate(L"\alpha=8.4^\circ", [0.38, 0.53], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=6.3^\circ", [0.38, 0.402], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=4.2^\circ", [0.38, 0.275], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-        ax.annotate(L"\alpha=2.1^\circ", [0.38, 0.145], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-    else
-        ylims = [-0.04, 0.12]
-        ax.set_ylim(ylims)
-        ax.set_yticks(ylims[1]:0.04:ylims[end])
-        ax.set_ylabel(L"Sectional drag $c_d$")
-
-
-        ax.annotate(L"\alpha=8.4^\circ", [0.25, 0.030], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-10)
-        ax.annotate(L"\alpha=4.2^\circ", [0.25, -0.005], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6, rotation=-5)
-
-        ax.annotate(L"\alpha=6.3^\circ", [0.5, 0.035], xycoords="data", fontsize=ANNOT_SIZE, color="black", alpha=0.6)
-
-        ax.annotate("", [0.4, 0.0145], xycoords="data",
-                    xytext=[0.5, 0.035], textcoords="data",
-                    arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
-                                    :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
-    end
-
-    ax.spines["right"].set_visible(false)
-    ax.spines["top"].set_visible(false)
-end
-
-fig.tight_layout()
-
+# Proceed to do the following sweeps only if we are regenerating the docs
 if save_outputs
-    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-loading2.png"),
-                                                dpi=300, transparent=true)
-end
 
-# --------- Integrated forces and moment: lift, drag, and pitching moment
-AOAs = wingpolar2.AOA
-CLs = wingpolar2.CL
-CDs = wingpolar2.CD
-Cms = wingpolar2.Cm
+    # ----------------- AOA SWEEP 2 ------------------------------------------------
+    distributions = []
+
+    @time wingpolar2 = pnl.run_polarsweep(ll,
+                                magUinf, rho, X0, cref, b;
+                                use_Uind_for_force = false,
+                                aoa_sweeps = (sweep1, sweep2, sweep3),
+                                # sweepname = run_name,
+                                # plots_path= save_outputs ? fig_path : nothing,
+                                # extraplots_path = save_outputs ? fig_path : nothing,
+                                output_distributions=distributions,
+                                solver,
+                                solver_optargs,
+                                align_joints_with_Uinfs, 
+                            )
+
+    # --------- Load distribution 2
+
+    plot_distribution(distributions, sweep1; suffix="loading2")
+
+    # --------- Integrated forces and moment: lift, drag, and pitching moment
+    plot_polars(wingpolar2; suffix="CLCDCm2", 
+                            aoalims=[-17, 17], aoaticks=-15:5:15,
+                            CLlims=[-0.75, 1.0],
+                            CDlims=[0, 0.06], 
+                            Cmlims=[-1.5, 1.5],
+                            )
 
 
-fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
-axs = fig.subplots(2, 2)
-
-axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
-
-# CL vs AOA
-ax = axs[1]
-ax.plot(alphas_web, CLs_web, stl_web; fmt_web...)
-ax.plot(alphas_vsp, CL_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
-ax.plot(data_machupx["alphas"], data_machupx["CLs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, CLs, stl_ll; fmt_ll...)
-
-CLlims = ylims = [-0.75, 1.0]
-ax.set_ylim(ylims)
-ax.set_yticks(-0.5:0.5:ylims[end])
-ax.set_ylabel(L"Lift coeff. $C_L$")
-
-# CD vs AOA
-ax = axs[2]
-ax.plot(alphas_web, CDs_web, stl_web; fmt_web...)
-ax.plot(alphas_vsp, CDtot_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["CD"], stl_asb; fmt_asb...)
-# ax.plot(data_machupx["alphas"], data_machupx["CDs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, CDs, stl_ll; fmt_ll...)
-
-CDlims = ylims = [0, 0.06]
-ax.set_ylim(ylims)
-ax.set_yticks(ylims[1]:0.02:ylims[end])
-ax.set_ylabel(L"Drag coeff. $C_D$")
-
-# CL vs CD
-ax = axs[3]
-ax.plot(CDs_web, CLs_web, stl_web; fmt_web...)
-ax.plot(CDtot_vsp, CL_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["CD"], data_aerosandbox["CL"], stl_asb; fmt_asb...)
-# ax.plot(data_machupx["CDs"], data_machupx["CLs"], stl_mux; fmt_mux...)
-ax.plot(CDs, CLs, stl_ll; fmt_ll...)
-
-ylims = CLlims
-xlims = CDlims
-ax.set_ylim(ylims)
-ax.set_yticks(-0.5:0.5:ylims[end])
-ax.set_ylabel(L"Lift coeff. $C_L$")
-ax.set_xlim(xlims)
-ax.set_xticks(xlims[1]:0.02:xlims[end])
-ax.set_xlabel(L"Drag coeff. $C_D$")
-
-# Cm vs AOA
-ax = axs[4]
-ax.plot(alphas_vsp, CMy_vsp, stl_vsp; fmt_vsp...)
-ax.plot(data_aerosandbox["alpha"], data_aerosandbox["Cm"], stl_asb; fmt_asb...)
-ax.plot(data_machupx["alphas"], data_machupx["CMs"], stl_mux; fmt_mux...)
-ax.plot(AOAs, Cms, stl_ll; fmt_ll...)
-
-ylims = [-1.5, 1.5]
-ax.set_ylim(ylims)
-ax.set_yticks(ylims[1]:0.5:ylims[end])
-ax.set_ylabel(L"Pitching moment $C_m$")
-
-for (axi, ax) in enumerate(axs)
-    xlims = [-17, 17]
-    xticks = -15:5:15
-
-    if axi != 3
-        ax.set_xlim(xlims)
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(["$val"*L"^\circ" for val in xticks])
-        ax.set_xlabel(L"Angle of attack $\alpha$")
-    end
-
-    ax.spines["right"].set_visible(false)
-    ax.spines["top"].set_visible(false)
-
-    ax.legend(loc="best", frameon=false, fontsize=8, reverse=true)
-end
-
-fig.tight_layout()
-
-if save_outputs
-    fig.savefig(joinpath(fig_path, "$(run_name)-sweep-CLCDCm2.png"),
-                                                dpi=300, transparent=true)
+    plot_polars(wingpolar2; suffix="CLCDCm-zoomout2", 
+                            aoalims=[-40, 40], aoaticks=-40:20:40,
+                            CDlims=[0, 0.4], CDticks=0:0.1:0.4,
+                            )
 end

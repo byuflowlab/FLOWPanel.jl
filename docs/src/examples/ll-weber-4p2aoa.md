@@ -118,7 +118,7 @@ solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()              # Indiffe
 
 solver_optargs  = (; 
                     abstol = 1e-9,  
-                    maxiters = 400,
+                    maxiters = 800,
                     )
 
 align_joints_with_Uinfs = false                 # Whether to align joint bound vortices with the freestream
