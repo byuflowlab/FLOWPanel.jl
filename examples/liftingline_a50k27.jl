@@ -29,7 +29,7 @@ run_name        = "ll-a50k27"                   # Name of this run
 save_path       = run_name                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find 2D polars
 
-paraview        = false                         # Whether to visualize with Paraview
+paraview        = true                          # Whether to visualize with Paraview
 save_outputs    = false                         # Whether to save outputs for docs or not
 
 
@@ -122,10 +122,8 @@ use_Uind_for_force = false                      # Whether to use Uind as opposed
                                                 # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
 X0              = [0.595, 0, 0]                 # (m) center about which to calculate moments
-
 cref            = 0.2472                        # (m) reference chord
 Aref            = 0.957                         # (m^2) reference area
-nondim          = 0.5*rho*magUinf^2*Aref        # Normalization factor
 
 
 # ------------------ GENERATE LIFTING LINE -------------------------------------

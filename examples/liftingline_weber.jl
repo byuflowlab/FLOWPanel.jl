@@ -31,7 +31,7 @@ run_name        = "ll-weber"                    # Name of this run
 save_path       = run_name                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find 2D polars
 
-paraview        = false                         # Whether to visualize with Paraview
+paraview        = true                          # Whether to visualize with Paraview
 save_outputs    = false                         # Whether to save outputs for docs or not
 
 
@@ -125,15 +125,7 @@ align_joints_with_Uinfs = false                 # Whether to align joint bound v
 use_Uind_for_force = true                       # Whether to use Uind as opposed to selfUind for force postprocessing
                                                 # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
-Dhat            = Uinf/norm(Uinf)               # Drag direction
-Shat            = [0, 1, 0]                     # Span direction
-Lhat            = cross(Dhat, Shat)             # Lift direction
-
 X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
-lhat            = Dhat                          # Rolling direction
-mhat            = Shat                          # Pitching direction
-nhat            = Lhat                          # Yawing direction
-
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
 

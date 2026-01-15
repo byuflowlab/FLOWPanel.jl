@@ -57,7 +57,8 @@ function calc_noseposition(ll::LiftingLine)
     end
 end
 
-function save(self::LiftingLine, filename::AbstractString; 
+
+function save(self::LiftingLine{R}, filename::AbstractString; 
                     format="vtk", 
                     horseshoe_suffix="_horseshoe",
                     midpoint_suffix="_midp", 
@@ -65,9 +66,15 @@ function save(self::LiftingLine, filename::AbstractString;
                     planar_suffix="_planar", 
                     wake_length_factor=0.25,
                     debug=false,
-                    optargs...)
+                    optargs...) where R
 
     str = ""
+
+    # Function for fetching values out of Dual numbers
+    value(x::Number) = x
+    value(x::FD.Dual) = FD.value(x)
+    value(x::AbstractArray) = x
+    value(x::AbstractArray{<:FD.Dual}) = FD.value.(x)
 
     # ------------- OUTPUT HORSESHOES ------------------------------------------
 
@@ -108,24 +115,24 @@ function save(self::LiftingLine, filename::AbstractString;
     end
 
     # Format the points as a vector of vectors 
-    horseshoes = eachcol(horseshoes)
+    horseshoes = eachcol(value(horseshoes))
 
     horseshoes_data = [
                             Dict(   "field_name"  => "Gamma",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.Gammas)
+                                    "field_data"  => value(self.Gammas))
 
                             Dict(   "field_name"  => "sigma",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.sigmas)
+                                    "field_data"  => value(self.sigmas))
 
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.aoas)
+                                    "field_data"  => value(self.aoas))
                                     
                             Dict(   "field_name"  => "claero",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.claeros)
+                                    "field_data"  => value(self.claeros))
                         ]
 
     str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
@@ -171,7 +178,7 @@ function save(self::LiftingLine, filename::AbstractString;
             end
 
             # Format the points as a vector of vectors 
-            horseshoes = eachcol(horseshoes)
+            horseshoes = eachcol(value(horseshoes))
 
             this_str = gt.generateVTK(filename*horseshoe_suffix, horseshoes; 
                                         cells=lines, num=ei,
@@ -182,40 +189,40 @@ function save(self::LiftingLine, filename::AbstractString;
             end
 
             # Output associated midpoint
-            midpoints = [self.midpoints[:, ei]]
+            midpoints = [value(self.midpoints[:, ei])]
 
             midpoints_data = [
                                     Dict(   "field_name"  => "tangent",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.tangents[:, ei]]),
+                                            "field_data"  => [value(self.tangents[:, ei])]),
 
                                     Dict(   "field_name"  => "span",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.spans[:, ei]]),
+                                            "field_data"  => [value(self.spans[:, ei])]),
 
                                     Dict(   "field_name"  => "normal",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.normals[:, ei]]),
+                                            "field_data"  => [value(self.normals[:, ei])]),
 
                                     Dict(   "field_name"  => "swepttangent",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.swepttangents[:, ei]]),
+                                            "field_data"  => [value(self.swepttangents[:, ei])]),
 
                                     Dict(   "field_name"  => "line",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.lines[:, ei]]),
+                                            "field_data"  => [value(self.lines[:, ei])]),
 
                                     Dict(   "field_name"  => "sweptnormal",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.sweptnormals[:, ei]]),
+                                            "field_data"  => [value(self.sweptnormals[:, ei])]),
 
                                     Dict(   "field_name"  => "angleofattack",
                                             "field_type"  => "scalar",
-                                            "field_data"  => [self.aoas[ei]]),
+                                            "field_data"  => [value(self.aoas[ei])]),
 
                                     Dict(   "field_name"  => "U",
                                             "field_type"  => "vector",
-                                            "field_data"  => [self.Us[:, ei]])
+                                            "field_data"  => [value(self.Us[:, ei])])
                                 ]
 
             this_str = gt.generateVTK(filename*midpoint_suffix, midpoints;
@@ -232,40 +239,40 @@ function save(self::LiftingLine, filename::AbstractString;
     end
 
     # ------------- OUTPUT MIDPOINTS -------------------------------------------
-    midpoints = eachcol(self.midpoints)
+    midpoints = eachcol(value(self.midpoints))
 
     midpoints_data = [
                             Dict(   "field_name"  => "tangent",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.tangents)),
+                                    "field_data"  => eachcol(value(self.tangents))),
 
                             Dict(   "field_name"  => "span",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.spans)),
+                                    "field_data"  => eachcol(value(self.spans))),
 
                             Dict(   "field_name"  => "normal",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.normals)),
+                                    "field_data"  => eachcol(value(self.normals))),
 
                             Dict(   "field_name"  => "swepttangent",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.swepttangents)),
+                                    "field_data"  => eachcol(value(self.swepttangents))),
 
                             Dict(   "field_name"  => "line",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.lines)),
+                                    "field_data"  => eachcol(value(self.lines))),
 
                             Dict(   "field_name"  => "sweptnormal",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.sweptnormals)),
+                                    "field_data"  => eachcol(value(self.sweptnormals))),
                                     
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.aoas),
+                                    "field_data"  => value(self.aoas)),
 
                             Dict(   "field_name"  => "U",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.Us))
+                                    "field_data"  => eachcol(value(self.Us)))
                         ]
 
     str *= gt.generateVTK(filename*midpoint_suffix, midpoints; 
@@ -273,24 +280,25 @@ function save(self::LiftingLine, filename::AbstractString;
                                 point_data=midpoints_data, optargs...)
 
     # ------------- OUTPUT CONTROL POINTS --------------------------------------
-    controlpoints = eachcol(self.controlpoints)
+    controlpoints = eachcol(value(self.controlpoints))
 
     controlpoints_data = [
                             Dict(   "field_name"  => "normal",
                                     "field_type"  => "vector",
-                                    "field_data"  => eachcol(self.normals)),
+                                    "field_data"  => eachcol(value(self.normals))),
 
                             Dict(   "field_name"  => "angleofattack",
                                     "field_type"  => "scalar",
-                                    "field_data"  => self.aoas)
+                                    "field_data"  => value(self.aoas))
                         ]
 
     str *= gt.generateVTK(filename*controlpoint_suffix, controlpoints; 
                                 point_data=controlpoints_data, optargs...)
 
     #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
-
-    str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
+    if !(R <: FD.Dual)
+        str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
+    end
 
     return str
 end

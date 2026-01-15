@@ -1,18 +1,15 @@
-In this example we solve the aerodynamics of Weber's $45^\circ$ swept-back 
-wing at an angle of attack of $4.2^\circ$ using a the lifting line solver
-with a rigid wake model.
+# Stability Derivatives
+In this example we show how to calculate stability derivatives using automatic 
+differentiation. This example uses Weber's wing with 5deg dihedral, and
+the nonlinear lifting line method.
 
-# $4.2^\circ$ Angle of Attack
 ```julia
 #=##############################################################################
 # DESCRIPTION
-    45deg swept-back wing at an angle of attack of 4.2deg. This wing has an
-    aspect ratio of 5.0, a RAE 101 airfoil section with 12% thickness, and no
-    dihedral, twist, nor taper. This test case matches the experimental setup
-    of Weber, J., and Brebner, G., “Low-Speed Tests on 45-deg Swept-Back Wings,
-    Part I,” Tech. rep., 1951.
-
-    This example uses the nonlinear lifting line method.
+    
+    Example on how to calculate stability derivatives using automatic 
+    differentiation. This example uses Weber's wing with 5deg dihedral, and
+    the nonlinear lifting line method.
 
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
@@ -21,6 +18,8 @@ with a rigid wake model.
   * License   : MIT License
 =###############################################################################
 
+import ForwardDiff: Dual, Partials, value, partials
+
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
@@ -28,7 +27,7 @@ import PyPlot as plt
 
 
 
-run_name        = "ll-weber"                    # Name of this run
+run_name        = "ll-stabilityderivatives"     # Name of this run
 
 save_path       = run_name                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find 2D polars
@@ -37,9 +36,23 @@ paraview        = true                          # Whether to visualize with Para
 
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
-AOA             = 4.2                           # (deg) angle of attack
-magUinf         = 49.7                          # (m/s) freestream velocity
-Uinf            = magUinf*[cosd(AOA), 0, sind(AOA)] # Freestream
+
+# NOTE: Here we define a sideslip angle in addition to the angle of attack
+
+alpha           = 4.2                           # (deg) angle of attack
+beta            = 0.0                           # (deg) sideslip angle
+
+# NOTE: In the dual numbers we will implicitely defined the first partial to be 
+#       the derivative w.r.t. angle of attack and the second partial to be
+#       the derivative w.r.t. sideslip angle
+
+alpha           = Dual(alpha, Partials((1.0, 0.0))) # Convert angle of attack into dual number for automatic differentiation
+beta            = Dual(beta,  Partials((0.0, 1.0))) # Convert sideslip angle into dual number for automatic differentiation
+NumType         = typeof(alpha)                 # Number type for LiftingLine
+
+
+magUinf         = 49.7                          # (m/s) freestream velocity magnitude
+Uinf            = magUinf*pnl.direction(; alpha, beta) # Freestream vector
 
 rho             = 1.225                         # (kg/m^3) air density
 
@@ -80,8 +93,8 @@ sweep_distribution = [
 # Dihedral distribution (nondim y-position, dihedral)
 dihedral_distribution = [
 #   2*y/b   dihedral (deg)
-    0.0     0.0
-    1.0     0.0
+    0.0     5.0
+    1.0     5.0
 ]
 
 # Span-axis distribution: chordwise point about which the wing is twisted, 
@@ -126,23 +139,35 @@ align_joints_with_Uinfs = false                 # Whether to align joint bound v
 use_Uind_for_force = true                       # Whether to use Uind as opposed to selfUind for force postprocessing
                                                 # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
+# NOTE: We need to manually define the direction of lift, drag, and span, as 
+#       well as roll, pitching, and yawing moment since we now have a sideslip
+#       angle
+
+Dhat            = pnl.direction(; alpha)        # Drag direction
+Shat            = [0, 1, 0]                     # Span direction
+Lhat            = cross(Dhat, Shat)             # Lift direction
+
+X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+lhat            = Dhat                          # Rolling direction
+mhat            = Shat                          # Pitching direction
+nhat            = Lhat                          # Yawing direction
+
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
 
 # ------------------ GENERATE LIFTING LINE -------------------------------------
 
-ll = pnl.LiftingLine(
-                        airfoil_distribution; 
-                        b, chord_distribution, twist_distribution,
-                        sweep_distribution, dihedral_distribution,
-                        spanaxis_distribution,
-                        discretization,
-                        symmetric,
-                        deltasb, deltajoint, sigmafactor, sigmaexponent,
-                        element_optargs,
-                        plot_discretization = true,
-                        )
+ll = pnl.LiftingLine{NumType}(
+                                airfoil_distribution; 
+                                b, chord_distribution, twist_distribution,
+                                sweep_distribution, dihedral_distribution,
+                                spanaxis_distribution,
+                                discretization,
+                                symmetric,
+                                deltasb, deltajoint, sigmafactor, sigmaexponent,
+                                element_optargs,
+                                plot_discretization = true,
+                                )
 
 display(ll)
 
@@ -155,7 +180,7 @@ Uinfs = repeat(Uinf, 1, ll.nelements)
 # Run solver
 result, solver_cache = pnl.solve(ll, Uinfs; 
                                     debug=true,             # `true` returns the residual rms
-                                    aoas_initial_guess=AOA, 
+                                    aoas_initial_guess=alpha, 
                                     align_joints_with_Uinfs, 
                                     solver, solver_optargs)
 
@@ -185,22 +210,32 @@ fig.tight_layout()
 
 
 # ------------------ POSTPROCESSING --------------------------------------------
-distributions = []                      # Spanwise distributions get stored here
 
 # Calculate force and moment coefficients
 calcs = pnl.calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
                                             rho, cref, b;
                                             X0, 
-                                            use_Uind_for_force,
-                                            distributions)
+                                            Dhat, Shat, Lhat,
+                                            lhat, mhat, nhat,
+                                            use_Uind_for_force)
 
 # Unpack calculations
 (; CD, CY, CL) = calcs                      # Drag, side, and lift forces
 (; Cl, Cm, Cn) = calcs                      # Roll, pitch, and yawing moment
-(; Dhat, Shat, Lhat) = calcs                # Direction of each force
-(; lhat, mhat, nhat) = calcs                # Direction of each moment
 (; q, Aref, bref, cref) = calcs             # Reference dynamic pressure, area, span, and chord
-(; spanposition, cd, cy, cl) = distributions[end]   # Spanwise distributions: 2*y/b, drag, side, and lift
+
+@show dCLdα = partials(CL)[1]
+@show dCDdα = partials(CD)[1]
+@show dCmdα = partials(Cm)[1]
+
+@show dCLdβ = partials(CL)[2]
+@show dCDdβ = partials(CD)[2]
+@show dCmdβ = partials(Cm)[2]
+
+@show CL = value(CL)
+@show CD = value(CD)
+@show Cm = value(Cm)
+
 
 
 # ------------------ OUTPUT SOLUTION -------------------------------------------
@@ -213,25 +248,11 @@ if !isnothing(save_path)
     end
     
 end
-
-
 ```
 (see the complete example under
-[examples/liftingline_weber.jl](https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/liftingline_weber.jl)
+[examples/liftingline_stabilityderivatives.jl](https://github.com/byuflowlab/FLOWPanel.jl/blob/master/examples/liftingline_stabilityderivatives.jl)
 to see how to postprocess the spanwise loading that is plotted below)
 
-```@raw html
-<center>
-    <br><br><b>Spanwise loading distribution</b>
-    <img src="../../assets/images/ll-weber-loading.png" alt="Pic here" style="width: 100%;"/>
-</center>
-```
-
-
-|           | Experimental  | FLOWPanel Lifting Line    | Error | `VSPAERO 3D Panel` |
-| --------: | :-----------: | :-----------------------: | :---- |  :----: |
-| $C_L$   | 0.238         | 0.247    | 3.6% | *`0.257`* |
-| $C_D$   | 0.005         | 0.0055    | 10.2% | *`0.0033`* |
 
 
 !!! details "Tip"
@@ -240,6 +261,6 @@ to see how to postprocess the spanwise loading that is plotted below)
     ```julia
     import FLOWPanel as pnl
 
-    include(joinpath(pnl.examples_path, "liftingline_weber.jl"))
+    include(joinpath(pnl.examples_path, "liftingline_stabilityderivatives.jl"))
     ```
 

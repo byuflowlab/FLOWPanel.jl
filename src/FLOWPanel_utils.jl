@@ -23,6 +23,20 @@ end
 mean(xs) = sum(xs)/length(xs)
 
 """
+`direction(; alpha=0, beta=0)`
+
+Return the unit vector of a freestream at `alpha` angle of attack (
+rotation about -y direction) and `beta` sideslip angle (rotation about +z 
+direction).
+
+Both angles must be in degrees.
+"""
+function direction(; alpha::Number=0, beta::Number=0, gamma::Number=0)
+    M = gt.rotation_matrix2(gamma, -alpha, beta)
+    return M[:, 1]
+end
+
+"""
 `simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
 bodytype=RigidWakeBody,
 span_NDIVS="automatic", rfl_NDIVS="automatic",
