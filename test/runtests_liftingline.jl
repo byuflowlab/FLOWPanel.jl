@@ -8,6 +8,8 @@ import Printf: @printf
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
+import ForwardDiff: Dual, Partials, value, partials
+
 try
     verbose
 catch
@@ -117,7 +119,7 @@ v_lvl = 0
 
 
     # ------------------ GENERATE LIFTING LINE ---------------------------------
-    ll = pnl.LiftingLine{Float64}(
+    ll = pnl.LiftingLine(
                                     airfoil_distribution; 
                                     b, chord_distribution, twist_distribution,
                                     sweep_distribution, dihedral_distribution,
@@ -270,5 +272,104 @@ v_lvl = 0
     @test err_CL_nonlinear <= 0.04
     @test err_CD_nonlinear <= 0.11
     @test err_Cm_nonlinear <= 0.06
+
+
+    # ------------------ TEST STABILITY DERIVATIVES ----------------------------
+
+    # NOTE: Here we define a sideslip angle in addition to the angle of attack
+
+    alpha           = 4.2                           # (deg) angle of attack
+    beta            = 2.0                           # (deg) sideslip angle
+
+    # NOTE: In the dual numbers we will implicitely defined the first partial to be 
+    #       the derivative w.r.t. angle of attack and the second partial to be
+    #       the derivative w.r.t. sideslip angle
+
+    alpha           = Dual(alpha, Partials((1.0, 0.0))) # Convert angle of attack into dual number for automatic differentiation
+    beta            = Dual(beta,  Partials((0.0, 1.0))) # Convert sideslip angle into dual number for automatic differentiation
+    NumType         = typeof(alpha)                 # Number type for LiftingLine
+
+    Uinf            = magUinf*pnl.direction(; alpha, beta) # Freestream vector
+
+    # NOTE: We need to manually define the direction of lift, drag, and span, as 
+    #       well as roll, pitching, and yawing moment since we now have a sideslip
+    #       angle
+
+    Dhat            = pnl.direction(; alpha)        # Drag direction
+    Shat            = [0, 1, 0]                     # Span direction
+    Lhat            = cross(Dhat, Shat)             # Lift direction
+
+    lhat            = Dhat                          # Rolling direction
+    mhat            = Shat                          # Pitching direction
+    nhat            = Lhat                          # Yawing direction
+
+    # Add dihedral so the sideslip force is non-zero
+    dihedral_distribution = [
+    #   2*y/b   dihedral (deg)
+        0.0     5.0
+        1.0     5.0
+    ]
+
+    # Redefine lifting line with Dual numbers
+    ll = pnl.LiftingLine{NumType}(
+                                    airfoil_distribution; 
+                                    b, chord_distribution, twist_distribution,
+                                    sweep_distribution, dihedral_distribution,
+                                    spanaxis_distribution,
+                                    discretization,
+                                    symmetric,
+                                    deltasb, deltajoint,
+                                    plot_discretization = false,
+                                    element_optargs = (; 
+                                        path = airfoil_path, 
+                                        plot_polars = false,
+                                        verbose = false
+                                        )
+                                    )
+
+    # Freestream velocity at each stripwise element
+    Uinfs = repeat(Uinf, 1, ll.nelements)
+
+    # Run solver
+    result, solver_cache = pnl.solve(ll, Uinfs; 
+                                        debug=true,             # `true` returns the residual rms
+                                        aoas_initial_guess=alpha, 
+                                        solver, solver_optargs)
+
+
+    # Calculate force and moment coefficients
+    calcs = pnl.calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
+                                                rho, cref, b;
+                                                X0, 
+                                                Dhat, Shat, Lhat,
+                                                lhat, mhat, nhat)
+
+    # Unpack calculations
+    (; CD, CY, CL) = calcs                      # Drag, side, and lift forces
+    (; Cl, Cm, Cn) = calcs                      # Roll, pitch, and yawing moment
+    (; q, Aref, bref, cref) = calcs             # Reference dynamic pressure, area, span, and chord
+
+    dCLdα = partials(CL)[1]
+    dCDdα = partials(CD)[1]
+    dCmdα = partials(Cm)[1]
+
+    dCLdβ = partials(CL)[2]
+    dCDdβ = partials(CD)[2]
+    dCmdβ = partials(Cm)[2]
+
+    CL = value(CL)
+    CD = value(CD)
+    Cm = value(Cm)
+
+    # Tests
+    @test abs(CL - 0.24709439885542692) <= 1e-12
+    @test abs(CD - 0.005540765716982027) <= 1e-12
+    @test abs(Cm - -0.35783803349227894) <= 1e-12
+    @test abs(dCLdα - 0.06773567828194929) <= 1e-12
+    @test abs(dCDdα - 0.001944238708320056) <= 1e-12
+    @test abs(dCmdα - -0.09941038196468542) <= 1e-12
+    @test abs(dCLdβ - 0.0002089112131300865) <= 1e-12
+    @test abs(dCDdβ - -6.872400820022926e-6) <= 1e-12
+    @test abs(dCmdβ - -0.00033435257221903946) <= 1e-12
 
 end
