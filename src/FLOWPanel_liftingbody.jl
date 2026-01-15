@@ -49,6 +49,7 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
     # Properties
     nnodes::Int                               # Number of nodes
     ncells::Int                               # Number of cells
+    cells::Matrix{Int}                        # Cell connectivity (each column is a cell)
     nsheddings::Int                           # Number of shedding edges
     fields::Array{String, 1}                  # Available fields (solutions)
     Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
@@ -64,6 +65,7 @@ struct RigidWakeBody{E, N} <: AbstractLiftingBody{E, N}
     function RigidWakeBody{E, N}(
                                 grid, shedding;
                                 nnodes=grid.nnodes, ncells=grid.ncells,
+                                cells=grid2cells(grid),
                                 nsheddings=size(shedding,2),
                                 fields=Array{String,1}(),
                                 Oaxis=Array(1.0I, 3, 3), O=zeros(3),
@@ -874,7 +876,7 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2}
 end
 
 function _Uind!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 2},
-                                            targets, out; optargs...)
+                                            targets, out, backend::DirectBackend; optargs...)
 
     # Velocity induced by vortex rings
     _Uvortexring!(self, targets, out; stri=1, optargs...)

@@ -21,6 +21,7 @@ Implementations of AbstractBody are expected to have the following fields
 * `grid::GeometricTools.GridTriangleSurface `     : Paneled geometry
 * `nnodes::Int`                       : Number of nodes
 * `ncells::Int`                       : Number of cells
+* `cells::Matrix{Int}`                : Cell connectivity (each column is a cell)
 * `fields::Vector{String}`            : Available fields (solutions)
 * `Oaxis::Matrix`                     : Coordinate system of body w.r.t global (3x3 matrix)
 * `O::Vector`                         : Origin of body w.r.t. global (3-dim vector)
@@ -31,6 +32,7 @@ Implementations of AbstractBody are expected to have the following fields
                                         control point
 * `kerneloffset::Real`                : Kernel offset to avoid singularities
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
+* `backend::Backend`                  : N-body backend (fmm or direct)
 
 and the following functions
 
@@ -61,8 +63,10 @@ and the following functions
 
     # Returns the velocity induced by the body on the targets `targets`. It adds
     # the velocity at the i-th target to out[:, i].
+    # NOTE: `backend` is the N-body backend to be used, allowing support for
+    #       different N-body methods (FMM, direct, etc).
     function _Uind(self::AbstractBody, targets::Array{<:Real, 2},
-                    out::Array{<:Real, 2}, args...; optargs...)
+                    out::Array{<:Real, 2}, backend::Backend, args...; optargs...)
         .
         .
         .
@@ -70,8 +74,10 @@ and the following functions
 
     # Returns the potential induced by the body on the targets `targets`. It
     # adds the potential at the i-th target to out[i].
+    # NOTE: `backend` is the N-body backend to be used, allowing support for
+    #       different N-body methods (FMM, direct, etc).
     function _phi(self::AbstractBody, targets::Array{<:Real, 2},
-                    out::Array{<:Real, 1}, args...; optargs...)
+                    out::Array{<:Real, 1}, backend::Backend, args...; optargs...)
         .
         .
         .
@@ -98,7 +104,7 @@ end
 Returns the velocity induced by the body on the targets `targets`, which is a
 3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
 """
-function Uind!(self::AbstractBody, targets, out, args...; optargs...)
+function Uind!(self::AbstractBody, targets, out, backend::Backend, args...; optargs...)
 
     # ERROR CASES
     if check_solved(self)==false
@@ -106,7 +112,7 @@ function Uind!(self::AbstractBody, targets, out, args...; optargs...)
               " Please call `solve()` function first.")
     end
 
-    _Uind!(self, targets, out, args...; optargs...)
+    _Uind!(self, targets, out, backend::Backend, args...; optargs...)
 end
 
 """
@@ -115,7 +121,7 @@ end
 Returns the potential induced by the body on the targets `targets`. It adds the
 potential at the i-th target to `out[:, i]`.
 """
-function phi!(self::AbstractBody, targets, out, args...; optargs...)
+function phi!(self::AbstractBody, targets, out, backend::Backend, args...; optargs...)
 
     # ERROR CASES
     if check_solved(self)==false
@@ -123,7 +129,7 @@ function phi!(self::AbstractBody, targets, out, args...; optargs...)
               " Please call `solve()` function first.")
     end
 
-    _phi!(self, targets, out, args...; optargs...)
+    _phi!(self, targets, out, backend::Backend, args...; optargs...)
 end
 
 """
@@ -138,6 +144,7 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
                                                  out_nodeindex::Bool=false,
                                                  out_controlpoints::Bool=false,
                                                  debug::Bool=false,
+                                                 backend=DirectBackend(),
                                                  suffix::String="",
                                                  optargs...)
 
@@ -164,7 +171,7 @@ function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=fal
 
     # Outputs control points
     if out_controlpoints || debug
-        str *= save_controlpoints(body, filename; debug=debug,
+        str *= save_controlpoints(body, filename; debug=debug, backend,
                                                 optargs..., suffix="_cp")
     end
 
@@ -184,7 +191,8 @@ Outputs a vtk file with the control points of the body along with associated
 normals and surface velocities.
 """
 function save_controlpoints(body::AbstractBody, filename::String; debug=false,
-                                              suffix::String="_cp", optargs...)
+                                              suffix::String="_cp", backend=DirectBackend(), 
+                                              optargs...)
 
     # Normals
     normals = _calc_normals(body)
@@ -223,7 +231,7 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
     if check_solved(body) && debug
         # Surface velocity
         Usurf = hcat(collect(get_fieldval(body, "Uinf", i) for i in 1:body.ncells)...)
-        Uind!(body, CPs, Usurf)
+        Uind!(body, CPs, Usurf, backend)
 
 
         Usurf = collect(eachcol(Usurf))
@@ -241,7 +249,7 @@ function save_controlpoints(body::AbstractBody, filename::String; debug=false,
 
         # Surface potential
         phis = zeros(body.ncells)
-        phi!(body, CPs, phis)
+        phi!(body, CPs, phis, backend)
 
         push!(data,
                   Dict( "field_name"  => "phi",
@@ -632,6 +640,26 @@ its area.
 """
 characteristiclength_sqrtarea(nodes, panel) = sqrt(gt._get_area(nodes, panel))
 
+function _calc_controlpoint(grid::gt.GridTriangleSurface, pi::Int)
+
+    # float type
+    TF = eltype(grid._nodes)
+
+    # Get panel nodes
+    nodes = grid._nodes
+
+    # initialize as zeros
+    cpx = zero(TF)
+    cpy = zero(TF)
+    cpz = zero(TF)
+
+    # Control point: Average point between nodes
+    p1x = nodes[1, grid._cells[1, pi]]
+    controlpoint /= length(panel)
+
+    return controlpoint
+end
+
 function _calc_controlpoints!(grid::gt.GridTriangleSurface,
                                 controlpoints, normals; off::Real=0.005,
                                 characteristiclength::Function=characteristiclength_sqrtarea)
@@ -650,6 +678,9 @@ function _calc_controlpoints!(grid::gt.GridTriangleSurface,
 
         panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
                                                 grid, pi, lin, ndivscells, cin)
+
+        # @show panel
+        # throw()
 
         controlpoints[:, pi] .= 0
 
@@ -997,4 +1028,120 @@ function _count(type::Type)
         return 1
     end
 end
+
+function grid2cells(grid::gt.GridTriangleSurface)
+    cells = zeros(Int, 3, grid.ncells)
+    for i in 1:grid.ncells
+        cells[:, i] .= gt.get_cell(grid, i)
+    end
+    return cells
+end
+
+function get_cell(system::AbstractBody, i::Int)
+    return system.cells[1,i], system.cells[2,i], system.cells[3,i]
+end
+
+#------- FastMultipole interface functions -------#
+
+function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractBody, i_body)
+    
+    # vertex indices for this panel
+    i1, i2, i3 = get_cell(system, i_body)
+    
+    # extract vertices
+    nodes = system.grid._nodes
+    v1x = nodes[1, i1]
+    v1y = nodes[2, i1]
+    v1z = nodes[3, i1]
+    v2x = nodes[1, i2]
+    v2y = nodes[2, i2]
+    v2z = nodes[3, i2]
+    v3x = nodes[1, i3]
+    v3y = nodes[2, i3]
+    v3z = nodes[3, i3]
+
+    # get centroid
+    cx = (v1x + v2x + v3x) * 0.3333333333333333
+    cy = (v1y + v2y + v3y) * 0.3333333333333333
+    cz = (v1z + v2z + v3z) * 0.3333333333333333
+
+    # get radius
+    r = zero(eltype(buffer))
+    dx = v1x - cx
+    dy = v1y - cy
+    dz = v1z - cz
+    r = max(r, sqrt(dx*dx + dy*dy + dz*dz))
+    dx = v2x - cx
+    dy = v2y - cy
+    dz = v2z - cz
+    r = max(r, sqrt(dx*dx + dy*dy + dz*dz))
+    dx = v3x - cx
+    dy = v3y - cy
+    dz = v3z - cz
+    r = max(r, sqrt(dx*dx + dy*dy + dz*dz))
+
+    buffer[1, i_buffer] = cx
+    buffer[2, i_buffer] = cy
+    buffer[3, i_buffer] = cz
+    buffer[4, i_buffer] = r
+
+    # strength
+    ns = size(system.strength, 2)
+    for i in 1:ns
+        buffer[4+i, i_buffer] = system.strength[i_body,i]
+    end
+
+    # save vertices
+    buffer[4+ns+1, i_buffer] = v1x
+    buffer[4+ns+2, i_buffer] = v1y
+    buffer[4+ns+3, i_buffer] = v1z
+    buffer[4+ns+4, i_buffer] = v2x
+    buffer[4+ns+5, i_buffer] = v2y
+    buffer[4+ns+6, i_buffer] = v2z
+    buffer[4+ns+7, i_buffer] = v3x
+    buffer[4+ns+8, i_buffer] = v3y
+    buffer[4+ns+9, i_buffer] = v3z
+end
+
+FastMultipole.numtype(system::AbstractBody) = eltype(system.strength)
+
+FastMultipole.data_per_body(system::AbstractBody) = 4 + size(system.strength, 2) + 9
+
+function FastMultipole.get_position(system::AbstractBody, i)
+
+    # vertex indices for this panel
+    i1, i2, i3 = get_cell(system, i)
+    
+    # extract vertices
+    nodes = system.grid._nodes
+    v1x = nodes[1, i1]
+    v1y = nodes[2, i1]
+    v1z = nodes[3, i1]
+    v2x = nodes[1, i2]
+    v2y = nodes[2, i2]
+    v2z = nodes[3, i2]
+    v3x = nodes[1, i3]
+    v3y = nodes[2, i3]
+    v3z = nodes[3, i3]
+
+    # get centroid
+    cx = (v1x + v2x + v3x) * 0.3333333333333333
+    cy = (v1y + v2y + v3y) * 0.3333333333333333
+    cz = (v1z + v2z + v3z) * 0.3333333333333333
+
+    return cx, cy, cz
+end
+
+FastMultipole.strength_dims(system::AbstractBody) = size(system.strength, 2)
+
+FastMultipole.get_n_bodies(system::AbstractBody) = system.ncells
+
+function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+    throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
+end
+
+function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::AbstractBody, source_buffer, source_index) where {PS,VS,GS}
+    throw("FastMultipole.direct! is not implemented for `<:AbstractBody` systems of type $(typeof(source_system))")
+end
+
 ##### END OF ABSTRACT BODY #####################################################

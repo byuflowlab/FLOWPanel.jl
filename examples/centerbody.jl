@@ -18,7 +18,7 @@ import DataFrames: DataFrame
 run_name        = "centerbody-lewis00"      # Name of this run
 
 save_path       = ""                        # Where to save outputs
-paraview        = true                      # Whether to visualize with Paraview
+paraview        = false                      # Whether to visualize with Paraview
 
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
@@ -82,13 +82,39 @@ Uinfs = repeat(Vinf, 1, body.ncells)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions
 @time pnl.solve(body, Uinfs)
+body.strength[2:end] .= 0.0
 
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
 
 # Calculate surface velocity on the body
-@time Us = pnl.calcfield_U(body, body)
+backend = pnl.FastMultipoleBackend(
+                                    expansion_order=12,
+                                    multipole_acceptance=0.4,
+                                    leaf_size=50,
+                                )
+
+@time Us = pnl.calcfield_U(body, body; backend)
+@show Us[:,1:10]
+
+str = pnl.save(body, "debug_fmm"; path="./", debug=true, backend)
+
+# using Profile
+# using PProf
+# Profile.clear()
+# @profile Us = pnl.calcfield_U(body, body; backend)
+
+
+Us .= zero(eltype(Us))
+backend = pnl.DirectBackend()
+# @time Us = pnl.calcfield_U(body, body; backend)
+# @show Us[:,1:10]
+str = pnl.save(body, "debug_direct"; path="./", debug=true, backend)
+
+
+# @profile Us = pnl.calcfield_U(body, body; backend)
+# pprof()
 
 # Calculate pressure coefficient
 @time Cps = pnl.calcfield_Cp(body, magVinf)
@@ -126,4 +152,4 @@ end
 
 
 # ----------------- VORTEX RING SOLVER -----------------------------------------
-include(joinpath(pnl.examples_path, "centerbody_vortexring.jl"))
+# include(joinpath(pnl.examples_path, "centerbody_vortexring.jl"))

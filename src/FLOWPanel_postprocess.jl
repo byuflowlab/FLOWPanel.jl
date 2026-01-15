@@ -27,7 +27,8 @@ starts with all zeroes).
 """
 function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractBody,
                         controlpoints::Arr2, Uinfs::Arr3;
-                        fieldname="U", addfield=true, optargs...
+                        fieldname="U", addfield=true, 
+                        backend::Backend=DirectBackend(), optargs...
                         ) where {   Arr1<:AbstractArray{<:Number,2},
                                     Arr2<:AbstractArray{<:Number,2},
                                     Arr3<:AbstractArray{<:Number,2}}
@@ -51,7 +52,7 @@ function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractB
     out .+= Uinfs
 
     # Add induced velocity at each control point
-    Uind!(sourcebody, controlpoints, out; optargs...)
+    Uind!(sourcebody, controlpoints, out, backend; optargs...)
 
     # Save field in body
     if addfield
@@ -77,7 +78,7 @@ starts with all zeroes).
 function calcfield_U!(out::Arr,
                         sourcebody::AbstractBody, targetbody::AbstractBody;
                         offset=nothing, characteristiclength=nothing,
-                        optargs...
+                        backend::Backend=DirectBackend(), optargs...
                         ) where {Arr<:AbstractArray{<:Number,2}}
 
     @assert check_field(targetbody, "Uinf") ""*
@@ -95,7 +96,7 @@ function calcfield_U!(out::Arr,
     controlpoints = calc_controlpoints(targetbody, normals; cp_optargs...)
 
     # Calculate field on control points
-    calcfield_U!(out, sourcebody, targetbody, controlpoints, Uinfs; optargs...)
+    calcfield_U!(out, sourcebody, targetbody, controlpoints, Uinfs; backend, optargs...)
 end
 
 """

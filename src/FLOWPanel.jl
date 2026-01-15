@@ -26,6 +26,7 @@ import LinearAlgebra: I
 import Krylov
 import SimpleNonlinearSolve
 import Requires: @require
+import FastMultipole
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -61,13 +62,12 @@ const Im = Array(1.0I, 3, 3)
 const noshedding = zeros(Int, 6, 0)
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements", "linearsolver",
+for header_name in ["elements", "linearsolver", "fmm",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",
                     "liftingline",
                     "utils", "postprocess",
-                    # "fmm"
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end
@@ -95,18 +95,18 @@ function __init__()
 
 
     # Conditionally load FMM solver if FastMultipole is available
-    try
-        @require FastMultipole="ce07d0d3-2b9f-49ba-89eb-12c800257c85" begin
+    # try
+    #     @require FastMultipole="ce07d0d3-2b9f-49ba-89eb-12c800257c85" begin
 
-            for header_name in ["fmm"]
-              include("FLOWPanel_"*header_name*".jl")
-            end
+    #         for header_name in ["fmm"]
+    #           include("FLOWPanel_"*header_name*".jl")
+    #         end
 
-        end
+    #     end
 
-    catch e
-        @warn "FastMultipole is not available; FMM solvers will not be loaded"
-    end
+    # catch e
+    #     @warn "FastMultipole is not available; FMM solvers will not be loaded"
+    # end
 
 end
 

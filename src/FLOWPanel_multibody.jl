@@ -618,15 +618,15 @@ end
 
 
 #### INTERNAL FUNCTIONS ########################################################
-function _Uind!(self::MultiBody, args...; optargs...)
+function _Uind!(self::MultiBody, targets, out, backend::DirectBackend, args...; optargs...)
     for body in self.bodies
-        _Uind!(body, args...; optargs...)
+        _Uind!(body, targets, out, backend, args...; optargs...)
     end
 end
 
-function _phi!(self::MultiBody, args...; optargs...)
+function _phi!(self::MultiBody, targets, out, backend::DirectBackend, args...; optargs...)
     for body in self.bodies
-        _phi!(body, args...; optargs...)
+        _phi!(body, targets, out, backend, args...; optargs...)
     end
 end
 
