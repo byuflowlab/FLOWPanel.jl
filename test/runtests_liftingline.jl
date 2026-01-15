@@ -230,61 +230,23 @@ v_lvl = 0
 
     # ------------------ POSTPROCESSING NONLINEAR SOLUTION ---------------------
 
-    # NOTE: Coefficients must be evaluated on using the velocity from 
-    #       the effective horseshoes as shown below, which is automatically
-    #       computed by the solver already
-    # ll.Us .= Uinfs
-    # pnl.selfUind!(ll)
+    # Calculate force and moment coefficients
+    calcs = pnl.calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
+                                                rho, cref, b;
+                                                X0)
+                                                
+    # Unpack calculations
+    (; CD, CY, CL) = calcs
+    (; Cl, Cm, Cn) = calcs
+    (; Dhat, Shat, Lhat) = calcs
+    (; lhat, mhat, nhat) = calcs
+    (; q, Aref, bref, cref) = calcs
 
-    # Calculate stripwise coefficients
-    pnl.calcfield_cl(ll)
-    pnl.calcfield_cd(ll)
-    pnl.calcfield_cm(ll)
-
-    # Convert velocity to effective swept velocity
-    # NOTE: Forces must use the velocity from the original horseshoes for
-    #       best accuracy, as done here
-    ll.Us .= Uinfs
-    pnl.Uind!(ll, ll.midpoints, ll.Us)
-    pnl.calc_UΛs!(ll, ll.Us)
-
-    # Force per stripwise element integrating lift and drag coefficient
-    pnl.calcfield_F(ll, rho)
-
-    # Integrated force
-    Ftot = pnl.calcfield_Ftot(ll)
-
-    # Integrated force decomposed into lift and drag
-    LDS = pnl.calcfield_LDS(ll, Lhat, Dhat, Shat)
-
-    L = LDS[:, 1]
-    D = LDS[:, 2]
-
-    # Loading distribution (force per unit span)
-    # fs = pnl.calcfield_f(ll)
-
-    # lds = pnl.decompose(fs, Lhat, Dhat)
-
-    # l = lds[1, :]
-    # d = lds[2, :]
-
-    # Integrated moment
-    Mtot = pnl.calcfield_Mtot(ll, X0, rho)
-    
-    # Moment decomposed into axes
-    lmn = pnl.calcfield_lmn(ll, lhat, mhat, nhat)
-    roll, pitch, yaw = collect(eachcol(lmn))
 
     # Coefficients
-    CL_nonlinear = sign(dot(L, Lhat)) * norm(L) / nondim
-    CD_nonlinear = sign(dot(D, Dhat)) * norm(D) / nondim
-
-    # cl = l / (nondim/b)
-    # cd = d / (nondim/b)
-
-    # Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
-    Cm_nonlinear = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
-    # Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
+    CL_nonlinear = CL
+    CD_nonlinear = CD
+    Cm_nonlinear = Cm
 
     # Error
     err_CL_nonlinear = abs(CL_nonlinear-CLexp)/CLexp

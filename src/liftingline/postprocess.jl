@@ -9,6 +9,158 @@
   * License     : MIT License
 =###############################################################################
 
+"""
+Calculate forces and moments of this lifting line.
+
+Before calling this function, the local velocity needs to be computed as 
+follows:
+```julia
+ll.Us .= Uinfs
+selfUind!(ll)
+```
+The local velocity is also automatically computed in `solve(ll, ...)`, so no
+need to recompute it if `calc_forcesmoments` is called right after `solve`.
+"""
+function calc_forcesmoments(ll::LiftingLine, 
+                            Uinfs::AbstractMatrix, 
+                            Uinf_ref::AbstractVector, 
+                            rho::Number; 
+
+                            X0 = zeros(3),              # (m) center about which to calculate moments
+
+                            use_Uind_for_force = true,  # Whether to use Uind as opposed to selfUind for force postprocessing
+                                                        # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
+
+                            distributions = nothing,    # Give it an array and it will push spanwise distributions there
+
+                            # Unit vectors
+                            Dhat = Uinf_ref/norm(Uinf_ref), # Drag direction
+                            Shat = [0, 1, 0],           # Span direction
+                            Lhat = cross(Dhat, Shat),   # Lift direction
+
+                            lhat = Dhat,                # Rolling direction
+                            mhat = Shat,                # Pitching direction
+                            nhat = Lhat,                # Yawing direction
+                            )
+
+
+    # NOTE: Coefficients must be evaluated using the velocity from 
+    #       the effective horseshoes as shown below, which is automatically
+    #       computed by the solver already, so these lines are commented out to
+    #       avoid redundant computation
+    # ll.Us .= Uinfs
+    # selfUind!(ll)
+
+    # Calculate stripwise coefficients
+    calcfield_cl(ll)
+    calcfield_cd(ll)
+    calcfield_cm(ll)
+
+    # Convert velocity to effective swept velocity
+    # NOTE: Forces are most accurate with the velocity from the original horseshoes,
+    #       as done in the conditional statement here
+    if use_Uind_for_force
+        ll.Us .= Uinfs
+        Uind!(ll, ll.midpoints, ll.Us)
+    end
+    calc_UΛs!(ll, ll.Us)
+
+    # Force per stripwise element integrating lift and drag coefficient
+    calcfield_F(ll, rho)
+
+    # Integrated force
+    Ftot = calcfield_Ftot(ll)
+
+    # Integrated force decomposed into lift and drag
+    LDS = calcfield_LDS(ll, Lhat, Dhat, Shat)
+
+    L = LDS[:, 1]
+    D = LDS[:, 2]
+    S = LDS[:, 3]
+
+    # Loading distribution (force per unit span)
+    if !isnothing(distributions)
+        fs = calcfield_f(ll)
+
+        lds = decompose(fs, Lhat, Dhat)
+
+        ypos = (ll.ypositions[2:end] .+ ll.ypositions[1:end-1]) / 2
+        l = lds[1, :]
+        d = lds[2, :]
+        s = lds[3, :]
+
+        push!(distributions, (; spanposition=ypos, lift_distribution=l, 
+                                        drag_distribution=d, side_distribution=s))
+    end
+
+    # Integrated moment
+    Mtot = calcfield_Mtot(ll, X0, rho)
+
+    # Moment decomposed into axes
+    lmn = calcfield_lmn(ll, lhat, mhat, nhat)
+    roll, pitch, yaw = collect(eachcol(lmn))
+
+    # Outputs
+    return (;   lift=L, drag=D, side=S, roll, pitch, yaw, 
+                Dhat, Shat, Lhat, lhat, mhat, nhat)
+end
+
+"""
+Same than `calc_forcesmoments` but converting forces and moments to 
+non-dimensional coefficients.
+"""
+function calc_forcemoment_coefficients(ll::LiftingLine, 
+                                            Uinfs::AbstractMatrix,              # Local inflow velocity
+                                            Uinf_ref::AbstractVector,           # (m/s) reference freestream velocity vector
+                                            rho::Number,                        # (kg/m^3) air density
+                                            cref::Number,                       # (m) reference chord
+                                            bref::Number;                       # (m) reference span
+                                            Aref = cref*bref,                   # (m^2) reference area
+                                            magUinf = norm(Uinf_ref),           # (m/s) reference freestream velocity magnitude
+                                            distributions = nothing,            # Give it an array and it will push spanwise distributions there
+                                            optargs...)
+
+    q = 0.5*rho*magUinf^2               # Dynamic pressure
+
+    # Dimensional forces and moment
+    dim = calc_forcesmoments(ll, Uinfs, Uinf_ref, rho; distributions, 
+                                                                    optargs...)
+
+    # Fetch forces and moments
+    (; lift, drag, side) = dim
+    (; roll, pitch, yaw) = dim
+
+    # Fetch unit vectors
+    (; Dhat, Shat, Lhat) = dim
+    (; lhat, mhat, nhat) = dim
+
+    # Coefficients
+    CL = sign(dot(lift, Lhat)) * norm(lift) / (q*Aref)
+    CD = sign(dot(drag, Dhat)) * norm(drag) / (q*Aref)
+    CY = sign(dot(side, Shat)) * norm(side) / (q*Aref)
+    
+    Cl = sign(dot(roll, lhat)) * norm(roll) / (q*Aref*cref)
+    Cm = sign(dot(pitch, mhat)) * norm(pitch) / (q*Aref*cref)
+    Cn = sign(dot(yaw, nhat)) * norm(yaw) / (q*Aref*cref)
+
+    # Non-dimensional force and moment distributions
+    if !isnothing(distributions)
+
+        distrs = distributions[end]
+
+        spanposition = distrs.spanposition
+        cl = distrs.lift_distribution / (q*Aref/bref)
+        cd = distrs.drag_distribution / (q*Aref/bref)
+        cy = distrs.side_distribution / (q*Aref/bref)
+
+        distributions[end] = (; spanposition, cl, cd, cy)
+    end
+
+    # Outputs
+    return (;   CL, CD, CY, Cl, Cm, Cn,
+                Dhat, Shat, Lhat, lhat, mhat, nhat,
+                q, Aref, bref, cref)
+end
 
 ################################################################################
 # FORCE FIELDS
@@ -84,7 +236,7 @@ hasn't been pre-allocated yet
 """
 function calcfield_fkj(ll::LiftingLine{R}, args...; F_fieldname="Fkj", fieldname="fkj", optargs...) where {R}
 
-    return calcfield_f(ll, args...; F_fieldname, fieldname, optargs...)
+    return calcfield_f!(ll, args...; F_fieldname, fieldname, optargs...)
 
 end
 
@@ -397,8 +549,13 @@ function calcfield_F(ll::LiftingLine{R}, args...;
 end
 
 
+function calcfield_Ftot(ll::LiftingLine{R}, args...; optargs...) where R 
+    return calcfield_Ftot!(zeros(R, 3), ll, args...; optargs...)
+end
 
-
+function calcfield_LDS(ll::LiftingLine{R}, args...; optargs...) where R 
+    return calcfield_LDS!(zeros(R, 3, 3), ll, args...; optargs...)
+end
 
 
 """
@@ -613,6 +770,9 @@ function calcfield_Mtot!(out, ll::LiftingLine, X0, rho;
 end
 
 
+function calcfield_Mtot(ll::LiftingLine{R}, args...; optargs...) where R 
+    return calcfield_Mtot!(zeros(R, 3), ll, args...; optargs...)
+end
 
 
 """
@@ -696,4 +856,8 @@ end
 """
 function calcfield_lmn!(out, ll::LiftingLine, lhat, mhat; optargs...)
     return calcfield_lmn!(out, ll, lhat, mhat, cross(lhat, mhat); optargs...)
+end
+
+function calcfield_lmn(ll::LiftingLine{R}, args...; optargs...) where R 
+    return calcfield_lmn!(zeros(R, 3, 3), ll, args...; optargs...)
 end

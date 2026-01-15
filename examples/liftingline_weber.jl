@@ -129,28 +129,27 @@ Dhat            = Uinf/norm(Uinf)               # Drag direction
 Shat            = [0, 1, 0]                     # Span direction
 Lhat            = cross(Dhat, Shat)             # Lift direction
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
 lhat            = Dhat                          # Rolling direction
 mhat            = Shat                          # Pitching direction
 nhat            = Lhat                          # Yawing direction
 
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
-nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
 
 
 # ------------------ GENERATE LIFTING LINE -------------------------------------
 
-ll = pnl.LiftingLine{Float64}(
-                                airfoil_distribution; 
-                                b, chord_distribution, twist_distribution,
-                                sweep_distribution, dihedral_distribution,
-                                spanaxis_distribution,
-                                discretization,
-                                symmetric,
-                                deltasb, deltajoint, sigmafactor, sigmaexponent,
-                                element_optargs,
-                                plot_discretization = true,
-                                )
+ll = pnl.LiftingLine(
+                        airfoil_distribution; 
+                        b, chord_distribution, twist_distribution,
+                        sweep_distribution, dihedral_distribution,
+                        spanaxis_distribution,
+                        discretization,
+                        symmetric,
+                        deltasb, deltajoint, sigmafactor, sigmaexponent,
+                        element_optargs,
+                        plot_discretization = true,
+                        )
 
 display(ll)
 
@@ -193,66 +192,22 @@ fig.tight_layout()
 
 
 # ------------------ POSTPROCESSING --------------------------------------------
+distributions = []                      # Spanwise distributions get stored here
 
-# NOTE: Coefficients must be evaluated using the velocity from 
-#       the effective horseshoes as shown below, which is automatically
-#       computed by the solver already, so these lines are commented out to
-#       avoid redundant computation
-# ll.Us .= Uinfs
-# pnl.selfUind!(ll)
+# Calculate force and moment coefficients
+calcs = pnl.calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
+                                            rho, cref, b;
+                                            X0, 
+                                            use_Uind_for_force,
+                                            distributions)
 
-# Calculate stripwise coefficients
-pnl.calcfield_cl(ll)
-pnl.calcfield_cd(ll)
-pnl.calcfield_cm(ll)
-
-# Convert velocity to effective swept velocity
-# NOTE: Forces are most accurate with the velocity from the original horseshoes,
-#       as done in the conditional statement here
-if use_Uind_for_force
-    ll.Us .= Uinfs
-    pnl.Uind!(ll, ll.midpoints, ll.Us)
-end
-pnl.calc_UΛs!(ll, ll.Us)
-
-# Force per stripwise element integrating lift and drag coefficient
-pnl.calcfield_F(ll, rho)
-
-# Integrated force
-Ftot = pnl.calcfield_Ftot(ll)
-
-# Integrated force decomposed into lift and drag
-LDS = pnl.calcfield_LDS(ll, Lhat, Dhat, Shat)
-
-L = LDS[:, 1]
-D = LDS[:, 2]
-
-# Loading distribution (force per unit span)
-fs = pnl.calcfield_f(ll)
-
-lds = pnl.decompose(fs, Lhat, Dhat)
-
-ypos = (ll.ypositions[2:end] .+ ll.ypositions[1:end-1]) / 2
-l = lds[1, :]
-d = lds[2, :]
-
-# Integrated moment
-Mtot = pnl.calcfield_Mtot(ll, X0, rho)
-
-# Moment decomposed into axes
-lmn = pnl.calcfield_lmn(ll, lhat, mhat, nhat)
-roll, pitch, yaw = collect(eachcol(lmn))
-
-# Coefficients
-CL = sign(dot(L, Lhat)) * norm(L) / nondim
-CD = sign(dot(D, Dhat)) * norm(D) / nondim
-
-cl = l / (nondim/b)
-cd = d / (nondim/b)
-
-Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
-Cm = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
-Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
+# Unpack calculations
+(; CD, CY, CL) = calcs                      # Drag, side, and lift forces
+(; Cl, Cm, Cn) = calcs                      # Roll, pitch, and yawing moment
+(; Dhat, Shat, Lhat) = calcs                # Direction of each force
+(; lhat, mhat, nhat) = calcs                # Direction of each moment
+(; q, Aref, bref, cref) = calcs             # Reference dynamic pressure, area, span, and chord
+(; spanposition, cd, cy, cl) = distributions[end]   # Spanwise distributions: 2*y/b, drag, side, and lift
 
 
 # ------------------ OUTPUT SOLUTION -------------------------------------------
@@ -340,6 +295,7 @@ end
 
 
 # --------- Spanwise loading
+ypos = spanposition
 
 cls_vsp = [3.884799999999999920e-01,5.206999999999999823e-02,1.146999999999999964e-01,1.115700000000000025e-01,1.437400000000000067e-01,1.428300000000000125e-01,1.532600000000000073e-01,1.908199999999999896e-01,1.643699999999999883e-01,2.065800000000000136e-01,1.799199999999999966e-01,1.906599999999999961e-01,1.981499999999999928e-01,2.024299999999999988e-01,2.312200000000000089e-01,2.334199999999999886e-01,2.392199999999999882e-01,2.444699999999999929e-01,2.497900000000000120e-01,2.543799999999999950e-01,2.581600000000000006e-01,2.615899999999999892e-01,2.644699999999999829e-01,2.663400000000000212e-01,2.687999999999999834e-01,2.700699999999999767e-01,2.715299999999999936e-01,2.722600000000000020e-01,2.727100000000000080e-01,2.731500000000000039e-01,2.733099999999999974e-01,2.731600000000000139e-01,2.727100000000000080e-01,2.717899999999999761e-01,2.708800000000000097e-01,2.694500000000000228e-01,2.685199999999999809e-01,2.666000000000000036e-01,2.648699999999999943e-01,2.627200000000000091e-01,2.609699999999999798e-01,2.584899999999999975e-01,2.561399999999999788e-01,2.536499999999999866e-01,2.513900000000000023e-01,2.480900000000000050e-01,2.457900000000000085e-01,2.442300000000000026e-01,2.435299999999999965e-01,2.435499999999999887e-01,2.441399999999999959e-01,2.456399999999999972e-01,2.479200000000000015e-01,2.513199999999999878e-01,2.539399999999999991e-01,2.564500000000000113e-01,2.589400000000000035e-01,2.612999999999999767e-01,2.630100000000000215e-01,2.652800000000000158e-01,2.671700000000000186e-01,2.690299999999999914e-01,2.699500000000000233e-01,2.711799999999999766e-01,2.722200000000000175e-01,2.733700000000000019e-01,2.741700000000000248e-01,2.745299999999999963e-01,2.745699999999999807e-01,2.743800000000000128e-01,2.740699999999999803e-01,2.735699999999999799e-01,2.722300000000000275e-01,2.706500000000000017e-01,2.685600000000000209e-01,2.669900000000000051e-01,2.642800000000000149e-01,2.606299999999999728e-01,2.571800000000000197e-01,2.533299999999999996e-01,2.485300000000000009e-01,2.437300000000000022e-01,2.377299999999999969e-01,2.355700000000000016e-01,2.069000000000000006e-01,2.023099999999999898e-01,1.945399999999999907e-01,1.833100000000000007e-01,2.095499999999999863e-01,1.673099999999999865e-01,1.935300000000000076e-01,1.562300000000000078e-01,1.461800000000000044e-01,1.464999999999999913e-01,1.139799999999999980e-01,1.164099999999999996e-01,5.419000000000000206e-02,3.897700000000000053e-01]
 cds_vsp = [1.577999999999999889e-02,-2.197999999999999954e-02,-7.799999999999999859e-04,-8.139999999999999666e-03,-4.579999999999999870e-03,-2.251999999999999835e-02,-7.500000000000000156e-04,-4.530000000000000172e-03,-3.010000000000000089e-03,-1.217999999999999985e-02,-8.840000000000000635e-03,-9.050000000000000752e-03,-1.330000000000000019e-03,-1.916999999999999954e-02,-6.020000000000000177e-03,-1.685000000000000039e-02,-7.100000000000000408e-03,-1.976999999999999938e-02,-7.749999999999999944e-03,-1.623000000000000137e-02,-7.539999999999999827e-03,-1.620999999999999872e-02,-8.099999999999999561e-03,-1.097000000000000058e-02,-9.820000000000000603e-03,-1.315000000000000023e-02,-7.380000000000000275e-03,-9.579999999999999974e-03,-5.130000000000000011e-03,-1.076000000000000047e-02,-4.259999999999999898e-03,-7.089999999999999948e-03,-2.899999999999999800e-03,-7.119999999999999593e-03,-8.000000000000000383e-04,-2.809999999999999998e-03,-1.600000000000000131e-04,-1.920000000000000049e-03,3.870000000000000176e-03,-5.599999999999999509e-04,1.699999999999999905e-03,-1.510000000000000057e-03,4.819999999999999632e-03,3.000000000000000076e-05,7.510000000000000182e-03,1.270000000000000078e-03,9.379999999999999449e-03,5.309999999999999616e-03,2.518000000000000099e-02,2.522999999999999896e-02,5.239999999999999866e-03,9.329999999999999752e-03,1.299999999999999940e-03,7.459999999999999618e-03,-8.000000000000000654e-05,4.740000000000000289e-03,-1.649999999999999991e-03,1.559999999999999972e-03,-7.399999999999999894e-04,3.680000000000000111e-03,-2.010000000000000068e-03,1.299999999999999886e-04,-2.599999999999999881e-03,-7.100000000000000191e-04,-7.139999999999999646e-03,-2.949999999999999931e-03,-7.040000000000000251e-03,-4.170000000000000095e-03,-1.059000000000000045e-02,-5.089999999999999906e-03,-9.679999999999999369e-03,-7.450000000000000025e-03,-1.316999999999999942e-02,-9.900000000000000813e-03,-1.111999999999999968e-02,-8.259999999999999981e-03,-1.632000000000000117e-02,-7.599999999999999985e-03,-1.634999999999999995e-02,-7.889999999999999444e-03,-1.965000000000000080e-02,-6.969999999999999633e-03,-1.692000000000000101e-02,-6.190000000000000190e-03,-1.922000000000000097e-02,-9.700000000000000505e-04,-8.649999999999999703e-03,-8.750000000000000833e-03,-1.280000000000000061e-02,-3.160000000000000048e-03,-4.959999999999999999e-03,-8.499999999999999526e-04,-2.248999999999999957e-02,-4.680000000000000132e-03,-7.919999999999999957e-03,-5.900000000000000296e-04,-2.031000000000000166e-02,1.408000000000000050e-02]
@@ -564,7 +520,7 @@ function plot_distribution(distributions, sweep1; suffix="loading")
     fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
     axs = fig.subplots(1, 2)
 
-    ypos = distributions[1].yposition
+    ypos = distributions[1].spanposition
     aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
     cls = [cl for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
     cds = [cd for (aoa, cd) in zip(distributions[1].AOA, distributions[1].cd) if aoa in sweep1]

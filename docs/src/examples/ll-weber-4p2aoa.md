@@ -130,28 +130,27 @@ Dhat            = Uinf/norm(Uinf)               # Drag direction
 Shat            = [0, 1, 0]                     # Span direction
 Lhat            = cross(Dhat, Shat)             # Lift direction
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
 lhat            = Dhat                          # Rolling direction
 mhat            = Shat                          # Pitching direction
 nhat            = Lhat                          # Yawing direction
 
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
-nondim          = 0.5*rho*magUinf^2*b*cref      # Normalization factor
 
 
 # ------------------ GENERATE LIFTING LINE -------------------------------------
 
-ll = pnl.LiftingLine{Float64}(
-                                airfoil_distribution; 
-                                b, chord_distribution, twist_distribution,
-                                sweep_distribution, dihedral_distribution,
-                                spanaxis_distribution,
-                                discretization,
-                                symmetric,
-                                deltasb, deltajoint, sigmafactor, sigmaexponent,
-                                element_optargs,
-                                plot_discretization = true,
-                                )
+ll = pnl.LiftingLine(
+                        airfoil_distribution; 
+                        b, chord_distribution, twist_distribution,
+                        sweep_distribution, dihedral_distribution,
+                        spanaxis_distribution,
+                        discretization,
+                        symmetric,
+                        deltasb, deltajoint, sigmafactor, sigmaexponent,
+                        element_optargs,
+                        plot_discretization = true,
+                        )
 
 display(ll)
 
@@ -194,66 +193,22 @@ fig.tight_layout()
 
 
 # ------------------ POSTPROCESSING --------------------------------------------
+distributions = []                      # Spanwise distributions get stored here
 
-# NOTE: Coefficients must be evaluated using the velocity from 
-#       the effective horseshoes as shown below, which is automatically
-#       computed by the solver already, so these lines are commented out to
-#       avoid redundant computation
-# ll.Us .= Uinfs
-# pnl.selfUind!(ll)
+# Calculate force and moment coefficients
+calcs = pnl.calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
+                                            rho, cref, b;
+                                            X0, 
+                                            use_Uind_for_force,
+                                            distributions)
 
-# Calculate stripwise coefficients
-pnl.calcfield_cl(ll)
-pnl.calcfield_cd(ll)
-pnl.calcfield_cm(ll)
-
-# Convert velocity to effective swept velocity
-# NOTE: Forces are most accurate with the velocity from the original horseshoes,
-#       as done in the conditional statement here
-if use_Uind_for_force
-    ll.Us .= Uinfs
-    pnl.Uind!(ll, ll.midpoints, ll.Us)
-end
-pnl.calc_UΛs!(ll, ll.Us)
-
-# Force per stripwise element integrating lift and drag coefficient
-pnl.calcfield_F(ll, rho)
-
-# Integrated force
-Ftot = pnl.calcfield_Ftot(ll)
-
-# Integrated force decomposed into lift and drag
-LDS = pnl.calcfield_LDS(ll, Lhat, Dhat, Shat)
-
-L = LDS[:, 1]
-D = LDS[:, 2]
-
-# Loading distribution (force per unit span)
-fs = pnl.calcfield_f(ll)
-
-lds = pnl.decompose(fs, Lhat, Dhat)
-
-ypos = (ll.ypositions[2:end] .+ ll.ypositions[1:end-1]) / 2
-l = lds[1, :]
-d = lds[2, :]
-
-# Integrated moment
-Mtot = pnl.calcfield_Mtot(ll, X0, rho)
-
-# Moment decomposed into axes
-lmn = pnl.calcfield_lmn(ll, lhat, mhat, nhat)
-roll, pitch, yaw = collect(eachcol(lmn))
-
-# Coefficients
-CL = sign(dot(L, Lhat)) * norm(L) / nondim
-CD = sign(dot(D, Dhat)) * norm(D) / nondim
-
-cl = l / (nondim/b)
-cd = d / (nondim/b)
-
-Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
-Cm = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
-Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
+# Unpack calculations
+(; CD, CY, CL) = calcs                      # Drag, side, and lift forces
+(; Cl, Cm, Cn) = calcs                      # Roll, pitch, and yawing moment
+(; Dhat, Shat, Lhat) = calcs                # Direction of each force
+(; lhat, mhat, nhat) = calcs                # Direction of each moment
+(; q, Aref, bref, cref) = calcs             # Reference dynamic pressure, area, span, and chord
+(; spanposition, cd, cy, cl) = distributions[end]   # Spanwise distributions: 2*y/b, drag, side, and lift
 
 
 # ------------------ OUTPUT SOLUTION -------------------------------------------
