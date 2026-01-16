@@ -102,6 +102,7 @@ function calc_forcesmoments(ll::LiftingLine,
 
     # Outputs
     return (;   lift=L, drag=D, side=S, roll, pitch, yaw, 
+                Ftot, Mtot,
                 Dhat, Shat, Lhat, lhat, mhat, nhat)
 end
 
@@ -118,21 +119,24 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
                                             Aref = cref*bref,                   # (m^2) reference area
                                             magUinf = norm(Uinf_ref),           # (m/s) reference freestream velocity magnitude
                                             distributions = nothing,            # Give it an array and it will push spanwise distributions there
+                                            forcesmoments = nothing,            # Pre-calculated dimensional forces and moments
                                             optargs...)
 
     q = 0.5*rho*magUinf^2               # Dynamic pressure
 
-    # Dimensional forces and moment
-    dim = calc_forcesmoments(ll, Uinfs, Uinf_ref, rho; distributions, 
-                                                                    optargs...)
+    # Calculate dimensional forces and moment if not already provided
+    if isnothing(forcesmoments)
+        forcesmoments = calc_forcesmoments(ll, Uinfs, Uinf_ref, rho; 
+                                                    distributions, optargs...)
+    end
 
     # Fetch forces and moments
-    (; lift, drag, side) = dim
-    (; roll, pitch, yaw) = dim
+    (; lift, drag, side) = forcesmoments
+    (; roll, pitch, yaw) = forcesmoments
 
     # Fetch unit vectors
-    (; Dhat, Shat, Lhat) = dim
-    (; lhat, mhat, nhat) = dim
+    (; Dhat, Shat, Lhat) = forcesmoments
+    (; lhat, mhat, nhat) = forcesmoments
 
     # Coefficients
     CL = sign(dot(lift, Lhat)) * norm(lift) / (q*Aref)
