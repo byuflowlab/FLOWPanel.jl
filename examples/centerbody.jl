@@ -82,39 +82,39 @@ Uinfs = repeat(Vinf, 1, body.ncells)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions
 @time pnl.solve(body, Uinfs)
-body.strength[2:end] .= 0.0
-
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
 
-# Calculate surface velocity on the body
+# Calculate surface velocity on the body with the FMM backend
 backend = pnl.FastMultipoleBackend(
-                                    expansion_order=12,
+                                    expansion_order=7,
                                     multipole_acceptance=0.4,
-                                    leaf_size=50,
+                                    leaf_size=10
                                 )
-
+println("Running FMM:")
 @time Us = pnl.calcfield_U(body, body; backend)
-@show Us[:,1:10]
+Us_fmm = deepcopy(Us) # save for comparison/verification
+# str = pnl.save(body, "debug_fmm"; path="./", debug=true, backend)
 
-str = pnl.save(body, "debug_fmm"; path="./", debug=true, backend)
-
+# uncomment to profile
 # using Profile
 # using PProf
+# @profile Us = pnl.calcfield_U(body, body; backend)
 # Profile.clear()
 # @profile Us = pnl.calcfield_U(body, body; backend)
-
+# pprof()
 
 Us .= zero(eltype(Us))
 backend = pnl.DirectBackend()
-# @time Us = pnl.calcfield_U(body, body; backend)
-# @show Us[:,1:10]
-str = pnl.save(body, "debug_direct"; path="./", debug=true, backend)
+println("Running Direct:")
+@time Us = pnl.calcfield_U(body, body; backend)
+Us_direct = deepcopy(Us)
+# str = pnl.save(body, "debug_direct"; path="./", debug=true, backend)
 
-
-# @profile Us = pnl.calcfield_U(body, body; backend)
-# pprof()
+# calculate error
+max_err = maximum(abs.(Us_direct - Us_fmm))
+println("Max velocity error between Direct and FMM normalized by Vinf: $(max_err/magVinf)")
 
 # Calculate pressure coefficient
 @time Cps = pnl.calcfield_Cp(body, magVinf)

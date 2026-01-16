@@ -43,4 +43,6 @@ end
 # alias
 const FMM = FastMultipoleBackend
 
+#--- overload FastMultipole functions ---#
+
 ################################################################################

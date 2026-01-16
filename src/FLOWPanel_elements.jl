@@ -141,7 +141,6 @@ function U_constant_source(nodes::Arr1, panel,
 end
 
 
-
 """
 Computes the potential induced by a panel of vertices `nodes[:, panel]` and
 constant strength source `strength` on the targets `targets`. It adds the

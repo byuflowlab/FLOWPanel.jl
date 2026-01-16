@@ -27,6 +27,7 @@ import Krylov
 import SimpleNonlinearSolve
 import Requires: @require
 import FastMultipole
+using FastMultipole.StaticArrays: @SVector
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -52,6 +53,9 @@ const examples_path = joinpath(module_path, "..", "examples")
 #                     # ForwardDiff.Dual{Nothing,Int64,3}
 #                     }
 
+# 1/4pi
+const ONE_OVER_4PI = 1.0 / (4.0 * pi)
+
 # Discretization parameter type
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
@@ -65,7 +69,7 @@ const noshedding = zeros(Int, 6, 0)
 for header_name in ["elements", "linearsolver", "fmm",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
-                    "multibody",
+                    "multibody",  "elements_fmm",
                     "liftingline",
                     "utils", "postprocess",
                     ]

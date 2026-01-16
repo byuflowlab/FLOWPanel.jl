@@ -38,7 +38,7 @@ body.strength[1,1] = 1.0
 npoints = 100
 dz = range(0.0, stop=10.0, length=npoints)
 points = hcat([ [0.33; 0.33; z] for z in dz ]...)  # points above centroid of triangle
-points = hcat([[0.33; 0.33; 0.0] .+ [z; z; z] for z in dz ]...)  # points in y from the centroid
+# points = hcat([[0.33; 0.33; 0.0] .+ [z; z; z] for z in dz ]...)  # points in y from the centroid
 
 # set "solved" flag
 FLOWPanel._solvedflag(body, true)
@@ -51,7 +51,7 @@ pnl.Uind!(body, points, out_direct, backend)
 # fast multipole backend
 backend_fmm = pnl.FastMultipoleBackend(
                                     expansion_order=20,
-                                    multipole_acceptance=1.0,
+                                    multipole_acceptance=0.0,
                                     leaf_size=1,
                                 )
 out_fmm = zeros(3, npoints)

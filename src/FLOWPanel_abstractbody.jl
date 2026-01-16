@@ -1140,8 +1140,37 @@ function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_t
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
 end
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::AbstractBody, source_buffer, source_index) where {PS,VS,GS}
-    throw("FastMultipole.direct! is not implemented for `<:AbstractBody` systems of type $(typeof(source_system))")
+# function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::AbstractBody, source_buffer, source_index) where {PS,VS,GS}
+#     throw("FastMultipole.direct! is not implemented for `<:AbstractBody` systems of type $(typeof(source_system))")
+# end
+
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}
+    TF = eltype(target_system)
+    for i_target in target_index # loop over targets
+        target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
+                  target_system[2, i_target],
+                  target_system[3, i_target])
+        
+        phi_out = zero(eltype(target_system))
+        U_out = @SVector zeros(eltype(target_system), 3)
+
+        for i_source in source_index # loop over sources
+            # evaluate influence due to this source
+            phi, U, _ = induced(target, source_system, source_buffer, i_source, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            phi_out += phi
+            U_out += U
+        end
+
+        # store results
+        if PS
+            target_system[4, i_target] += phi_out
+        end
+        if GS
+            target_system[5, i_target] += U_out[1]
+            target_system[6, i_target] += U_out[2]
+            target_system[7, i_target] += U_out[3]
+        end
+    end
 end
 
 ##### END OF ABSTRACT BODY #####################################################

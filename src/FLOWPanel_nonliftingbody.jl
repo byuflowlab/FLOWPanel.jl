@@ -845,147 +845,17 @@ function _phi!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend
     return nothing
 end
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::NonLiftingBody{ConstantSource, 1}, source_buffer, source_index) where {PS,GS,HS}
-    # assemble targets
-    targets = view(target_system, 1:3, target_index)
-    phi = view(target_system, 4, target_index)
-    
-    U_out = view(target_system, 5:7, target_index)
-    for i_source in source_index
-        # get vertex indices of the panel
-        panel = get_cell(source_system, i_source)
-        # panel = (1,2,3)  # TEMPORARY HACK TO BYPASS get_cell COST
+FastMultipole.has_vector_potential(::NonLiftingBody) = false
 
-        # Potential of i-th panel on every target
-        if PS
-            # Potential of i-th panel on every target
-            phi_constant_source(
-                                source_system.grid._nodes,         # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                phi;                               # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-
-        # velocity output only if requested
-        if GS
-            # Velocity of i-th panel on every target
-            U_constant_source(
-                                source_system.grid._nodes,                  # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                U_out;                             # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-    end
-end
-
-FastMultipole.body_to_multipole!(system::NonLiftingBody{ConstantSource, 1}, args...) =
+FastMultipole.body_to_multipole!(system::AbstractBody{ConstantSource, 1}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Source}, system, args...)
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::NonLiftingBody{ConstantDoublet, 1}, source_buffer, source_index) where {PS,GS,HS}
-    # assemble targets
-    targets = view(target_system, 1:3, target_index)
-    phi = view(target_system, 4, target_index)
-    
-    U_out = view(target_system, 5:7, target_index)
-    for i_source in source_index
-        # get vertex indices of the panel
-        panel = get_cell(source_system, i_source)
-
-        # Potential of i-th panel on every target
-        if PS
-            # Potential of i-th panel on every target
-            phi_constant_doublet(
-                                source_system.grid._nodes,         # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                phi;                               # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-
-        # velocity output only if requested
-        if GS
-            # Velocity of i-th panel on every target
-            U_constant_doublet(
-                                source_system.grid._nodes,                  # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                U_out;                             # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-    end
-end
-
-FastMultipole.body_to_multipole!(system::NonLiftingBody{ConstantDoublet, 1}, args...) =
+FastMultipole.body_to_multipole!(system::AbstractBody{ConstantDoublet, 1}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::NonLiftingBody{Union{ConstantSource,ConstantDoublet}, 1}, source_buffer, source_index) where {PS,GS,HS}
-    # assemble targets
-    targets = view(target_system, 1:3, target_index)
-    phi = view(target_system, 4, target_index)
-    
-    U_out = view(target_system, 5:7, target_index)
-    for i_source in source_index
-        # get vertex indices of the panel
-        panel = get_cell(source_system, i_source)
-
-        # Potential of i-th panel on every target
-        if PS
-            # Potential of i-th panel on every target
-            phi_constant_source(
-                                source_system.grid._nodes,         # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                phi;                               # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-            phi_constant_doublet(
-                                source_system.grid._nodes,         # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                phi;                               # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-
-        # velocity output only if requested
-        if GS
-            # Velocity of i-th panel on every target
-            U_constant_source(
-                                source_system.grid._nodes,                  # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                U_out;                             # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-            U_constant_doublet(
-                                source_system.grid._nodes,                  # All nodes
-                                panel,                             # Indices of nodes that make this panel
-                                source_system.strength[i_source, 1],               # Unitary strength
-                                targets,                           # Targets
-                                U_out;                             # Outputs
-                                offset=source_system.kerneloffset,          # Offset of kernel to avoid singularities
-                            )
-        end
-    end
-end
-
-FastMultipole.body_to_multipole!(system::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 1}, args...) =
+FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,ConstantDoublet}, 1}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...)
 
-FastMultipole.has_vector_potential(::NonLiftingBody) = false
 ##### END OF FASTMULTIPOLE BACKEND SUPPORT #####################################
 
 
