@@ -581,8 +581,8 @@ function plot_distribution(distributions, sweep1; suffix="loading")
 
             ax.annotate("", [0.4, 0.0145], xycoords="data",
                         xytext=[0.5, 0.035], textcoords="data",
-                        arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
-                                        :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
+                        arrowprops=Dict("facecolor"=>"black", "linewidth"=>0, "alpha"=>0.4,
+                                        "shrink"=>0, "width"=>1.0, "headwidth"=>5.0, "headlength"=>7))
         end
 
         ax.spines["right"].set_visible(false)
