@@ -109,6 +109,7 @@ cds = ds / nondim
 
 fig4 = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
 axs = fig4.subplots(1, 2)
+axs = pyconvert(Array, axs)
 
 
 for (axi, (ax, vals_exp)) in enumerate(zip(axs, [cls_web, cds_web[2:end, :]]))
@@ -197,6 +198,7 @@ CMy_vsp = [val for val in data_vsp[16, 2:end]]
 
 fig5 = plt.figure(figsize=[7*2, 5*1*0.75]*2/3)
 axs = fig5.subplots(1, 2)
+axs = pyconvert(Array, axs)
 
 ax = axs[1]
 ax.plot(alphas_web, CLs_web, "-ok", label="Experimental")

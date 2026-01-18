@@ -298,6 +298,7 @@ cds = cd
 
 fig = plt.figure(figsize = [7*2, 0.75*5]*2/3 )
 axs = fig.subplots(1, 2)
+axs = pyconvert(Array, axs)
 
 ax = axs[1]
 
@@ -511,6 +512,7 @@ function plot_distribution(distributions, sweep1; suffix="loading")
 
     fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
     axs = fig.subplots(1, 2)
+    axs = pyconvert(Array, axs)
 
     ypos = distributions[1].spanposition
     aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
@@ -637,6 +639,7 @@ function plot_polars(wingpolar; suffix="CLCDCm",
 
     fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
     axs = fig.subplots(2, 2)
+    axs = pyconvert(Array, axs)
 
     axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
 

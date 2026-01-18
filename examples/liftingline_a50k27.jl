@@ -324,6 +324,7 @@ function plot_polars(wingpolar; suffix="CLCDCm",
 
     fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
     axs = fig.subplots(2, 2)
+    axs = pyconvert(Array, axs)
 
     axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
 

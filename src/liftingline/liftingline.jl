@@ -1487,6 +1487,7 @@ function _discretize_wing_parameterization(;
 
         fig = plt.figure(figsize = [7*2, 0.5*5*3]*7/9)
         axs = fig.subplots(3, 2)
+        axs = pyconvert(Array, axs)
         axs = permutedims(axs, (2, 1))
 
         stl_inp = "o"
@@ -1733,6 +1734,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
         # Compare raw vs extrapolated
         fig1 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
         axs1 = fig1.subplots(3, 1)
+        axs1 = pyconvert(Array, axs1)
 
         fig = fig1
         axs = axs1
@@ -1786,6 +1788,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
     # Compare blends
     fig2 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
     axs2 = fig2.subplots(3, 1)
+    axs2 = pyconvert(Array, axs2)
 
     fig = fig2
     axs = axs2

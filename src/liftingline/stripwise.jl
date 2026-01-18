@@ -402,6 +402,7 @@ function plot_slice(self::GeneralAirfoil{N}, slice;
 
     fig = plt.figure(figsize = [7, 0.75*5*3]*7/9)
     axs = fig.subplots(3, 1)
+    axs = pyconvert(Array, axs)
 
     fig.suptitle("Data slice at " * 
                 join(("$(name) = $(self.parameters[ni][slice[ni-1]])" for (ni, name) in enumerate(self.names) if ni != 1), ", "))

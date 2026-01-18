@@ -36,6 +36,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
     # Plot slices of the wing along the span
     fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
+    axs = _axs==nothing ? pyconvert(Array, axs) : axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 
     for (axi, (ax, spanpos)) in enumerate(zip(axs, spanposs))
@@ -142,6 +143,7 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
     # Plot slices of the wing along the span
     fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
+    axs = _axs==nothing ? pyconvert(Array, axs) : axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 
     for (axi, (ax, spanpos)) in enumerate(zip(axs, spanposs))
@@ -233,6 +235,7 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
     # Plot loading
     fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [length(to_plot), 1]) : _fig
     axs = _axs==nothing ? fig.subplots(1, length(to_plot)) : _axs
+    axs = _axs==nothing ? pyconvert(Array, axs) : axs
     axs = _axs==nothing ? length(to_plot)==1 ? [axs] : [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 
     for (axi, (ax, pi)) in enumerate(zip(axs, to_plot))

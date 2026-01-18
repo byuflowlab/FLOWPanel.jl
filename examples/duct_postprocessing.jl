@@ -10,6 +10,7 @@ function plot_Cp(body, AOA; plot_experimental=true)
 
     fig = plt.figure("AOA $(AOA)", figsize=[7, 5*0.8]*2/3 .* [2, 1])
     axs = fig.subplots(1, 2)
+    axs = pyconvert(Array, axs)
 
     for (ax, upperside) in zip(axs, [true, false])  # Iterate over duct side
 
