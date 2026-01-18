@@ -1,5 +1,5 @@
 import PythonPlot as plt
-import LaTeXStrings: @L_str
+import LaTeXStrings: @L_str, pyconvert
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 """

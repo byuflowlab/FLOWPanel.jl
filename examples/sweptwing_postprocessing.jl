@@ -7,7 +7,7 @@ import PythonPlot as plt
 import CSV
 import DataFrames: DataFrame
 import OrderedCollections: OrderedDict
-import PythonPlot: @L_str
+import PythonPlot: @L_str, pyconvert
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 expdata_path = joinpath(pnl.examples_path, "data")
