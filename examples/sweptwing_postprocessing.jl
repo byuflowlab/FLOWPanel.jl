@@ -3,11 +3,11 @@
     Postprocessing functions of swept wing example and experimental data
 =###############################################################################
 
-import PyPlot as plt
+import PythonPlot as plt
 import CSV
 import DataFrames: DataFrame
 import OrderedCollections: OrderedDict
-import PyPlot: @L_str
+import PythonPlot: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 expdata_path = joinpath(pnl.examples_path, "data")

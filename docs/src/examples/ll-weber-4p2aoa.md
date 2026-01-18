@@ -24,7 +24,7 @@ with a rigid wake model.
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import PyPlot as plt
+import PythonPlot as plt
 
 
 

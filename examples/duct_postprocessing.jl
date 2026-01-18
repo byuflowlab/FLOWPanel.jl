@@ -1,4 +1,4 @@
-import PyPlot as plt
+import PythonPlot as plt
 import LaTeXStrings: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 

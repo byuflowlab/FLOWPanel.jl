@@ -99,7 +99,7 @@ Following these guidelines, `GeometricTools.surface_revolution` returns a revolv
 First, we need a profile to revolve consisting of a collection of points. This can be predefined and read as a csv file (for example), or defined programmatically. Here we show how to define the contour programmatically:
 
 ```julia
-import PyPlot as plt
+import PythonPlot as plt
 
 Rhub = 0.375 * 0.02542        # (m) radius of hub
 Rinn = Rhub / 2               # (m) inner hole radius

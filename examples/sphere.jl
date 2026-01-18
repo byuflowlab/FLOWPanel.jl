@@ -12,10 +12,10 @@
 
 import FLOWPanel as pnl
 
-import PyPlot as plt
+import PythonPlot as plt
 import CSV
 import DataFrames: DataFrame
-import PyPlot: @L_str
+import PythonPlot: @L_str
 
 save_path       = "temps/"                  # Where to save results
 file_name       = "sphere00"                # Prefix of output files

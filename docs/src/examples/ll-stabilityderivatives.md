@@ -23,7 +23,7 @@ import ForwardDiff: Dual, Partials, value, partials
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import PyPlot as plt
+import PythonPlot as plt
 
 
 

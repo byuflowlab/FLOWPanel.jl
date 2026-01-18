@@ -48,7 +48,7 @@ if paraview
     run(`paraview --data=$file_name.vtk`)
 
 else
-    # Use PyPlot instead of Paraview
+    # Use PythonPlot instead of Paraview
     gt.plot(grid; labelnodes=!true, labelcells=!true, labelndivs=true)
 end;
 ```
@@ -87,7 +87,7 @@ if paraview
     # Calls paraview
     run(`paraview --data=$file_name.vtk`)
 else
-    # Use PyPlot instead of Paraview
+    # Use PythonPlot instead of Paraview
     gt.plot(grid; labelnodes=!true, labelcells=!true, labelndivs=true)
 end;
 ```

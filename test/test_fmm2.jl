@@ -25,7 +25,7 @@ import FLOWPanel as pnl
 import FLOWPanel: dot, norm
 using Test
 
-# Check if PyPlot is available
+# Check if PythonPlot is available
 try
     import FLOWPanel: plt, @L_str
     global pyplot = true
