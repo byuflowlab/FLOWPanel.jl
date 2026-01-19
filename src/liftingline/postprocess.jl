@@ -103,7 +103,8 @@ function calc_forcesmoments(ll::LiftingLine,
     # Outputs
     return (;   lift=L, drag=D, side=S, roll, pitch, yaw, 
                 Ftot, Mtot,
-                Dhat, Shat, Lhat, lhat, mhat, nhat)
+                Dhat, Shat, Lhat, lhat, mhat, nhat,
+                X0)
 end
 
 """
@@ -133,6 +134,7 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     # Fetch forces and moments
     (; lift, drag, side) = forcesmoments
     (; roll, pitch, yaw) = forcesmoments
+    (; X0) = forcesmoments
 
     # Fetch unit vectors
     (; Dhat, Shat, Lhat) = forcesmoments
@@ -163,7 +165,8 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     # Outputs
     return (;   CL, CD, CY, Cl, Cm, Cn,
                 Dhat, Shat, Lhat, lhat, mhat, nhat,
-                q, Aref, bref, cref)
+                q, Aref, bref, cref,
+                X0)
 end
 
 ################################################################################
