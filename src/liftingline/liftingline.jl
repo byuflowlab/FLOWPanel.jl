@@ -22,6 +22,7 @@ struct LiftingLine{ R<:Number,
                     LI<:LinearIndices} <: AbstractBody{S, N}
 
     # Internal properties
+    origin::VectorType                          # Origin about which to center the wing
     grid::gt.Grid                               # Flat-geometry grid
     linearindices::LI                           # Linear indices of grid.nodes where linearindices[i, j] 
                                                 # is TE (j==1) or LE (j==2) of the i-th row of nodes
@@ -95,6 +96,7 @@ struct LiftingLine{ R<:Number,
                             aerodynamic_centers=1/4,
                             strip_positions=0.5,
                             controlpoint_position=3/4,
+                            origin=:automatic,
                             deltasb=1.0,
                             deltajoint=0.15,
                             sigmafactor=1.0,
@@ -131,9 +133,12 @@ struct LiftingLine{ R<:Number,
         linearindices = LinearIndices(grid._ndivsnodes)
         
         # ------------------ MORPH GRID INTO WING GEOMETRY ---------------------
-        _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
+        origin = _morph_grid_wing!(grid, b, ypositions, chords, 
+                                            twists, sweeps, dihedrals, 
                                             spanaxiss, symmetric, linearindices; 
-                                            center=true)
+                                            center=true, origin)
+
+        origin = VectorType(origin)
 
         # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
@@ -235,6 +240,7 @@ struct LiftingLine{ R<:Number,
             S, _count(S),
             VectorType, MatrixType, TensorType, TensorType2,
             typeof(linearindices)}(
+                                origin,
                                 grid, linearindices, String[],
                                 ypositions, 
                                 nelements, elements,
@@ -274,7 +280,7 @@ end
 Morph the lifting-line wing geometry into a new geometry
 """
 function remorph!(self::LiftingLine, args...; 
-                    recenter=false, 
+                    center=true, 
                     aerodynamic_centers=1/4,
                     controlpoint_positions=3/4, 
                     Uinf=[1, 0, 0],
@@ -288,7 +294,8 @@ function remorph!(self::LiftingLine, args...;
 
     # Morph existing wing geometry into the new geometry
     _morph_grid_wing!(self.grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric, self.linearindices; center=recenter)
+                            spanaxiss, symmetric, self.linearindices; 
+                            center, origin=self.origin)
 
     # Update horseshoe geometries
     self.aerocenters .= aerodynamic_centers
@@ -1533,7 +1540,8 @@ function _discretize_wing_parameterization(;
 end
 
 function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric, linearindices; center=false)
+                            spanaxiss, symmetric, linearindices; center=true,
+                            origin=:automatic)
 
     @assert grid._ndivsnodes[1] == length(ypositions) ""*
         "Invalid grid! Received grid of $(grid._ndivsnodes[1]) spanwise nodes,"*
@@ -1590,17 +1598,22 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
     # Center the wing nose on the origin
     if center
-        xorigin = minimum(view(grid.nodes, 1, :))
-        yorigin = (minimum(view(grid.nodes, 2, :)) + maximum(view(grid.nodes, 2, :))) / 2
-        zorigin = grid.nodes[3, findmin(view(grid.nodes, 1, :))[2]]
 
-        grid.nodes[1, :] .-= xorigin
-        grid.nodes[2, :] .-= yorigin
-        grid.nodes[3, :] .-= zorigin
+        # Automatically calculate origin
+        if origin == :automatic
+            xorigin = minimum(view(grid.nodes, 1, :))
+            yorigin = (minimum(view(grid.nodes, 2, :)) + maximum(view(grid.nodes, 2, :))) / 2
+            zorigin = grid.nodes[3, findmin(view(grid.nodes, 1, :))[2]]
+
+            origin = [xorigin, yorigin, zorigin]
+        end
+
+        grid.nodes[1, :] .-= origin[1]
+        grid.nodes[2, :] .-= origin[2]
+        grid.nodes[3, :] .-= origin[3]
     end
-
-    return nothing
-
+    
+    return origin
 end
 
 function _generate_stripwise_elements(airfoil_distribution, ypositions, 
