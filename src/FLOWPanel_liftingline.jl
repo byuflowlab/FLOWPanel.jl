@@ -43,7 +43,8 @@ import LaTeXStrings: @L_str
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["stripwise", "liftingline", 
                     "linearsolver", "nonlinearsolver",
-                    "postprocess", "polarsweep", "utils"
+                    "postprocess", "polarsweep", "utils",
+                    "optimization"
                     ]
 
   include(joinpath("liftingline", header_name*".jl"))
