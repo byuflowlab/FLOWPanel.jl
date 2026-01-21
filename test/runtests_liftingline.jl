@@ -8,7 +8,7 @@ import Printf: @printf
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import ForwardDiff: Dual, Partials, value, partials, jacobian
+import ForwardDiff: Dual, Partials, value, partials
 
 try
     verbose
@@ -18,7 +18,7 @@ end
 v_lvl = 0
 
 
-@testset verbose=verbose "Lifting Line Tests" begin
+@testset verbose=verbose "Lifting Line Solver Tests" begin
 
     @testset "Swept wing validation" begin
 
@@ -385,135 +385,6 @@ v_lvl = 0
         end
 
     end
-
-
-
-    @testset "run_liftingline compatibility with AD" begin
-
-        # --------------- run_liftingline TESTS --------------------------------
-        if verbose
-            println("\n"*"\t"^(v_lvl)*"run_liftingline AD compatibility tests")
-        end
-
-        alpha = 4.2
-        beta = 1.0
-
-        X0 = zeros(3)
-
-        dihedral_distribution = [
-        #   2*y/b   dihedral (deg)
-            0.0     4.0
-            1.0     4.0
-        ]
-
-        optargs = (; alpha, beta, X0, dihedral_distribution, verbose=false)
-
-        # Wall-clock benchmark for reference
-        out = pnl.run_liftingline(; optargs...)
-        cache = out.cache
-        pnl.run_liftingline(; cache, optargs...)
-
-        t = @elapsed pnl.run_liftingline(; cache, optargs...)
-
-        if verbose
-            println("\n"*"\t"^(v_lvl+1)*"run_liftingline run time: $(Int(round(t*1000))) ms")
-        end
-        
-
-        # Reference values (these where obtained through built-in Duals)
-        out_ref = (;    CD = 0.0055338499113409614, CY = 0.0002269891577923591, CL = 0.24681427783627455, 
-                        Cl = -0.009055479511985452, Cm = -0.3571370514170437, Cn = 0.0003528888094935135, 
-                        dCDdα = 0.0019359109713538113, dCYdα = -4.73088519324675e-6, dCLdα = 0.06765598314629265, 
-                        dCldα = -0.00136491717526742, dCmdα = -0.09912479914111964, dCndα = 6.05371898560579e-5, 
-                        dCDdβ = -2.8762128067772757e-6, dCYdβ = 0.00022690799615432357, dCLdβ = 6.364513730187299e-5, 
-                        dCldβ = -0.009053779138291685, dCmdβ = -0.00010373311929720024, dCndβ = 0.00035263241876742245)
-
-        # Compute stability derivatives through finite difference
-        dalpha = 0.001
-        out_m1 = pnl.run_liftingline(; optargs..., alpha=alpha-dalpha, stability_derivatives=false)
-        out_1  = pnl.run_liftingline(; optargs..., alpha=alpha,        stability_derivatives=false)
-        out_p1 = pnl.run_liftingline(; optargs..., alpha=alpha+dalpha, stability_derivatives=false)
-
-        dbeta = 0.001
-        out_m2 = pnl.run_liftingline(; optargs..., alpha, beta=beta-dbeta,  stability_derivatives=false)
-        out_2  = pnl.run_liftingline(; optargs..., alpha, beta=beta,        stability_derivatives=false)
-        out_p2 = pnl.run_liftingline(; optargs..., alpha, beta=beta+dbeta,  stability_derivatives=false)
-
-        out_diff = (;   CD=out_1.CD, CY=out_1.CY, CL=out_1.CL,
-                        Cl=out_1.Cl, Cm=out_1.Cm, Cn=out_1.Cn,
-                        dCDdα=(out_p1.CD-out_m1.CD)/(2*dalpha), dCYdα=(out_p1.CY-out_m1.CY)/(2*dalpha), dCLdα=(out_p1.CL-out_m1.CL)/(2*dalpha),
-                        dCldα=(out_p1.Cl-out_m1.Cl)/(2*dalpha), dCmdα=(out_p1.Cm-out_m1.Cm)/(2*dalpha), dCndα=(out_p1.Cn-out_m1.Cn)/(2*dalpha),
-                        dCDdβ=(out_p2.CD-out_m2.CD)/(2*dbeta), dCYdβ=(out_p2.CY-out_m2.CY)/(2*dbeta), dCLdβ=(out_p2.CL-out_m2.CL)/(2*dbeta),
-                        dCldβ=(out_p2.Cl-out_m2.Cl)/(2*dbeta), dCmdβ=(out_p2.Cm-out_m2.Cm)/(2*dbeta), dCndβ=(out_p2.Cn-out_m2.Cn)/(2*dbeta),
-                    )
-
-        # Built-in Dual computation of stability derivatives
-        out_dual = pnl.run_liftingline(; optargs..., alpha, stability_derivatives=true)
-
-        # ForwardDiff computation of stability derivatives
-        function f(x; stability_derivatives=false)
-            out = pnl.run_liftingline(; optargs..., alpha=x[1], beta=x[2], stability_derivatives)
-
-            (; CD, CY, CL, Cl, Cm, Cn,
-            dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-            dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) = out
-
-            return [CD, CY, CL, Cl, Cm, Cn,
-            dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-            dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ]
-        end
-
-        f1(x) = f(x; stability_derivatives=false)
-
-        out_fd1_p = f1([alpha, beta])
-        out_fd1_j = jacobian(f1, [alpha, beta])
-
-        out_fd1 = (;    CD=out_fd1_p[1], CY=out_fd1_p[2], CL=out_fd1_p[3], Cl=out_fd1_p[4], Cm=out_fd1_p[5], Cn=out_fd1_p[6],
-                        dCDdα=out_fd1_j[1, 1], dCYdα=out_fd1_j[2, 1], dCLdα=out_fd1_j[3, 1], dCldα=out_fd1_j[4, 1], dCmdα=out_fd1_j[5, 1], dCndα=out_fd1_j[6, 1],
-                        dCDdβ=out_fd1_j[1, 2], dCYdβ=out_fd1_j[2, 2], dCLdβ=out_fd1_j[3, 2], dCldβ=out_fd1_j[4, 2], dCmdβ=out_fd1_j[5, 2], dCndβ=out_fd1_j[6, 2])
-
-        # ForwardDiff computation of stability derivatives embedded in the built-in Dual computation
-        f2(x) = f(x; stability_derivatives=true)
-
-        out_fd2_p = f2([alpha, beta])
-        out_fd2_j = jacobian(f2, [alpha, beta])
-
-        out_fd2 = (;    CD=out_fd2_p[1], CY=out_fd2_p[2], CL=out_fd2_p[3], Cl=out_fd2_p[4], Cm=out_fd2_p[5], Cn=out_fd2_p[6],
-                        dCDdα=out_fd2_j[1, 1], dCYdα=out_fd2_j[2, 1], dCLdα=out_fd2_j[3, 1], dCldα=out_fd2_j[4, 1], dCmdα=out_fd2_j[5, 1], dCndα=out_fd2_j[6, 1],
-                        dCDdβ=out_fd2_j[1, 2], dCYdβ=out_fd2_j[2, 2], dCLdβ=out_fd2_j[3, 2], dCldβ=out_fd2_j[4, 2], dCmdβ=out_fd2_j[5, 2], dCndβ=out_fd2_j[6, 2])
-
-        # # Print dual result for reference
-        # (; CD, CY, CL, Cl, Cm, Cn,
-        #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-        #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ)  = out_dual
-
-        # @show (; CD, CY, CL, Cl, Cm, Cn,
-        #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-        #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) 
-    
-        for (lbl, out, atol) in (
-                                ("Finite Difference", out_diff, 1e-6),
-                                ("Built-in Duals", out_dual, eps(10.0)),
-                                ("ForwardDiff w/o built-in Duals", out_fd1, 1e-13),
-                                ("ForwardDiff with built-in Duals", out_fd2, eps(10.0)),
-                            )
-            
-            @testset "$lbl" begin
-                for sym in (:CD, :CY, :CL, :Cl, :Cm, :Cn,
-                            :dCDdα, :dCYdα, :dCLdα, :dCldα, :dCmdα, :dCndα,
-                            :dCDdβ, :dCYdβ, :dCLdβ, :dCldβ, :dCmdβ, :dCndβ)
-        
-                    @testset "$sym" begin
-                        @test isapprox(getproperty(out, sym), getproperty(out_ref, sym); atol)
-                    end
-        
-                end
-            end
-            
-        end
-        
-    end
-
 
 end
 
