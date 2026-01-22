@@ -21,131 +21,132 @@ v_lvl = 0
 
 @testset verbose=verbose "Lifting Line Optimization Tests" begin
 
-    # @testset "run_liftingline compatibility with AD" begin
+    @testset "run_liftingline compatibility with AD" begin
 
-    #     # --------------- run_liftingline TESTS --------------------------------
-    #     if verbose
-    #         println("\n"*"\t"^(v_lvl)*"run_liftingline AD compatibility tests")
-    #     end
+        # --------------- run_liftingline TESTS --------------------------------
+        if verbose
+            println("\n"*"\t"^(v_lvl)*"run_liftingline AD compatibility tests")
+        end
 
-    #     alpha = 4.2
-    #     beta = 1.0
+        alpha = 4.2
+        beta = 1.0
 
-    #     X0 = zeros(3)
+        X0 = [-0.2 * 98*0.0254 * 0.25, 0, 0]
 
-    #     dihedral_distribution = [
-    #     #   2*y/b   dihedral (deg)
-    #         0.0     4.0
-    #         1.0     4.0
-    #     ]
+        dihedral_distribution = [
+        #   2*y/b   dihedral (deg)
+            0.0     4.0
+            1.0     4.0
+        ]
 
-    #     optargs = (; alpha, beta, X0, dihedral_distribution, verbose=false)
+        optargs = (; alpha, beta, X0, dihedral_distribution, verbose=false)
 
-    #     # Wall-clock benchmark for reference
-    #     out = pnl.run_liftingline(; optargs...)
-    #     cache = out.cache
-    #     pnl.run_liftingline(; cache, optargs...)
+        # Wall-clock benchmark for reference
+        out = pnl.run_liftingline(; optargs...)
+        cache = out.cache
+        pnl.run_liftingline(; cache, optargs...)
 
-    #     t = @elapsed pnl.run_liftingline(; cache, optargs...)
+        t = @elapsed pnl.run_liftingline(; cache, optargs...)
 
-    #     if verbose
-    #         println("\n"*"\t"^(v_lvl+1)*"run_liftingline run time: $(Int(round(t*1000))) ms")
-    #     end
+        if verbose
+            println("\n"*"\t"^(v_lvl+1)*"run_liftingline run time: $(Int(round(t*1000))) ms")
+        end
         
 
-    #     # Reference values (these where obtained through built-in Duals)
-    #     out_ref = (;    CD = 0.0055338499113409614, CY = 0.0002269891577923591, CL = 0.24681427783627455, 
-    #                     Cl = -0.009055479511985452, Cm = -0.3571370514170437, Cn = 0.0003528888094935135, 
-    #                     dCDdα = 0.0019359109713538113, dCYdα = -4.73088519324675e-6, dCLdα = 0.06765598314629265, 
-    #                     dCldα = -0.00136491717526742, dCmdα = -0.09912479914111964, dCndα = 6.05371898560579e-5, 
-    #                     dCDdβ = -2.8762128067772757e-6, dCYdβ = 0.00022690799615432357, dCLdβ = 6.364513730187299e-5, 
-    #                     dCldβ = -0.009053779138291685, dCmdβ = -0.00010373311929720024, dCndβ = 0.00035263241876742245)
+        # Compute stability derivatives through finite difference
+        dalpha = 0.001
+        out_m1 = pnl.run_liftingline(; optargs..., alpha=alpha-dalpha, stability_derivatives=false)
+        out_1  = pnl.run_liftingline(; optargs..., alpha=alpha,        stability_derivatives=false)
+        out_p1 = pnl.run_liftingline(; optargs..., alpha=alpha+dalpha, stability_derivatives=false)
 
-    #     # Compute stability derivatives through finite difference
-    #     dalpha = 0.001
-    #     out_m1 = pnl.run_liftingline(; optargs..., alpha=alpha-dalpha, stability_derivatives=false)
-    #     out_1  = pnl.run_liftingline(; optargs..., alpha=alpha,        stability_derivatives=false)
-    #     out_p1 = pnl.run_liftingline(; optargs..., alpha=alpha+dalpha, stability_derivatives=false)
+        dbeta = 0.001
+        out_m2 = pnl.run_liftingline(; optargs..., alpha, beta=beta-dbeta,  stability_derivatives=false)
+        out_2  = pnl.run_liftingline(; optargs..., alpha, beta=beta,        stability_derivatives=false)
+        out_p2 = pnl.run_liftingline(; optargs..., alpha, beta=beta+dbeta,  stability_derivatives=false)
 
-    #     dbeta = 0.001
-    #     out_m2 = pnl.run_liftingline(; optargs..., alpha, beta=beta-dbeta,  stability_derivatives=false)
-    #     out_2  = pnl.run_liftingline(; optargs..., alpha, beta=beta,        stability_derivatives=false)
-    #     out_p2 = pnl.run_liftingline(; optargs..., alpha, beta=beta+dbeta,  stability_derivatives=false)
+        out_diff = (;   CD=out_1.CD, CY=out_1.CY, CL=out_1.CL,
+                        Cl=out_1.Cl, Cm=out_1.Cm, Cn=out_1.Cn,
+                        dCDdα=(out_p1.CD-out_m1.CD)/(2*dalpha), dCYdα=(out_p1.CY-out_m1.CY)/(2*dalpha), dCLdα=(out_p1.CL-out_m1.CL)/(2*dalpha),
+                        dCldα=(out_p1.Cl-out_m1.Cl)/(2*dalpha), dCmdα=(out_p1.Cm-out_m1.Cm)/(2*dalpha), dCndα=(out_p1.Cn-out_m1.Cn)/(2*dalpha),
+                        dCDdβ=(out_p2.CD-out_m2.CD)/(2*dbeta), dCYdβ=(out_p2.CY-out_m2.CY)/(2*dbeta), dCLdβ=(out_p2.CL-out_m2.CL)/(2*dbeta),
+                        dCldβ=(out_p2.Cl-out_m2.Cl)/(2*dbeta), dCmdβ=(out_p2.Cm-out_m2.Cm)/(2*dbeta), dCndβ=(out_p2.Cn-out_m2.Cn)/(2*dbeta),
+                    )
 
-    #     out_diff = (;   CD=out_1.CD, CY=out_1.CY, CL=out_1.CL,
-    #                     Cl=out_1.Cl, Cm=out_1.Cm, Cn=out_1.Cn,
-    #                     dCDdα=(out_p1.CD-out_m1.CD)/(2*dalpha), dCYdα=(out_p1.CY-out_m1.CY)/(2*dalpha), dCLdα=(out_p1.CL-out_m1.CL)/(2*dalpha),
-    #                     dCldα=(out_p1.Cl-out_m1.Cl)/(2*dalpha), dCmdα=(out_p1.Cm-out_m1.Cm)/(2*dalpha), dCndα=(out_p1.Cn-out_m1.Cn)/(2*dalpha),
-    #                     dCDdβ=(out_p2.CD-out_m2.CD)/(2*dbeta), dCYdβ=(out_p2.CY-out_m2.CY)/(2*dbeta), dCLdβ=(out_p2.CL-out_m2.CL)/(2*dbeta),
-    #                     dCldβ=(out_p2.Cl-out_m2.Cl)/(2*dbeta), dCmdβ=(out_p2.Cm-out_m2.Cm)/(2*dbeta), dCndβ=(out_p2.Cn-out_m2.Cn)/(2*dbeta),
-    #                 )
+        # Built-in Dual computation of stability derivatives
+        out_dual = pnl.run_liftingline(; optargs..., alpha, stability_derivatives=true)
 
-    #     # Built-in Dual computation of stability derivatives
-    #     out_dual = pnl.run_liftingline(; optargs..., alpha, stability_derivatives=true)
+        # ForwardDiff computation of stability derivatives
+        function f(x; stability_derivatives=false)
+            out = pnl.run_liftingline(; optargs..., alpha=x[1], beta=x[2], stability_derivatives)
 
-    #     # ForwardDiff computation of stability derivatives
-    #     function f(x; stability_derivatives=false)
-    #         out = pnl.run_liftingline(; optargs..., alpha=x[1], beta=x[2], stability_derivatives)
+            (; CD, CY, CL, Cl, Cm, Cn,
+            dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
+            dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) = out
 
-    #         (; CD, CY, CL, Cl, Cm, Cn,
-    #         dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-    #         dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) = out
+            return [CD, CY, CL, Cl, Cm, Cn,
+            dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
+            dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ]
+        end
 
-    #         return [CD, CY, CL, Cl, Cm, Cn,
-    #         dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-    #         dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ]
-    #     end
+        f1(x) = f(x; stability_derivatives=false)
 
-    #     f1(x) = f(x; stability_derivatives=false)
+        out_fd1_p = f1([alpha, beta])
+        out_fd1_j = jacobian(f1, [alpha, beta])
 
-    #     out_fd1_p = f1([alpha, beta])
-    #     out_fd1_j = jacobian(f1, [alpha, beta])
+        out_fd1 = (;    CD=out_fd1_p[1], CY=out_fd1_p[2], CL=out_fd1_p[3], Cl=out_fd1_p[4], Cm=out_fd1_p[5], Cn=out_fd1_p[6],
+                        dCDdα=out_fd1_j[1, 1], dCYdα=out_fd1_j[2, 1], dCLdα=out_fd1_j[3, 1], dCldα=out_fd1_j[4, 1], dCmdα=out_fd1_j[5, 1], dCndα=out_fd1_j[6, 1],
+                        dCDdβ=out_fd1_j[1, 2], dCYdβ=out_fd1_j[2, 2], dCLdβ=out_fd1_j[3, 2], dCldβ=out_fd1_j[4, 2], dCmdβ=out_fd1_j[5, 2], dCndβ=out_fd1_j[6, 2])
 
-    #     out_fd1 = (;    CD=out_fd1_p[1], CY=out_fd1_p[2], CL=out_fd1_p[3], Cl=out_fd1_p[4], Cm=out_fd1_p[5], Cn=out_fd1_p[6],
-    #                     dCDdα=out_fd1_j[1, 1], dCYdα=out_fd1_j[2, 1], dCLdα=out_fd1_j[3, 1], dCldα=out_fd1_j[4, 1], dCmdα=out_fd1_j[5, 1], dCndα=out_fd1_j[6, 1],
-    #                     dCDdβ=out_fd1_j[1, 2], dCYdβ=out_fd1_j[2, 2], dCLdβ=out_fd1_j[3, 2], dCldβ=out_fd1_j[4, 2], dCmdβ=out_fd1_j[5, 2], dCndβ=out_fd1_j[6, 2])
+        # ForwardDiff computation of stability derivatives embedded in the built-in Dual computation
+        f2(x) = f(x; stability_derivatives=true)
 
-    #     # ForwardDiff computation of stability derivatives embedded in the built-in Dual computation
-    #     f2(x) = f(x; stability_derivatives=true)
+        out_fd2_p = f2([alpha, beta])
+        out_fd2_j = jacobian(f2, [alpha, beta])
 
-    #     out_fd2_p = f2([alpha, beta])
-    #     out_fd2_j = jacobian(f2, [alpha, beta])
+        out_fd2 = (;    CD=out_fd2_p[1], CY=out_fd2_p[2], CL=out_fd2_p[3], Cl=out_fd2_p[4], Cm=out_fd2_p[5], Cn=out_fd2_p[6],
+                        dCDdα=out_fd2_j[1, 1], dCYdα=out_fd2_j[2, 1], dCLdα=out_fd2_j[3, 1], dCldα=out_fd2_j[4, 1], dCmdα=out_fd2_j[5, 1], dCndα=out_fd2_j[6, 1],
+                        dCDdβ=out_fd2_j[1, 2], dCYdβ=out_fd2_j[2, 2], dCLdβ=out_fd2_j[3, 2], dCldβ=out_fd2_j[4, 2], dCmdβ=out_fd2_j[5, 2], dCndβ=out_fd2_j[6, 2])
 
-    #     out_fd2 = (;    CD=out_fd2_p[1], CY=out_fd2_p[2], CL=out_fd2_p[3], Cl=out_fd2_p[4], Cm=out_fd2_p[5], Cn=out_fd2_p[6],
-    #                     dCDdα=out_fd2_j[1, 1], dCYdα=out_fd2_j[2, 1], dCLdα=out_fd2_j[3, 1], dCldα=out_fd2_j[4, 1], dCmdα=out_fd2_j[5, 1], dCndα=out_fd2_j[6, 1],
-    #                     dCDdβ=out_fd2_j[1, 2], dCYdβ=out_fd2_j[2, 2], dCLdβ=out_fd2_j[3, 2], dCldβ=out_fd2_j[4, 2], dCmdβ=out_fd2_j[5, 2], dCndβ=out_fd2_j[6, 2])
+        # # Print dual result for reference
+        # (; CD, CY, CL, Cl, Cm, Cn,
+        #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
+        #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ)  = out_dual
 
-    #     # # Print dual result for reference
-    #     # (; CD, CY, CL, Cl, Cm, Cn,
-    #     #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-    #     #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ)  = out_dual
+        # @show (; CD, CY, CL, Cl, Cm, Cn,
+        #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
+        #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) 
 
-    #     # @show (; CD, CY, CL, Cl, Cm, Cn,
-    #     #     dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,
-    #     #     dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ) 
+        # Reference values (these where obtained through built-in Duals)
+        out_ref = (; CD = 0.005533849911341167, CY = 0.00022698915779239564, CL = 0.2468142778362872, 
+                        Cl = -0.00905547951198593, Cm = -0.3571370514170585, Cn = 0.0003528888094935986, 
+                        dCDdα = 0.0019359114770833169, dCYdα = -4.730781732494048e-6, dCLdα = 0.06765600936287354, 
+                        dCldα = -0.00136491817804796, dCmdα = -0.09912482938826489, dCndα = 6.053722709544468e-5, 
+                        dCDdβ = -2.876213151452691e-6, dCYdβ = 0.00022690799608518475, dCLdβ = 6.364511734491141e-5, 
+                        dCldβ = -0.009053779137479243, dCmdβ = -0.00010373309622187973, dCndβ = 0.000352632418737478)
     
-    #     for (lbl, out, atol) in (
-    #                             ("Finite Difference", out_diff, 1e-6),
-    #                             ("Built-in Duals", out_dual, eps(10.0)),
-    #                             ("ForwardDiff w/o built-in Duals", out_fd1, 1e-13),
-    #                             ("ForwardDiff with built-in Duals", out_fd2, eps(10.0)),
-    #                         )
+        # Tests
+        for (lbl, out, atol) in (
+                                ("Finite Difference", out_diff, 1e-6),
+                                ("Built-in Duals", out_dual, eps(10.0)),
+                                ("ForwardDiff w/o built-in Duals", out_fd1, 1e-13),
+                                ("ForwardDiff with built-in Duals", out_fd2, eps(10.0)),
+                            )
             
-    #         @testset "$lbl" begin
-    #             for sym in (:CD, :CY, :CL, :Cl, :Cm, :Cn,
-    #                         :dCDdα, :dCYdα, :dCLdα, :dCldα, :dCmdα, :dCndα,
-    #                         :dCDdβ, :dCYdβ, :dCLdβ, :dCldβ, :dCmdβ, :dCndβ)
+            @testset "$lbl" begin
+                for sym in (:CD, :CY, :CL, :Cl, :Cm, :Cn,
+                            :dCDdα, :dCYdα, :dCLdα, :dCldα, :dCmdα, :dCndα,
+                            :dCDdβ, :dCYdβ, :dCLdβ, :dCldβ, :dCmdβ, :dCndβ)
         
-    #                 @testset "$sym" begin
-    #                     @test isapprox(getproperty(out, sym), getproperty(out_ref, sym); atol)
-    #                 end
+                    @testset "$sym" begin
+                        @test isapprox(getproperty(out, sym), getproperty(out_ref, sym); atol)
+                    end
         
-    #             end
-    #         end
+                end
+            end
             
-    #     end
+        end
         
-    # end
+    end
 
 
     @testset "AOA optimization: Max L/D" begin
@@ -282,8 +283,8 @@ v_lvl = 0
 
         x0 = [4.2; 0.0]             # Initial guess
 
-        lx = [-10.0, -10.0]         # Lower bounds on x
-        ux = [10.0, 10.0]           # Upper bounds on x
+        lx = [-10.0, 0.0]         # Lower bounds on x
+        ux = [10.0, 0.0]           # Upper bounds on x
 
         ng = 2                      # Number of constraints
         lg = -Inf*ones(ng)          # Lower bounds on g
@@ -334,57 +335,6 @@ v_lvl = 0
             @test isapprox(fopt_ipopt, fopt_brute, atol=0.01)
         end
 
-
-
-
-
-
-        # --------------- OPTIMIZATION TEST: Optimum twist ---------------------
-        if verbose
-            println("\n"*"\t"^(v_lvl)*"Optimization test: Max L/D w.r.t. twist")
-        end
-
-        function f2!(args...; optargs...)
-            return f!(args...; optargs..., optimize_aoa=false)
-        end
-
-        model_cache = Dict()
-        model_cache["fcalls"] = 0
-
-        # t_ipopt = @elapsed begin
-        #     xopt, fopt, info = minimize(f2!, x0, ng, lx, ux, lg, ug, options)
-        # end
-
-        # twistopt_ipopt = sum(xopt)
-        # fopt_ipopt = value(f!(zeros(ng), xopt))
-        # fcalls_ipopt = model_cache["fcalls"]
-
-        # Brute force answer
-        model_cache = Dict()
-        model_cache["fcalls"] = 0
-
-        t_brute = @elapsed begin
-            twists = range(lx[1], ux[1], length=200)
-            fs = [value(f2!(zeros(2), [twist, 0])) for twist in twists]
-        end
-
-        twistopt_brute_i = argmin(fs)
-        twistopt_brute = twists[twistopt_brute_i]
-        fopt_brute = fs[twistopt_brute_i]
-        fcalls_brute = model_cache["fcalls"]
-
-        if verbose
-            println()
-            @printf "%s%15.15s   %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "Opt twist" "Max L/D" "Time" "Function calls"
-            @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Brute force" twistopt_brute -fopt_brute t_brute fcalls_brute
-            # @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Ipopt" twistopt_ipopt -fopt_ipopt t_ipopt fcalls_ipopt
-        end
-
-        # @testset "Max L/D w.r.t. twist" begin
-        #     @test info == :Solved_To_Acceptable_Level || info == :Solve_Succeeded
-        #     @test isapprox(twistopt_ipopt, twistopt_brute, atol=0.05)
-        #     @test isapprox(fopt_ipopt, fopt_brute, atol=0.01)
-        # end
 
     end
 
