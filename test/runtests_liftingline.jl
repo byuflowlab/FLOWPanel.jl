@@ -111,7 +111,7 @@ v_lvl = 0
         Shat            = [0, 1, 0]                     # Span direction
         Lhat            = cross(Dhat, Shat)             # Lift direction
 
-        X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+        X0              = [-0.25 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
         lhat            = Dhat                          # Rolling direction
         mhat            = Shat                          # Pitching direction
         nhat            = Lhat                          # Yawing direction
@@ -371,17 +371,34 @@ v_lvl = 0
         CD = value(CD)
         Cm = value(Cm)
 
+        # # Print values to manually reset reference values
+        # for (sym, val) in ((:CL, CL), (:CD, CD), (:Cm, Cm), 
+        #                     (:dCLdα, dCLdα), (:dCDdα, dCDdα), (:dCmdα, dCmdα), 
+        #                     (:dCLdβ, dCLdβ), (:dCDdβ, dCDdβ), (:dCmdβ, dCmdβ))
+        #     println("$(sym)_ref = $(val)")
+        # end
+
+        CL_ref = 0.24709439885543394
+        CD_ref = 0.005540765716982176
+        Cm_ref = -0.35783803349228677
+        dCLdα_ref = 0.06773568655785198
+        dCDdα_ref = 0.0019442389136368012
+        dCmdα_ref = -0.09941039257399063
+        dCLdβ_ref = 0.00020891114332682333
+        dCDdβ_ref = -6.872402553708992e-6
+        dCmdβ_ref = -0.00033435248263139546
+
         #Tests
         @testset "Stability derivatives" begin
-            @test abs(CL - 0.24709439885542692) <= 1e-12
-            @test abs(CD - 0.005540765716982027) <= 1e-12
-            @test abs(Cm - -0.35783803349227894) <= 1e-12
-            @test abs(dCLdα - 0.06773567828194929) <= 1e-12
-            @test abs(dCDdα - 0.001944238708320056) <= 1e-12
-            @test abs(dCmdα - -0.09941038196468542) <= 1e-12
-            @test abs(dCLdβ - 0.0002089112131300865) <= 1e-12
-            @test abs(dCDdβ - -6.872400820022926e-6) <= 1e-12
-            @test abs(dCmdβ - -0.00033435257221903946) <= 1e-12
+            @test abs(CL - CL_ref) <= 1e-12
+            @test abs(CD - CD_ref) <= 1e-12
+            @test abs(Cm - Cm_ref) <= 1e-12
+            @test abs(dCLdα - dCLdα_ref) <= 1e-12
+            @test abs(dCDdα - dCDdα_ref) <= 1e-12
+            @test abs(dCmdα - dCmdα_ref) <= 1e-12
+            @test abs(dCLdβ - dCLdβ_ref) <= 1e-12
+            @test abs(dCDdβ - dCDdβ_ref) <= 1e-12
+            @test abs(dCmdβ - dCmdβ_ref) <= 1e-12
         end
 
     end

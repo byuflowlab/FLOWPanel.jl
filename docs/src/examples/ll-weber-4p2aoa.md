@@ -126,7 +126,7 @@ align_joints_with_Uinfs = false                 # Whether to align joint bound v
 use_Uind_for_force = true                       # Whether to use Uind as opposed to selfUind for force postprocessing
                                                 # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
+X0              = [-0.25 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
 
