@@ -22,7 +22,6 @@ struct LiftingLine{ R<:Number,
                     LI<:LinearIndices} <: AbstractBody{S, N}
 
     # Internal properties
-    origin::VectorType                          # Origin about which to center the wing
     grid::gt.Grid                               # Flat-geometry grid
     linearindices::LI                           # Linear indices of grid.nodes where linearindices[i, j] 
                                                 # is TE (j==1) or LE (j==2) of the i-th row of nodes
@@ -32,6 +31,7 @@ struct LiftingLine{ R<:Number,
 
     nelements::Int                              # Number of stripwise elements
     elements::Vector{S}                         # Stripwise elements
+    root_i::Int                                 # Index of root element
 
     deltasb::Float64                            # Blending distance, deltasb = 2*dy/b
     deltajoint::Float64                         # Joint distance, deltajoint = dx/c
@@ -96,7 +96,6 @@ struct LiftingLine{ R<:Number,
                             aerodynamic_centers=1/4,
                             strip_positions=0.5,
                             controlpoint_position=3/4,
-                            origin=:automatic,
                             deltasb=1.0,
                             deltajoint=0.15,
                             sigmafactor=1.0,
@@ -118,7 +117,7 @@ struct LiftingLine{ R<:Number,
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
         sweeps, dihedrals, spanaxiss, 
-        symmetric) = _discretize_wing_parameterization(args...; plots, optargs...)
+        symmetric, root_i) = _discretize_wing_parameterization(args...; plots, optargs...)
 
         # ------------------ PREALLOCATE GRID MEMORY ---------------------------
         P_min = [0, 0, 0]               # Lower boundary span, chord, dummy
@@ -133,12 +132,10 @@ struct LiftingLine{ R<:Number,
         linearindices = LinearIndices(grid._ndivsnodes)
         
         # ------------------ MORPH GRID INTO WING GEOMETRY ---------------------
-        origin = _morph_grid_wing!(grid, b, ypositions, chords, 
+        _morph_grid_wing!(grid, b, ypositions, chords, 
                                             twists, sweeps, dihedrals, 
                                             spanaxiss, symmetric, linearindices; 
-                                            center=true, origin)
-
-        origin = VectorType(origin)
+                                            center=true, root_i)
 
         # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
@@ -240,10 +237,9 @@ struct LiftingLine{ R<:Number,
             S, _count(S),
             VectorType, MatrixType, TensorType, TensorType2,
             typeof(linearindices)}(
-                                origin,
                                 grid, linearindices, String[],
                                 ypositions, 
-                                nelements, elements,
+                                nelements, elements, root_i,
                                 deltasb, deltajoint, sigmafactor, sigmaexponent,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
@@ -280,7 +276,7 @@ end
 Morph the lifting-line wing geometry into a new geometry
 """
 function remorph!(self::LiftingLine, args...; 
-                    center=true, 
+                    center=true,
                     aerodynamic_centers=1/4,
                     controlpoint_positions=3/4, 
                     Uinf=[1, 0, 0],
@@ -295,7 +291,7 @@ function remorph!(self::LiftingLine, args...;
     # Morph existing wing geometry into the new geometry
     _morph_grid_wing!(self.grid, b, ypositions, chords, twists, sweeps, dihedrals, 
                             spanaxiss, symmetric, self.linearindices; 
-                            center, origin=self.origin)
+                            center, root_i=self.root_i)
 
     # Update horseshoe geometries
     self.aerocenters .= aerodynamic_centers
@@ -1473,6 +1469,9 @@ function _discretize_wing_parameterization(;
     dihedrals = interpolation(dihedral_distribution[:, 1], dihedral_distribution[:, 2], ypositions)
     spanaxiss = interpolation(spanaxis_distribution[:, 1], spanaxis_distribution[:, 2], ypositions)
 
+    # Index of root section
+    root_i = 1
+
     # Mirror the wing if symmetric
     if symmetric
         @assert minimum(ypositions) >= 0 ""*
@@ -1486,6 +1485,8 @@ function _discretize_wing_parameterization(;
         sweeps = vcat(-reverse(sweeps[rng]), sweeps)
         dihedrals = vcat(-reverse(dihedrals[rng]), dihedrals)
         spanaxiss = vcat(reverse(spanaxiss[rng]), spanaxiss)
+
+        root_i += length(rng)
     end
 
 
@@ -1536,12 +1537,13 @@ function _discretize_wing_parameterization(;
         end
     end
 
-    return (; b, ypositions, chords, twists, sweeps, dihedrals, spanaxiss, symmetric)
+    return (; b, ypositions, chords, twists, sweeps, dihedrals, spanaxiss, 
+                symmetric, root_i)
 end
 
 function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric, linearindices; center=true,
-                            origin=:automatic)
+                            spanaxiss, symmetric, linearindices; 
+                            center=true, root_i=1)
 
     @assert grid._ndivsnodes[1] == length(ypositions) ""*
         "Invalid grid! Received grid of $(grid._ndivsnodes[1]) spanwise nodes,"*
@@ -1552,6 +1554,8 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
     ypos_prev = ypositions[1]
     x0_prev, y0_prev, z0_prev = 0, ypos_prev*(b/2), 0
     sweep_prev, dihedral_prev = 0, 0
+
+    xroot, yroot, zroot = 0.0, 0.0, 0.0
 
     for (i, (ypos, cob, twist, sweep, dihedral, xoc)) in enumerate(zip(
                                                                 ypositions, chords, twists, sweeps, dihedrals, spanaxiss
@@ -1587,6 +1591,12 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
         grid.nodes[2, iTE] = yTE
         grid.nodes[3, iTE] = zTE
 
+        if i==root_i
+            xroot = x0
+            yroot = y0
+            zroot = z0
+        end
+
         ypos_prev = ypos
         x0_prev = x0
         y0_prev = y0
@@ -1596,24 +1606,13 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
     end
 
-    # Center the wing nose on the origin
+    # Center the wing root on the origin
     if center
-
-        # Automatically calculate origin
-        if origin == :automatic
-            xorigin = minimum(view(grid.nodes, 1, :))
-            yorigin = (minimum(view(grid.nodes, 2, :)) + maximum(view(grid.nodes, 2, :))) / 2
-            zorigin = grid.nodes[3, findmin(view(grid.nodes, 1, :))[2]]
-
-            origin = [xorigin, yorigin, zorigin]
-        end
-
-        grid.nodes[1, :] .-= origin[1]
-        grid.nodes[2, :] .-= origin[2]
-        grid.nodes[3, :] .-= origin[3]
+        grid.nodes[1, :] .-= xroot
+        grid.nodes[2, :] .-= yroot
+        grid.nodes[3, :] .-= zroot
     end
-    
-    return origin
+
 end
 
 function _generate_stripwise_elements(airfoil_distribution, ypositions, 
