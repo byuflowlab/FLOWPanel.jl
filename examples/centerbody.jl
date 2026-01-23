@@ -81,7 +81,24 @@ println("Solving body...")
 Uinfs = repeat(Vinf, 1, body.ncells)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions
-@time pnl.solve(body, Uinfs)
+# @time pnl.solve(body, Uinfs)
+# strengths1 = deepcopy(body.strength)
+@time begin
+    # solver = pnl.Backslash(body; least_squares=false)
+    solver = pnl.KrylovSolver(body;
+        method=:gmres,
+        itmax=20,
+        atol=1e-4,
+        rtol=1e-4,
+        backend=pnl.FastMultipoleBackend(
+                                    expansion_order=7,
+                                    multipole_acceptance=0.4,
+                                    leaf_size=10
+                                )
+    )
+    pnl.solve2!(body, Uinfs, solver)#; update_G=false)
+end
+strengths2 = deepcopy(body.strength)
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")

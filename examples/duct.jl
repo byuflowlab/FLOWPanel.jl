@@ -23,7 +23,7 @@ run_name        = "duct-hill00"             # Name of this run
 
 save_path       = run_name                  # Where to save outputs
 fluiddomain     = false                     # Whether to generate fluid domain
-paraview        = true                      # Whether to visualize with Paraview
+paraview        = false                      # Whether to visualize with Paraview
 
 save_plots      = false                     # Whether to save plots or not
 # Where to save plots (default to re-generating the figures that are used
@@ -33,6 +33,7 @@ fig_path = joinpath(pnl.examples_path, "..", "docs", "resources", "images")
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
 AOAs            = [0, 5, 15]                # (deg) angles of attack to evaluate
+AOAs            = [5]                # (deg) angles of attack to evaluate
 magVinf         = 30.0                      # (m/s) freestream velocity
 rho             = 1.225                     # (kg/m^3) air density
 
@@ -70,7 +71,8 @@ NDIVS_rfl_lo = NDIVS_rfl_up                 # Discretization of airfoil lower su
 #       middle panel is 10 times larger than the peripheral panels.
 
 # Solver: Vortex-ring least-squares
-bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2} # Elements and wake model
+# bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64} # Elements and wake model
+bodytype        = pnl.RigidWakeBody{pnl.ConstantDoublet, 1, Float64} # Elements and wake model
 
 
 # ----------------- GENERATE BODY ----------------------------------------------
@@ -109,7 +111,7 @@ vtks = save_path*"/"                        # String with VTK output files
 
 # ----------------- CALL SOLVER ------------------------------------------------
 for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
-
+    
     println("Solving body...")
 
     # Freestream vector
@@ -120,18 +122,40 @@ for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 
     # Unitary direction of semi-infinite vortex at points `a` and `b` of each
     # trailing edge panel
-    Das = repeat(Vinf/magVinf, 1, body.nsheddings)
-    Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
+    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings)
+    body.Dbs .= repeat(Vinf/magVinf, 1, body.nsheddings)
 
     # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
     # `Das` and `Dbs` as trailing edge rigid wake direction
-    @time pnl.solve(body, Uinfs, Das, Dbs)
+    # @time pnl.solve(body, Uinfs, Das, Dbs)
+    @time begin
+        solver = pnl.Backslash(body; least_squares=true)
+        solver = pnl.KrylovSolver(body;
+            method=:gmres,
+            itmax=20,
+            atol=1e-4,
+            rtol=1e-4,
+            # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
+            backend=pnl.FastMultipoleBackend(
+                        expansion_order=7,
+                        multipole_acceptance=0.4,
+                        leaf_size=10
+                    )
+        )
+        pnl.solve2!(body, Uinfs, solver)
+    end
 
     # ----------------- POST PROCESSING ----------------------------------------
     println("Post processing...")
 
     # Calculate surface velocity U on the body
-    Us = pnl.calcfield_U(body, body)
+    backend = pnl.FastMultipoleBackend(
+                                    expansion_order=7,
+                                    multipole_acceptance=0.4,
+                                    leaf_size=10
+                                )
+    # backend = pnl.DirectBackend()
+    @time Us = pnl.calcfield_U(body, body; backend)
 
     # NOTE: Since the boundary integral equation of the potential flow has a
     #       discontinuity at the boundary, we need to add the gradient of the

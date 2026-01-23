@@ -45,7 +45,7 @@
   end
   ```
 """
-abstract type AbstractLiftingBody{E, N} <: AbstractBody{E, N} end
+abstract type AbstractLiftingBody{E, N, TF} <: AbstractBody{E, N, TF} end
 
 """
     `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
@@ -118,7 +118,7 @@ of equations solved in the body type `RigidWakeBody{VortexRing}` becomes
 singular (this is because in the absence of an open edge, the solution
 depends only in the difference between adjacent panels rather than the strengths
 themselves), leading to vortex ring strengths that are astronomically large. To
-avoid this situation, use `RigidWakeBody{VortexRing, 2}`, which indicates the
+avoid this situation, use `RigidWakeBody{VortexRing, 1}`, which indicates the
 solver to center the solution around 0.
 """
 function generate_revolution_liftbody(bodytype::Type{B}, args...;

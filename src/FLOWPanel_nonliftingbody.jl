@@ -29,7 +29,7 @@ Non-lifting body that is solved using a combination of N panel elements.
   * `O::Vector`                         : Origin of body w.r.t. global
 
 """
-struct NonLiftingBody{E, N} <: AbstractBody{E, N}
+struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
 
     # User inputs
     grid::gt.GridTriangleSurface              # Paneled geometry
@@ -39,47 +39,69 @@ struct NonLiftingBody{E, N} <: AbstractBody{E, N}
     ncells::Int                               # Number of cells
     cells::Matrix{Int}                        # Cell connectivity (each column is a cell)
     fields::Array{String, 1}                  # Available fields (solutions)
-    Oaxis::Array{<:Number,2}                  # Coordinate system of original grid
-    O::Array{<:Number,1}                      # Position of CS of original grid
+    Oaxis::Array{TF,2}                  # Coordinate system of original grid
+    O::Array{TF,1}                      # Position of CS of original grid
 
     # Internal variables
-    strength::Array{<:Number, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
-    CPoffset::Float64                         # Control point offset in normal direction
-    kerneloffset::Float64                     # Kernel offset to avoid singularities
-    kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
-    characteristiclength::Function            # Characteristic length of each panel
+    strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
+    CPoffset::Float64                   # Control point offset in normal direction
+    kerneloffset::Float64               # Kernel offset to avoid singularities
+    kernelcutoff::Float64               # Kernel cutoff to avoid singularities
+    characteristiclength::Function      # Characteristic length of each panel
+    watertight::Bool                     # Whether the body is watertight or not
 
-    NonLiftingBody{E, N}(
-                    grid;
-                    nnodes=grid.nnodes, ncells=grid.ncells,
-                    cells=grid2cells(grid),
-                    fields=Array{String,1}(),
-                    Oaxis=Array(1.0I, 3, 3), O=zeros(3),
-                    strength=zeros(grid.ncells, N),
-                    CPoffset=1e-14,
-                    kerneloffset=1e-8,
-                    kernelcutoff=1e-14,
-                    characteristiclength=characteristiclength_unitary
-                  ) where {E, N} = new(
-                    grid,
-                    nnodes, ncells, cells,
-                    fields,
-                    Oaxis, O,
-                    strength,
-                    CPoffset,
-                    kerneloffset,
-                    kernelcutoff,
-                    characteristiclength
-                  )
 end
 
-function (NonLiftingBody{E})(args...; optargs...) where {E}
-    return NonLiftingBody{E, _count(E)}(args...; optargs...)
+function NonLiftingBody{E, N, TF}(
+                grid;
+                nnodes=grid.nnodes, ncells=grid.ncells,
+                cells=grid2cells(grid),
+                fields=Array{String,1}(),
+                Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
+                strength=zeros(grid.ncells, N),
+                CPoffset=1e-14,
+                kerneloffset=1e-8,
+                kernelcutoff=1e-14,
+                characteristiclength=characteristiclength_unitary,
+                check_mesh=true, watertight=false
+              ) where {E, N, TF}
+    # check if mesh is watertight
+    if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
+        mesh = grid.orggrid
+        watertight = gt.isclosed(mesh)
+    end
+
+    return NonLiftingBody{E, N, TF}(
+                grid,
+                nnodes, ncells, cells,
+                fields,
+                Oaxis, O,
+                strength,
+                CPoffset,
+                kerneloffset,
+                kernelcutoff,
+                characteristiclength,
+                watertight
+              )
+end
+
+function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
+    return NonLiftingBody{E, _count(E), eltype(grid._nodes)}(grid; optargs...)
 end
 
 function save(body::NonLiftingBody, args...; optargs...)
     return save_base(body, args...; optargs...)
 end
+
+calc_elprescribe(::NonLiftingBody{ConstantSource, 1}) = Tuple{Int,Float64}[]
+calc_elprescribe(body::NonLiftingBody{VortexRing, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
+calc_elprescribe(body::NonLiftingBody{ConstantDoublet, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
+
+solved_field_name(::NonLiftingBody{ConstantSource, 1}) = "sigma"
+solved_field_name(::NonLiftingBody{ConstantDoublet, 1}) = "mu"
+solved_field_name(::NonLiftingBody{VortexRing, 1}) = "gamma"
+solved_field_name(::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) = "mu"
+
 #### END OF NON-LIFTING BODY  ##################################################
 
 
@@ -809,55 +831,101 @@ _get_Gdims(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) = (s
 ################################################################################
 # FASTMULTIPOLE BACKEND SUPPORT
 ################################################################################
-function _Uind!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    potential = Vector{TF}(undef, 0) # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
+# function _Uind!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
+#     # wrap targets in a probe system
+#     TF = eltype(targets)
+#     potential = Vector{TF}(undef, 0) # unused
+#     hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+#     probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
 
-    # perform N-body calculation
-    FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
-                                        multipole_acceptance=backend.multipole_acceptance,
-                                        leaf_size_source=backend.leaf_size,
-                                        hessian=false,
-                                        gradient=true, 
-                                        scalar_potential=false)
+#     # perform N-body calculation
+#     FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
+#                                         multipole_acceptance=backend.multipole_acceptance,
+#                                         leaf_size_source=backend.leaf_size,
+#                                         hessian=false,
+#                                         gradient=true, 
+#                                         scalar_potential=false)
 
-    return nothing
-end
+#     return nothing
+# end
 
-function _phi!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    velocity = Array{TF, 2}(undef, 0, 0)  # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
+# function _phi!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
+#     # wrap targets in a probe system
+#     TF = eltype(targets)
+#     velocity = Array{TF, 2}(undef, 0, 0)  # unused
+#     hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+#     probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
 
-    # perform N-body calculation
-    FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
-                                        multipole_acceptance=backend.multipole_acceptance,
-                                        leaf_size_source=backend.leaf_size,
-                                        hessian=false,
-                                        gradient=false, 
-                                        scalar_potential=true)
+#     # perform N-body calculation
+#     FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
+#                                         multipole_acceptance=backend.multipole_acceptance,
+#                                         leaf_size_source=backend.leaf_size,
+#                                         hessian=false,
+#                                         gradient=false, 
+#                                         scalar_potential=true)
 
-    return nothing
-end
+#     return nothing
+# end
 
-FastMultipole.has_vector_potential(::NonLiftingBody) = false
+FastMultipole.has_vector_potential(::AbstractBody{ConstantSource, 1}) = false
 
-FastMultipole.body_to_multipole!(system::AbstractBody{ConstantSource, 1}, args...) =
+FastMultipole.has_vector_potential(::AbstractBody{ConstantDoublet, 1}) = false
+
+FastMultipole.body_to_multipole!(system::AbstractBody{ConstantSource, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Source}, system, args...)
 
-FastMultipole.body_to_multipole!(system::AbstractBody{ConstantDoublet, 1}, args...) =
+FastMultipole.body_to_multipole!(system::AbstractBody{ConstantDoublet, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,ConstantDoublet}, 1}, args...) =
+FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,ConstantDoublet}, 2, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...)
 
 ##### END OF FASTMULTIPOLE BACKEND SUPPORT #####################################
 
+################################################################################
+# ABSTRACT SOLVER INTERFACE
+################################################################################
+
+function solve2!(self::NonLiftingBody{<:Any,1,TFG}, Uinfs::Array{TFS, 2}, solver::AbstractMatrixfulSolver{false};
+        update_G::Bool=false,   # Whether to update the influence matrix G
+        strength_name=get_strength_name(self),  # Name of the strength field to solve for
+        optargs...              # Additional optional arguments to _G_U!
+    ) where {TFG, TFS<:Real}
+
+    # formatting assertions
+    @assert size(self.strength, 2) == 1 "AbstractBody{<:Any, 1} expected to have single strength per element; got size $(size(self.strength, 2))."
+
+    # update influence matrix (if requested)
+    normals = _calc_normals(self)
+    if update_G
+        # Compute normals and control points
+        CPs = _calc_controlpoints(self, normals)
+
+        # Update geometric matrix (left-hand-side influence matrix)
+        _G_U!(self, solver.G, CPs, normals; optargs...)
+    end
+
+    # generate RHS
+    TF = promote_type(TFG, TFS)
+    RHS = zeros(TF, self.ncells)
+    calc_bc_noflowthrough!(RHS, Uinfs, normals)
+
+    # Solve system of equations
+    solution = zeros(TF, self.ncells)
+    solve_matrix!(solution, solver.G, RHS, solver)
+    
+    # set solved flag
+    _solvedflag(self, true)
+
+    # Assign solution to body element strengths
+    # _assign_elementstrengths!(self, solution)
+    self.strength .= solution
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field(self, strength_name, "scalar", view(self.strength, :, 1), "cell")
+
+    return nothing
+end
+##### END OF ABSTRACT SOLVER INTERFACE ##########################################
 
 
 ################################################################################
@@ -903,4 +971,5 @@ function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
 
     return bodytype(triang_grid; bodyoptargs...)
 end
+
 ##### END OF COMMON FUNTIONS ###################################################

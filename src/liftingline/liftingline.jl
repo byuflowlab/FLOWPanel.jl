@@ -19,7 +19,7 @@ struct LiftingLine{ R<:Number,
                     MatrixType<:AbstractMatrix{R}, 
                     TensorType<:AbstractArray{R, 3},
                     TensorType2<:AbstractArray{R, 4},
-                    LI<:LinearIndices} <: AbstractBody{S, N}
+                    LI<:LinearIndices} <: AbstractBody{S, N, R}
 
     # Internal properties
     grid::gt.Grid                               # Flat-geometry grid

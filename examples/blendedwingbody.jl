@@ -56,7 +56,7 @@ Sref            = 3.23^2 / 8.0             # (m^2) reference area
 # bodytype = pnl.RigidWakeBody{pnl.VortexRing} # Wake model and element type
 
 # Solver: least-squares solver for watertight bodies
-bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
+bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 1}
 
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold

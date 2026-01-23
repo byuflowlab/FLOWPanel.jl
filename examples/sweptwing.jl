@@ -46,7 +46,7 @@ airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 #       either an integer, or an array of tuples as shown below
 
 n_rfl           = 8                             # Control number of chordwise panels
-# n_rfl         = 10                            # <-- uncomment this for finer discretization
+# n_rfl         = 16                            # <-- uncomment this for finer discretization
 
 #           # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
@@ -101,6 +101,8 @@ bodyoptargs_r = (;
                             span_NDIVS=NDIVS_span_l,
                             b_low=-1.0, b_up=0.0
                            )
+wing_left.Das .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings)
+wing_left.Dbs .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings)
 
 # Loft right side of the wing from right to left
 @time wing_right = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
@@ -112,6 +114,8 @@ bodyoptargs_r = (;
                             span_NDIVS=NDIVS_span_r,
                             b_low=1.0, b_up=0.0,
                            )
+wing_right.Das .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings)
+wing_right.Dbs .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings)
 
 # Put both sides together to make a wing with symmetric discretization
 bodies = [wing_left, wing_right]
@@ -119,6 +123,8 @@ names = ["L", "R"]
 
 @time body = pnl.MultiBody(bodies, names)
 
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body.ncells)
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -126,24 +132,42 @@ println("Number of panels:\t$(body.ncells)")
 # ----------------- CALL SOLVER ------------------------------------------------
 println("Solving body...")
 
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
-
-# Unitary direction of semi-infinite vortex at points `a` and `b` of each
-# trailing edge panel
-Das = repeat(Vinf/magVinf, 1, body.nsheddings)
-Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
-
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 # `Das` and `Dbs` as trailing edge rigid wake direction
-@time pnl.solve(body, Uinfs, Das, Dbs)
+
+# # uncomment to use original (unabstracted) solver
+# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings)
+# Dbs = repeat(Vinf ./ magVinf, 1, body.nsheddings)
+# @time pnl.solve(body, Uinfs, Das, Dbs)
+
+solver = pnl.Backslash(body; least_squares=false)
+# elprescribe = Tuple{Int,Float64}[] # [(1, 0.0)]   # Prescribe strength of first panel to be zero
+# solver = pnl.KrylovSolver(body;
+#             method=:gmres,
+#             itmax=20,
+#             atol=1e-4,
+#             rtol=1e-4,
+#             elprescribe,
+#             backend=pnl.FastMultipoleBackend(
+#                         expansion_order=7,
+#                         multipole_acceptance=0.4,
+#                         leaf_size=10
+#                     )
+#         )
+pnl.solve2!(body, Uinfs, solver; elprescribe)
 
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
 
 # Calculate surface velocity induced by the body on itself
-@time Us = pnl.calcfield_U(body, body)
+backend = pnl.FastMultipoleBackend(
+                                expansion_order=7,
+                                multipole_acceptance=0.4,
+                                leaf_size=10
+                            )
+# backend = pnl.DirectBackend()
+@time Us = pnl.calcfield_U(body, body; backend)
 
 # NOTE: Since the boundary integral equation of the potential flow has a
 #       discontinuity at the boundary, we need to add the gradient of the

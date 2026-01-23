@@ -13,20 +13,20 @@
 # ABSTRACT N-BODY BACKEND
 ################################################################################
 
-abstract type Backend end
+abstract type AbstractBackend end
 
 ################################################################################
 # DIRECT BACKEND
 ################################################################################
 
-struct DirectBackend <: Backend
+struct DirectBackend <: AbstractBackend
 end
 
 ################################################################################
 # FASTMULTIPOLE BACKEND
 ################################################################################
 
-struct FastMultipoleBackend <: Backend
+struct FastMultipoleBackend <: AbstractBackend
     expansion_order::Int
     multipole_acceptance::Float64
     leaf_size::Int
@@ -39,9 +39,6 @@ function FastMultipoleBackend(; expansion_order::Int=5,
                                 multipole_acceptance,
                                 leaf_size)
 end
-
-# alias
-const FMM = FastMultipoleBackend
 
 #--- overload FastMultipole functions ---#
 

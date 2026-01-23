@@ -13,9 +13,9 @@
 # ABSTRACT BODY TYPE
 ################################################################################
 """
-Abstract type `AbstractBody{N, E<:AbstractElement}` where `N` is the number of
+Abstract type `AbstractBody{N, E<:AbstractElement, TF<:Number}` where `N` is the number of
 element types in this body and `E` is an Union containing the `N` element
-types.
+types. `TF` is the floating point type used in this body.
 
 Implementations of AbstractBody are expected to have the following fields
 * `grid::GeometricTools.GridTriangleSurface `     : Paneled geometry
@@ -32,14 +32,14 @@ Implementations of AbstractBody are expected to have the following fields
                                         control point
 * `kerneloffset::Real`                : Kernel offset to avoid singularities
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
-* `backend::Backend`                  : N-body backend (fmm or direct)
+* `watertight::Bool`                  : Whether the body is watertight or not
 
 and the following functions
 
 ```julia
 
     # Imposes boundary conditions to solve for element strengths.
-    function solve(self::AbstractBody, Uinfs::Array{<:Real, 2}, args...)
+    function solve(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::AbstractSolver, args...)
         .
         .
         .
@@ -66,7 +66,7 @@ and the following functions
     # NOTE: `backend` is the N-body backend to be used, allowing support for
     #       different N-body methods (FMM, direct, etc).
     function _Uind(self::AbstractBody, targets::Array{<:Real, 2},
-                    out::Array{<:Real, 2}, backend::Backend, args...; optargs...)
+                    out::Array{<:Real, 2}, backend::AbstractBackend, args...; optargs...)
         .
         .
         .
@@ -77,14 +77,14 @@ and the following functions
     # NOTE: `backend` is the N-body backend to be used, allowing support for
     #       different N-body methods (FMM, direct, etc).
     function _phi(self::AbstractBody, targets::Array{<:Real, 2},
-                    out::Array{<:Real, 1}, backend::Backend, args...; optargs...)
+                    out::Array{<:Real, 1}, backend::AbstractBackend, args...; optargs...)
         .
         .
         .
     end
 ```
 """
-abstract type AbstractBody{E<:AbstractElement, N} end
+abstract type AbstractBody{E<:AbstractElement, N, TF} end
 
 """
     `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
@@ -104,7 +104,7 @@ end
 Returns the velocity induced by the body on the targets `targets`, which is a
 3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
 """
-function Uind!(self::AbstractBody, targets, out, backend::Backend, args...; optargs...)
+function Uind!(self::AbstractBody, targets, out, backend::AbstractBackend, args...; optargs...)
 
     # ERROR CASES
     if check_solved(self)==false
@@ -112,7 +112,7 @@ function Uind!(self::AbstractBody, targets, out, backend::Backend, args...; opta
               " Please call `solve()` function first.")
     end
 
-    _Uind!(self, targets, out, backend::Backend, args...; optargs...)
+    _Uind!(self, targets, out, backend::AbstractBackend, args...; optargs...)
 end
 
 """
@@ -121,7 +121,7 @@ end
 Returns the potential induced by the body on the targets `targets`. It adds the
 potential at the i-th target to `out[:, i]`.
 """
-function phi!(self::AbstractBody, targets, out, backend::Backend, args...; optargs...)
+function phi!(self::AbstractBody, targets, out, backend::AbstractBackend, args...; optargs...)
 
     # ERROR CASES
     if check_solved(self)==false
@@ -129,7 +129,7 @@ function phi!(self::AbstractBody, targets, out, backend::Backend, args...; optar
               " Please call `solve()` function first.")
     end
 
-    _phi!(self, targets, out, backend::Backend, args...; optargs...)
+    _phi!(self, targets, out, backend::AbstractBackend, args...; optargs...)
 end
 
 """
@@ -435,6 +435,15 @@ function add_field(self::AbstractBody, field_name::String, field_type::String,
     end
 
     nothing
+end
+
+function add_field(self::AbstractBody, field_type::String,
+                    field_data, entry_type::String;
+                    raise_warn=false, collectfield=true)
+
+    field_name = solved_field_name(self)
+    add_field(self, field_name, field_type, field_data, entry_type;
+                raise_warn, collectfield)
 end
 
 """

@@ -23,7 +23,7 @@ function make_single_triangle_body()
     grid = FLOWPanel.gt.GridTriangleSurface(mesh)
 
     # Construct NonLiftingBody passing `cells` explicitly to avoid calling gt-based grid2cells
-    body = pnl.NonLiftingBody{pnl.ConstantSource}(grid)
+    body = pnl.NonLiftingBody{pnl.ConstantDoublet}(grid)
 
     return body
 end

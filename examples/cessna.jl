@@ -64,7 +64,7 @@ Xac             = [2.815, 0, 0.4142]        # (m) aerodynamic center for
 # bodytype = pnl.RigidWakeBody{pnl.VortexRing} # Wake model and element type
 
 # Solver: least-squares solver for watertight bodies
-bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2}
+bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2} # Wake model and element type
 
 
 # ----------------- GENERATE BODY ----------------------------------------------

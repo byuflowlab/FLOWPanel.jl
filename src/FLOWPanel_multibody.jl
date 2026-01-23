@@ -16,7 +16,7 @@
 ################################################################################
 # MULTIBODY TYPE
 ################################################################################
-struct MultiBody{E, N, B<:Union{AbstractBody, AbstractLiftingBody}} <: AbstractBody{E, N}
+struct MultiBody{E, N, B<:AbstractBody, TF<:Number} <: AbstractBody{E, N, TF}
 
     # User inputs
     bodies::Array{B, 1}                       # Array of bodies
@@ -28,17 +28,17 @@ struct MultiBody{E, N, B<:Union{AbstractBody, AbstractLiftingBody}} <: AbstractB
     ncells::Int                               # Number of cells
     nsheddings::Int                           # Number of shedding edges
     fields::Array{String, 1}                  # Available fields (solutions)
-    Oaxis::Array{<:Number,2}                  # Coordinate system orientation
-    O::Array{<:Number,1}                      # Coordinate system origin
+    Oaxis::Array{TF,2}                  # Coordinate system orientation
+    O::Array{TF,1}                      # Coordinate system origin
 
-    function MultiBody{E, N, B}(    bodies, names;
+    function MultiBody{E, N, B, TF}(    bodies, names;
                                     nbodies=length(bodies),
                                     nnodes=sum(body.nnodes for body in bodies; init=0),
                                     ncells=sum(body.ncells for body in bodies; init=0),
                                     nsheddings=_calc_nsheddings(bodies),
                                     fields=Array{String,1}(),
-                                    Oaxis=Array(1.0I, 3, 3), O=zeros(3)
-                                    ) where {E, N, B}
+                                    Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3)
+                                    ) where {E, N, B, TF}
 
             @assert length(bodies)==length(names) ""*
                 "Found different number of bodies than names"
@@ -67,7 +67,9 @@ function MultiBody(bodies::Array{B, 1}, args...; optargs...) where {B<:Union{Abs
 
     N = max(countEbodies, _count(E))
 
-    return MultiBody{E, N, B}(bodies, args...; optargs...)
+    TF = promote_type([eltype(body.grid._nodes) for body in bodies]...)
+
+    return MultiBody{E, N, B, TF}(bodies, args...; optargs...)
 end
 
 function MultiBody(bodies::Array{<:Union{AbstractBody, AbstractLiftingBody}, 1}; optargs...)
@@ -142,6 +144,34 @@ function add_field(self::MultiBody{E, N, B}, field_name::String,
         end
 
         add_field(body, field_name, field_type, data_slice, entry_type;
+                                                          raise_warn=raise_warn)
+        counter += offset
+    end
+
+end
+
+function add_field(self::MultiBody{E, N, B},
+                    field_type::String, field_data, entry_type::String;
+                    raise_warn=false) where {E, N, B<:Union{AbstractBody, AbstractLiftingBody}}
+
+    # if !(field_name in self.fields)
+    #     push!(self.fields, field_name)
+    # end
+
+    counter = 0
+    prop = entry_type=="node" ? :nnodes : :ncells
+
+    for body in self.bodies
+
+        offset = getproperty(body, prop)
+
+        if entry_type=="system"
+            data_slice = field_data
+        else
+            data_slice = view(collect(field_data), (1:offset) .+ counter)
+        end
+
+        add_field(body, field_type, data_slice, entry_type;
                                                           raise_warn=raise_warn)
         counter += offset
     end
@@ -363,6 +393,46 @@ function solve!(self::MultiBody{VortexRing, 1},
     add_field(self, "Gamma", "scalar", Gamma, "cell")
 end
 
+function solve2!(self::MultiBody,
+                Uinfs::Matrix{T1},
+                solver::AbstractMatrixfulSolver{false};
+                    update_G::Bool=true,
+                    solver_optargs=(),
+                    elprescribe="automatic",
+                    optargs...
+                    # elprescribe_index::Int=1, elprescribe_value=0,
+                    # weight_gammat=0, weight_gammao=1
+                ) where T1<:Real
+
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    # elseif size(Das) != (3, self.nsheddings)
+    #     error("Invalid Das;"*
+    #           " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    # elseif size(Dbs) != (3, self.nsheddings)
+    #     error("Invalid Dbs;"*
+    #           " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
+
+    # get CPs and normals
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix)
+    solver.G .= zero(eltype(solver.G))
+    _G_U!(self, solver.G, CPs, normals; optargs...)
+
+    # Calculate boundary conditions (right-hand side of system of equations)
+    RHS = calc_bc_noflowthrough(Uinfs, normals)
+
+    # Solve system of equations
+    Gamma = zeros(T1, size(solver.G, 1))
+    solve_matrix!(Gamma, solver.G, RHS, solver; solver_optargs...)
+
+    # Save solution
+    set_solution(self, Gamma, Gamma, Tuple{Int,Float64}[], Uinfs)
+end
 
 
 
@@ -397,8 +467,7 @@ function solve(self::MultiBody{VortexRing, 2},
             Uinfs, Das, Dbs; elprescribe=_elprescribe, optargs...)
 end
 
-function allocate_solver(self::Union{MultiBody{VortexRing, 2}, RigidWakeBody{VortexRing, 2}},
-                                                                        _elprescribe, T::Type)
+function allocate_solver(self::AbstractBody, _elprescribe, T::Type)
 
     n = self.ncells
     npres = length(_elprescribe)
@@ -454,12 +523,105 @@ function solve!(self::MultiBody{VortexRing, 2},
     solver(Gammals, Gls, RHSls; solver_optargs...)
 
     # Save solution
-    set_solution(self, Gamma, Gammals, elprescribe, Uinfs, Das, Dbs)
+    set_solution(self, Gamma, Gammals, elprescribe, Uinfs)
 end
 
-function set_solution(self::MultiBody{VortexRing, 2},
+function solve2!(self::MultiBody,
+                Uinfs::AbstractMatrix{T1},
+                solver::AbstractMatrixfulSolver{true},
+                Das::AbstractMatrix{T2}, Dbs::AbstractMatrix{T3};
+                    update_G::Bool=true,
+                    solver_optargs=(),
+                    elprescribe="automatic",
+                    optargs...
+                    # elprescribe_index::Int=1, elprescribe_value=0,
+                    # weight_gammat=0, weight_gammao=1
+                ) where {T1, T2, T3}
+
+    if size(Uinfs) != (3, self.ncells)
+        error("Invalid Uinfs;"*
+              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
+    elseif size(Das) != (3, self.nsheddings)
+        error("Invalid Das;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Das))")
+    elseif size(Dbs) != (3, self.nsheddings)
+        error("Invalid Dbs;"*
+              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+    end
+
+    # Determine prescribed elements
+    _elprescribe = elprescribe=="automatic" ? calc_elprescribe(self) : elprescribe
+
+    # Allocate solver memory
+    T = promote_type(T1, T2, T3)
+    (; Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls) = allocate_solver(self, _elprescribe, T)
+
+    # Compute normals and control points
+    normals = _calc_normals(self)
+    CPs = _calc_controlpoints(self, normals)
+
+    # Compute geometric matrix (left-hand-side influence matrix) and boundary
+    # conditions (right-hand-side) converted into a least-squares problem
+    _G_U_RHS!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
+                        Uinfs, CPs, normals, Das, Dbs, _elprescribe; optargs...)
+
+    # Solve system of equations
+    solve_matrix!(Gammals, Gls, RHSls, solver; solver_optargs...)
+
+    # Save solution
+    set_solution(self, Gamma, Gammals, _elprescribe, Uinfs)
+end
+
+function numtype(self::MultiBody)
+    Tlist = [numtype(body) for body in self.bodies]
+    return promote_type(Tlist...)
+end
+
+"Assumes the solved strengths are all the first columns of the strength arrays."
+function set_solution(self::AbstractBody,
                         Gamma, Gammals, elprescribe,
-                        Uinfs, Das, Dbs)
+                        Uinfs)
+
+    if length(elprescribe)==0
+        Gamma .= Gammals
+    else
+        prev_eli = 0
+        for (i, (eli, elval)) in enumerate(elprescribe)
+
+            @show size(Gamma) size(Gammals) (prev_eli+1):(eli-1) (prev_eli+2-i):(eli-i)
+            Gamma[(prev_eli+1):(eli-1)] .= view(Gammals, (prev_eli+2-i):(eli-i))
+
+            Gamma[eli] = elval
+
+            if i==length(elprescribe) && eli!=length(Gamma)
+                Gamma[eli+1:end] .= view(Gammals, (eli-i+1):length(Gammals))
+            end
+
+            prev_eli = eli
+        end
+    end
+    _set_strength(self, Gamma)
+
+    _solvedflag(self, true)
+    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    add_field_D(self)
+    add_field(self, "scalar", Gamma, "cell")
+end
+
+function add_field_D(self::MultiBody)
+    for body in self.bodies
+        add_field_D(body)
+    end
+end
+
+function add_field_D(self::AbstractBody)
+    add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
+    add_field(self, "Db", "vector", collect(eachcol(self.Dbs)), "system")
+end
+
+function set_solution(self::MultiBody,
+                        Gamma, Gammals, elprescribe,
+                        Uinfs)
 
     if length(elprescribe)==0
         Gamma .= Gammals
@@ -479,19 +641,18 @@ function set_solution(self::MultiBody{VortexRing, 2},
         end
     end
     _set_strength(self, Gamma)
-
+    
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
-    add_field(self, "Gamma", "scalar", Gamma, "cell")
+    add_field_D(self)
+    add_field(self, "scalar", Gamma, "cell")
 end
 
-function _G_U_RHS(self::MultiBody{VortexRing, 2}, args...; optargs...)
+function _G_U_RHS(self::MultiBody{VortexRing, 1}, args...; optargs...)
     return _G_U_RHS_leastsquares(self, args...; optargs...)
 end
 
-function _G_U_RHS!(self::MultiBody{VortexRing, 2}, args...; optargs...)
+function _G_U_RHS!(self::MultiBody{VortexRing, 1}, args...; optargs...)
     return _G_U_RHS_leastsquares!(self, args...; optargs...)
 end
 
@@ -500,28 +661,26 @@ end
 # COMMON SOLVER FUNCTIONS
 ################################################################################
 function _G_U!(self::MultiBody,
-                    G::Arr1, CPs::Arr2, normals::Arr3, Das, Dbs;
+                    G::Arr1, CPs::Arr2, normals::Arr3;
                     optargs...
                ) where{ T1, Arr1<:AbstractArray{T1, 2},
                         T2, Arr2<:AbstractArray{T2, 2},
                         T3, Arr3<:AbstractArray{T3, 2}}
 
     ncells = 0
-    nsheddings = 0
+    # nsheddings = 0
 
     for body in self.bodies
 
-        if body isa AbstractLiftingBody || body isa MultiBody
+        # if body isa AbstractLiftingBody || body isa MultiBody
 
-            _G_U!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals,
-                        view(Das, :, (1:body.nsheddings) .+ nsheddings),
-                        view(Dbs, :, (1:body.nsheddings) .+ nsheddings); optargs...)
-
-            nsheddings += body.nsheddings
-
-        else
             _G_U!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals; optargs...)
-        end
+
+        #     nsheddings += body.nsheddings
+
+        # else
+        #     _G_U!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals; optargs...)
+        # end
 
         ncells += body.ncells
 
@@ -529,24 +688,22 @@ function _G_U!(self::MultiBody,
 
 end
 
-function _G_Uvortexring!(self::MultiBody, G, CPs, normals, Das, Dbs; optargs...)
+function _G_Uvortexring!(self::MultiBody, G, CPs, normals; optargs...)
 
     ncells = 0
-    nsheddings = 0
+    # nsheddings = 0
 
     for body in self.bodies
 
-        if body isa AbstractLiftingBody || body isa MultiBody
+        # if body isa AbstractLiftingBody || body isa MultiBody
 
-            _G_Uvortexring!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals,
-                        view(Das, :, (1:body.nsheddings) .+ nsheddings),
-                        view(Dbs, :, (1:body.nsheddings) .+ nsheddings); optargs...)
-
-            nsheddings += body.nsheddings
-
-        else
             _G_Uvortexring!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals; optargs...)
-        end
+
+        #     nsheddings += body.nsheddings
+
+        # else
+        #     _G_Uvortexring!(body, view(G, :, (1:body.ncells) .+ ncells), CPs, normals; optargs...)
+        # end
 
         ncells += body.ncells
 
@@ -581,7 +738,7 @@ function calc_elprescribe(self::MultiBody;
             calc_elprescribe(body; elprescribe=elpresecribe, ncells0=ncells)
 
         # Base case: watertight body
-        elseif body isa RigidWakeBody{VortexRing, 2}
+        elseif body.watertight
 
             for (ind, val) in zip(indices, values)
                 push!(elprescribe, (ncells+ind, val))

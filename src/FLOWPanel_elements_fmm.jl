@@ -9,7 +9,72 @@
   * License     : GNU Public License
 =###############################################################################
 
-function rotate_to_panel(source_system::AbstractBody{<:Any,NK}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
+#-------- high-level interface -------#
+
+function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+    # wrap targets in a probe system
+    TF = eltype(targets)
+    potential = Vector{TF}(undef, 0) # unused
+    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
+
+    # perform N-body calculation
+    FastMultipole.fmm!(probe_system, _unpack_fmm(self); expansion_order=backend.expansion_order,
+                                        multipole_acceptance=backend.multipole_acceptance,
+                                        leaf_size_source=backend.leaf_size,
+                                        hessian=false,
+                                        gradient=true, 
+                                        scalar_potential=false)
+
+    _rigid_wake_U!(self, targets, out; optargs...)
+
+    return nothing
+end
+
+function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+    # wrap targets in a probe system
+    TF = eltype(targets)
+    velocity = Array{TF, 2}(undef, 0, 0)  # unused
+    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+    probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
+    
+    # perform N-body calculation
+    FastMultipole.fmm!(probe_system, _unpack_fmm(self); expansion_order=backend.expansion_order,
+                                        multipole_acceptance=backend.multipole_acceptance,
+                                        leaf_size_source=backend.leaf_size,
+                                        hessian=false,
+                                        gradient=false, 
+                                        scalar_potential=true)
+
+    _rigid_wake_phi!(self, targets, out; optargs...)
+
+    return nothing
+end
+
+"Defaults to do nothing."
+_rigid_wake_phi!(self::AbstractBody, targets, out; optargs...) = nothing
+
+"Defaults to do nothing."
+_rigid_wake_U!(self::AbstractBody, targets, out; optargs...) = nothing
+
+"Recursively applies rigid wake contributions from each member body."
+function _rigid_wake_U!(self::MultiBody, targets, out; optargs...)
+    for body in self.bodies
+        _rigid_wake_U!(body, targets, out; optargs...)
+    end
+end
+
+"Defaults to do nothing."
+_unpack_fmm(self::AbstractBody) = self
+
+"Recursively unpacks multibody objects."
+function _unpack_fmm(self::MultiBody)
+    return Tuple(_unpack_fmm.(self.bodies))
+end
+
+#-------- panel kernels -------#
+
+function rotate_to_panel(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
 
     #--- rotate into panel frame ---#
 
@@ -60,8 +125,27 @@ function rotate_to_panel(source_system::AbstractBody{<:Any,NK}, source_buffer::M
     return R, v1, v2, v3
 end
 
+function get_vertices(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
+    # get vertices
+    v1x = source_buffer[5+NK, i_source]
+    v1y = source_buffer[6+NK, i_source]
+    v1z = source_buffer[7+NK, i_source]
+    v2x = source_buffer[8+NK, i_source]
+    v2y = source_buffer[9+NK, i_source]
+    v2z = source_buffer[10+NK, i_source]
+    v3x = source_buffer[11+NK, i_source]
+    v3y = source_buffer[12+NK, i_source]
+    v3z = source_buffer[13+NK, i_source]
+
+    # assemble vertices
+    v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+    v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+    v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
+    return v1, v2, v3
+end
+
 "Rotated kernels"
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix
     R, v1, v2, v3 = rotate_to_panel(source_system, source_buffer, i_source)
@@ -73,13 +157,19 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK},
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    return -potential, -velocity, -velocity_gradient
+    return potential, velocity, velocity_gradient
 end
 
 "Overload for non-rotated kernels"
-function induced(target, panel, kernel, derivatives_switch=DerivativesSwitch(true,true,true); kerneloffset=1.0e-3)
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+    
+    # get vertices
+    v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
+    
+    # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
+    strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
-    potential, velocity, velocity_gradient = _induced(target, panel, kernel, kerneloffset, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
 
     return potential, velocity, velocity_gradient
 end
@@ -252,7 +342,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         )
     end
 
-    return potential, velocity, velocity_gradient
+    return -potential, -velocity, -velocity_gradient
 end
 
 function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,TF}
@@ -537,122 +627,118 @@ end
 
 #------- vortex ring panel -------#
 
-# function _induced(target::AbstractVector{TFT}, panel::Panel{TFP,<:Any,NS}, kernel::VortexRing, core_radius, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TFT,TFP,NS,PS,VS,GS}
-#     TF = promote_type(TFT,TFP)
-#     corner_vectors = FastMultipole.StaticArrays.SVector{NS,FastMultipole.StaticArrays.SVector{3,TF}}(corner - target for corner in panel.vertices)
-#     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
-#     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+function _induced(target, vertices::NTuple{NS}, strength, kernel::Type{VortexRing}, core_radius, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {NS,PS,VS,GS}
+    TFT = eltype(target)
+    TFP = eltype(strength)
+    TF = promote_type(TFT,TFP)
+    velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
+    gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 
-#     # finite core settings
-#     finite_core = true
-#     core_size = core_radius
+    # finite core settings
+    finite_core = true
+    core_size = core_radius
 
-#     # evaluate velocity/gradient
-#     for i in 1:NS-1
-#         r1 = panel.vertices[i] - target
-#         r2 = panel.vertices[i+1] - target
+    # evaluate velocity/gradient
+    for i in 1:NS
+        ip1 = i < NS ? i+1 : 1
 
-#         # parameters
-#         r1norm = sqrt(r1'*r1)
-#         r2norm = sqrt(r2'*r2)
-#         r1normr2norm = r1norm*r2norm
-#         rcross = cross(r1, r2)
-#         rdot = dot(r1, r2)
-#         ONE_OVER_4PI = 1/4/pi
+        # filament
+        r1 = vertices[i] - target
+        r2 = vertices[ip1] - target
 
-#         if VS
-#             # velocity
-#             v = _bound_vortex_velocity(r1norm, r2norm, r1normr2norm, rcross, rdot, finite_core, core_size; epsilon=10*eps())
-#             velocity += v
-#         end
-#         if GS
-#             # velocity gradient
-#             g = _bound_vortex_gradient(r1, r2, r1norm, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps())
-#             gradient += g
-#         end
-#     end
+        if VS
+            # velocity
+            v = _bound_vortex_velocity(r1, r2, finite_core, core_size)
+            velocity += v
+        end
+        if GS
+            # velocity gradient
+            g = _bound_vortex_gradient(r1, r2, finite_core, core_size)
+            gradient += g
+        end
+    end
 
-#     # wrap vertex
-#     r1 = panel.vertices[NS] - target
-#     r2 = panel.vertices[1] - target
+    return zero(TF), velocity * strength[1], gradient * strength[1]
+end
 
-#     # parameters
-#     r1norm = sqrt(r1'*r1)
-#     r2norm = sqrt(r2'*r2)
-#     r1normr2norm = r1norm*r2norm
-#     rcross = cross(r1, r2)
-#     rdot = dot(r1, r2)
-#     ONE_OVER_4PI = 1/4/pi
+@inline function get_δ(distance, core_size)
+    δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
+    return δ
+end
 
-#     if VS
-#         # velocity
-#         v = _bound_vortex_velocity(r1norm, r2norm, r1normr2norm, rcross, rdot, finite_core, core_size; epsilon=10*eps())
-#         velocity += v
-#     end
-#     if GS
-#         # velocity gradient
-#         g = _bound_vortex_gradient(r1, r2, r1norm, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps())
-#         gradient += g
-#     end
+function _bound_vortex_velocity(r1, r2, finite_core, core_size)
+    # intermediate values
+    nr1 = norm(r1)
+    nr2 = norm(r2)
+    num = cross(r1, r2)
+    denom = nr1 * nr2 + dot(r1, r2)
 
-#     return zero(TF), velocity, gradient
-# end
+    if finite_core
+        # core size comes into play here
+        # nr3 = norm(r1 - r2) # length of the segment
+        # distance_line = norm(num) / nr3
+        δ0 = get_δ(denom, core_size)
+        δ1 = get_δ(nr1, core_size) # distance to first endpoint
+        δ2 = get_δ(nr2, core_size) # distance to second endpoint
+        # nr3 = norm(r1 - r2) # length of the filament
+        # distance_3 = sqrt(max(2*nr1*nr1 + 2*nr2*nr2 - nr3*nr3, zero(nr3)))*0.5 # distance to midpoint
+        # δ3 = get_δ(distance_3, core_size)
+    else
+        δ0 = zero(denom)
+        δ1 = zero(nr1)
+        δ2 = zero(nr2)
+    end
 
-# function _bound_vortex_velocity(r1norm::TF, r2norm, r1normr2norm, rcross, rdot, finite_core::Bool, core_size::Number; epsilon=10*eps()) where TF
-#     # check if evaluation point is colinear with the bound vortex
-#     if norm(rcross) < epsilon # colinear if true
-#         if isapprox(rdot, -r1normr2norm; atol=epsilon) # at the midpoint, so return zero
-#             return zero(FastMultipole.StaticArrays.SVector{3,TF})
-#         elseif rdot <= 0.0 && finite_core # coincident with the filament so use the finite core model
-#             r1s, r2s, εs = r1norm^2, r2norm^2, core_size^2
-#             f1 = rcross/(r1s*r2s - rdot^2 + εs*(r1s + r2s - 2*r1normr2norm))
-#             f2 = (r1s - rdot)/sqrt(r1s + εs) + (r2s - rdot)/sqrt(r2s + εs)
-#             velocity = (f1*f2)/(4*pi)
-#             return velocity
-#         end
-#     end
+    # desingularized terms
+    f1 = num/(denom + δ0)
+    f2 = 1/(nr1+δ1)
+    f3 = 1/(nr2+δ2)
 
-#     # otherwise, use singular kernel
-#     f1 = rcross/(r1normr2norm + rdot)
-#     f2 = (1/r1norm + 1/r2norm)
+    # evaluate vector field
+    V = (f1*(f2+f3))/(4*pi)
 
-#     velocity = (f1*f2) * ONE_OVER_4PI
+    return V
+end
 
-#     return velocity
-# end
+function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size; epsilon=10*eps()) where TF
+    # preliminaries
+    r1norm = norm(r1)
+    r2norm = norm(r2)
+    # r1normr2norm = r1norm * r2norm
+    rdot = dot(r1, r2)
+    # rcross = cross(r1, r2)
 
-# function _bound_vortex_gradient(r1, r2, r1norm::TF, r2norm, r1normr2norm, rcross, rdot; epsilon=10*eps()) where TF
-#     # zeta
-#     t1 = 1/(r1norm*r2norm + rdot)
-#     t2 = 1/r1norm + 1/r2norm
-#     z = t1*t2*ONE_OVER_4PI
+    # zeta
+    t1 = 1/(r1norm*r2norm + rdot)
+    t2 = 1/r1norm + 1/r2norm
+    z = t1*t2*ONE_OVER_4PI
 
-#     # zeta gradient
-#     r1norm3 = r1norm^3
-#     r2norm3 = r2norm^3
-#     t4 = FastMultipole.StaticArrays.SVector{3,TF}(r1[i]/r1norm^3 + r2[i]/r2norm^3 for i in 1:3)
-#     t5 = FastMultipole.StaticArrays.SVector{3,TF}(r1norm/r2norm*r2[i] + r2norm/r1norm*r1[i] + r1[i] + r2[i] for i in 1:3)
-#     zgrad = ONE_OVER_4PI*(-t1*t4 - t2*t5*t1^2)
+    # zeta gradient
+    r1norm3 = r1norm*r1norm*r1norm
+    r2norm3 = r2norm*r2norm*r2norm
+    t4 = FastMultipole.StaticArrays.SVector{3,TF}(r1[i]/r1norm3 + r2[i]/r2norm3 for i in 1:3)
+    t5 = FastMultipole.StaticArrays.SVector{3,TF}(r1norm/r2norm*r2[i] + r2norm/r1norm*r1[i] + r1[i] + r2[i] for i in 1:3)
+    zgrad = ONE_OVER_4PI*(-t1*t4 - t2*t5*t1^2)
 
-#     # Omega
-#     o = cross(r1,r2)
+    # Omega
+    o = cross(r1,r2)
 
-#     # Omega gradient
-#     ograd = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
-#         0.0,# 1,1
-#         r1[3]-r2[3], # 2,1
-#         r2[2]-r1[2], # 3,1
-#         r2[3]-r1[3], # 1,2
-#         0.0, # 2,2
-#         r1[1]-r2[1], # 3,2
-#         r1[2]-r2[2], # 1,3
-#         r2[1]-r1[1], # 2,3
-#         0.0 # 3,3
-#     )
-#     gradient = transpose(zgrad * transpose(o)) + z * ograd
+    # Omega gradient
+    ograd = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
+        0.0,# 1,1
+        r1[3]-r2[3], # 2,1
+        r2[2]-r1[2], # 3,1
+        r2[3]-r1[3], # 1,2
+        0.0, # 2,2
+        r1[1]-r2[1], # 3,2
+        r1[2]-r2[2], # 1,3
+        r2[1]-r1[1], # 2,3
+        0.0 # 3,3
+    )
+    gradient = transpose(zgrad * transpose(o)) + z * ograd
 
-#     return gradient
-# end
+    return gradient
+end
 
 #------- regularization functions -------#
 

@@ -28,7 +28,7 @@ starts with all zeroes).
 function calcfield_U!(out::Arr1, sourcebody::AbstractBody, targetbody::AbstractBody,
                         controlpoints::Arr2, Uinfs::Arr3;
                         fieldname="U", addfield=true, 
-                        backend::Backend=DirectBackend(), optargs...
+                        backend::AbstractBackend=DirectBackend(), optargs...
                         ) where {   Arr1<:AbstractArray{<:Number,2},
                                     Arr2<:AbstractArray{<:Number,2},
                                     Arr3<:AbstractArray{<:Number,2}}
@@ -78,7 +78,7 @@ starts with all zeroes).
 function calcfield_U!(out::Arr,
                         sourcebody::AbstractBody, targetbody::AbstractBody;
                         offset=nothing, characteristiclength=nothing,
-                        backend::Backend=DirectBackend(), optargs...
+                        backend::AbstractBackend=DirectBackend(), optargs...
                         ) where {Arr<:AbstractArray{<:Number,2}}
 
     @assert check_field(targetbody, "Uinf") ""*

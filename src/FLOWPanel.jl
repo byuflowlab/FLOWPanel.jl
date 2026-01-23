@@ -24,6 +24,7 @@ import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import LinearOperators
 import SimpleNonlinearSolve
 import Requires: @require
 import FastMultipole
@@ -67,7 +68,8 @@ const noshedding = zeros(Int, 6, 0)
 
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver", "fmm",
-                    "abstractbody", "nonliftingbody",
+                    "abstractbody", "solver",
+                    "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "multibody",  "elements_fmm",
                     "liftingline",
