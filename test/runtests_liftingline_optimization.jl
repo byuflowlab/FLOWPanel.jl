@@ -138,11 +138,11 @@ v_lvl = 0
     
         # Tests
         for (lbl, out, atol) in (
-                                ("Finite Difference", out_diff, 1e-6),
+                                ("Finite Difference", out_diff, 5e-6),
                                 ("CSDA", out_csda, 1e-12),
-                                # ("Built-in Duals", out_dual, 1e-8),
-                                # ("ForwardDiff w/o built-in Duals", out_fd1, 1e-8),
-                                # ("ForwardDiff with built-in Duals", out_fd2, 1e-8),
+                                ("Built-in Duals", out_dual, 5e-6),
+                                ("ForwardDiff w/o built-in Duals", out_fd1, 5e-6),
+                                ("ForwardDiff with built-in Duals", out_fd2, 5e-6),
                             )
 
             

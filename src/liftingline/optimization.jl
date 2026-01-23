@@ -132,8 +132,9 @@ function run_liftingline(;
         sigmaexponent   = 4.0,                          # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
         
                                                         # Nonlinear solver
-        solver          = SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust
+        # solver        = SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust   <---- NOT COMPATIBLE WITH FORWARDDIFF
         # solver        = SimpleNonlinearSolve.SimpleTrustRegion(),        # Trust region needs a good initial guess, but it converges very reliably
+        solver          = NonlinearSolve.SimpleBroyden(),                  # This seems to converge well while being compatible with ForwardDiff
         
         solver_optargs  = (; 
                             abstol = 1e-13,  
