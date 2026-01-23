@@ -250,16 +250,47 @@ end
 # FGS Solver
 ################################################################################
 
-struct FGSSolver{TB<:AbstractBody,TF<:Number} <: AbstractMatrixFreeSolver
-    body::TB
-    Uind::Array{TF, 2}    # induced velocity storage
-    CPs::Array{TF, 2}     # Control points
-    normals::Array{TF, 2} # Normals
-    unabbreviated_strengths::Array{TF, 1} # Storage for unabbreviated strengths
-    elprescribe::Vector{Tuple{Int,Float64}} # Prescribed element indices and values
-    itmax::Int             # Maximum number of iterations
-    atol::Float64          # absolute tolerance
-    rtol::Float64          # relative tolerance
+struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
+    fgs::TFGS
+    max_iterations::Int
+    tolerance::Float64
+end
+
+function FGSSolver(body::AbstractBody; 
+        max_iterations::Int=100,         # Maximum number of iterations
+        tolerance::Real=1e-6,            # Convergence tolerance
+        expansion_order=7,
+        multipole_acceptance=0.4,
+        leaf_size=10,
+        shrink=false,
+        recenter=false
+    )
+
+    # generate solver
+    TF = numtype(body)
+    fgs = FastMultipole.FastGaussSeidel((body,), (body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter)
+
+    return FGSSolver{typeof(fgs), TF}(fgs, max_iterations, Float64(tolerance))
+end
+
+#--- test solve! ---#
+
+function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
+    
+    # construct right-hand side
+    # TF2 = promote_type(eltype(Uinfs), TF)
+    # RHS = zeros(TF2, self.ncells)
+    # normals = _calc_normals(self)
+    # calc_bc_noflowthrough!(RHS, Uinfs, normals)
+
+    # apply freestream
+    self.velocity .= Uinfs
+
+    # solve system
+    FastMultipole.solve!(self, solver.fgs; max_iterations=10, tolerance=1e-3)
+
+    # store solution
+    set_solution(self, self.strength, self.strength, Tuple{Int,Float64}[], Uinfs)
 end
 
 ################################################################################

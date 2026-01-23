@@ -44,12 +44,12 @@ struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
 
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
+    velocity::Array{TF,2}               # Velocity at control points
     CPoffset::Float64                   # Control point offset in normal direction
     kerneloffset::Float64               # Kernel offset to avoid singularities
     kernelcutoff::Float64               # Kernel cutoff to avoid singularities
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
-
 end
 
 function NonLiftingBody{E, N, TF}(
@@ -59,6 +59,7 @@ function NonLiftingBody{E, N, TF}(
                 fields=Array{String,1}(),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
                 strength=zeros(grid.ncells, N),
+                velocity=zeros(3, grid.ncells),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
                 kernelcutoff=1e-14,
@@ -77,6 +78,7 @@ function NonLiftingBody{E, N, TF}(
                 fields,
                 Oaxis, O,
                 strength,
+                velocity,
                 CPoffset,
                 kerneloffset,
                 kernelcutoff,
@@ -925,6 +927,41 @@ function solve2!(self::NonLiftingBody{<:Any,1,TFG}, Uinfs::Array{TFS, 2}, solver
 
     return nothing
 end
+
+function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_body, value)
+    source_buffer[5, i_body] = value
+end
+
+function FastMultipole.influence!(influence, target_buffer, source_system::NonLiftingBody, source_buffer)
+    for i in 1:size(target_buffer, 2)
+        v = FastMultipole.get_gradient(target_buffer, i)
+        n = FastMultipole.get_normal(source_buffer, source_system, i)
+        influence[i] = dot(v, n)
+    end
+end
+
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system, i_target)
+    vx, vy, vz = target_system.velocity[1, i_target], target_system.velocity[2, i_target], target_system.velocity[3, i_target]
+    target_buffer[5, i_buffer] = vx
+    target_buffer[6, i_buffer] = vy
+    target_buffer[7, i_buffer] = vz
+end
+
+function FastMultipole.strength_to_value(strength, source_system::NonLiftingBody)
+    return strength[1]
+end
+
+function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+    vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+    target_system.velocity[1, i_target] = vx
+    target_system.velocity[2, i_target] = vy
+    target_system.velocity[3, i_target] = vz
+end
+
+function FastMultipole.buffer_to_system_strength!(system, i_body, source_buffer, i_buffer)
+    system.strength[i_body, 1] = source_buffer[5, i_buffer]
+end
+
 ##### END OF ABSTRACT SOLVER INTERFACE ##########################################
 
 

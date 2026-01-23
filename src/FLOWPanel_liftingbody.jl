@@ -262,12 +262,12 @@ function _G_U!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, arg
 end
 
 function solve2!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1},
-                    Uinfs::AbstractMatrix{T1},
+                    Uinfs::AbstractMatrix{T},
                     solver::AbstractMatrixfulSolver{false};
                     solver_optargs=(),
                     update_G::Bool=true,
                     optargs...
-                ) where {T1, T2, T3}
+                ) where {T}
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
@@ -278,8 +278,6 @@ function solve2!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1},
         error("Invalid Dbs;"*
               " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
-
-    T = promote_type(T1, T2, T3)
 
     # Compute normals and control points
     normals = _calc_normals(self)

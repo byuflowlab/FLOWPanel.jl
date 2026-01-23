@@ -615,6 +615,10 @@ function add_field_D(self::MultiBody)
 end
 
 function add_field_D(self::AbstractBody)
+    return nothing
+end
+
+function add_field_D(self::RigidWakeBody)
     add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
     add_field(self, "Db", "vector", collect(eachcol(self.Dbs)), "system")
 end
