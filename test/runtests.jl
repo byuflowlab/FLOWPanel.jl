@@ -9,6 +9,7 @@ include("runtests_solvers.jl")
 include("runtests_solvers2.jl")
 include("runtests_liftingline.jl")
 include("runtests_liftingline_optimization.jl")
+# include("runtests_liftingline_optimization_snopt.jl")
 
 if VERSION >= v"1.9" && !("remote" in Test.ARGS)
     include("runtests_meshes.jl")

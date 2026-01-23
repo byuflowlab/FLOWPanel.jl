@@ -20,6 +20,9 @@ end
 v_lvl = 0
 
 
+# NOTE: Use CSDA with DFSane, or ForwardDiff with Broyden
+
+
 @testset verbose=verbose "Lifting Line Optimization Tests w/ SNOPT" begin
 
     @testset "AOA vs twist optimization equivalence" begin
@@ -30,7 +33,6 @@ v_lvl = 0
         end
 
         model_cache = Dict()
-        model_cache["fcalls"] = 0
 
         function f!(g, x; optimize_aoa=true, cache=model_cache)
 
@@ -52,7 +54,7 @@ v_lvl = 0
             chord_root = 0.2
             chord_tip = 0.2
 
-            sweep = 0.0
+            sweep = 20.0
 
             dihedral = 0.0
 
@@ -121,14 +123,16 @@ v_lvl = 0
                                     sigmaexponent   = 4.0,                          # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
                                     
                                                                                     # Nonlinear solver
-                                    solver          = pnl.SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust
+                                    solver        = pnl.SimpleNonlinearSolve.SimpleDFSane(),         # Indifferent to initial guess, but somewhat not robust   <---- NOT COMPATIBLE WITH FORWARDDIFF
+                                    # solver        = pnl.SimpleNonlinearSolve.SimpleTrustRegion(),    # Trust region needs a good initial guess, but it converges very reliably
+                                    # solver          = pnl.NonlinearSolve.SimpleBroyden(),              # This seems to converge well while being compatible with ForwardDiff
                                     
                                     solver_optargs  = (; 
-                                                        abstol = 1e-12,  
+                                                        abstol = 1e-12,             # <-- tight tolerance to converge derivatives
                                                         maxiters = 800,
                                                         ),
                                     
-                                    align_joints_with_Uinfs = false,                # Whether to align joint bound vortices with the freestream
+                                    align_joints_with_Uinfs = !false,                # Whether to align joint bound vortices with the freestream
                                     
                                     use_Uind_for_force = true,                      # Whether to use Uind as opposed to selfUind for force postprocessing
                                                                                     # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
@@ -138,8 +142,6 @@ v_lvl = 0
                                     cache
                                     )
 
-            cache["fcalls"] += 1
-
             # Fetch results
             L = out.L
             D = out.D
@@ -147,19 +149,14 @@ v_lvl = 0
             # Objective (minimization)
             obj = -L/D
 
-            # Constraints (dummies, we defined two or SNOW won't work)
-            # g[1] = (-x[1] - 999) / 1e-3
-            # g[2] = (-x[2] - 999) / 1e-3
-            # g[2] = (-x[1] - 999) / 1e-3
-            # g[1] = (-x[1] - 1) / 1e-3
-            # g[2] = (-x[2] - 1) / 1e-3
-            # g[1] = -L
-            # g[2] = -L
+            # Constraints (none)
+            # g[1] = 
 
             return obj
         end
 
-        x0 = [0.0]             # Initial guess
+
+        x0 = [2.0]             # Initial guess
 
         lx = [-10.0]           # Lower bounds on x
         ux = [10.0]            # Upper bounds on x
@@ -169,15 +166,14 @@ v_lvl = 0
         ug = zeros(ng)              # Upper bounds on g
 
         snopt_options = Dict(
-                "Major iterations limit" => 500,
+                "Major iterations limit" => 50,
             )
         solver = SNOPT(options=snopt_options)
-        options = Options(; solver, derivatives=ForwardAD())
-        # options = Options(; solver, derivatives=ComplexStep())
-        # options = Options(; solver)
+
+        # options = Options(; solver, derivatives=ForwardAD())
+        options = Options(; solver, derivatives=ComplexStep())
 
         model_cache = Dict()
-        model_cache["fcalls"] = 0
 
         t_snopt = @elapsed begin
             xopt, fopt, info = minimize(f!, deepcopy(x0), ng, lx, ux, lg, ug, options)
@@ -189,11 +185,10 @@ v_lvl = 0
 
         # Brute force answer
         model_cache = Dict()
-        model_cache["fcalls"] = 0
 
         t_brute = @elapsed begin
             aoas = range(lx[1], ux[1], length=200)
-            fs = [value(f!(zeros(2), [aoa, 0])) for aoa in aoas]
+            fs = [value(f!(zeros(ng), [aoa])) for aoa in aoas]
         end
 
         aoaopt_brute_i = argmin(fs)
@@ -201,68 +196,126 @@ v_lvl = 0
         fopt_brute = fs[aoaopt_brute_i]
         fcalls_brute = model_cache["fcalls"]
 
+        fopt_aoa = fopt_snopt
+
         if verbose
             println()
             @printf "%s%15.15s   %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "Opt AOA" "Max L/D" "Time" "Function calls"
             @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Brute force" aoaopt_brute -fopt_brute t_brute fcalls_brute
-            @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Ipopt" aoaopt_snopt -fopt_snopt t_snopt fcalls_snopt
+            @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "SNOPT" aoaopt_snopt -fopt_snopt t_snopt fcalls_snopt
         end
 
         @testset "Max L/D w.r.t. alpha" begin
-            @test info == :Solved_To_Acceptable_Level || info == :Solve_Succeeded
+            @test info in [:Solved_To_Acceptable_Level, :Solve_Succeeded, "Finished successfully: optimality conditions satisfied"]
             @test isapprox(aoaopt_snopt, aoaopt_brute, atol=0.05)
             @test isapprox(fopt_snopt, fopt_brute, atol=0.01)
         end
 
 
+        # --------------- TEST DERIVATIVES OVER TWIST --------------------------
+        if verbose
+            println("\n"*"\t"^(v_lvl)*"AD test over twist")
+        end
+
+        function f2!(args...; optargs...)
+            return f!(args...; optargs..., optimize_aoa=false)
+        end
+
+        g = zeros(0)
+
+        # Compute derivative through finite difference
+        global daoa = 0.001
+        global cache_m1 = Dict()
+        global cache_diff = Dict()
+        global cache_p1 = Dict()
+        global f_m1 = f2!(g, x0 .- daoa; cache=cache_m1)
+        global f_diff = f2!(g, x0; cache=cache_diff)
+        global f_p1 = f2!(g, x0 .+ daoa; cache=cache_p1)
+
+        global dfdx_diff = (f_p1 - f_m1) / (2*daoa)
+
+        # Compute derivatives through complex-step
+        global h = eps()^2
+        global cache_csda = Dict()
+        global f_csda = f2!(g, [Complex(x0[1], h)]; cache=cache_csda)
+        global dfdx_csda = imag(f_csda) / h
+        f_csda = real(f_csda)
+
+        # Compute derivatives through Dual
+        global cache_dual = Dict()
+        global f_dual = f2!(g, [Dual(x0[1], Partials((1.0,)))]; cache=cache_dual)
+        global dfdx_dual = partials(f_dual)[1]
+        f_dual = value(f_dual)
+
+        f_ref = f_diff
+        dfdx_ref = dfdx_diff
+
+        # Tests
+        @testset "Derivative verification" begin
+            for (lbl, (f, dfdx), (atol1, atol2)) in (
+                                    ("Finite Difference", (f_diff, dfdx_diff), (1e-10, 1e-6)),
+                                    ("CSDA", (f_csda, dfdx_csda), (1e-10, 5e-4)),
+                                    ("Dual", (f_dual, dfdx_dual), (1e-10, 1e-6)),
+                                )
+
+                if verbose
+                    println("\t"^(v_lvl+1)*"Comparing $(lbl)...")
+                end
+
+                @testset "$(lbl) f" begin @test isapprox(f, f_ref; atol=atol1) end
+                @testset "$(lbl) dfdx" begin @test isapprox(dfdx, dfdx_ref; atol=atol2) end
+                
+            end
+        end
+
+        # --------------- OPTIMIZATION TEST: Optimum twist ---------------------
+        if verbose
+            println("\n"*"\t"^(v_lvl)*"Optimization test: Max L/D w.r.t. twist")
+        end
+
+        model_cache = Dict()
+
+        t_snopt = @elapsed begin
+            xopt, fopt, info = minimize(f2!, deepcopy(x0), ng, lx, ux, lg, ug, options)
+        end
+
+        twistopt_snopt = sum(xopt)
+        fopt_snopt = value(f!(zeros(ng), xopt))
+        fcalls_snopt = model_cache["fcalls"]
+
+        # Brute force answer
+        model_cache = Dict()
+
+        t_brute = @elapsed begin
+            twists = range(lx[1], ux[1], length=200)
+            fs = [value(f2!(zeros(ng), [twist])) for twist in twists]
+        end
+
+        twistopt_brute_i = argmin(fs)
+        twistopt_brute = twists[twistopt_brute_i]
+        fopt_brute = fs[twistopt_brute_i]
+        fcalls_brute = model_cache["fcalls"]
+
+        fopt_twist = fopt_snopt
+
+        if verbose
+            println()
+            @printf "%s%15.15s   %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "Opt twist" "Max L/D" "Time" "Function calls"
+            @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Brute force" twistopt_brute -fopt_brute t_brute fcalls_brute
+            @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "SNOPT" twistopt_snopt -fopt_snopt t_snopt fcalls_snopt
+        end
+
+        @testset "Max L/D w.r.t. twist" begin
+            @test info in [:Solved_To_Acceptable_Level, :Solve_Succeeded, "Finished successfully: optimality conditions satisfied"]
+            @test isapprox(twistopt_snopt, twistopt_brute, atol=0.05)
+            @test isapprox(fopt_snopt, fopt_brute, atol=0.05)
+        end
 
 
-        # # --------------- OPTIMIZATION TEST: Optimum twist ---------------------
-        # if verbose
-        #     println("\n"*"\t"^(v_lvl)*"Optimization test: Max L/D w.r.t. twist")
-        # end
-
-        # function f2!(args...; optargs...)
-        #     return f!(args...; optargs..., optimize_aoa=false)
-        # end
-
-        # model_cache = Dict()
-        # model_cache["fcalls"] = 0
-
-        # t_snopt = @elapsed begin
-        #     xopt, fopt, info = minimize(f2!, deepcopy(x0), ng, lx, ux, lg, ug, options)
-        # end
-
-        # twistopt_snopt = sum(xopt)
-        # fopt_snopt = value(f!(zeros(ng), xopt))
-        # fcalls_snopt = model_cache["fcalls"]
-
-        # # Brute force answer
-        # model_cache = Dict()
-        # model_cache["fcalls"] = 0
-
-        # t_brute = @elapsed begin
-        #     twists = range(lx[1], ux[1], length=200)
-        #     fs = [value(f2!(zeros(2), [twist, 0])) for twist in twists]
-        # end
-
-        # twistopt_brute_i = argmin(fs)
-        # twistopt_brute = twists[twistopt_brute_i]
-        # fopt_brute = fs[twistopt_brute_i]
-        # fcalls_brute = model_cache["fcalls"]
-
-        # if verbose
-        #     println()
-        #     @printf "%s%15.15s   %-10s %-10s %-10s %-10s\n" "\t"^(v_lvl+1) "" "Opt twist" "Max L/D" "Time" "Function calls"
-        #     @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Brute force" twistopt_brute -fopt_brute t_brute fcalls_brute
-        #     @printf "%s%15.15s   %-10.4f %-10.4f %-3.0f secs  %4.3g\n" "\t"^(v_lvl+1) "Ipopt" twistopt_snopt -fopt_snopt t_snopt fcalls_snopt
-        # end
-
-        # # @testset "Max L/D w.r.t. twist" begin
-        # #     @test info == :Solved_To_Acceptable_Level || info == :Solve_Succeeded
-        # #     @test isapprox(twistopt_snopt, twistopt_brute, atol=0.05)
-        # #     @test isapprox(fopt_snopt, fopt_brute, atol=0.01)
-        # # end
+        @testset "AOA and twist equivalence" begin
+            @test isapprox(aoaopt_snopt, twistopt_snopt, atol=0.05)
+            @test isapprox(fopt_aoa, fopt_twist, atol=1e-4)
+        end
 
 
     end
