@@ -104,7 +104,7 @@ v_lvl = 0
         # deltajoint    = 0.15                          # Joint distance, deltajoint = dx/c
         deltajoint      = 1.0
                                                         # Nonlinear solver
-        solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()
+        solver          = pnl.analysis_solver
         solver_optargs  = (; abstol = 1e-9)
 
         Dhat            = Uinf/norm(Uinf)               # Drag direction

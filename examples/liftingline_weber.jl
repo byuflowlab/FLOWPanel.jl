@@ -25,8 +25,6 @@ include(joinpath(pnl.examples_path, "plotformat.jl"))
 import CSV
 import DataFrames: DataFrame
 
-import SIAMFANLEquations
-
 
 run_name        = "ll-weber"                    # Name of this run
 
@@ -114,16 +112,8 @@ sigmafactor     = 0.0                           # Dragging line amplification fa
 sigmaexponent   = 4.0                           # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
 
                                                 # Nonlinear solver
-# solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()              # Indifferent to initial guess, but somewhat not robust
-# solver        = pnl.SimpleNonlinearSolve.SimpleTrustRegion()         # Trust region needs a good initial guess, but it converges very reliably
-solver          = pnl.NonlinearSolve.SimpleBroyden()                      # <---- Wining
-# solver        = pnl.NonlinearSolve.NLsolveJL(method = :trust_region)
-# solver        = pnl.NonlinearSolve.SIAMFANLEquationsJL(method = :anderson)
-# solver        = pnl.NonlinearSolve.FixedPointAccelerationJL(; algorithm = :Newton)
-# solver        = pnl.NonlinearSolve.FixedPointAccelerationJL(; algorithm = :Newton)
-# solver = pnl.NonlinearSolve.NonlinearSolveQuasiNewton.Broyden(; autodiff = ADTypes.AutoForwardDiff(),  init_jacobian=Val(:true_jacobian))
-# solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNLLSPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff()), # <--- WINING
-# solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNonlinearPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff(), prefer_simplenonlinearsolve = Val(true)) 
+solver          = pnl.analysis_solver           # Very robust and physically accurate, but it can take a long time post-stall (not AD compatible)
+# solver        = pnl.optimization_solver       # Robus, fast, and ForwardDiff compatible, but often times it returns the secondary solution that is unphysical post stall
 
 solver_optargs  = (; 
                     abstol = 1e-9,  

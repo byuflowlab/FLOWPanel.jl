@@ -109,8 +109,8 @@ sigmafactor     = 0.0                           # Dragging line amplification fa
 sigmaexponent   = 1.0                           # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
 
                                                 # Nonlinear solver
-solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()              # Indifferent to initial guess, but somewhat not robust
-# solver        = pnl.SimpleNonlinearSolve.SimpleTrustRegion()         # Trust region needs a good initial guess, but it converges very reliably
+solver          = pnl.analysis_solver           # Very robust and physically accurate, but it can take a long time post-stall (not AD compatible)
+# solver        = pnl.optimization_solver       # Robus, fast, and ForwardDiff compatible, but often times it returns the secondary solution that is unphysical post stall
 
 solver_optargs  = (; 
                     abstol = 1e-9,  

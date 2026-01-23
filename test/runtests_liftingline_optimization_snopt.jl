@@ -130,8 +130,10 @@ v_lvl = 0
                                     # solver          = pnl.NonlinearSolve.SimpleBroyden(),              # This seems to converge well while being compatible with ForwardDiff
                                     # solver        = pnl.NonlinearSolve.NLsolveJL(method = :trust_region), # Converges very well with ForwardDiff, not compatible with CSDA
 
-                                    # solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNLLSPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff()),
-                                    solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNonlinearPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff(), prefer_simplenonlinearsolve = Val(true)), # Robust, fast, and ForwardDiff compatible (though solver might be a bit noise, so set optimizer tol ~5e-5)
+                                    # solver        = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNLLSPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff()),
+                                    # solver        = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNonlinearPolyalg(; autodiff = :forward, vjp_autodiff = :forward, jvp_autodiff = :forward, prefer_simplenonlinearsolve = Val(true)), # Robust, fast, and ForwardDiff compatible (though solver might be a bit noise, so set optimizer tol ~5e-5)
+                                    
+                                    solver          = pnl.optimization_solver,
                                     
                                     solver_optargs  = (; 
                                                         abstol = 1e-12,             # <-- tight tolerance to converge derivatives

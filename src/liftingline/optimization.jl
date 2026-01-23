@@ -134,12 +134,13 @@ function run_liftingline(;
                                                         # Nonlinear solver
         # solver        = SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust post stall   <---- NOT COMPATIBLE WITH FORWARDDIFF (but compatible with CSDA and optimization converges well)
         # solver        = SimpleNonlinearSolve.SimpleTrustRegion(),        # Trust region needs a good initial guess, but solver converges very reliably post stall, not compatible with CSDA nor ForwardDiff
-        solver        = NonlinearSolve.SimpleBroyden(),                  # Optimization converges well while being compatible with ForwardDiff (not compatible with CSDA). EXTREMELY ROBUST ACROSS LINEAR, MILD STALL, AND DEEP STALL (it returns an answer, but it might be noise and not accurate)
+        # solver        = NonlinearSolve.SimpleBroyden(),                  # Optimization converges well while being compatible with ForwardDiff (not compatible with CSDA). EXTREMELY ROBUST ACROSS LINEAR, MILD STALL, AND DEEP STALL (it returns an answer, but it might be noise and not accurate)
         # solver        = NonlinearSolve.NonlinearSolveQuasiNewton.Broyden(; autodiff = ADTypes.AutoForwardDiff(),  init_jacobian=Val(:true_jacobian)) # Also extremely robust across regions (it returns an answer, but it might be noise and not accurate)
         # solver        = NonlinearSolve.NLsolveJL(method = :trust_region),# Optimization converges very well with ForwardDiff, not compatible with CSDA. Solver converges slowly but realibly in linear and mild stall regions, does not converge post stall
         # solver        = NonlinearSolve.SIAMFANLEquationsJL(method = :newton, autodiff=ADTypes.AutoForwardDiff()), # Also robust in linear and mild stall regions, but much faster
         # solver        = NonlinearSolve.NonlinearSolve.FastShortcutNLLSPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff()) # Very robust, but it can take a long time. Not ForwardDiff nor CSDA compatible
         # solver        = NonlinearSolve.NonlinearSolve.FastShortcutNonlinearPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff(), prefer_simplenonlinearsolve = Val(true)) # 100% convergence, and super fast, but it might return the wrong solution. ForwardDiff compatible (though solver might be a bit noise, so set optimizer tol ~5e-5)
+        solver          = optimization_solver,
         
         solver_optargs  = (; 
                             abstol = 1e-13,  

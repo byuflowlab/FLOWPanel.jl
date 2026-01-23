@@ -22,6 +22,31 @@
   * License     : MIT License
 =###############################################################################
 
+"""
+Robust, fast, and ForwardDiff compatible (though solver might be a bit noise, so 
+set optimizer tol ~5e-5). Often it returns the secondary solution that is 
+unphysical post stall. Not CSDA compatible.
+"""
+const optimization_solver = NonlinearSolve.FastShortcutNonlinearPolyalg(; 
+                                autodiff = :forward, 
+                                vjp_autodiff = :forward, jvp_autodiff = :forward, 
+                                prefer_simplenonlinearsolve = Val(true)
+                                )
+
+"""
+Very robust and physically accurate, but it can take a long time. 
+Not ForwardDiff nor CSDA compatible.
+"""
+const analysis_solver = NonlinearSolve.FastShortcutNLLSPolyalg(; 
+                                autodiff = ADTypes.AutoForwardDiff(), 
+                                # vjp_autodiff = ADTypes.AutoForwardDiff(), 
+                                # jvp_autodiff = ADTypes.AutoForwardDiff(), 
+                                )
+
+
+
+
+                                
 function solve(self::LiftingLine, Uinf::AbstractVector, 
                                             args...; optargs...) 
     solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)

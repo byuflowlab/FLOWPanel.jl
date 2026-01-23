@@ -266,7 +266,7 @@ v_lvl = 0
                                     sigmaexponent   = 4.0,                          # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
                                     
                                                                                     # Nonlinear solver
-                                    solver          = pnl.SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust
+                                    solver          = pnl.optimization_solver,
                                     
                                     solver_optargs  = (; 
                                                         abstol = 1e-9,  
