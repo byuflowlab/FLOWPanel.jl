@@ -158,14 +158,14 @@ function calc_residuals!(residuals::AbstractVector,
         magUxdl = sqrt(Uxdl1^2 + Uxdl2^2 + Uxdl3^2)
 
         # Apply the same assumption to calculate the total velocity counter-projected
-        magUxdl /= abs(cosd(phi))
+        magUxdl /= math.abs_smooth(cosd(phi), 0.01)
 
         # Area of this section
-        area = ll.chords[ei] * abs( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei] )
+        area = ll.chords[ei] * math.abs_smooth( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei], 0.01)
 
         # Calculate Lmabda just like Gamma (using Eq. 41 in Goates 2022 JoA paper)
         Lambda = cd * 0.5*magUΛ^2*area / magUxdl    # Source filament strength
-        sigma = Lambda/abs(ll.chords[ei]*cosd(sweep))   # Equivalent constant source panel strength
+        sigma = Lambda/math.abs_smooth(ll.chords[ei]*cosd(sweep), 0.01)   # Equivalent constant source panel strength
 
         for i in 1:3
             # Here we approximate the velocity induced by the dragging line
@@ -348,9 +348,8 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         # Apply the same assumption to calculate the total velocity counter-projected
         magUxdl /= cosd(phi)
 
-
         # Area of this section
-        area = ll.chords[ei] * abs( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei] )
+        area = ll.chords[ei] * math.abs_smooth( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei], 0.01 )
 
         # Calculate Gamma using Eq. 41 in Goates 2022 JoA paper
         Gammas[ei] = clΛ * 0.5*magUΛ^2*area / magUxdl
