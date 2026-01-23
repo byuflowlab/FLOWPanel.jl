@@ -11,6 +11,7 @@ temp*
 *.vtk
 *.jld
 ipopt.out
+snopt-*.out
 
 # Jupyter notebook temps
 .ipynb_checkpoints
