@@ -9,7 +9,6 @@
   * License     : MIT License
 =###############################################################################
 
-
 function calc_area(ll::LiftingLine{R}) where {R}
 
     nodes = ll.grid.nodes

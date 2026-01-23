@@ -9,6 +9,25 @@
   * License     : MIT License
 =###############################################################################
 
+
+"""
+Arctan2 of complex numbers to accomodate complex-step derivative approximation.
+"""
+function Base.atan(y::Complex, x::Complex)
+    
+    re = atan(real(y), real(x))
+    ima = (real(x)*imag(y) - real(y)*imag(x)) / (real(y)*real(y) + real(x)*real(x))
+    
+    return Complex(re, ima)
+end
+
+"""
+Comparison of complex numbers to accomodate complex-step derivative approximation
+"""
+Base.isless(x::Complex, y::Real) = isless(real(x), y)
+Base.isless(x::Real, y::Complex) = isless(x, real(y))
+Base.isless(x::Complex, y::Complex) = isless(real(x), real(y))
+
 """
 Wrapper function that generates a lifting line (or morphs an existing one found
 under the `cache` optional argument), and evaluates and returns forces, moments, 
@@ -124,9 +143,23 @@ function run_liftingline(;
         plot_convergence = false,                       # Whether to plot solver convergence
         
 ) where {R1, R2, R3, R4, R5, R6, R7, R8, R9}
+
+    # Populate cache fields
+    for field in ("ll", "Uinfs", "solver_cache")
+        if !(field in keys(cache))
+            cache[field] = Dict()
+        end
+    end
+
+    if !("fcalls" in keys(cache))
+        cache["fcalls"] = 0
+    end
+
+    # Increase function call counter
+    cache["fcalls"] += 1
                                                     
     # Number type for LiftingLine
-    NumType = promote_type(R1, R2, R3, R4, R5, R6, R7, R8, R9, typeof(alpha), typeof(beta))  
+    NumType = promote_type(R1, R2, R3, R4, R5, R6, R7, R8, R9)  
     
     # NOTE: In these dual numbers we will implicitely defined the first partial to be 
     #       the derivative w.r.t. angle of attack and the second partial to be
@@ -138,8 +171,9 @@ function run_liftingline(;
         beta = NumType(beta)
 
         # Convert alpha and beta into Dual numbers for stability derivatives
-        alpha = FD.Dual{:stabilityderivative}(alpha, FD.Partials((1.0, 0.0))) # Convert angle of attack into dual number for automatic differentiation
-        beta = FD.Dual{:stabilityderivative}(beta, FD.Partials((0.0, 1.0)))  # Convert sideslip angle into dual number for automatic differentiation
+        tag = FD.Tag{:stabilityderivative, NumType}
+        alpha = FD.Dual{tag}(alpha, FD.Partials((1.0, 0.0)))    # Convert angle of attack into dual number for automatic differentiation
+        beta  = FD.Dual{tag}(beta,  FD.Partials((0.0, 1.0)))    # Convert sideslip angle into dual number for automatic differentiation
         
         # Number type for LiftingLine
         NumType = promote_type(typeof(alpha), typeof(beta))
@@ -159,8 +193,8 @@ function run_liftingline(;
     cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
     # Initialize solver cache
-    if !("solver_cache" in keys(cache))
-        cache["solver_cache"] = Dict()
+    if !(NumType in keys(cache["solver_cache"]))
+        cache["solver_cache"][NumType] = Dict()
     end 
 
 
@@ -175,9 +209,9 @@ function run_liftingline(;
                                         plot_discretization = !true,)
 
     # Generate or fetch Lifting Line
-    if "ll" in keys(cache)
+    if NumType in keys(cache["ll"])
         
-        ll = cache["ll"]
+        ll = cache["ll"][NumType]
         
     else
         
@@ -188,7 +222,7 @@ function run_liftingline(;
                                         )
         verbose && display(ll)
 
-        cache["ll"] = ll
+        cache["ll"][NumType] = ll
     end
 
     # Morph Lifting Line into its shape
@@ -200,11 +234,11 @@ function run_liftingline(;
 
     # ------------------ CALL NONLINEAR SOLVER -------------------------------------
 
-    if "Uinfs" in keys(cache)
-        Uinfs = cache["Uinfs"]
+    if NumType in keys(cache["Uinfs"])
+        Uinfs = cache["Uinfs"][NumType]
     else
         Uinfs = repeat(Uinf, 1, ll.nelements)
-        cache["Uinfs"] = Uinfs
+        cache["Uinfs"][NumType] = Uinfs
     end
     
     # Freestream velocity at each stripwise element
@@ -218,10 +252,8 @@ function run_liftingline(;
                                         aoas_initial_guess=alpha, 
                                         align_joints_with_Uinfs, 
                                         solver, solver_optargs,
-                                        solver_cache=cache["solver_cache"]
+                                        solver_cache=cache["solver_cache"][NumType]
                                         )
-    
-    cache["solver_cache"] = solver_cache
 
     # Check solver success
     success = SimpleNonlinearSolve.SciMLBase.successful_retcode(result)

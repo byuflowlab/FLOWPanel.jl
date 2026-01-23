@@ -141,13 +141,30 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     (; lhat, mhat, nhat) = forcesmoments
 
     # Coefficients
-    CL = sign(dot(lift, Lhat)) * norm(lift) / (q*Aref)
-    CD = sign(dot(drag, Dhat)) * norm(drag) / (q*Aref)
-    CY = sign(dot(side, Shat)) * norm(side) / (q*Aref)
+    # CL = sign(dot(lift, Lhat)) * norm(lift) / (q*Aref)
+    # CD = sign(dot(drag, Dhat)) * norm(drag) / (q*Aref)
+    # CY = sign(dot(side, Shat)) * norm(side) / (q*Aref)
     
-    Cl = sign(dot(roll, lhat)) * norm(roll) / (q*Aref*cref)
-    Cm = sign(dot(pitch, mhat)) * norm(pitch) / (q*Aref*cref)
-    Cn = sign(dot(yaw, nhat)) * norm(yaw) / (q*Aref*cref)
+    # Cl = sign(dot(roll, lhat)) * norm(roll) / (q*Aref*cref)
+    # Cm = sign(dot(pitch, mhat)) * norm(pitch) / (q*Aref*cref)
+    # Cn = sign(dot(yaw, nhat)) * norm(yaw) / (q*Aref*cref)
+
+    # Complex-safe version of `sign`
+    sgnCL = dot(lift, Lhat) / sqrt(dot(lift, Lhat)^2)
+    sgnCD = dot(drag, Dhat) / sqrt(dot(drag, Dhat)^2)
+    sgnCY = dot(side, Shat) / sqrt(dot(side, Shat)^2)
+    
+    sgnCl = dot(roll, lhat) / sqrt(dot(roll, lhat)^2)
+    sgnCm = dot(pitch, mhat) / sqrt(dot(pitch, mhat)^2)
+    sgnCn = dot(yaw, nhat) / sqrt(dot(yaw, nhat)^2)
+
+    CL = sgnCL * norm(lift) / (q*Aref)
+    CD = sgnCD * norm(drag) / (q*Aref)
+    CY = sgnCY * norm(side) / (q*Aref)
+    
+    Cl = sgnCl * norm(roll) / (q*Aref*cref)
+    Cm = sgnCm * norm(pitch) / (q*Aref*cref)
+    Cn = sgnCn * norm(yaw) / (q*Aref*cref)
 
     # Non-dimensional force and moment distributions
     if !isnothing(distributions)
