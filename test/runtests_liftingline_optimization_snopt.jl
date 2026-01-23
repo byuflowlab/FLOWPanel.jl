@@ -10,6 +10,8 @@ import FLOWPanel: mean, norm, dot, cross
 
 import ForwardDiff: Dual, Partials, value, partials, jacobian
 import Snopt
+# import NLsolve
+import ADTypes
 import SNOW: minimize, Options, SNOPT, ForwardAD, ComplexStep
 
 try
@@ -123,9 +125,13 @@ v_lvl = 0
                                     sigmaexponent   = 4.0,                          # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
                                     
                                                                                     # Nonlinear solver
-                                    solver        = pnl.SimpleNonlinearSolve.SimpleDFSane(),         # Indifferent to initial guess, but somewhat not robust   <---- NOT COMPATIBLE WITH FORWARDDIFF
+                                    # solver        = pnl.SimpleNonlinearSolve.SimpleDFSane(),         # Indifferent to initial guess, but somewhat not robust   <---- NOT COMPATIBLE WITH FORWARDDIFF
                                     # solver        = pnl.SimpleNonlinearSolve.SimpleTrustRegion(),    # Trust region needs a good initial guess, but it converges very reliably
                                     # solver          = pnl.NonlinearSolve.SimpleBroyden(),              # This seems to converge well while being compatible with ForwardDiff
+                                    # solver        = pnl.NonlinearSolve.NLsolveJL(method = :trust_region), # Converges very well with ForwardDiff, not compatible with CSDA
+
+                                    # solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNLLSPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff()),
+                                    solver = pnl.NonlinearSolve.NonlinearSolve.FastShortcutNonlinearPolyalg(; autodiff = ADTypes.AutoForwardDiff(), vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff(), prefer_simplenonlinearsolve = Val(true)), # Robust, fast, and ForwardDiff compatible (though solver might be a bit noise, so set optimizer tol ~5e-5)
                                     
                                     solver_optargs  = (; 
                                                         abstol = 1e-12,             # <-- tight tolerance to converge derivatives
@@ -167,11 +173,13 @@ v_lvl = 0
 
         snopt_options = Dict(
                 "Major iterations limit" => 50,
+                "Major optimality tolerance" => 5e-5,
+                "Minor optimality tolerance" => 5e-5,
             )
         solver = SNOPT(options=snopt_options)
 
-        # options = Options(; solver, derivatives=ForwardAD())
-        options = Options(; solver, derivatives=ComplexStep())
+        options = Options(; solver, derivatives=ForwardAD())
+        # options = Options(; solver, derivatives=ComplexStep())
 
         model_cache = Dict()
 
@@ -254,7 +262,7 @@ v_lvl = 0
         @testset "Derivative verification" begin
             for (lbl, (f, dfdx), (atol1, atol2)) in (
                                     ("Finite Difference", (f_diff, dfdx_diff), (1e-10, 1e-6)),
-                                    ("CSDA", (f_csda, dfdx_csda), (1e-10, 5e-4)),
+                                    # ("CSDA", (f_csda, dfdx_csda), (1e-10, 5e-4)),
                                     ("Dual", (f_dual, dfdx_dual), (1e-10, 1e-6)),
                                 )
 

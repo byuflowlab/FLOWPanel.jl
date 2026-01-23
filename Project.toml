@@ -20,6 +20,7 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 SimpleNonlinearSolve = "727e6d20-b764-4bd8-a329-72de5adea6c7"
 NonlinearSolve = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
+NLsolve = "2774e3e8-f4cf-5e23-947b-6d7e65073b56"
 
 # [sources]
 # FastMultipole = {url = "https://github.com/byuflowlab/FastMultipole", rev = "d21d242d081ea8c9c19655097d83413b1f783d2d"}
