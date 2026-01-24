@@ -73,28 +73,28 @@ function run_liftingline(;
         symmetric       = true,                         # Whether the wing is symmetric
         
         # Chord distribution (nondim y-position, nondim chord)
-        chord_distribution::AbstractMatrix{R5} = [
+        chord_distribution::AbstractMatrix{R6} = [
         #   2*y/b   c/b
             0.0     0.2
             1.0     0.2
         ],
         
         # Twist distribution (nondim y-position, twist)
-        twist_distribution::AbstractMatrix{R6} = [
+        twist_distribution::AbstractMatrix{R7} = [
         #   2*y/b   twist (deg)
             0.0     0.0
             1.0     0.0
         ],
         
         # Sweep distribution (nondim y-position, sweep)
-        sweep_distribution::AbstractMatrix{R7} = [
+        sweep_distribution::AbstractMatrix{R8} = [
         #   2*y/b   sweep (deg)
             0.0     45.0
             1.0     45.0
         ],
         
         # Dihedral distribution (nondim y-position, dihedral)
-        dihedral_distribution::AbstractMatrix{R8} = [
+        dihedral_distribution::AbstractMatrix{R9} = [
         #   2*y/b   dihedral (deg)
             0.0     0.0
             1.0     0.0
@@ -102,7 +102,7 @@ function run_liftingline(;
         
         # Span-axis distribution: chordwise point about which the wing is twisted, 
         # swept, and dihedralized (nondim y-position, nondim chord-position)
-        spanaxis_distribution::AbstractMatrix{R9} = [
+        spanaxis_distribution::AbstractMatrix{R10} = [
         #   2*y/b   x/c
             0.0     0.25
             1.0     0.25
@@ -156,7 +156,7 @@ function run_liftingline(;
         
         plot_convergence = false,                       # Whether to plot solver convergence
         
-) where {R1, R2, R3, R4, R5, R6, R7, R8, R9}
+) where {R1, R2, R3, R4, R5, R6, R7, R8, R9, R10}
 
     # Populate cache fields
     for field in ("ll", "Uinfs", "solver_cache")
@@ -173,7 +173,7 @@ function run_liftingline(;
     cache["fcalls"] += 1
                                                     
     # Number type for LiftingLine
-    NumType = promote_type(R1, R2, R3, R4, R5, R6, R7, R8, R9)  
+    NumType = promote_type(R1, R2, R3, R4, R5, R6, R7, R8, R9, R10)  
     
     # NOTE: In these dual numbers we will implicitely defined the first partial to be 
     #       the derivative w.r.t. angle of attack and the second partial to be
@@ -386,13 +386,13 @@ function run_liftingline(;
         bref = FD.value(bref)
         cref = FD.value(cref)
     
-        Dhat = FD.value(Dhat)
-        Shat = FD.value(Shat)
-        Lhat = FD.value(Lhat)
+        Dhat = FD.value.(Dhat)
+        Shat = FD.value.(Shat)
+        Lhat = FD.value.(Lhat)
     
-        lhat = FD.value(lhat)
-        mhat = FD.value(mhat)
-        nhat = FD.value(nhat)
+        lhat = FD.value.(lhat)
+        mhat = FD.value.(mhat)
+        nhat = FD.value.(nhat)
 
         X0 = FD.value.(X0)
     else
