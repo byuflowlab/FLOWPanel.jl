@@ -28,8 +28,8 @@ set optimizer tol ~5e-5). Often it returns the secondary solution that is
 unphysical post stall. Not CSDA compatible.
 """
 const optimization_solver = NonlinearSolve.FastShortcutNonlinearPolyalg(; 
-                                autodiff = :forward, 
-                                vjp_autodiff = :forward, jvp_autodiff = :forward, 
+                                autodiff = ADTypes.AutoForwardDiff(), 
+                                vjp_autodiff = ADTypes.AutoForwardDiff(), jvp_autodiff = ADTypes.AutoForwardDiff(), 
                                 prefer_simplenonlinearsolve = Val(true)
                                 )
 
