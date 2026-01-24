@@ -280,7 +280,33 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                 point_data=controlpoints_data, optargs...)
 
     #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
-    if !(R <: FD.Dual)
+    if R <: FD.Dual
+
+        # Fetch original Dual data
+        nodes_org = self.grid.nodes
+        fields_org = Dict(field_name => field["field_data"] for (field_name, field) in self.grid.field)
+
+        # Replace Dual data with Real data
+        self.grid.nodes = value(nodes_org)
+
+        for (field_name, field_data) in fields_org
+
+            field_type = self.grid.field[field_name]["field_type"]
+            self.grid.field[field_name]["field_data"] = field_type == "vector" ? value.(field_data) : value(field_data)
+
+        end
+
+        # Save grid with Real data
+        str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
+
+        # Restore Dual data
+        self.grid.nodes = nodes_org
+
+        for (field_name, field_data) in fields_org
+            self.grid.field[field_name]["field_data"] = field_data
+        end
+
+    else
         str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
     end
 
