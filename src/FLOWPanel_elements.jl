@@ -428,6 +428,40 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
 end
 
 
+"""
+Bound vortex with a mirror ground-plane image at origin `(x01, x02, x03)` and 
+normal `(n1, n2, n3)`
+"""
+function U_boundvortex(         pa1::Number, pa2::Number, pa3::Number,
+                                pb1::Number, pb2::Number, pb3::Number,
+                                strength::Number,
+                                x01::Number, x02::Number, X03::Number,
+                                n1::Number, n2::Number, n3::Number,
+                                args...; optargs...
+                               )
+
+    # Distances to plane, h = (p - x0)⋅n
+    ha = (pa1 - x01)*n1 + (pa2 - x02)*n2 + (pa3 - x03)*n3
+    hb = (pb1 - x01)*n1 + (pb2 - x02)*n2 + (pb3 - x03)*n3
+
+    # Mirror points p, pm = p - 2*h*n
+    pma1 = pa1 - 2*ha*n1
+    pma2 = pa2 - 2*ha*n2
+    pma3 = pa3 - 2*ha*n3
+
+    pmb1 = pb1 - 2*hb*n1
+    pmb2 = pb2 - 2*hb*n2
+    pmb3 = pb3 - 2*hb*n3
+
+    # Evaluate influence of original geometry
+    U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, args...; optargs...)
+
+    # Evaluate influence of mirrored geometry
+    U_boundvortex(pma1, pma2, pma3, pmb1, pmb2, pmb3, -strength, args...; optargs...)
+
+end
+
+
 
 """
 `U_vortexring(nodes::Matrix, panel::Array{Int}, strength::Real,
@@ -439,12 +473,14 @@ Computes the velocity induced by a vortex ring panel of vertices
 `nodes[:, panel]` and vortex strength `strength` on the targets `targets`. It
 adds the velocity at the i-th target to out[i].
 """
-function U_vortexring(nodes::Arr1, panel, strength, targets, out;
-                        dot_with=nothing,
+function U_vortexring(nodes::Arr1, panel, strength,
+                        targets, out;
                         # closed_ring::Bool=true,
-                        cutoff=1e-14, offset=1e-8,
-                        omit_wake=false
+                        omit_wake=false,
+                        optargs...
                      ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+
 
     nn = length(panel)                      # Number of nodes
 
@@ -459,9 +495,34 @@ function U_vortexring(nodes::Arr1, panel, strength, targets, out;
                 pb1, pb2, pb3 = nodes[1, pj], nodes[2, pj], nodes[3, pj]
             end
 
-            U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, targets, out;
-                            dot_with=dot_with, cutoff=cutoff, offset=offset)
+            U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, targets, out; optargs...)
+
         # end
+
+    end
+end
+
+function U_vortexring(nodes::Arr1, panel, strength,
+                        x01, x02, X03,
+                        n1, n2, n3,
+                        targets, out;
+                        omit_wake=false,
+                        optargs...
+                     ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    nn = length(panel)                      # Number of nodes
+
+    # Iterate over nodes
+    for i in 1:nn
+
+        @inbounds begin
+            pi, pj = panel[i], panel[i%nn + 1]
+            pa1, pa2, pa3 = nodes[1, pi], nodes[2, pi], nodes[3, pi]
+            pb1, pb2, pb3 = nodes[1, pj], nodes[2, pj], nodes[3, pj]
+        end
+
+        U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, 
+                        x01, x02, X03, n1, n2, n3, targets, out; optargs...)
 
     end
 end
@@ -627,7 +688,39 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
 end
 
+"""
+Semi-infinite vortex with a mirror ground-plane image at origin 
+`(x01, x02, x03)` and normal `(n1, n2, n3)`
+"""
+function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
+                                d1::Number, d2::Number, d3::Number,
+                                strength::Number,
+                                x01::Number, x02::Number, X03::Number,
+                                n1::Number, n2::Number, n3::Number,
+                                targets, out; optargs...
+                               )
 
+    # Distance to plane, h = (p - x0)⋅n
+    h = (p1 - x01)*n1 + (p2 - x02)*n2 + (p3 - x03)*n3
+
+    # Mirror point p, pm = p - 2*h*n
+    pm1 = p1 - 2*h*n1
+    pm2 = p2 - 2*h*n2
+    pm3 = p3 - 2*h*n3
+
+    # Mirror semi-infinite direction, dm = d - 2*(d⋅n)*n
+    dn = d1*n1 + d2*n2* + d3*n3
+    dm1 = d1 - 2*dn*n1
+    dm2 = d2 - 2*dn*n2
+    dm3 = d3 - 2*dn*n3
+
+    # Evaluate influence of original geometry
+    U_semiinfinite_vortex(p1, p2, p3, d1, d2, d3, strength, targets, out; optargs...)
+
+    # Evaluate influence of mirrored geometry
+    U_semiinfinite_vortex(pm1, pm2, pm3, dm1, dm2, dm3, -strength, targets, out; optargs...)
+
+end
 
 """
 Computes the velocity induced by a semi-infinite horseshoe of strength
@@ -641,9 +734,8 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                                     TE, d1::Number, d2::Number, d3::Number,
                                     strength::Number,
                                     targets, out;
-                                    dot_with=nothing,
-                                    cutoff=1e-14, offset=1e-8,
-                                    omit_wake=false
+                                    omit_wake=false,
+                                    optargs...
                                   ) where{T1, Arr1<:AbstractArray{T1,2}}
 
     if !omit_wake
@@ -651,8 +743,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                                 d1, d2, d3, -strength,
                                 targets, out;
-                                dot_with=dot_with,
-                                cutoff=cutoff, offset=offset
+                                optargs...
                              )
     end
 
@@ -661,8 +752,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                     nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                     strength,
                     targets, out;
-                    dot_with=dot_with,
-                    cutoff=cutoff, offset=offset
+                    optargs...
                  )
 
     if !omit_wake
@@ -670,8 +760,50 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                                 d1, d2, d3, strength,
                                 targets, out;
-                                dot_with=dot_with,
-                                cutoff=cutoff, offset=offset
+                                optargs...
+                             )
+    end
+end
+
+function U_semiinfinite_horseshoe(nodes::Arr1,
+                                    TE, d1::Number, d2::Number, d3::Number,
+                                    strength::Number,
+                                    x01, x02, X03,
+                                    n1, n2, n3,
+                                    targets, out;
+                                    omit_wake=false,
+                                    optargs...
+                                  ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    if !omit_wake
+        # Semi-infinite vortex coming in (from ∞ to pi)
+        U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                                d1, d2, d3, -strength,
+                                x01, x02, X03,
+                                n1, n2, n3,
+                                targets, out;
+                                optargs...
+                             )
+    end
+
+    # Bound vortex (from pi and pj)
+    U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                    nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                    strength,
+                    x01, x02, X03,
+                    n1, n2, n3,
+                    targets, out;
+                    optargs...
+                 )
+
+    if !omit_wake
+        # Semi-infinite vortex going to (from pj to ∞)
+        U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                                d1, d2, d3, strength,
+                                x01, x02, X03,
+                                n1, n2, n3,
+                                targets, out;
+                                optargs...
                              )
     end
 end
@@ -695,9 +827,8 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                                     db1::Number, db2::Number, db3::Number,
                                     strength::Number,
                                     targets, out;
-                                    dot_with=nothing,
-                                    cutoff=1e-14, offset=1e-8,
-                                    omit_wake=false
+                                    omit_wake=false,
+                                    optargs...
                                   ) where{T1, Arr1<:AbstractArray{T1,2}}
 
     if !omit_wake
@@ -705,8 +836,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                                 da1, da2, da3, -strength,
                                 targets, out;
-                                dot_with=dot_with,
-                                cutoff=cutoff, offset=offset
+                                optargs...
                              )
     end
 
@@ -715,16 +845,58 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                     nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                     strength,
                     targets, out;
-                    dot_with=dot_with,
-                    cutoff=cutoff, offset=offset
+                    optargs...
                  )
     if !omit_wake
         # Semi-infinite vortex going to (from pj to ∞)
         U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                                 db1, db2, db3, strength,
                                 targets, out;
-                                dot_with=dot_with,
-                                cutoff=cutoff, offset=offset
+                                optargs...
+                             )
+    end
+end
+
+function U_semiinfinite_horseshoe(nodes::Arr1,
+                                    TE,
+                                    da1::Number, da2::Number, da3::Number,
+                                    db1::Number, db2::Number, db3::Number,
+                                    strength::Number,
+                                    x01, x02, X03,
+                                    n1, n2, n3,
+                                    targets, out;
+                                    omit_wake=false,
+                                    optargs...
+                                  ) where{T1, Arr1<:AbstractArray{T1,2}}
+
+    if !omit_wake
+        # Semi-infinite vortex coming in (from ∞ to pi)
+        U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                                da1, da2, da3, -strength,
+                                x01, x02, X03,
+                                n1, n2, n3,
+                                targets, out;
+                                optargs...
+                             )
+    end
+
+    # Bound vortex (from pi and pj)
+    U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
+                    nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                    strength,
+                    x01, x02, X03,
+                    n1, n2, n3,
+                    targets, out;
+                    optargs...
+                 )
+    if !omit_wake
+        # Semi-infinite vortex going to (from pj to ∞)
+        U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
+                                db1, db2, db3, strength,
+                                x01, x02, X03,
+                                n1, n2, n3,
+                                targets, out;
+                                optargs...
                              )
     end
 end

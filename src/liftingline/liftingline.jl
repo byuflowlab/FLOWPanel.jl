@@ -38,6 +38,10 @@ struct LiftingLine{ R<:Number,
     sigmafactor::Float64                        # Dragging line amplification factor
     sigmaexponent::Float64                      # Dragging line amplification exponent
 
+    # Ground plane
+    ground_position::VectorType                 # Ground plane origin
+    ground_normal::VectorType                   # Ground normal
+
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
     strippositions::VectorType                  # Position of each stripwise element within the bound vortex (0==a, 1==b)
@@ -182,6 +186,13 @@ struct LiftingLine{ R<:Number,
         Geff = TensorType(undef, nelements, nelements, 3)
         elements_settings = MatrixType(undef, nelements, S.parameters[1]-1)
 
+        ground_position = VectorType(undef, 3)
+        ground_normal = VectorType(undef, 3)
+
+        ground_position .= -Inf
+        ground_normal .= 0
+        ground_normal[3] = 1
+
         aoas .= 0
         claeros .= 0
         Gammas .= 0
@@ -231,6 +242,8 @@ struct LiftingLine{ R<:Number,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
+                    ground_position,
+                    ground_normal,
                     offset=kerneloffset, cutoff=kernelcutoff)
 
         new{R,
@@ -241,6 +254,7 @@ struct LiftingLine{ R<:Number,
                                 ypositions, 
                                 nelements, elements, root_i,
                                 deltasb, deltajoint, sigmafactor, sigmaexponent,
+                                ground_position, ground_normal,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, 
@@ -271,6 +285,25 @@ function Base.show(io::IO, self::LiftingLine{R, S, N}) where {R, S, N}
     print(io, "└─ Dragging line amplification exponent:\t$(self.sigmaexponent)")
 
 end
+
+
+"""
+    set_ground(self::LiftingLine, position::AbstractVector, normal::AbstractVector)
+
+    set_ground(self::LiftingLine, h::Number, normal::AbstractVector)
+
+Set the ground plane of the given normal at the requested distance `h` or 
+position `position`.
+"""
+function set_ground(self::LiftingLine, 
+                    position::AbstractVector, normal::AbstractVector)
+
+    self.ground_position .= position
+    self.ground_normal .= position
+
+end
+
+set_ground(self::LiftingLine, h::Number; normal=self.ground_normal) = set_ground(self, -h*normal, normal)
 
 """
 Morph the lifting-line wing geometry into a new geometry
@@ -1191,6 +1224,8 @@ function calc_Geff!(self::LiftingLine; optargs...)
                 self.nelements; 
                 offset=self.kerneloffset, 
                 cutoff=self.kernelcutoff,
+                ground_position=self.ground_position,
+                ground_normal=self.ground_normal,
                 optargs...)
 end
 
@@ -1224,11 +1259,21 @@ function calc_Geff!(Geff::AbstractMatrix,
                     midpoints::AbstractMatrix,
                     dot_with::AbstractMatrix, 
                     nelements::Int;
+                    ground_distance=Inf, 
+                    ground_normal=[0, 0, 1], 
+                    ground_position=-ground_distance*ground_normal,
                     optargs...)
 
     Geff .= 0                                   # Erase previous values
 
     TE = [1, size(effective_horseshoes, 2)]     # Indices of TE nodes in each horseshoe
+
+    # Ground plane arguments
+    if isfinite(norm(ground_position))
+        ground = (ground_position..., ground_normal...)
+    else
+        ground = ()
+    end
 
     # Build geometric matrix from panel contributions
     Threads.@threads for mi in 1:nelements                         # Iterate over midpoints (iterations distributed among all CPU threads)
@@ -1246,6 +1291,7 @@ function calc_Geff!(Geff::AbstractMatrix,
                             view(horseshoes, :, :, ei),   # All nodes in this horseshoe
                             1:4,                          # Indices of nodes that make this horseshoe (closed ring)
                             1.0,                          # Unitary strength
+                            ground...,
                             targets,                      # Midpoint as the target
                             view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
                             dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
@@ -1266,6 +1312,7 @@ function calc_Geff!(Geff::AbstractMatrix,
                             da1, da2, da3,                # Semi-infinite direction da
                             db1, db2, db3,                # Semi-infinite direction db
                             1.0,                          # Unitary strength
+                            ground...,
                             targets,                      # Midpoint as the target
                             view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
                             dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
@@ -1370,7 +1417,16 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                     targets::AbstractMatrix, out::AbstractMatrix; 
                     horseshoes::AbstractArray=self.horseshoes,
                     add_boundvortices=true,
+                    ground_normal=self.ground_normal, 
+                    ground_position=self.ground_position,
                     optargs...)
+
+    # Ground plane arguments
+    if isfinite(norm(ground_position))
+        ground = (ground_position..., ground_normal...)
+    else
+        ground = ()
+    end
 
     if add_boundvortices
 
@@ -1382,6 +1438,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                                 view(horseshoes, :, :, ei),        # All nodes
                                 1:4,                               # Indices of nodes that make this panel (closed ring)
                                 Gammas[ei],                        # Horseshoe circulation
+                                ground...,
                                 targets,                           # Targets
                                 out;                               # Outputs
                                 offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -1410,6 +1467,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
                           Gammas[ei],                        # Filament circulation
+                          ground...,
                           targets,                           # Targets
                           out;                               # Outputs
                           offset=self.kerneloffset,          # Offset of kernel to avoid singularities

@@ -47,7 +47,17 @@ function solve_linear(self::LiftingLine, Uinfs::AbstractMatrix;
 
 end
 
-function _G_U!(self::LiftingLine; optargs...)
+function _G_U!(self::LiftingLine; 
+                    ground_normal=self.ground_normal, 
+                    ground_position=self.ground_position,
+                    optargs...)
+
+    # Ground plane arguments
+    if isfinite(norm(ground_position))
+        ground = (ground_position..., ground_normal...)
+    else
+        ground = ()
+    end
 
     # Build geometric matrix from panel contributions
     elements = 1:self.nelements
@@ -61,6 +71,7 @@ function _G_U!(self::LiftingLine; optargs...)
                               view(self.horseshoes, :, :, ei),   # All nodes
                               1:4,                               # Indices of nodes that make this panel (closed ring)
                               1.0,                               # Unitary strength
+                              ground...,
                               self.controlpoints,                # Targets
                               view(self.G, :, ei);               # Velocity of ei-th panel on every CP
                               dot_with=self.normals,             # Normal of every CP
@@ -93,9 +104,10 @@ function _G_U!(self::LiftingLine; optargs...)
                               da1, da2, da3,                     # Semi-infinite direction da
                               db1, db2, db3,                     # Semi-infinite direction db
                               1.0,                               # Unitary strength
+                              ground...,
                               self.controlpoints,                # Targets
-                              view(self.G, :, ei);                    # Velocity of wake panel on every CP
-                              dot_with=self.normals,                  # Normal of every CP
+                              view(self.G, :, ei);               # Velocity of wake panel on every CP
+                              dot_with=self.normals,             # Normal of every CP
                               offset=self.kerneloffset,          # Offset of kernel to avoid singularities
                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                               optargs...

@@ -60,7 +60,8 @@ function solve(self::LiftingLine,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
-                        debug=false
+                        debug=false,
+                        optargs...
                         )
 
     # Align joint nodes with freestream
@@ -78,7 +79,7 @@ function solve(self::LiftingLine,
     calc_Dinfs!(self, Uinfs)
 
     # Precompute self-induced velocity geometric matrix
-    calc_Geff!(self)
+    calc_Geff!(self; optargs...)
 
     # Generate residual function
     f! = generate_f_residual(self, Uinfs; cache=solver_cache, debug)

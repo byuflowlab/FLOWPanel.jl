@@ -320,6 +320,8 @@ v_lvl = 0
             1.0     5.0
         ]
 
+        solver = pnl.optimization_solver # NOTE: analysis_solver is not compatible with Duals
+
         # Redefine lifting line with Dual numbers
         ll = pnl.LiftingLine{NumType}(
                                         airfoil_distribution; 
@@ -378,15 +380,15 @@ v_lvl = 0
         #     println("$(sym)_ref = $(val)")
         # end
 
-        CL_ref = 0.24709439885543394
-        CD_ref = 0.005540765716982176
-        Cm_ref = -0.35783803349228677
-        dCLdα_ref = 0.06773568655785198
-        dCDdα_ref = 0.0019442389136368012
-        dCmdα_ref = -0.09941039257399063
-        dCLdβ_ref = 0.00020891114332682333
-        dCDdβ_ref = -6.872402553708992e-6
-        dCmdβ_ref = -0.00033435248263139546
+        CL_ref = 0.24701840418377627
+        CD_ref = 0.005568643399043802
+        Cm_ref = -0.3576246732385218
+        dCLdα_ref = 0.06771124438594885
+        dCDdα_ref = 0.001959784908216191
+        dCmdα_ref = -0.09934229226504118
+        dCLdβ_ref = 0.000208819647459248
+        dCDdβ_ref = -6.8145808228723855e-6
+        dCmdβ_ref = -0.00033410814568276686
 
         #Tests
         @testset "Stability derivatives" begin
