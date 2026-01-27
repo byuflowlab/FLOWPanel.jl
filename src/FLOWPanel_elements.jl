@@ -492,7 +492,7 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
-    elseif abs(d1^2 + d2^2 + d3^2 - 1) > 2*eps()
+    elseif abs(d1^2 + d2^2 + d3^2 - 1) > eps(10.0)
         error("Found non-unitary semi-infinite direction"*
                 " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
     end

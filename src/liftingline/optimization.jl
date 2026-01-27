@@ -232,7 +232,7 @@ function run_liftingline(;
         ll = LiftingLine{NumType}(  airfoil_distribution; 
                                         geom_optargs...,
                                         deltasb, deltajoint, sigmafactor, sigmaexponent,
-                                        element_optargs
+                                        element_optargs,
                                         )
         verbose && display(ll)
 
@@ -440,6 +440,7 @@ function run_liftingline(;
 
                 X0,                                           # Point about with the moments where calculated
         
+                ll,                                           # Lifting line object that was used to obtain these results
                 cache                                         # Model cache
                 )
 end

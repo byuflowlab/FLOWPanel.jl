@@ -102,7 +102,7 @@ struct LiftingLine{ R<:Number,
                             sigmaexponent=1.0,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
-                            kernelcutoff=1e-14,
+                            kernelcutoff=1e-9,   # <- Finite difference would get tripped by anything smaller than this
                             arraytype::Type=Array,
                             plots=nothing,
                             optargs...
