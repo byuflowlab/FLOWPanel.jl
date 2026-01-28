@@ -435,7 +435,7 @@ normal `(n1, n2, n3)`
 function U_boundvortex(         pa1::Number, pa2::Number, pa3::Number,
                                 pb1::Number, pb2::Number, pb3::Number,
                                 strength::Number,
-                                x01::Number, x02::Number, X03::Number,
+                                x01::Number, x02::Number, x03::Number,
                                 n1::Number, n2::Number, n3::Number,
                                 args...; optargs...
                                )
@@ -503,7 +503,7 @@ function U_vortexring(nodes::Arr1, panel, strength,
 end
 
 function U_vortexring(nodes::Arr1, panel, strength,
-                        x01, x02, X03,
+                        x01, x02, x03,
                         n1, n2, n3,
                         targets, out;
                         omit_wake=false,
@@ -522,7 +522,7 @@ function U_vortexring(nodes::Arr1, panel, strength,
         end
 
         U_boundvortex(pa1, pa2, pa3, pb1, pb2, pb3, strength, 
-                        x01, x02, X03, n1, n2, n3, targets, out; optargs...)
+                        x01, x02, x03, n1, n2, n3, targets, out; optargs...)
 
     end
 end
@@ -695,7 +695,7 @@ Semi-infinite vortex with a mirror ground-plane image at origin
 function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
                                 d1::Number, d2::Number, d3::Number,
                                 strength::Number,
-                                x01::Number, x02::Number, X03::Number,
+                                x01::Number, x02::Number, x03::Number,
                                 n1::Number, n2::Number, n3::Number,
                                 targets, out; optargs...
                                )
@@ -768,7 +768,7 @@ end
 function U_semiinfinite_horseshoe(nodes::Arr1,
                                     TE, d1::Number, d2::Number, d3::Number,
                                     strength::Number,
-                                    x01, x02, X03,
+                                    x01, x02, x03,
                                     n1, n2, n3,
                                     targets, out;
                                     omit_wake=false,
@@ -779,7 +779,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         # Semi-infinite vortex coming in (from ∞ to pi)
         U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                                 d1, d2, d3, -strength,
-                                x01, x02, X03,
+                                x01, x02, x03,
                                 n1, n2, n3,
                                 targets, out;
                                 optargs...
@@ -790,7 +790,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
     U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                     nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                     strength,
-                    x01, x02, X03,
+                    x01, x02, x03,
                     n1, n2, n3,
                     targets, out;
                     optargs...
@@ -800,7 +800,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         # Semi-infinite vortex going to (from pj to ∞)
         U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                                 d1, d2, d3, strength,
-                                x01, x02, X03,
+                                x01, x02, x03,
                                 n1, n2, n3,
                                 targets, out;
                                 optargs...
@@ -862,7 +862,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
                                     da1::Number, da2::Number, da3::Number,
                                     db1::Number, db2::Number, db3::Number,
                                     strength::Number,
-                                    x01, x02, X03,
+                                    x01, x02, x03,
                                     n1, n2, n3,
                                     targets, out;
                                     omit_wake=false,
@@ -873,7 +873,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         # Semi-infinite vortex coming in (from ∞ to pi)
         U_semiinfinite_vortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                                 da1, da2, da3, -strength,
-                                x01, x02, X03,
+                                x01, x02, x03,
                                 n1, n2, n3,
                                 targets, out;
                                 optargs...
@@ -884,7 +884,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
     U_boundvortex(  nodes[1, TE[1]], nodes[2, TE[1]], nodes[3, TE[1]],
                     nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                     strength,
-                    x01, x02, X03,
+                    x01, x02, x03,
                     n1, n2, n3,
                     targets, out;
                     optargs...
@@ -893,7 +893,7 @@ function U_semiinfinite_horseshoe(nodes::Arr1,
         # Semi-infinite vortex going to (from pj to ∞)
         U_semiinfinite_vortex(  nodes[1, TE[2]], nodes[2, TE[2]], nodes[3, TE[2]],
                                 db1, db2, db3, strength,
-                                x01, x02, X03,
+                                x01, x02, x03,
                                 n1, n2, n3,
                                 targets, out;
                                 optargs...

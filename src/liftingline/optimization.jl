@@ -57,6 +57,7 @@ function run_liftingline(;
         beta::R2        = 0.0,                          # (deg) sideslip angle
         
         magUinf::R3     = 49.7,                         # (m/s) freestream velocity magnitude
+        ground_distance = Inf,                          # (m) distance to ground
         
         rho::R4         = 1.225,                        # (kg/m^3) air density
         
@@ -151,6 +152,8 @@ function run_liftingline(;
         
         use_Uind_for_force = true,                      # Whether to use Uind as opposed to selfUind for force postprocessing
                                                         # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
+
+        distributions = false,                          # Whether to output spanwise distributions
 
         cache = Dict(),                                 # Model cache
         
@@ -248,6 +251,7 @@ function run_liftingline(;
 
     # ------------------ CALL NONLINEAR SOLVER -------------------------------------
 
+    # Fetch cache
     if NumType in keys(cache["Uinfs"])
         Uinfs = cache["Uinfs"][NumType]
     else
@@ -258,6 +262,11 @@ function run_liftingline(;
     # Freestream velocity at each stripwise element
     for U in eachcol(Uinfs)
         U .= Uinf
+    end
+
+    # Set ground distance
+    if isfinite(ground_distance)
+        set_ground(ll, ground_distance)
     end
     
     # Run solver
@@ -302,18 +311,22 @@ function run_liftingline(;
 
     # ------------------ POSTPROCESSING --------------------------------------------
 
+    distributions = distributions ? [] : nothing
+
     # Calculate dimensional forces and moments (vectors)
     forcesmoments = calc_forcesmoments(ll, Uinfs, Uinf, rho; 
                                                 X0,
                                                 use_Uind_for_force,
                                                 Dhat, Shat, Lhat,
-                                                lhat, mhat, nhat
+                                                lhat, mhat, nhat,
+                                                distributions,
                                                 )
     
     # Calculate force and moment coefficients (scalars)
     coefficients = calc_forcemoment_coefficients(ll, Uinfs, Uinf,
                                                 rho, cref, b;
-                                                forcesmoments
+                                                forcesmoments,
+                                                distributions,
                                                 )
     
     # Unpack calculations
@@ -438,9 +451,13 @@ function run_liftingline(;
                 lift, drag, side, roll, pitch, yaw,           # Dimensional forces and moments (vectors)
                 Ftot, Mtot,                                   # Total forces and moment vectors
 
-                X0,                                           # Point about with the moments where calculated
+                X0,                                           # Point about which the moments where calculated
         
                 ll,                                           # Lifting line object that was used to obtain these results
-                cache                                         # Model cache
+                cache,                                        # Model cache
+
+                distributions = isnothing(distributions) ? NaN : distributions[end], # Spanwise distributions
+
+                success                                       # Whether the nonlinear solver was successful
                 )
 end

@@ -176,7 +176,9 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
         cd = distrs.drag_distribution / (q*Aref/bref)
         cy = distrs.side_distribution / (q*Aref/bref)
 
-        distributions[end] = (; spanposition, cl, cd, cy)
+        nondim_distrs = (; spanposition, cl, cd, cy)
+
+        distributions[end] = merge(distrs, nondim_distrs)
     end
 
     # Outputs
