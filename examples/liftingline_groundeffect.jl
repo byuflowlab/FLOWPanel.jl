@@ -142,10 +142,11 @@ for aspect_ratio in aspect_ratios
                 lift, drag, side, roll, pitch, yaw,           # Dimensional forces and moments (vectors)
                 Ftot, Mtot,                                   # Total forces and moment vectors
 
-                X0,                                           # Point about which the moments where calculated
+                X0,                                           # Point about which the moments were calculated
 
                 distributions,                                # Spanwise distributions
         
+                success,                                      # Whether the nonlinear solver was successful
                 ll,                                           # Lifting line object that was used to obtain these results
                 ) = results
 

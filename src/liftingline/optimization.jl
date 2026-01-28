@@ -451,7 +451,7 @@ function run_liftingline(;
                 lift, drag, side, roll, pitch, yaw,           # Dimensional forces and moments (vectors)
                 Ftot, Mtot,                                   # Total forces and moment vectors
 
-                X0,                                           # Point about which the moments where calculated
+                X0,                                           # Point about which the moments were calculated
         
                 ll,                                           # Lifting line object that was used to obtain these results
                 cache,                                        # Model cache
