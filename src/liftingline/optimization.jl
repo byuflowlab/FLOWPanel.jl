@@ -214,7 +214,6 @@ function run_liftingline(;
         cache["solver_cache"][NumType] = Dict()
     end 
 
-
     # ------------------ GENERATE GEOMETRY -------------------------------------
 
     # Arguments for geometry generation
@@ -237,7 +236,7 @@ function run_liftingline(;
                                         deltasb, deltajoint, sigmafactor, sigmaexponent,
                                         element_optargs,
                                         )
-        verbose && display(ll)
+        # verbose && display(ll)   # NOTE: For some reason, this display throws off Python when called through juliacall
 
         cache["ll"][NumType] = ll
     end
@@ -247,7 +246,6 @@ function run_liftingline(;
                     geom_optargs...,
                     deltasb, deltajoint,
                     )
-
 
     # ------------------ CALL NONLINEAR SOLVER -------------------------------------
 
