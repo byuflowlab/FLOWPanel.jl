@@ -359,7 +359,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         tan_term = atan(num, den)
     end
 
-    potential = -strength[1] * tan_term
+    potential = strength[1] * tan_term
 
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     if VS
@@ -437,7 +437,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     potential = zero(TF)
     if PS# && !isinf(mi)
         potential += strength[1] * (((target_Rx - vx_i) * dy - (target_Ry - vy_i) * dx) / ds * log_term + target_Rz * tan_term)
-        potential -= strength[2] * tan_term
+        potential += strength[2] * tan_term
     end
 
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
