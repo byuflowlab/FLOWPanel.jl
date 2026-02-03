@@ -264,7 +264,7 @@ function run_liftingline(;
 
     # Set ground distance
     if isfinite(ground_distance)
-        set_ground(ll, ground_distance)
+        set_ground!(ll, ground_distance)
     end
     
     # Run solver

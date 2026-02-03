@@ -288,22 +288,22 @@ end
 
 
 """
-    set_ground(self::LiftingLine, position::AbstractVector, normal::AbstractVector)
+    set_ground!(self::LiftingLine, position::AbstractVector, normal::AbstractVector)
 
-    set_ground(self::LiftingLine, h::Number, normal::AbstractVector)
+    set_ground!(self::LiftingLine, h::Number, normal::AbstractVector)
 
 Set the ground plane of the given normal at the requested distance `h` or 
 position `position`.
 """
-function set_ground(self::LiftingLine, 
+function set_ground!(self::LiftingLine, 
                     position::AbstractVector, normal::AbstractVector)
 
     self.ground_position .= position
-    self.ground_normal .= position
+    self.ground_normal .= normal
 
 end
 
-set_ground(self::LiftingLine, h::Number; normal=self.ground_normal) = set_ground(self, -h*normal, normal)
+set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal) = set_ground!(self, -h*normal, normal)
 
 """
 Morph the lifting-line wing geometry into a new geometry
