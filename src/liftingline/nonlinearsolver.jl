@@ -91,11 +91,24 @@ function solve(self::LiftingLine,
     isinplace = true
     problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
 
-    # Call nonlinear solver
-    result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+    # Wrap the nonlinear solver for ImplicitAD
+    result = []
+    function solveaoa(w; result=result)
+
+        # Call nonlinear solver
+        res = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+
+        push!(result, res)
+
+        return res.u
+    end
 
     # Set solved AOA
-    self.aoas .= result.u
+    w = ()
+    self.aoas .= solveaoa(w)
+
+    # Fetch solver results
+    result = result[end]
 
     # Calculate Gamma from AOA
     # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
