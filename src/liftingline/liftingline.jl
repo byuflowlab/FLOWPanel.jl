@@ -10,6 +10,16 @@
 =###############################################################################
 
 
+#=
+TODO
+* [ ] Refactor nonlinear solver to be compatible with ImplictAD (that would 
+        allow us to use more solvers since then Duals wouldn't be passing
+        through the nonlinear solver, while also speeding up derivative calcs).
+        You might also need to rework stability derivatives to be compatible
+        Python code in the AD chain of ImplicitAD.
+=#
+
+
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################

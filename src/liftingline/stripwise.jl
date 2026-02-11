@@ -11,9 +11,121 @@
 
 abstract type StripwiseElement{N} <: AbstractElement where {N} end
 
+################################################################################
+# FUNCTIONAL AIRFOIL ELEMENT STRUCT
+################################################################################
+struct FunctionalAirfoil{N, R<:Number} <: StripwiseElement{N}
+
+    # Provided functions
+    fun_cl::Function
+    fun_cd::Function
+    fun_cm::Function
+
+    alpha0::R                           # (deg) AOA at zero lift
+
+    function FunctionalAirfoil(nparameters::Int, 
+                                fun_cl::Function, fun_cd::Function, fun_cm::Function,
+                                alpha0=NaN)
+        new{nparameters, typeof(alpha0)}(fun_cl, fun_cd, fun_cm, alpha0)
+    end
+
+end
+
+function FunctionalAirfoil(args::Tuple; optargs...)
+    return FunctionalAirfoil(args...; optargs...)
+end
+
+# Generate a wrapper for a SimpleAirfoil using only the first parameter
+function FunctionalAirfoil(nparameters::Int,
+                            alphas::AbstractVector,
+                            cls::AbstractVector, cds::AbstractVector, cms::AbstractVector,
+                            alpha0=NaN)
+
+    simple = SimpleAirfoil(alphas, cls, cds, cms)
+
+    fun_cl(aoa, args...) = simple.spl_cl(aoa)
+    fun_cd(aoa, args...) = simple.spl_cd(aoa)
+    fun_cm(aoa, args...) = simple.spl_cm(aoa)
+
+    return FunctionalAirfoil(nparameters, fun_cl, fun_cd, fun_cm, isnan(alpha0) ? simple.alpha0 : alpha0)
+
+end
+
+
+function Base.show(io::IO, self::FunctionalAirfoil{N}) where {N}
+    println(io, "FunctionalAirfoil with $(N) parameter dimensions")
+    print(io, "└─ α0:\t$(self.alpha0)")
+end
+
+"""
+Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
+"""
+function calc_sweptcl(self::FunctionalAirfoil, sweep::Number, alpha_Λ::Number, 
+                                                            args...; optargs...)
+
+
+    # Find AOA at zero lift
+    if isnan(self.alpha0)
+
+        f(u, p) = [self.fun_cl(u[1], args...)]
+        u0 = [0.0]
+        prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
+        result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
+        alpha0 = result.u[1]
+
+        # Check solver success
+        success = SimpleNonlinearSolve.SciMLBase.successful_retcode(result)
+
+        if !success
+            @warn "alpha0 solver did not converge!"
+            @show success
+            @show result.retcode
+            # display(result)
+        end
+
+    else
+        alpha0 = self.alpha0
+    end
+
+    alpha = alpha_Λ + alpha0*( 1 - 1/cosd(sweep) )
+
+    return calc_cl(self, alpha, args...; optargs...)
+
+end
+
+
+(self::FunctionalAirfoil)(args...; optargs...) = (
+    calc_cl(self, args...; optargs...), 
+    calc_cd(self, args...; optargs...), 
+    calc_cm(self, args...; optargs...)
+)
+
+calc_claero(self::FunctionalAirfoil, args...; optargs...) = calc_cl(self, args...; optargs...)
+
+calc_cl(self::FunctionalAirfoil, args...; optargs...) = self.fun_cl(args...; optargs...)
+calc_cd(self::FunctionalAirfoil, args...; optargs...) = self.fun_cd(args...; optargs...)
+calc_cm(self::FunctionalAirfoil, args...; optargs...) = self.fun_cm(args...; optargs...)
+
+
+"""
+Blend two stripwise elements using a given weight, where `weight=0` simply
+returns `airfoil0` and `weight=1` returns `airfoil1`
+"""
+function blend(airfoil0::FunctionalAirfoil{N}, airfoil1::FunctionalAirfoil{N}, 
+                                                        weight::Number) where N
+    # Linearly blend the functions
+    cl(args...; optargs...) = (weight - 1)*airfoil0.fun_cl(args...; optargs...) + weight*airfoil1.fun_cl(args...; optargs...)
+    cd(args...; optargs...) = (weight - 1)*airfoil0.fun_cd(args...; optargs...) + weight*airfoil1.fun_cd(args...; optargs...)
+    cm(args...; optargs...) = (weight - 1)*airfoil0.fun_cm(args...; optargs...) + weight*airfoil1.fun_cm(args...; optargs...)
+    alpha0 = (weight - 1)*airfoil0.alpha0 + weight*airfoil1.alpha0
+
+    return FunctionalAirfoil(N, cl, cd, cm, alpha0)
+end
+
+
 
 ################################################################################
-# AIRFOIL ELEMENT STRUCT
+# GENERAL AIRFOIL ELEMENT STRUCT
 ################################################################################
 struct GeneralAirfoil{N,
                         Tdim<:NTuple{N, Int},
@@ -160,13 +272,9 @@ function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
     println(io, "GeneralAirfoil with $(N) parameter dimensions and $(prod(self.dims)) data points")
 
     for (i, (name, vals, dim)) in enumerate(zip(self.names, self.parameters, self.dims))
-        if i != N
-            print(io, "├─")
-        else
-            print(io, "└─")
-        end
-        print(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
+        println(io, "├─" * rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
     end
+    print(io, "└─ α0:\t$(self.alpha0)")
 
 end
 
@@ -440,6 +548,13 @@ function plot_slice(self::GeneralAirfoil{N}, slice;
     return fig, axs
 end
 
+
+
+
+
+
+
+
 ################################################################################
 # SIMPLE AIRFOIL ELEMENT STRUCT
 ################################################################################
@@ -504,7 +619,8 @@ function SimpleAirfoil(file_name::String; path::String="")
 end
 
 function Base.show(io::IO, self::SimpleAirfoil)
-    print(io, "SimpleAirfoil with $(length(self.alpha)) data points")
+    println(io, "SimpleAirfoil with $(length(self.alpha)) data points")
+    print(io, "└─ α0:\t$(self.alpha0)")
 end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))
