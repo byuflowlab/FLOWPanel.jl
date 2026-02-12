@@ -291,6 +291,10 @@ function run_liftingline(;
         # display(result)
     end
 
+    cache["success"] = success
+    cache["retcode"] = result.retcode
+    cache["fcalls"] = solver_cache[:fcalls]
+
     # (Optional) plot residual convergence
     if plot_convergence
         fig = plt.figure(figsize=[7, 0.5*5]*7/9)
