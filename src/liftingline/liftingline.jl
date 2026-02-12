@@ -1686,6 +1686,7 @@ end
 function _generate_stripwise_elements(airfoil_distribution, ypositions, 
                                         symmetric::Bool; 
                                         extrapolatepolar=true, plot_polars=true, 
+                                        slice=nothing, slice_alphas=range(-40, 40, step=1),
                                         verbose=true,
                                         plots=nothing,
                                         optargs...)
@@ -1772,7 +1773,9 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions,
     if plot_polars
         these_figs = _plot_polars(airfoils, 
                                     airfoils_extrapolated, airfoils_blended; 
-                                    plot_extrapolated=extrapolatepolar)
+                                    plot_extrapolated=extrapolatepolar,
+                                    symmetric,
+                                    slice, slice_alphas)
 
         if !isnothing(plots)
             for (fig, axs) in these_figs
@@ -1800,7 +1803,9 @@ function _read_polars(airfoil_distribution; optargs...)
 end
 
 function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
-                                                    plot_extrapolated=true)
+                                        plot_extrapolated=true, symmetric=true,
+                                        slice=nothing, slice_alphas=range(-40, 40, step=1)
+                                        )
 
     stl_org = ""
     stl_extrap = "-"
@@ -1808,7 +1813,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
 
     fmt_org = (; marker=".", alpha=0.5)
     fmt_extrap = (; linewidth=1, alpha=0.5)
-    fmt_blnd = (; linewidth=1, alpha=0.25)
+    fmt_blnd = (; linewidth=1, alpha=0.5)
 
     if plot_extrapolated
         # Compare raw vs extrapolated
@@ -1826,10 +1831,12 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
             stl = stl_org
             fmt = fmt_org
 
-            axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-            axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-            axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            end
 
         end
 
@@ -1839,10 +1846,15 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
             stl = stl_extrap
             fmt = fmt_extrap
 
-            axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
-            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-            axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
-            axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+            else
+                plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+            end
 
         end
 
@@ -1874,16 +1886,32 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
     axs = axs2
     fig.suptitle("Blending comparison")
 
-    for (ypos, airfoil) in airfoils_blended
-        
-        clr = plt.cm.gnuplot(0.9*ypos)
-        stl = stl_blnd
-        fmt = fmt_blnd
+    for (ai, (ypos, airfoil)) in enumerate(airfoils_blended)
 
-        axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-        axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        if !symmetric || ypos>=0
+        
+            # clr = plt.cm.gnuplot(symmetric ? 0.9*ypos : 0.9*(ypos+1)/2)
+            clr = plt.cm.berlin(symmetric ? 0.9*ypos : 0.9*(ypos+1)/2)
+            stl = stl_blnd
+            fmt = fmt_blnd
+            if symmetric
+                lbl = (L"$2y/b = $"*"$(ypos)")^(ai==length(airfoils_blended) || ai==round(length(airfoils_blended)/2 + 1) || ai==round(length(airfoils_blended)*3/4))
+            else
+                lbl = (L"$2y/b = $"*"$(ypos)")^(ai==1 || ai==length(airfoils_blended) || ai==round(length(airfoils_blended)/2))
+            end
+
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=lbl, color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=lbl, color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=lbl, color=clr, fmt...)
+            else
+                plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, label=lbl, color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+            end
+            
+        end
+
 
     end
 

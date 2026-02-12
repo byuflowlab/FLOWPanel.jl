@@ -114,13 +114,62 @@ returns `airfoil0` and `weight=1` returns `airfoil1`
 function blend(airfoil0::FunctionalAirfoil{N}, airfoil1::FunctionalAirfoil{N}, 
                                                         weight::Number) where N
     # Linearly blend the functions
-    cl(args...; optargs...) = (weight - 1)*airfoil0.fun_cl(args...; optargs...) + weight*airfoil1.fun_cl(args...; optargs...)
-    cd(args...; optargs...) = (weight - 1)*airfoil0.fun_cd(args...; optargs...) + weight*airfoil1.fun_cd(args...; optargs...)
-    cm(args...; optargs...) = (weight - 1)*airfoil0.fun_cm(args...; optargs...) + weight*airfoil1.fun_cm(args...; optargs...)
-    alpha0 = (weight - 1)*airfoil0.alpha0 + weight*airfoil1.alpha0
+    cl(args...; optargs...) = (1 - weight)*airfoil0.fun_cl(args...; optargs...) + weight*airfoil1.fun_cl(args...; optargs...)
+    cd(args...; optargs...) = (1 - weight)*airfoil0.fun_cd(args...; optargs...) + weight*airfoil1.fun_cd(args...; optargs...)
+    cm(args...; optargs...) = (1 - weight)*airfoil0.fun_cm(args...; optargs...) + weight*airfoil1.fun_cm(args...; optargs...)
+    alpha0 = (1 - weight)*airfoil0.alpha0 + weight*airfoil1.alpha0
 
     return FunctionalAirfoil(N, cl, cd, cm, alpha0)
 end
+
+
+function plot_slice(self::FunctionalAirfoil{N}, alphas, slice; 
+                                        fig=nothing, axs=nothing, 
+                                        stl="-",
+                                        optargs...) where N
+
+    @assert length(slice) == N-1 ""*
+        "Invalid slice dimensions; expected $(N-1) dimension, got $(length(slice))"
+
+    if isnothing(fig)
+        fig = plt.figure(figsize = [7, 0.75*5*3]*7/9)
+    end
+    if isnothing(axs)
+        axs = fig.subplots(3, 1)
+        axs = pyconvert(Array, axs)
+    end
+
+    fig.suptitle("Element polar at slice [" * join(("x$(i)" for i in 1:length(slice)), ", ") * "] = [" * join(("$x" for x in slice), ", ")*"]")
+
+    ax = axs[1]
+    ax.plot(alphas, [calc_cl(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_\ell")
+
+    ax = axs[2]
+    ax.plot(alphas, [calc_cd(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_d")
+
+    ax = axs[3]
+    ax.plot(alphas, [calc_cm(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_m")
+
+
+    for ax in axs
+        ax.set_xlabel(L"Angle of attack ($^\circ$)")
+        ax.spines["top"].set_visible(false)
+        ax.spines["right"].set_visible(false)
+        ax.legend(loc="best", frameon=false, fontsize=8)
+    end
+        
+    fig.tight_layout()
+
+    return fig, axs
+end
+
+
 
 
 
