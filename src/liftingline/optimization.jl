@@ -155,6 +155,7 @@ function run_liftingline(;
 
         distributions = false,                          # Whether to output spanwise distributions
 
+        modify_liftingline! = identity,                 # Provide a function for manual customization of LiftingLine if needed
         cache = Dict(),                                 # Model cache
         
         plot_convergence = false,                       # Whether to plot solver convergence
@@ -266,6 +267,9 @@ function run_liftingline(;
     if isfinite(ground_distance)
         set_ground!(ll, ground_distance)
     end
+
+    # Expose LiftingLine to user for further customization
+    modify_liftingline!(ll)
     
     # Run solver
     result, solver_cache = solve(ll, Uinfs; 
