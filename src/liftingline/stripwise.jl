@@ -21,12 +21,17 @@ struct FunctionalAirfoil{N, R<:Number} <: StripwiseElement{N}
     fun_cd::Function
     fun_cm::Function
 
+    fun_claero::Function
+
     alpha0::R                           # (deg) AOA at zero lift
 
     function FunctionalAirfoil(nparameters::Int, 
                                 fun_cl::Function, fun_cd::Function, fun_cm::Function,
-                                alpha0=NaN)
-        new{nparameters, typeof(alpha0)}(fun_cl, fun_cd, fun_cm, alpha0)
+                                fun_claero=fun_cl, alpha0=NaN)
+
+        new{nparameters, typeof(alpha0)}(fun_cl, fun_cd, fun_cm, 
+                                                        fun_claero, alpha0)
+
     end
 
 end
@@ -47,7 +52,10 @@ function FunctionalAirfoil(nparameters::Int,
     fun_cd(aoa, args...) = simple.spl_cd(aoa)
     fun_cm(aoa, args...) = simple.spl_cm(aoa)
 
-    return FunctionalAirfoil(nparameters, fun_cl, fun_cd, fun_cm, isnan(alpha0) ? simple.alpha0 : alpha0)
+    fun_claero = fun_cl
+
+    return FunctionalAirfoil(nparameters, fun_cl, fun_cd, fun_cm, 
+                                fun_claero, isnan(alpha0) ? simple.alpha0 : alpha0)
 
 end
 
@@ -61,13 +69,18 @@ end
 Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
 """
 function calc_sweptcl(self::FunctionalAirfoil, sweep::Number, alpha_Λ::Number, 
-                                                            args...; optargs...)
+                                                            args...; 
+                                                            claero=false,
+                                                            optargs...)
 
+
+
+    cl = claero ? self.fun_claero : self.fun_cl
 
     # Find AOA at zero lift
     if isnan(self.alpha0)
 
-        f(u, p) = [self.fun_cl(u[1], args...)]
+        f(u, p) = [cl(u[1], args...)]
         u0 = [0.0]
         prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
@@ -89,7 +102,7 @@ function calc_sweptcl(self::FunctionalAirfoil, sweep::Number, alpha_Λ::Number,
 
     alpha = alpha_Λ + alpha0*( 1 - 1/cosd(sweep) )
 
-    return calc_cl(self, alpha, args...; optargs...)
+    return cl(alpha, args...; optargs...)
 
 end
 
@@ -117,9 +130,10 @@ function blend(airfoil0::FunctionalAirfoil{N}, airfoil1::FunctionalAirfoil{N},
     cl(args...; optargs...) = (1 - weight)*airfoil0.fun_cl(args...; optargs...) + weight*airfoil1.fun_cl(args...; optargs...)
     cd(args...; optargs...) = (1 - weight)*airfoil0.fun_cd(args...; optargs...) + weight*airfoil1.fun_cd(args...; optargs...)
     cm(args...; optargs...) = (1 - weight)*airfoil0.fun_cm(args...; optargs...) + weight*airfoil1.fun_cm(args...; optargs...)
+    claero(args...; optargs...) = (1 - weight)*airfoil0.fun_claero(args...; optargs...) + weight*airfoil1.fun_claero(args...; optargs...)
     alpha0 = (1 - weight)*airfoil0.alpha0 + weight*airfoil1.alpha0
 
-    return FunctionalAirfoil(N, cl, cd, cm, alpha0)
+    return FunctionalAirfoil(N, cl, cd, cm, claero, alpha0)
 end
 
 
@@ -711,11 +725,17 @@ end
 Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
 """
 function calc_sweptcl(airfoil::StripwiseElement, sweep::Number, alpha_Λ::Number, 
-                                                            args...; optargs...)
+                                                            args...; 
+                                                            claero=false,
+                                                            optargs...)
 
     alpha = alpha_Λ + airfoil.alpha0*( 1 - 1/cosd(sweep) )
 
-    return calc_cl(airfoil, alpha, args...; optargs...)
+    if claero
+        return calc_claero(airfoil, alpha, args...; optargs...)
+    else
+        return calc_cl(airfoil, alpha, args...; optargs...)
+    end
 
 end
 

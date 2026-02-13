@@ -328,7 +328,7 @@ function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine,
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
-        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei], view(ll.elements_settings, ei, :)...)
+        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei], view(ll.elements_settings, ei, :)...; claero=true)
 
         # Project the velocity onto the filament direction
         UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
