@@ -1833,7 +1833,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
 
             if isnothing(slice)
                 axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
                 axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
                 axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
             end
@@ -1848,18 +1848,18 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
 
             if isnothing(slice)
                 axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
-                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
                 axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
                 axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
             else
                 plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, color=clr, fmt...)
-                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_claero(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
             end
 
         end
 
         ax = axs[1]
-        ax.set_ylabel(L"Lift $c_\ell$")
+        ax.set_ylabel(L"Lift $c_{\ell_\mathrm{aero}}$")
 
         ax = axs[2]
         ax.set_ylabel(L"Drag $c_d$")
@@ -1902,12 +1902,12 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
 
             if isnothing(slice)
                 axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=lbl, color=clr, fmt...)
-                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
                 axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=lbl, color=clr, fmt...)
                 axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=lbl, color=clr, fmt...)
             else
                 plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, label=lbl, color=clr, fmt...)
-                axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [calc_claero(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
             end
             
         end
@@ -1916,7 +1916,7 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
     end
 
     ax = axs[1]
-    ax.set_ylabel(L"Lift $c_\ell$")
+    ax.set_ylabel(L"Lift $c_{\ell_\mathrm{aero}}$")
 
     ax = axs[2]
     ax.set_ylabel(L"Drag $c_d$")

@@ -147,6 +147,8 @@ function run_liftingline(;
                             abstol = 1e-13,  
                             maxiters = 800,
                             ),
+        aoas_initial_guess = alpha,                     # Solver initial guess
+        solver_verbose = true,                          # Whether to show solver verbose in unsuccessfull runs
         
         align_joints_with_Uinfs = false,                # Whether to align joint bound vortices with the freestream
         
@@ -274,7 +276,7 @@ function run_liftingline(;
     # Run solver
     result, solver_cache = solve(ll, Uinfs; 
                                         debug=plot_convergence,      # `true` returns the residual rms
-                                        aoas_initial_guess=alpha, 
+                                        aoas_initial_guess, 
                                         align_joints_with_Uinfs, 
                                         solver, solver_optargs,
                                         solver_cache=cache["solver_cache"][NumType]
@@ -283,7 +285,7 @@ function run_liftingline(;
     # Check solver success
     success = SimpleNonlinearSolve.SciMLBase.successful_retcode(result)
 
-    if !success
+    if !success && solver_verbose
         @warn "Lifting line solver did not converge!"
         @show success
         @show solver_cache[:fcalls]
