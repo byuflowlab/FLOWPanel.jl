@@ -138,9 +138,12 @@ end
 
 
 function plot_slice(self::FunctionalAirfoil{N}, alphas, slice; 
+                                        claero=true,
                                         fig=nothing, axs=nothing, 
                                         stl="-",
                                         optargs...) where N
+
+    fun_cl = claero ? calc_claero : calc_cl
 
     @assert length(slice) == N-1 ""*
         "Invalid slice dimensions; expected $(N-1) dimension, got $(length(slice))"
@@ -156,9 +159,9 @@ function plot_slice(self::FunctionalAirfoil{N}, alphas, slice;
     fig.suptitle("Element polar at slice [" * join(("x$(i)" for i in 1:length(slice)), ", ") * "] = [" * join(("$x" for x in slice), ", ")*"]")
 
     ax = axs[1]
-    ax.plot(alphas, [calc_claero(self, a, slice...) for a in alphas], stl; optargs...)
+    ax.plot(alphas, [fun_cl(self, a, slice...) for a in alphas], stl; optargs...)
 
-    ax.set_ylabel(L"c_{\ell_\mathrm{aero}}")
+    ax.set_ylabel(claero ? L"c_{\ell_\mathrm{aero}}" : L"c_{\ell}")
 
     ax = axs[2]
     ax.plot(alphas, [calc_cd(self, a, slice...) for a in alphas], stl; optargs...)
