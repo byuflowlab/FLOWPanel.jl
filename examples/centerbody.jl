@@ -18,7 +18,7 @@ import DataFrames: DataFrame
 run_name        = "centerbody-lewis00"      # Name of this run
 
 save_path       = ""                        # Where to save outputs
-paraview        = false                      # Whether to visualize with Paraview
+paraview        = true                      # Whether to visualize with Paraview
 
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
@@ -42,7 +42,12 @@ R               = maximum(contour_lewis[:, 2]) # (m) max radius
 NDIVS_theta     = 60                        # Number of azimuthal panels
 
 # Solver
-bodytype        = pnl.NonLiftingBody{pnl.ConstantSource}    # Elements and wake model
+# kerneltype = pnl.ConstantDoublet          # Kernel type to use
+# kerneltype = pnl.VortexRing               # Kernel type to use
+kerneltype = pnl.ConstantSource               # Kernel type to use
+# kerneltype = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+bodytype        = pnl.NonLiftingBody{kerneltype}    # Elements and wake model
+# bodytype2        = pnl.NonLiftingBody{pnl.ConstantDoublet}    # Elements and wake model
 
 
 # ----------------- GENERATE BODY ----------------------------------------------
@@ -70,6 +75,7 @@ trigrid = pnl.gt.GridTriangleSurface(grid, split_dim)
 
 # Generate body to be solved
 body = bodytype(trigrid)
+# body2 = bodytype2(trigrid)
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -79,6 +85,22 @@ println("Solving body...")
 
 # Freestream at every control point
 Uinfs = repeat(Vinf, 1, body.ncells)
+
+#--- debugging ---#
+
+G = zeros(body.ncells, body.ncells)
+normals = pnl._calc_normals(body)
+CPs = pnl._calc_controlpoints(body, normals; off=1e-14)
+backend = pnl.FastMultipoleBackend(leaf_size=1000000)
+pnl._G_phi!(body, kerneltype, G, CPs, backend; kerneloffset=1.0e-8)
+
+body.strength .= 1.0
+test_rhs = zeros(body.ncells)
+pnl._phi!(body, CPs, test_rhs, backend; kerneloffset=1.0e-8)
+debug_rhs = G * body.strength[:,1]
+@show maximum(abs.(test_rhs .- debug_rhs))
+
+
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions
 # @time pnl.solve(body, Uinfs)
@@ -90,14 +112,18 @@ Uinfs = repeat(Vinf, 1, body.ncells)
     #     itmax=20,
     #     atol=1e-4,
     #     rtol=1e-4,
-    #     backend=pnl.FastMultipoleBackend(
-    #                                 expansion_order=7,
-    #                                 multipole_acceptance=0.4,
-    #                                 leaf_size=10
-    #                             )
+        backend=pnl.FastMultipoleBackend(
+                                    expansion_order=7,
+                                    multipole_acceptance=0.4,
+                                    leaf_size=10
+                                )
     # )
-    solver = pnl.FGSSolver(body)
-    pnl.solve2!(body, Uinfs, solver)#; update_G=false)
+
+    # G, rhs = pnl.solve(body, Uinfs)
+    # G2, rhs2 = pnl.solve(body2, Uinfs)
+
+    solver = pnl.Backslash(body; least_squares=false)
+    pnl.solve2!(body, Uinfs, solver; backend)
 end
 strengths2 = deepcopy(body.strength)
 
@@ -105,11 +131,11 @@ strengths2 = deepcopy(body.strength)
 println("Post processing...")
 
 # Calculate surface velocity on the body with the FMM backend
-backend = pnl.FastMultipoleBackend(
-                                    expansion_order=7,
-                                    multipole_acceptance=0.4,
-                                    leaf_size=10
-                                )
+# backend = pnl.FastMultipoleBackend(
+#                                     expansion_order=7,
+#                                     multipole_acceptance=0.4,
+#                                     leaf_size=10
+#                                 )
 println("Running FMM:")
 @time Us = pnl.calcfield_U(body, body; backend)
 Us_fmm = deepcopy(Us) # save for comparison/verification
@@ -133,6 +159,28 @@ Us_direct = deepcopy(Us)
 # calculate error
 max_err = maximum(abs.(Us_direct - Us_fmm))
 println("Max velocity error between Direct and FMM normalized by Vinf: $(max_err/magVinf)")
+
+if kerneltype == pnl.ConstantDoublet || kerneltype == pnl.VortexRing || kerneltype == Union{pnl.ConstantSource, pnl.ConstantDoublet}
+    # Calculate velocity induced by doublet strength gradient
+    if kerneltype == Union{pnl.ConstantSource, pnl.ConstantDoublet}
+        Gammai = 2
+    else
+        Gammai = 1
+    end
+    @time UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true, force_cellTE=false, Gammai)
+
+    # Add both velocities together
+    pnl.addfields(body, "Ugradmu", "U")
+end
+
+Us_tot = pnl.get_field(body, "U")["field_data"] # save for comparison/verification
+Us_tot = [Us_tot[j][i] for i=1:3, j=1:size(Us_tot,1)]
+
+# check normal flow condition
+normals = pnl._calc_normals(body)
+Udotn = sum(Us_tot .* normals, dims=1)
+resid = maximum(abs.(Udotn))
+println("Max flow tangency residual: $resid")
 
 # Calculate pressure coefficient
 @time Cps = pnl.calcfield_Cp(body, magVinf)

@@ -1069,10 +1069,25 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     v3y = nodes[2, i3]
     v3z = nodes[3, i3]
 
-    # get centroid
-    cx = (v1x + v2x + v3x) * 0.3333333333333333
-    cy = (v1y + v2y + v3y) * 0.3333333333333333
-    cz = (v1z + v2z + v3z) * 0.3333333333333333
+    # normal
+    dx1 = v2x - v1x
+    dy1 = v2y - v1y
+    dz1 = v2z - v1z
+    dx2 = v3x - v1x
+    dy2 = v3y - v1y
+    dz2 = v3z - v1z
+    # normal_x = dy1*dz2 - dz1*dy2
+    # normal_y = dz1*dx2 - dx1*dz2
+    # normal_z = dx1*dy2 - dy1*dx2
+    # norm_inv = system.CPoffset / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
+    # normal_x *= norm_inv
+    # normal_y *= norm_inv
+    # normal_z *= norm_inv
+
+    # centroid
+    cx = (v1x + v2x + v3x) * 0.3333333333333333 # + normal_x
+    cy = (v1y + v2y + v3y) * 0.3333333333333333 # + normal_y
+    cz = (v1z + v2z + v3z) * 0.3333333333333333 # + normal_z
 
     # get radius
     r = zero(eltype(buffer))
@@ -1089,6 +1104,7 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     dz = v3z - cz
     r = max(r, sqrt(dx*dx + dy*dy + dz*dz))
 
+    # update buffer
     buffer[1, i_buffer] = cx
     buffer[2, i_buffer] = cy
     buffer[3, i_buffer] = cz
@@ -1110,11 +1126,23 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     buffer[4+ns+7, i_buffer] = v3x
     buffer[4+ns+8, i_buffer] = v3y
     buffer[4+ns+9, i_buffer] = v3z
+
+    # additional fields added by dispatch
+    additional_source_system_to_buffer!(buffer, i_buffer, system, i_body, 4+ns+9)
+
+end
+
+function additional_source_system_to_buffer!(buffer, i_buffer, system, i_body, i_start)
+    # By default, no additional fields are added to the buffer. This function is
+    # meant to be extended by dispatch for specific body types.
+    return nothing
 end
 
 FastMultipole.numtype(system::AbstractBody) = eltype(system.strength)
 
-FastMultipole.data_per_body(system::AbstractBody) = 4 + size(system.strength, 2) + 9
+FastMultipole.data_per_body(system::AbstractBody) = 4 + size(system.strength, 2) + 9 + additional_data_per_body(system)
+
+additional_data_per_body(system::AbstractBody) = 0 # by default, no additional data is added to the buffer
 
 function FastMultipole.get_position(system::AbstractBody, i)
 
@@ -1133,10 +1161,25 @@ function FastMultipole.get_position(system::AbstractBody, i)
     v3y = nodes[2, i3]
     v3z = nodes[3, i3]
 
+    # get normal vector
+    dx1 = v2x - v1x
+    dy1 = v2y - v1y
+    dz1 = v2z - v1z
+    dx2 = v3x - v1x
+    dy2 = v3y - v1y
+    dz2 = v3z - v1z
+    normal_x = dy1*dz2 - dz1*dy2
+    normal_y = dz1*dx2 - dx1*dz2
+    normal_z = dx1*dy2 - dy1*dx2
+    norm_inv = system.CPoffset / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
+    normal_x *= norm_inv
+    normal_y *= norm_inv
+    normal_z *= norm_inv
+
     # get centroid
-    cx = (v1x + v2x + v3x) * 0.3333333333333333
-    cy = (v1y + v2y + v3y) * 0.3333333333333333
-    cz = (v1z + v2z + v3z) * 0.3333333333333333
+    cx = (v1x + v2x + v3x) * 0.3333333333333333 + normal_x
+    cy = (v1y + v2y + v3y) * 0.3333333333333333 + normal_y
+    cz = (v1z + v2z + v3z) * 0.3333333333333333 + normal_z
 
     return cx, cy, cz
 end
@@ -1179,6 +1222,22 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
             target_system[6, i_target] += U_out[2]
             target_system[7, i_target] += U_out[3]
         end
+    end
+end
+
+function FastMultipole.buffer_to_system_strength!(system::AbstractBody{<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
+    system.strength[i_body, 1] = source_buffer[5, i_buffer]
+end
+
+# function FastMultipole.strength_to_value(strength, source_system::AbstractBody{<:Any, 1, <:Any})
+#     return strength[1]
+# end
+
+function FastMultipole.influence!(influence, target_buffer, source_system::AbstractBody, source_buffer)
+    for i in 1:size(target_buffer, 2)
+        v = FastMultipole.get_gradient(target_buffer, i)
+        n = FastMultipole.get_normal(source_buffer, source_system, i)
+        influence[i] = dot(v, n)
     end
 end
 

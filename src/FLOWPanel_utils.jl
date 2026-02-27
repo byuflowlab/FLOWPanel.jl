@@ -53,7 +53,7 @@ NOTE2: In the current implementation, sweep and dihedral are done about the LE.
 """
 function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                       twist_tip::Number, lambda::Number, gamma::Number;
-                      bodytype::Type{<:AbstractLiftingBody}=RigidWakeBody{Union{ConstantSource,ConstantDoublet}},
+                      bodytype::Type{<:AbstractBody}=RigidWakeBody{Union{ConstantSource,ConstantDoublet}},
                       span_NDIVS::ndivstype=nothing,
                       rfl_NDIVS::ndivstype=nothing,
                       airfoil_root::String="naca6412.dat",
@@ -121,7 +121,7 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
     # verify_spline = false             # Plots the splined distributions
     # verify_rflspline = true           # Plots the splined airfoil cross sections
 
-    return generate_loft_liftbody(bodytype, airfoil_files, airfoil_path,
+    stuff = generate_loft_liftbody(bodytype, airfoil_files, airfoil_path,
                                         urfl_NDIVS, lrfl_NDIVS,
                                         semispan, b_low, b_up, b_NDIVS,
                                         chords, twists, x_pos, z_pos;
@@ -133,6 +133,8 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                                         rflspl_s=rflspl_s,
                                         opt_args...
                                     )
+    @show typeof(stuff)
+    return stuff
 end
 
 

@@ -35,7 +35,10 @@ function U_constant_source(nodes::Arr1, panel,
                                   T2, Arr2<:AbstractArray{T2,2},
                                   T3, Arr3<:AbstractArray{T3}}
 
-    nt = size(targets, 2)                   # Number of targets
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = -1/(4*π) # boundary, with negative to match Morino sign convention
+
+    nt = size(targets, 2)                  # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
     nn = length(panel)                      # Number of nodes
 
@@ -123,9 +126,9 @@ function U_constant_source(nodes::Arr1, panel,
 
         # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
         #       this factor
-        V1 *= 1/(4*pi)
-        V2 *= 1/(4*pi)
-        V3 *= 1/(4*pi)
+        V1 *= scaling_factor
+        V2 *= scaling_factor
+        V3 *= scaling_factor
 
         if dot_with!=nothing
             @inbounds out[ti] += strength*(V1*t1 + V2*o1 + V3*n1)*dot_with[1,ti]
@@ -156,6 +159,8 @@ function phi_constant_source(nodes::Arr1, panel,
                                     T2, Arr2<:AbstractArray{T2,2},
                                     T3, Arr3<:AbstractArray{T3}}
 
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
     nn = length(panel)                      # Number of nodes
@@ -234,7 +239,7 @@ function phi_constant_source(nodes::Arr1, panel,
             dtheta *= Rij>=0
         end
 
-        @inbounds out[ti] += strength/(4*π) * abs(z)*dtheta
+        @inbounds out[ti] += strength * scaling_factor * abs(z)*dtheta
 
     end
 end
@@ -352,6 +357,8 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
 
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
@@ -396,7 +403,7 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
         if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
             # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-            aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+            aux = strength * rijdothat / ((dotrixrj + offset^2))
 
             #=
             # Singular kernel
@@ -415,11 +422,11 @@ function U_boundvortex( pa1::Number, pa2::Number, pa3::Number,
 
             # NOTE: Negative sign is not needed since we defined rij = rj - ri
             if dot_with!=nothing
-                @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] )
+                @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] ) * scaling_factor
             else
-                @inbounds out[1, ti] += aux * rixrj1
-                @inbounds out[2, ti] += aux * rixrj2
-                @inbounds out[3, ti] += aux * rixrj3
+                @inbounds out[1, ti] += aux * rixrj1 * scaling_factor
+                @inbounds out[2, ti] += aux * rixrj2 * scaling_factor
+                @inbounds out[3, ti] += aux * rixrj3 * scaling_factor
             end
         end
     end
@@ -488,6 +495,8 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
     nt = size(targets, 2)                               # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
@@ -546,7 +555,7 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
             if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
                 # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-                aux = strength * rijdothat / (4*π*(dotrixrj + offset^2))
+                aux = strength * rijdothat / ((dotrixrj + offset^2))
 
                 #=
                 # Singular kernel
@@ -565,11 +574,11 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
                 # NOTE: Negative sign is not needed since we defined rij = rj - ri
                 if dot_with!=nothing
-                    @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] )
+                    @inbounds out[ti] += aux * ( rixrj1*dot_with[1,ti] + rixrj2*dot_with[2,ti] + rixrj3*dot_with[3,ti] ) * scaling_factor
                 else
-                    @inbounds out[1, ti] += aux * rixrj1
-                    @inbounds out[2, ti] += aux * rixrj2
-                    @inbounds out[3, ti] += aux * rixrj3
+                    @inbounds out[1, ti] += aux * rixrj1 * scaling_factor
+                    @inbounds out[2, ti] += aux * rixrj2 * scaling_factor
+                    @inbounds out[3, ti] += aux * rixrj3 * scaling_factor
                 end
             end
 
@@ -598,7 +607,7 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
 
             # aux = strength / (4*π*(h + offset))
             # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-            aux = strength / (4*π*(hsqr + offset^2))
+            aux = strength / ((hsqr + offset^2))
 
             #=
             # Singular kernel
@@ -613,11 +622,11 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
             =#
 
             if dot_with!=nothing
-                @inbounds out[ti] += aux * (n1*dot_with[1,ti] + n2*dot_with[2,ti] + n3*dot_with[3,ti])
+                @inbounds out[ti] += aux * (n1*dot_with[1,ti] + n2*dot_with[2,ti] + n3*dot_with[3,ti]) * scaling_factor
             else
-                @inbounds out[1, ti] += aux * n1
-                @inbounds out[2, ti] += aux * n2
-                @inbounds out[3, ti] += aux * n3
+                @inbounds out[1, ti] += aux * n1 * scaling_factor
+                @inbounds out[2, ti] += aux * n2 * scaling_factor
+                @inbounds out[3, ti] += aux * n3 * scaling_factor
             end
 
         end
@@ -625,7 +634,6 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
     end
 
 end
-
 
 
 """
@@ -758,6 +766,9 @@ function phi_constant_doublet(nodes::Arr1, panel,
     no = length(out)                        # Number of outputs
     nn = length(panel)                      # Number of nodes
 
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
+
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     end
@@ -837,7 +848,7 @@ function phi_constant_doublet(nodes::Arr1, panel,
 
         # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
         #       this factor
-        V3 *= 1/(4*pi)
+        V3 *= scaling_factor
 
         # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
         out[ti] += strength*V3
@@ -965,6 +976,8 @@ function phi_semiinfinite_doublet(nodes::Arr1,
 
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
@@ -1061,7 +1074,7 @@ function phi_semiinfinite_doublet(nodes::Arr1,
 
             # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
             #       this factor
-            V3 *= 1/(4*pi)
+            V3 *= scaling_factor
 
             # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
             out[ti] += strength*V3
@@ -1080,13 +1093,13 @@ function phi_semiinfinite_doublet(nodes::Arr1,
         # zb = z1*(p_j1-O1) + z2*(p_j2-O2) + z3*(p_j3-O3)
 
         # TODO: What is the domain of evaluation of this atan function in the theory?
-        val += atan((yb-y)/z) + atan( (yb-y)*(x-xa) / (z*sqrt((x-xa)^2 + (yb-y)^2 + z^2)) )
+        val += atan((yb-y)/z) + atan( (yb-y)*(x-xb) / (z*sqrt((x-xb)^2 + (yb-y)^2 + z^2)) )
         val -= atan((ya-y)/z) + atan( (ya-y)*(x-xa) / (z*sqrt((x-xa)^2 + (ya-y)^2 + z^2)) )
         # val += atan(yb-y, z) + atan( (yb-y)*(x-xa), z*sqrt((x-xa)^2 + (yb-y)^2 + z^2) )
         # val -= atan(ya-y, z) + atan( (ya-y)*(x-xa), z*sqrt((x-xa)^2 + (ya-y)^2 + z^2) )
 
         # out[ti] -= strength/(4*pi) * val
-        out[ti] += strength/(4*pi) * val # NOTE: For some reason I ended up having to flip this sign to match the potential of the finite doublet panel
+        out[ti] += strength*scaling_factor * val # NOTE: For some reason I ended up having to flip this sign to match the potential of the finite doublet panel
     end
 end
 
@@ -1120,6 +1133,9 @@ function phi_semiinfinite_doublet(nodes::Arr1,
     nt = size(targets, 2)                   # Number of targets
     no = length(out)                        # Number of outputs
 
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary
+
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
     elseif abs(da1^2 + da2^2 + da3^2 - 1) > 2*eps()
@@ -1138,6 +1154,7 @@ function phi_semiinfinite_doublet(nodes::Arr1,
 
     # Calculate triangular semi-infinite section between da and db going from pb
     if abs(da1-db1) > 2*eps() || abs(da2-db2) > 2*eps() || abs(da3-db3) > 2*eps()
+        println("VVVVVVV MADE IT HERE VVVVVVV")
 
         # Numerical approximation of semi-infinite panel with a large panel
         @inbounds begin
@@ -1232,7 +1249,7 @@ function phi_semiinfinite_doublet(nodes::Arr1,
 
             # NOTE: Katz and Plotkin's potential differs from Hess and Smith's by
             #       this factor
-            V3 *= 1/(4*pi)
+            V3 *= scaling_factor
 
             # out[ti] -= strength*V3        # No need for - since it was already accounted for using the negative normal
             out[ti] += strength*V3
@@ -1269,6 +1286,9 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
     nt = size(targets, 2)                   # Number of targets
     no = dot_with!=nothing ? length(out) : size(out, 2) # Number of outputs
     nn = length(panel)                      # Number of nodes
+
+    # scaling_factor = 1/(4*π) # fluid domain
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
 
     if no!=nt
         error("Invalid `out` argument. Expected size $(nt), got $(no).")
@@ -1376,9 +1396,9 @@ function U_constant_vortexsheet(nodes::Arr1, panel,
             end
         end
 
-        V1 /= 4*pi
-        V2 /= 4*pi
-        V3 /= 4*pi
+        V1 *= scaling_factor
+        V2 *= scaling_factor
+        V3 *= scaling_factor
 
         if dot_with!=nothing
             @inbounds out[ti] += V1*dot_with[1,ti] + V2*dot_with[2,ti] + V3*dot_with[3,ti]

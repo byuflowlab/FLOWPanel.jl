@@ -11,7 +11,7 @@
 
 #-------- high-level interface -------#
 
-function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; include_wake=true, optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     potential = Vector{TF}(undef, 0) # unused
@@ -24,14 +24,18 @@ function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend;
                                         leaf_size_source=backend.leaf_size,
                                         hessian=false,
                                         gradient=true, 
-                                        scalar_potential=false)
+                                        scalar_potential=false,
+                                        extra_farfield=EXTRA_FARFIELD[1], 
+                                        shrink=true)
 
-    _rigid_wake_U!(self, targets, out; optargs...)
+    if include_wake && !EXTRA_FARFIELD[1]
+        _rigid_wake_U!(self, targets, out; optargs...)
+    end
 
     return nothing
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; include_wake=true, optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     velocity = Array{TF, 2}(undef, 0, 0)  # unused
@@ -44,9 +48,14 @@ function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; 
                                         leaf_size_source=backend.leaf_size,
                                         hessian=false,
                                         gradient=false, 
-                                        scalar_potential=true)
+                                        scalar_potential=true,
+                                        extra_farfield=EXTRA_FARFIELD[1],
+                                        shrink=true)
 
-    _rigid_wake_phi!(self, targets, out; optargs...)
+    if include_wake && !EXTRA_FARFIELD[1]
+        println(">>>>>>>>>>>>>> Adding rigid wake contributions to velocity... <<<<<<<<<<<<<<<")
+        _rigid_wake_phi!(self, targets, out; optargs...)
+    end
 
     return nothing
 end
@@ -89,6 +98,10 @@ function rotate_to_panel(source_system::AbstractBody{<:Any,NK,<:Any}, source_buf
     v3y = source_buffer[12+NK, i_source]
     v3z = source_buffer[13+NK, i_source]
 
+    return rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
+end
+
+function rotate_to_panel(v1x::TF, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z) where TF
     # normal (new z axis)
     # explicit cross(v2-v1, v3-v1)
     dx1 = v2x - v1x; dy1 = v2y - v1y; dz1 = v2z - v1z
@@ -155,6 +168,20 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
+    # evaluate influence
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+
+    # check for semi-infinite wake (zero if not)
+    p, v, vg = _induced_semiinfinite(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
+
+    # return potential, velocity, velocity_gradient
+    return potential+p, velocity+v, velocity_gradient+vg
+end
+
+function induced(target::AbstractVector{TF}, TK, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF}
+
+    R, v1, v2, v3 = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
     return potential, velocity, velocity_gradient
@@ -170,6 +197,17 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    return potential, velocity, velocity_gradient
+end
+
+function induced(target::AbstractVector{TF1}, TK::Type{VortexRing}, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF2}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF1,TF2}
+
+    TF = promote_type(TF1,TF2)
+    v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+    v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+    v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, TK, kerneloffset, derivatives_switch)
 
     return potential, velocity, velocity_gradient
 end
@@ -342,7 +380,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         )
     end
 
-    return -potential, -velocity, -velocity_gradient
+    return potential, velocity, velocity_gradient
 end
 
 function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,TF}
@@ -359,7 +397,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         tan_term = atan(num, den)
     end
 
-    potential = strength[1] * tan_term
+    potential = -strength[1] * tan_term
 
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     if VS
@@ -368,7 +406,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         rho = r_times_rp1 + (target_Rx - vx_i) * (target_Rx - vx_ip1) + (target_Ry - vy_i) * (target_Ry - vy_ip1) + target_Rz * target_Rz
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
         val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
-        velocity += strength[1] * FastMultipole.StaticArrays.SVector{3}(
+        velocity -= strength[1] * FastMultipole.StaticArrays.SVector{3}(
             target_Rz * dy * val4,
             -target_Rz * dx * val4,
             lambda * val4
@@ -437,7 +475,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     potential = zero(TF)
     if PS# && !isinf(mi)
         potential += strength[1] * (((target_Rx - vx_i) * dy - (target_Ry - vy_i) * dx) / ds * log_term + target_Rz * tan_term)
-        potential += strength[2] * tan_term
+        potential -= strength[2] * tan_term
     end
 
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
@@ -448,12 +486,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
         lambda = (target_Rx - vx_i) * (target_Ry - vy_ip1) - (target_Rx - vx_ip1) * (target_Ry - vy_i)
 
         val4 = r_plus_rp1 / (r_times_rp1 * rho + reg_term)
-        velocity -= strength[1] * FastMultipole.StaticArrays.SVector{3}(
+        velocity += strength[1] * FastMultipole.StaticArrays.SVector{3}(
             dy / ds * log_term,
             -dx / ds * log_term,
             tan_term
         )
-        velocity += strength[2] * FastMultipole.StaticArrays.SVector{3}(
+        velocity -= strength[2] * FastMultipole.StaticArrays.SVector{3}(
             target_Rz * dy * val4,
             -target_Rz * dx * val4,
             lambda * val4
@@ -610,11 +648,11 @@ function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, s
 
     if PS
         # potential += p
-        potential *= ONE_OVER_4PI
+        potential *= -ONE_OVER_4PI
     end
     if VS
         # velocity += v
-        velocity = ONE_OVER_4PI * R * velocity
+        velocity = -ONE_OVER_4PI * R * velocity
     end
     if GS
         # velocity_gradient += vg
@@ -746,4 +784,392 @@ end
     δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
 
     return δ
+end
+
+#------- semi-infinite panels -------#
+
+function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any}, source_buffer, i_source)
+    # get the strength of the doublet
+    return source_buffer[6, i_source]
+end
+
+function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantDoublet, VortexRing}, 1, <:Any}, source_buffer, i_source)
+    # get the strength of the doublet
+    return source_buffer[5, i_source]
+end
+
+function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantSource, UniformVortexSheet}, 1, <:Any}, source_buffer, i_source)
+    # get the strength of the doublet
+    @warn "get_strength_doublet requested or a system that does not have doublets: returning zero"
+    return zero(eltype(source_buffer))
+end
+
+"Defaults to no semiinfinite wake"
+function _induced_semiinfinite(target::AbstractVector{TF}, vertices::Tuple, source_system::AbstractBody, source_buffer, i_source, derivatives_switch) where TF
+    return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+end
+
+function _induced_semiinfinite(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, source_buffer, i_source, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {TF,PS,GS,HS}
+    # check if this panel has a semi-infinite wake
+    idx_1 = Int(source_buffer[end-1, i_source])
+    if idx_1 > 0 && EXTRA_FARFIELD[1]
+        # check which vertices are used
+        v1x, v1y, v1z = vertices[idx_1]
+        idx_2 = Int(source_buffer[end, i_source])
+        v2x, v2y, v2z = vertices[idx_2]
+
+        # get the semi-infinite direction
+        Dax, Day, Daz = source_system.Das[1,1], source_system.Das[2,1], source_system.Das[3,1]
+
+        # get strength
+        strength = get_strength_doublet(source_system, source_buffer, i_source)
+
+        # evaluate potential
+        return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+
+    else
+        # no semi-infinite wake
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+end
+
+function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS}; kerneloffset) where {TF,PS,VS,GS}
+    potential = zero(TF)
+    velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
+    gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    if PS
+        potential += _phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+    end
+    if VS
+        velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+    end
+
+    return potential, velocity, gradient
+end
+
+function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+
+    # initialize result
+    phi = zero(TF)
+    scaling_factor = 1/(4*π)
+
+    if abs(d1*d1 + d2*d2 + d3*d3 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+                " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
+    end
+
+    # Split panel into a bound panel and a semi-infinite panel
+    @inbounds begin
+        p_i1, p_i2, p_i3 = v1x, v1y, v1z
+        p_j1, p_j2, p_j3 = v2x, v2y, v2z
+
+        # p_a = p_i + [(p_j-p_i)⋅d]d
+        pijdotd = (p_j1 - p_i1)*d1 + (p_j2 - p_i2)*d2 + (p_j3 - p_i3)*d3
+        pa1 = p_i1 + pijdotd*d1
+        pa2 = p_i2 + pijdotd*d2
+        pa3 = p_i3 + pijdotd*d3
+
+        # Panel local coordinate system
+        x1, x2, x3 = d1, d2, d3
+        nrmpbpa = sqrt( (p_j1-pa1)^2 + (p_j2-pa2)^2 + (p_j3-pa3)^2  )
+        y1, y2, y3 = (p_j1-pa1)/nrmpbpa, (p_j2-pa2)/nrmpbpa, (p_j3-pa3)/nrmpbpa
+        z1, z2, z3 = x2*y3-x3*y2, x3*y1-x1*y3, x1*y2-x2*y1
+
+        O1, O2, O3 = p_i1, p_i2, p_i3                   # Origin
+        R = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
+            x1, x2, x3,
+            y1, y2, y3,
+            z1, z2, z3
+        )                                               # Transformation matrix
+    end
+
+    # Target position in panel coordinate system
+    # X = Oaxis*(targets[:, ti]-O)
+    @inbounds begin
+        x = x1*(target[1]-O1) + x2*(target[2]-O2) + x3*(target[3]-O3)
+        y = y1*(target[1]-O1) + y2*(target[2]-O2) + y3*(target[3]-O3)
+        z = z1*(target[1]-O1) + z2*(target[2]-O2) + z3*(target[3]-O3)
+    end
+
+    # ------------ Potential of bound panel
+    if abs(pijdotd) > 2*eps()               # <--- Avoids the case that there is no bound panel
+
+        # assemble vertices
+        v1 = FastMultipole.StaticArrays.SVector{3,TF}(p_i1, p_i2, p_i3)
+        v2 = FastMultipole.StaticArrays.SVector{3,TF}(p_j1, p_j2, p_j3)
+        v3 = FastMultipole.StaticArrays.SVector{3,TF}(pa1, pa2, pa3)
+        control_point = (v1 + v2 + v3) * 0.3333333333333333
+
+        # assemble strength
+        this_strength = FastMultipole.StaticArrays.SVector{1,TF}(strength)
+
+        # other arguments
+        derivatives_switch = FastMultipole.DerivativesSwitch{true, false, false}()
+
+        # compute potential
+        potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, kerneloffset, R, derivatives_switch)
+        phi += potential
+
+    end
+
+    # ------------ Potential of semi-infinite panel
+    val = zero(TF)
+
+    # Convert nodes to panel coordinate system
+    xa = x1*(pa1-O1) + x2*(pa2-O2) + x3*(pa3-O3)
+    ya = y1*(pa1-O1) + y2*(pa2-O2) + y3*(pa3-O3)
+    # za = z1*(pa1-O1) + z2*(pa2-O2) + z3*(pa3-O3)
+    xb = x1*(p_j1-O1) + x2*(p_j2-O2) + x3*(p_j3-O3)
+    yb = y1*(p_j1-O1) + y2*(p_j2-O2) + y3*(p_j3-O3)
+    # zb = z1*(p_j1-O1) + z2*(p_j2-O2) + z3*(p_j3-O3)
+
+    # TODO: What is the domain of evaluation of this atan function in the theory?
+    val += atan((yb-y) / z) + atan( (yb-y)*(x-xb) / (z*sqrt((x-xb)^2 + (yb-y)^2 + z^2)) )
+    val -= atan((ya-y) / z) + atan( (ya-y)*(x-xa) / (z*sqrt((x-xa)^2 + (ya-y)^2 + z^2)) )
+    # val += atan(yb-y, z) + atan( (yb-y)*(x-xa), z*sqrt((x-xa)^2 + (yb-y)^2 + z^2) )
+    # val -= atan(ya-y, z) + atan( (ya-y)*(x-xa), z*sqrt((x-xa)^2 + (ya-y)^2 + z^2) )
+
+    phi += strength * scaling_factor * val
+
+    return phi
+end
+
+function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+    Ux1, Uy1, Uz1 = _U_semiinfinite_vortex(v1x, v1y, v1z,
+                                    d1, d2, d3,
+                                    -strength,
+                                    target; offset=kerneloffset)
+    
+    Ux2, Uy2, Uz2 = _U_semiinfinite_vortex(v2x, v2y, v2z,
+                                    d1, d2, d3,
+                                    strength,
+                                    target; offset=kerneloffset)
+    
+    Uxb, Uyb, Uzb = _U_boundvortex(v1x, v1y, v1z,
+                                    v2x, v2y, v2z,
+                                    strength,
+                                    target; offset=kerneloffset)
+
+    # Uxb, Uyb, Uzb = _bound_vortex_velocity(
+    #                     FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z),
+    #                     FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z),
+    #                     true,
+    #                     kerneloffset
+    #                 ) .* strength
+    
+    # combine contributions
+    Ux = Ux1 + Ux2 + Uxb
+    Uy = Uy1 + Uy2 + Uyb
+    Uz = Uz1 + Uz2 + Uzb
+
+    return FastMultipole.StaticArrays.SVector{3,TF}(-Ux, -Uy, -Uz)
+end
+
+function _U_boundvortex( pa1::TF1, pa2::Number, pa3::Number,
+                        pb1::Number, pb2::Number, pb3::Number,
+                        strength::TF2,
+                        target::AbstractVector{TF3};
+                        cutoff=1e-14, offset=1e-8,
+                       ) where{TF1, TF2, TF3}
+
+    TF = promote_type(TF1, TF2, TF3)
+    Ux = zero(TF)
+    Uy = zero(TF)
+    Uz = zero(TF)
+    scaling_factor = 1/(4*π) # boundary
+
+    # rij = pj - pi
+    rij1 = pb1 - pa1
+    rij2 = pb2 - pa2
+    rij3 = pb3 - pa3
+
+    @inbounds begin
+        # ri = x - pi
+        ri1 = target[1] - pa1
+        ri2 = target[2] - pa2
+        ri3 = target[3] - pa3
+
+        # rj = x - pj
+        rj1 = target[1] - pb1
+        rj2 = target[2] - pb2
+        rj3 = target[3] - pb3
+    end
+
+    # ri × rj
+    rixrj1 = ri2*rj3 - ri3*rj2
+    rixrj2 = ri3*rj1 - ri1*rj3
+    rixrj3 = ri1*rj2 - ri2*rj1
+
+    # ‖ ri × rj ‖^2
+    dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
+
+    # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
+    normri = sqrt(ri1*ri1 + ri2*ri2 + ri3*ri3) + offset
+    normrj = sqrt(rj1*rj1 + rj2*rj2 + rj3*rj3) + offset
+    # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
+    # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
+    rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
+
+    if dotrixrj > cutoff^2 # This makes the self induced velocity zero
+
+        # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
+        aux = strength * rijdothat / ((dotrixrj + offset^2))
+
+        #=
+        # Singular kernel
+        aux = strength * rijdothat / (4*π*dotrixrj)
+
+        # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+        r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
+        di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
+        dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
+        # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
+        h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
+        modh = h + ( (di - dj) - r0 )               # h + projected edge distance
+
+        aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+        =#
+
+        # NOTE: Negative sign is not needed since we defined rij = rj - ri
+        Ux += aux * rixrj1 * scaling_factor
+        Uy += aux * rixrj2 * scaling_factor
+        Uz += aux * rixrj3 * scaling_factor
+    end
+
+    return -Ux, -Uy, -Uz
+end
+
+function _U_semiinfinite_vortex(p1::TF1, p2::Number, p3::Number,
+                                d1::Number, d2::Number, d3::Number,
+                                strength::TF2,
+                                target::AbstractVector{TF3};
+                                cutoff=1e-14, offset=1e-8) where {TF1,TF2,TF3}
+
+
+    TF = promote_type(TF1,TF2,TF3)
+    scaling_factor = 1/(4*π) # boundary, with negative to match Morino sign convention
+
+    if abs(d1*d1 + d2*d2 + d3*d3 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+                " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
+    end
+
+    vx, vy, vz = zero(TF), zero(TF), zero(TF)
+    tx, ty, tz = target[1], target[2], target[3]
+
+    # Split vortex into bound and semi-infinite sections
+    # p0 = p + [(x-p)⋅d]d
+    @inbounds xmpdotd = (tx - p1)*d1 + (ty - p2)*d2 + (tz - p3)*d3
+    p01 = p1 + xmpdotd*d1
+    p02 = p2 + xmpdotd*d2
+    p03 = p3 + xmpdotd*d3
+
+    # ----------------- Bound Vortex ---------------------------------------
+    if (p01-p1) * (p01-p1) + (p02-p2) * (p02-p2) + (p03-p3) * (p03-p3) > offset^2 # Check that there is a bound section
+
+        # rij = pj - pi
+        rij1 = p01 - p1
+        rij2 = p02 - p2
+        rij3 = p03 - p3
+
+        @inbounds begin
+            # ri = x - pi
+            ri1 = tx - p1
+            ri2 = ty - p2
+            ri3 = tz - p3
+
+            # rj = x - pj
+            rj1 = tx - p01
+            rj2 = ty - p02
+            rj3 = tz - p03
+        end
+
+        # ri × rj
+        rixrj1 = ri2*rj3 - ri3*rj2
+        rixrj2 = ri3*rj1 - ri1*rj3
+        rixrj3 = ri1*rj2 - ri2*rj1
+
+        # ‖ ri × rj ‖^2
+        dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
+
+        # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
+        normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
+        normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
+        # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
+        # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
+        rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
+
+        if dotrixrj > cutoff^2 # This makes the self induced velocity zero
+
+            # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
+            aux = strength * rijdothat / ((dotrixrj + offset^2))
+
+            #=
+            # Singular kernel
+            aux = strength * rijdothat / (4*π*dotrixrj)
+
+            # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+            r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
+            di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
+            dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
+            # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
+            h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
+            modh = h + ( (di - dj) - r0 )               # h + projected edge distance
+
+            aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+            =#
+
+            # NOTE: Negative sign is not needed since we defined rij = rj - ri
+            vx += aux * rixrj1 * scaling_factor
+            vy += aux * rixrj2 * scaling_factor
+            vz += aux * rixrj3 * scaling_factor
+        end
+
+    end
+
+    # ----------------- Semi-Infinite Vortex -------------------------------
+    # h = ‖x - p0‖
+    # @inbounds h = sqrt( (tx - p01)^2 + (targets[2, ti] - p02)^2 + (targets[3, ti] - p03)^2 )
+    hsqr = (tx - p01)^2 + (ty - p02)^2 + (tz - p03)^2
+
+    # hhat = (x - p0) / ‖x - p0‖
+    # h1 = (tx - p01)/h
+    # h2 = (targets[2, ti] - p02)/h
+    # h3 = (targets[3, ti] - p03)/h
+    h1 = (tx - p01)
+    h2 = (ty - p02)
+    h3 = (tz - p03)
+
+    # nhat = dhat × hhat
+    n1 = d2*h3 - d3*h2
+    n2 = d3*h1 - d1*h3
+    n3 = d1*h2 - d2*h1
+
+    # if h > cutoff # This makes the self induced velocity zero
+    if hsqr > cutoff^2
+
+        # aux = strength / (4*π*(h + offset))
+        # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
+        aux = strength / ((hsqr + offset^2))
+
+        #=
+        # Singular kernel
+        aux = strength / (4*π*hsqr)
+
+        # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
+        dp = d1*h1 + d2*h2 + d3*h3                  # dp = hat{d}⋅(x - p0)
+        h = sqrt(n1^2 + n2^2 + n3^2)                # h = | d × (x - p0) |
+        modh = h + max(0, -dp)                     # h + projected edge distance
+
+        aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
+        =#
+
+        vx += aux * n1 * scaling_factor
+        vy += aux * n2 * scaling_factor
+        vz += aux * n3 * scaling_factor
+
+    end
+
+    return -vx, -vy, -vz
+
 end

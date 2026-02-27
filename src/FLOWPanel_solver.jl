@@ -34,7 +34,7 @@ abstract type AbstractMatrixFreeSolver <: AbstractSolver end
 "LS indicates whether the solver uses least-squares solution."
 abstract type AbstractMatrixfulSolver{LS} <: AbstractSolver end
 
-function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::AbstractSolver, args...; optargs...)
+function solve2!(self, Uinfs, solver; optargs...)
     throw(ErrorException("solve2! not implemented for body of type $(typeof(self)) and solver of type $(typeof(solver))"))
 end
 
@@ -49,11 +49,13 @@ struct Backslash{TF,LS} <: AbstractMatrixfulSolver{LS}
     G::Matrix{TF}    # Coefficient matrix
 end
 
-function Backslash(self::AbstractBody;
+function Backslash(self::AbstractBody{TK, 1, <:Any};
+        backend::AbstractBackend=FastMultipoleBackend(),  # Backend to use for matrix construction
+        kernel=TK,                      # Kernel type for matrix construction
         TFG=numtype(self), # Type for G matrix
         least_squares::Bool=true,     # Whether to use least squares solution
         optargs...                    # Additional optional arguments
-    )
+    ) where TK
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -61,7 +63,7 @@ function Backslash(self::AbstractBody;
 
     # Compute geometric matrix (left-hand-side influence matrix)
     G = zeros(TFG, self.ncells, self.ncells)
-    _G_U!(self, G, CPs, normals; optargs...)
+    _G_U!(self, kernel, G, CPs, normals, backend; optargs...)
 
     return Backslash{TFG, least_squares}(G)
 end
@@ -82,6 +84,31 @@ get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
 
 # interface with existing methods
 solve_matrix!(y, A, b, ::Backslash) = solve_backslash!(y, A, b)
+
+#--- Dirichlet formulation ---#
+
+struct BackslashDirichlet{TF} <: AbstractMatrixfulSolver{false} 
+    G::Matrix{TF}
+    rhs::Vector{TF}
+end
+
+function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF 
+    G = zeros(TF, body.ncells, body.ncells)
+    rhs = zeros(TF, body.ncells)
+    return BackslashDirichlet{TF}(G, rhs)
+end
+
+# function BackslashDirichlet(body::RigidWakeBody{<:Any,<:Any,TF}) where TF 
+#     G = zeros(TF, body.ncells + body.nsheddings, body.ncells + body.nsheddings)
+#     rhs = zeros(TF, body.ncells + body.nsheddings)
+#     return BackslashDirichlet{TF}(G, rhs)
+# end
+
+# function BackslashDirichlet(body::AbstractBody{<:Any,2,TF}) where TF 
+#     G = zeros(TF, body.ncells * 2, body.ncells * 2)
+#     rhs = zeros(TF, body.ncells * 2)
+#     return BackslashDirichlet{TF}(G, rhs)
+# end
 
 
 ################################################################################
@@ -252,30 +279,42 @@ end
 
 struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
     fgs::TFGS
+    expansion_order::Int
+    leaf_size::Int
+    multipole_acceptance::Float64
     max_iterations::Int
     tolerance::Float64
+    rlx::Float64
 end
 
 function FGSSolver(body::AbstractBody; 
         max_iterations::Int=100,         # Maximum number of iterations
         tolerance::Real=1e-6,            # Convergence tolerance
+        rlx::Real=1.0,                  # Relaxation factor
         expansion_order=7,
         multipole_acceptance=0.4,
         leaf_size=10,
         shrink=false,
-        recenter=false
+        recenter=false,
     )
+
+    # ensure CPoffset is negative (we'll solve this in the interior)
+    CPoffset_old = body.CPoffset
+    body.CPoffset = -abs(CPoffset_old)
 
     # generate solver
     TF = numtype(body)
     fgs = FastMultipole.FastGaussSeidel((body,), (body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter)
 
-    return FGSSolver{typeof(fgs), TF}(fgs, max_iterations, Float64(tolerance))
+    # restore CPoffset
+    body.CPoffset = CPoffset_old
+
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Float64(tolerance), Float64(rlx))
 end
 
 #--- test solve! ---#
 
-function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
+function solve2!(self::AbstractBody{<:Any,1,<:Any}, Uinfs::Array{<:Real, 2}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
     
     # construct right-hand side
     # TF2 = promote_type(eltype(Uinfs), TF)
@@ -287,7 +326,7 @@ function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::FGSSolver{
     self.velocity .= Uinfs
 
     # solve system
-    FastMultipole.solve!(self, solver.fgs; max_iterations=10, tolerance=1e-3)
+    FastMultipole.solve!(self, solver.fgs; max_iterations=solver.max_iterations, tolerance=solver.tolerance, rlx=solver.rlx)
 
     # store solution
     set_solution(self, self.strength, self.strength, Tuple{Int,Float64}[], Uinfs)

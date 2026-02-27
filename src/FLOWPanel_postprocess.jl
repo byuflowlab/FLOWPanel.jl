@@ -280,6 +280,7 @@ function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
                                 maxgrad=Inf,
                                 smoothPass=0, smoothRows=[0]
                                 )
+
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
         "Invalid `out` matrix."*
@@ -826,12 +827,18 @@ end
 function calcfield_Ugradmu!(out::AbstractMatrix,
                                     out_cell::AbstractMatrix,
                                     out_node::AbstractMatrix,
-                                    body::RigidWakeBody,
+                                    body::Union{RigidWakeBody, NonLiftingBody{ConstantDoublet, 1, <:Any}, NonLiftingBody{VortexRing, 1, <:Any}, NonLiftingBody{Union{ConstantSource,ConstantDoublet}, 2, <:Any}},
                                     areas::AbstractVector, normals::AbstractMatrix,
                                     controlpoints::AbstractMatrix;
                                     fieldname="Ugradmu", addfield=true, Gammai=1,
                                     sharpTE=false, force_cellTE=true,
                                     anglecrit=30)
+
+    # If the body stores both source and doublet strengths (N==2), ensure
+    # the user requests the doublet component (Gammai==2).
+    if typeof(body) <: NonLiftingBody{Union{ConstantSource,ConstantDoublet}, 2, <:Any}
+        @assert Gammai==2 "set Gammai=2 for source-doublet bodies."
+    end
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==body.ncells ""*
@@ -952,6 +959,8 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
 
     end
 
+    # out .*= -1
+
     # Save field in body
     if addfield
         add_field(body, fieldname, "vector", eachcol(out), "cell")
@@ -1018,19 +1027,19 @@ end
 function calcfield_Ugradmu!(out::AbstractMatrix,
                                     out_cell::AbstractMatrix,
                                     out_node::AbstractMatrix,
-                                    body::AbstractBody; optargs...)
+                                    body::AbstractBody; off=1e-8, optargs...)
     normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals)
+    controlpoints = calc_controlpoints(body, normals; off)
     areas = calc_areas(body)
 
     calcfield_Ugradmu!(out, out_cell, out_node, body, areas, normals, controlpoints; optargs...)
     return out
 end
 
-function calcfield_Ugradmu(body::AbstractBody; optargs...)
+function calcfield_Ugradmu(body::AbstractBody; off=1e-8, optargs...)
 
     normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals)
+    controlpoints = calc_controlpoints(body, normals; off)
     areas = calc_areas(body)
 
     out = zeros(3, body.ncells)

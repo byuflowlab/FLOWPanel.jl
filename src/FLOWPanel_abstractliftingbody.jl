@@ -74,7 +74,7 @@ function generate_loft_liftbody(bodytype::Type{B}, args...;
                                 bodyoptargs=(), dimsplit::Int=2,
                                 overwrite_shedding=nothing,
                                 optargs...
-                               ) where {B<:AbstractLiftingBody}
+                               ) where {B<:AbstractBody}
     # Lofts the surface geometry
     grid = gt.generate_loft(args...; optargs...)
 
@@ -104,7 +104,14 @@ function generate_loft_liftbody(bodytype::Type{B}, args...;
         shedding = overwrite_shedding
     end
 
-    return bodytype(triang_grid, shedding; bodyoptargs...)
+    @show bodytype
+    if bodytype <: AbstractLiftingBody
+        return bodytype(triang_grid, shedding; bodyoptargs...)
+    elseif bodytype <: NonLiftingBody
+        return bodytype(triang_grid; bodyoptargs...)
+    else
+        error("Body type $(bodytype) is not a lifting or non-lifting body.")
+    end
 end
 
 """
@@ -217,4 +224,81 @@ function _checkTE(grid, shedding::Array{Int, 2}; tol=1e1*eps())
 
     return true
 end
+
+function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs, backend::FastMultipoleBackend; kerneloffset=1.0e-8, optargs...) where TF
+    # Add wake contributions
+    sheddings = 1:self.nsheddings
+    chunks = collect(Iterators.partition(sheddings, max(length(sheddings) ÷ Threads.nthreads(), 3*Threads.nthreads())))
+    Das, Dbs = self.Das, self.Dbs
+    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false)
+
+    # for chunk in chunks        # Distribute wake panel iteration among all CPU threads
+    # Threads.@threads for chunk in chunks        # Distribute wake panel iteration among all CPU threads
+    for chunk in chunks        # Distribute wake panel iteration among all CPU threads
+
+        # for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding))
+        for i_source in chunk                          # Iterate over wake-shedding panels
+
+            pi, nia, nib, pj, nja, njb = view(self.shedding, :, i_source)
+
+            # Fetch nodes of upper wake panel
+            nodes_idx = (self.cells[1, pi], self.cells[2, pi], self.cells[3, pi])
+
+            TE1 = nodes_idx[nia]
+            TE2 = nodes_idx[nib]
+            v1x = self.grid._nodes[1, TE1]
+            v1y = self.grid._nodes[2, TE1]
+            v1z = self.grid._nodes[3, TE1]
+            v2x = self.grid._nodes[1, TE2]
+            v2y = self.grid._nodes[2, TE2]
+            v2z = self.grid._nodes[3, TE2]
+
+            # direction of trailing semi-infinite wake
+            da1, da2, da3 = Das[1, i_source], Das[2, i_source], Das[3, i_source]
+            db1, db2, db3 = Dbs[1, i_source], Dbs[2, i_source], Dbs[3, i_source]
+            @assert isapprox(da1, db1) && isapprox(da2, db2) && isapprox(da3, db3) "Inconsistent wake directions in _G_phi_wake!"
+
+            for i_target in axes(CPs, 2)
+                # get target
+                tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+                target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+                # compute influence
+                phi, _ = induced_semiinfinite(target, kernel, v1x, v1y, v1z, v2x, v2y, v2z, da1, da2, da3, 1.0, derivatives_switch; kerneloffset)
+
+                # update G
+                G[i_target, pi] += phi
+            end
+
+            # lower wake panel (if it exists)
+            if pj != -1
+                # Fetch nodes of lower wake panel
+                nodes_idx = (self.cells[1, pj], self.cells[2, pj], self.cells[3, pj])
+
+                TE1 = nodes_idx[nja]
+                TE2 = nodes_idx[njb]
+                v1x = self.grid._nodes[1, TE1]
+                v1y = self.grid._nodes[2, TE1]
+                v1z = self.grid._nodes[3, TE1]
+                v2x = self.grid._nodes[1, TE2]
+                v2y = self.grid._nodes[2, TE2]
+                v2z = self.grid._nodes[3, TE2]
+
+                for i_target in axes(CPs, 2)
+                    # get target
+                    tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+                    target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+                    # compute influence
+                    phi, _ = induced_semiinfinite(target, kernel, v1x, v1y, v1z, v2x, v2y, v2z, da1, da2, da3, 1.0, derivatives_switch; kerneloffset)
+
+                    # update G
+                    G[i_target, pj] += phi
+                end
+
+            end
+        end
+    end
+end
+
 ##### END OF ABSTRACT LIFTING BODY #############################################
