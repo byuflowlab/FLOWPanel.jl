@@ -66,10 +66,6 @@ const Im = Array(1.0I, 3, 3)
 # Shedding matrix for a RigidWakeBody without shedding
 const noshedding = zeros(Int, 6, 0)
 
-# whether or not the FastMultipole `extra_farfield` option is enabled for semi-infinite wakes;
-#   otherwise, perform interactions directly (no FMM)
-const EXTRA_FARFIELD = [true]
-
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver", "fmm",
                     "abstractbody", "solver",
@@ -78,6 +74,7 @@ for header_name in ["elements", "linearsolver", "fmm",
                     "multibody",  "elements_fmm",
                     "liftingline",
                     "utils", "postprocess",
+                    "wake", "simulate",
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end

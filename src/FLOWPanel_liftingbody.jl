@@ -44,7 +44,7 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
 
     # User inputs
     grid::gt.GridTriangleSurface              # Paneled geometry
-    shedding::Array{Int, 2}                   # Indicates edges along which to
+    shedding::Vector{Array{Int, 2}}           # Indicates edges along which to
                                               # shed the wake
     # Properties
     shedding_full::Matrix{Int}                 # Map from panel index to shedding edge index (0 if none)
@@ -52,8 +52,8 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
     ncells::Int                               # Number of cells
     cells::Matrix{Int}                        # Cell connectivity (each column is a cell)
     nsheddings::Int                           # Number of shedding edges
-    Das::Array{TF, 2}                   # Unitary direction of rigid wake
-    Dbs::Array{TF, 2}                   # Unitary direction of rigid wake
+    Das::Vector{Array{TF, 2}}                   # Unitary direction of rigid wake
+    Dbs::Vector{Array{TF, 2}}                   # Unitary direction of rigid wake
     fields::Array{String, 1}                  # Available fields (solutions)
     Oaxis::Array{TF,2}                  # Coordinate system of original grid
     O::Array{TF,1}                      # Position of CS of original grid
@@ -69,8 +69,7 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
     watertight::Bool                         # Whether the body is watertight or not
 
     # wake properties
-    wake_strength::Array{TF,1}           # strength of each wake panel
-    use_wake_strength::Bool              # whether to use wake strength in calculations
+    semiinfinite_wake::Bool
 end
 
 function RigidWakeBody{E, N, TF}(
@@ -80,8 +79,8 @@ function RigidWakeBody{E, N, TF}(
                                 nsheddings=size(shedding,2),
                                 fields=Array{String,1}(),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
-                                Das::Matrix{TF} = zeros(TF, 3, size(shedding,2)),
-                                Dbs::Matrix{TF} = zeros(TF, 3, size(shedding,2)),
+                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)) for s in shedding],
+                                Dbs::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)) for s in shedding],
                                 strength=zeros(TF, grid.ncells, N),
                                 potential=zeros(TF, grid.ncells),
                                 velocity=zeros(TF, 3, grid.ncells),
@@ -90,11 +89,12 @@ function RigidWakeBody{E, N, TF}(
                                 kernelcutoff=1e-14,
                                 characteristiclength=characteristiclength_unitary,
                                 check_mesh=true, watertight=true,
-                                wake_strength=zeros(TF, size(shedding,2)),
-                                use_wake_strength=false
+                                semiinfinite_wake=true
                             ) where {E, N, TF}
 
-    @assert _checkTE(grid, shedding) "Got invalid trailing edge"
+    for i_surf in eachindex(shedding)
+        @assert _checkTE(grid, shedding[i_surf]) "Got invalid trailing edge"
+    end
 
     # Automated sanity checks for Meshes.jl mesh
     if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
@@ -136,17 +136,31 @@ function RigidWakeBody{E, N, TF}(
     end
 
     # generate full shedding map
-    shedding_full = zeros(Int, 2, ncells)
+    shedding_full = zeros(Int, 4, ncells)
     shedding_full .= -1
-    
-    # upper shedding edge
-    for i in 1:nsheddings
-        shedding_full[:, shedding[1, i]] .= view(shedding, 2:3, i)
-    end
 
-    # lower shedding edge
-    for i in 1:nsheddings
-        shedding_full[:, shedding[4, i]] .= view(shedding, 5:6, i)
+    # loop over shedding surfaces
+    for i_surf in eachindex(shedding)
+    
+        # upper shedding edge
+        this_shedding = shedding[i_surf]
+        for i in axes(this_shedding, 2)
+            idx = this_shedding[1,i]
+            shedding_full[1:2, idx] .= view(this_shedding, 2:3, i)
+            shedding_full[3, idx] = i_surf # which i_surf of Das/Dbs to use
+            shedding_full[4, idx] = i # which index of Das/Dbs to use
+        end
+
+        # lower shedding edge
+        for i in axes(this_shedding, 2)
+            idx = this_shedding[4,i]
+            if idx > 0
+                shedding_full[1:2, idx] .= view(this_shedding, 5:6, i)
+                shedding_full[3, idx] = i_surf
+                shedding_full[4, idx] = i
+            end
+        end
+
     end
 
     return RigidWakeBody{E, N, TF}(
@@ -164,8 +178,7 @@ function RigidWakeBody{E, N, TF}(
                     kernelcutoff,
                     characteristiclength,
                     watertight,
-                    wake_strength,
-                    use_wake_strength
+                    semiinfinite_wake
                 )
 end
 
@@ -203,7 +216,7 @@ function save(body::RigidWakeBody, args...;
     str *= save_base(body, args...; debug=debug, optargs...)
 
     # Output the wake
-    if out_wake
+    if out_wake && body.semiinfinite_wake
         str *= _savewake(body, args...; len=wake_len, panel=wake_panel,
                             optargs..., suffix=wake_suffix)
     end
@@ -378,12 +391,6 @@ function solve2!(self::RigidWakeBody{TK, 1},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(self.Das) != (3, self.nsheddings)
-        error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(self.Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
     # Compute normals and control points
@@ -415,11 +422,10 @@ function solve2!(self::RigidWakeBody{TK, 1},
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 end
 
-
 function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, TF}, Uinfs::Matrix{<:Real}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
     # get normals and control points
     normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals; off=1e-10)
+    # CPs = _calc_controlpoints(self, normals; off=1e-10)
     CPs_inside = _calc_controlpoints(self, normals; off=-1e-10)
 
     # get source strengths
@@ -438,27 +444,27 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, T
     G = solver.G
     G .= 0.0
 
-    method = 1
+    # method = 1
 
-    if method == 1
+    # if method == 1
 
         #--- method 1: solve for interior perturbation potential = 0 ---#
 
         # solve for doublet strengths such that the interior perturbation potential vanishes everywhere
         # then, the resulting velocity outside will be equal to the source strength, which satifsied flow tangency
-        _G_phi!(self, ConstantDoublet, G, CPs_inside, backend; kerneloffset=1.0e-8, include_wake=true)
+        _G_phi!(self, ConstantDoublet, G, CPs_inside, backend; kerneloffset=1.0e-8)
         
-    elseif method == 2
+    # elseif method == 2
         
-        #--- method 2: (Morino formulation) solve for exterior potential = μ ---#
+    #     #--- method 2: (Morino formulation) solve for exterior potential = μ ---#
         
-        _G_phi!(self, ConstantDoublet, G, CPs, backend; kerneloffset=1.0e-8, include_wake=true)
+    #     _G_phi!(self, ConstantDoublet, G, CPs, backend; kerneloffset=1.0e-8)
 
-        # Fredholm second-kind equation
-        for i in 1:size(G,1)
-            G[i, i] += 1.0 # jump in potential equals doublet strength
-        end
-    end
+    #     # Fredholm second-kind equation
+    #     for i in 1:size(G,1)
+    #         G[i, i] += 1.0 # jump in potential equals doublet strength
+    #     end
+    # end
 
     # Solve system of equations for the potential
     μ = G \ rhs
@@ -507,139 +513,14 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, T
     add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
 end
 
-function solve2!(self::RigidWakeBody{VortexRing, 1, TF}, Uinfs::Matrix{<:Real}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
-    # get normals and control points
-    normals = _calc_normals(self)
-
-    CPs = _calc_controlpoints(self, normals; off=1e-12)
-    CPs_inside = _calc_controlpoints(self, normals; off=-1e-12)
-
-    # right-hand side
-    # rhs = view(solver.rhs, 1:self.ncells)
-    # rhs .= vec(sum(.- Uinfs .* normals, dims=1))
-
-    # # Compute geometric matrix (left-hand-side influence matrix)
-    # G = view(solver.G, 1:self.ncells, 1:self.ncells)
-    # G .= 0.0
-    # _G_U_constantsource!(self, G, CPs, normals; offset=self.kerneloffset, optargs...)
-
-    # # solve for source strengths
-    # σ = G \ rhs
-    # self.strength[:, 1] .= σ
-    # self.strength[:, 2] .= 0.0
-
-    # # save total velocity for debugging
-    # vind = zeros(TF, 3, self.ncells)
-    # _Uind!(self, CPs, vind, backend; optargs...)
-    # vind .+= Uinfs
-    # vnorms = sum(vind .* normals, dims=1)
-    # @show maximum(abs.(vnorms))
-
-    # compute potential distribution (RHS for doublet solve)
-    rhs_doublet = solver.rhs
-    phi_freestream = vec(sum(Uinfs .* CPs_inside, dims=1))
-    rhs_doublet .= .- phi_freestream
-    # _phi!(self, CPs, view(rhs_doublet, 1:self.ncells), backend; optargs...)
-    # phis_source = deepcopy(rhs_doublet[1:self.ncells])
-
-    #--- compute geometric matrix for doublets ---#
-
-    Gdoublets = solver.G
-    Gdoublets .= 0.0
-
-    # contributions due to body panels
-    _G_phi_constantdoublet!(self, Gdoublets, CPs_inside; optargs...)
-    # for i in 1:self.ncells
-    #     Gdoublets[i,i] = 0.5
-    # end
-
-    # Add wake contributions
-    sheddings = 1:self.nsheddings
-    chunks = collect(Iterators.partition(sheddings, max(length(sheddings) ÷ Threads.nthreads(), 3*Threads.nthreads())))
-    Das, Dbs = self.Das, self.Dbs
-
-    # for chunk in chunks        # Distribute wake panel iteration among all CPU threads
-    Threads.@threads for chunk in chunks        # Distribute wake panel iteration among all CPU threads
-
-        # Pre-allocate memory for panel calculation
-        TE = zeros(Int, 2)
-        _tri_out, _tricoor, _quadcoor, _quad_out, _lin, _ndivscells, _cin = gt.generate_getcellt_args!(self.grid)
-
-        # for (ei, (pi, nia, nib, pj, nja, njb)) in enumerate(eachcol(self.shedding))
-        for ei in chunk                          # Iterate over wake-shedding panels
-
-            pi, nia, nib, pj, nja, njb = view(self.shedding, :, ei)
-
-            # Fetch nodes of upper wake panel
-            panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
-                                                self.grid, pi, _lin, _ndivscells, _cin)
-
-            # Indicate nodes in the upper shedding edge
-            TE[1] = panel[nia]
-            TE[2] = panel[nib]
-            da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
-            db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
-
-            phi_semiinfinite_doublet(
-                              self.grid._nodes,                  # All nodes
-                              TE,                                # Indices of nodes that make the shedding edge
-                              da1, da2, da3,                     # Semi-infinite direction da
-                              db1, db2, db3,                     # Semi-infinite direction db
-                              1.0,                               # Unitary strength
-                              CPs_inside,                               # Targets
-                              view(Gdoublets, :, pi)                     # Potential of upper wake panel on every CP
-                             )
-
-            if pj != -1
-                # Fetch nodes of lower wake panel
-                panel = gt.get_cell_t!(_tri_out, _tricoor, _quadcoor, _quad_out,
-                                                    self.grid, pj, _lin, _ndivscells, _cin)
-
-                # Indicate nodes in the lower shedding edge
-                TE[1] = panel[nja]
-                TE[2] = panel[njb]
-
-                phi_semiinfinite_doublet(
-                              self.grid._nodes,                  # All nodes
-                              TE,                                # Indices of nodes that make the shedding edge
-                              db1, db2, db3,                     # Semi-infinite direction db
-                              da1, da2, da3,                     # Semi-infinite direction da
-                              1.0,                               # Unitary strength
-                              CPs_inside,                               # Targets
-                              view(Gdoublets, :, pj)                     # Potential of upper wake panel on every CP
-                            )
-            end
-        end
-    end
-
-    # Solve system of equations
-    self.strength[:, 1] .= Gdoublets \ rhs_doublet
-
-    # calculate inside potential
-    phis_inside = zeros(TF, self.ncells)
-    _phi!(self, CPs_inside, phis_inside, backend; optargs...)
-
-    # calculate outside potential
-    phis_outside = zeros(TF, self.ncells)
-    _phi!(self, CPs, phis_outside, backend; optargs...)
-
-    # Save solution
-    _solvedflag(self, true)
-    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(self.Dbs)), "system")
-    add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
-    add_field(self, "phi_inside", "scalar", phis_inside .+ phi_freestream, "cell")
-    add_field(self, "phi_outside", "scalar", phis_outside .+ phi_freestream, "cell")
-    add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
-    # add_field(self, "vtot", "vector", collect(eachcol(vind)), "cell")
-    # add_field(self, "phi_source", "scalar", phis_source, "cell")
-end
-
 to_tuple(val::Tuple) = val
 to_tuple(val) = (val,)
 
-function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; optargs...) where TF
+function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
+        expansion_order=solver.expansion_order, 
+        multipole_acceptance=solver.multipole_acceptance, 
+        leaf_size=solver.leaf_size
+    ), optargs...) where TF
 
     # ensure CPoffset is negative (we'll solve this in the interior)
     CPoffset_old = self.CPoffset
@@ -655,11 +536,6 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, 
     self.strength[:, 2] .= 0.0
 
     # calculate potential due to source strengths
-    backend = FastMultipoleBackend(
-        expansion_order=solver.expansion_order, 
-        multipole_acceptance=solver.multipole_acceptance, 
-        leaf_size=solver.leaf_size
-    )
     _phi!(self, CPs, self.potential, backend; include_wake=false, optargs...) # NOTE: wake is included in the `direct!` function in this line
     
     # zero source strengths while we solver for the doublet strengths
@@ -670,7 +546,8 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, 
         max_iterations=solver.max_iterations, 
         tolerance=solver.tolerance, 
         rlx=solver.rlx,
-        derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, to_tuple(_unpack_fmm(self)))
+        derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, to_tuple(_unpack_fmm(self))),
+        reverse_pass=false
     )
 
     # update source strength
@@ -881,12 +758,6 @@ function solve2!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(self.Das) != (3, self.nsheddings)
-        error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(self.Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
     # Compute normals and control points
@@ -1749,12 +1620,6 @@ function solve2!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
-        error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
     # store Das and Dbs
@@ -2164,6 +2029,89 @@ FastMultipole.has_vector_potential(::AbstractBody{VortexRing, 1, <:Any}) = true
 
 FastMultipole.has_vector_potential(::AbstractBody{Union{VortexRing, UniformVortexSheet}, 2, <:Any}) = true
 
+has_semiinfinite_wake(self::RigidWakeBody) = self.semiinfinite_wake
+
+function FastMultipole.body_to_multipole!(system::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, TF}, multipole_coefficients, buffer, center, bodies_index, harmonics, expansion_order) where TF
+    # loop over bodies
+    for i_body in bodies_index
+        # relative body position
+        # i1 = 5 + strength_dims(system)
+        # x1 = SVector{3}(buffer[i1,i_body], buffer[i1+1,i_body], buffer[i1+2,i_body])
+        # x2 = SVector{3}(buffer[i1+3,i_body], buffer[i1+4,i_body], buffer[i1+5,i_body])
+        # x3 = SVector{3}(buffer[i1+6,i_body], buffer[i1+7,i_body], buffer[i1+8,i_body])
+        x1 = FastMultipole.get_vertex(buffer, system, i_body, 1)
+        x2 = FastMultipole.get_vertex(buffer, system, i_body, 2)
+        x3 = FastMultipole.get_vertex(buffer, system, i_body, 3)
+        x0 = x1 - center
+        xu = x2 - x1
+        xv = x3 - x1
+
+        # get normal
+        normal = cross(xu, xv)
+        normal /= norm(normal)
+
+        # get strength
+        strength = FastMultipole.SVector{2,TF}(buffer[5, i_body], buffer[6, i_body])
+        # strength = strength .* scale_strength
+
+        # update values
+        element = FastMultipole.Panel{FastMultipole.SourceDipole}
+        FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength, expansion_order)
+
+        # add wake panel
+        if !system.semiinfinite_wake
+            # which vertices connect to the wake
+            idx1 = Int(buffer[end-7, i_body])
+            if idx1 > 0
+                println("wake...")
+                # first vertex and wake
+                Dax, Day, Daz = buffer[end-6, i_body], buffer[end-5, i_body], buffer[end-4, i_body]
+                Da = FastMultipole.SVector{3}(Dax, Day, Daz)
+                vs = (x1, x2, x3)
+                v1 = vs[idx1]
+                v1w = v1 + Da
+
+                # second vertex and wake
+                idx2 = Int(buffer[end-3, i_body])
+                v2 = vs[idx2]
+                Dbx, Dby, Dbz = buffer[end-2, i_body], buffer[end-1, i_body], buffer[end, i_body]
+                Db = FastMultipole.SVector{3}(Dbx, Dby, Dbz)
+                v2w = v2 + Db
+
+                
+                # body-to-multipole: first triangle
+                x0 = v1 - center
+                xu = v2 - v1
+                xv = v1w - v1
+                
+                # get normal
+                normal = cross(xu, xv)
+                normal /= norm(normal)
+
+                # doublet strength
+                strength_doublet = FastMultipole.SVector{1,TF}(strength[2])
+                @show Da, Db, v1, v2, v1w, v2w, normal
+
+                # update values
+                element = FastMultipole.Panel{FastMultipole.Dipole}
+                FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength_doublet, expansion_order)
+
+                # body-to-multipole: second triangle
+                x0 = v1w - center
+                xu = v2 - v1w
+                xv = v2w - v1w
+
+                # get normal
+                normal = cross(xu, xv)
+                normal /= norm(normal)
+
+                # update values
+                FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength_doublet, expansion_order)
+            end
+        end
+    end
+end
+
 # multipole coefficients for vortex ring
 function body_to_multipole_vl!(multipole_coefficients, harmonics, x1, x2, center, gamma, expansion_order)
     # delta
@@ -2210,7 +2158,7 @@ function FastMultipole.body_to_multipole!(system::AbstractBody{VortexRing, NK}, 
     end
 end
 
-## multipole coefficients for a vortex ring are equivalent to those for a constant doublet panel
+# multipole coefficients for a vortex ring are equivalent to those for a constant doublet panel
 # FastMultipole.body_to_multipole!(system::AbstractBody{VortexRing, 1, <:Any}, args...) =
 #     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
@@ -2258,20 +2206,60 @@ end
 
 #--- additional FastMultipole interface functions for RigidWakeBody ---#
 
-function manual_check(v::AbstractVector{TF}, val) where TF
-    for (i, vi) in enumerate(v)
-        vi == val && (return i)
-    end
-    return TF(-1)
-end
+"""
+    additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWakeBody, i_body, ilast)
 
+Updates 8 rows to the buffer in column `i_buffer` corresponding to the `i_body`th body,
+beginning with row `ilast+1`:
+
+1. Which of the 3 vertices of this source sheds the first wake vertex (-1 if no wake is shed).
+2. (If a wake is shed,) the \$x\$ delta from the first wake-shedding vertex to the next wake point
+3. (If a wake is shed,) the \$y\$ delta from the first wake-shedding vertex to the next wake point
+4. (If a wake is shed,) the \$z\$ delta from the first wake-shedding vertex to the next wake point
+5. Which of the 3 vertices of this source sheds the second wake vertex (-1 if no wake is shed).
+6. (If a wake is shed,) the \$x\$ delta from the second wake-shedding vertex to the next wake point
+7. (If a wake is shed,) the \$y\$ delta from the second wake-shedding vertex to the next wake point
+8. (If a wake is shed,) the \$z\$ delta from the second wake-shedding vertex to the next wake point
+
+**Returns**
+
+- `ilast+nrows` where `nrows` is the number of updated rows
+
+"""
 function additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWakeBody, i_body, ilast)
-    buffer[ilast+1, i_buffer] = system.shedding_full[1, i_body] # index of first node of shedding edge
-    buffer[ilast+2, i_buffer] = system.shedding_full[2, i_body] # index of second node of shedding edge
-    return ilast+2
+    # index of first node of shedding edge
+    idx1 = system.shedding_full[1, i_body]
+    buffer[ilast+1, i_buffer] = idx1
+
+    # wake delta from the first node
+    update_radius = zero(eltype(buffer))
+    if idx1 > 0
+        idx_Das = system.shedding_full[3, i_body]
+        Dax, Day, Daz = view(system.Das[idx_Das], :, system.shedding_full[4, i_body])
+        buffer[ilast+2:ilast+4, i_buffer] .= (Dax, Day, Daz)
+        update_radius = sqrt(Dax*Dax + Day*Day + Daz*Daz)
+    end
+
+    # index of second node of shedding edge
+    idx2 = system.shedding_full[2, i_body]
+    buffer[ilast+5, i_buffer] = system.shedding_full[2, i_body]
+
+    # wake delta from the second node
+    if idx2 > 0
+        idx_Das = system.shedding_full[3, i_body]
+        Dax, Day, Daz = view(system.Das[idx_Das], :, system.shedding_full[4, i_body])
+        buffer[ilast+6:ilast+8, i_buffer] .= (Dax, Day, Daz)
+        update_radius = max(update_radius, sqrt(Dax*Dax + Day*Day + Daz*Daz))
+    end
+
+    if !system.semiinfinite_wake
+        buffer[4] += update_radius # conservative update to accomadate wake size
+    end
+
+    return ilast+8
 end
 
-additional_data_per_body(system::RigidWakeBody) = 2 # for the two node indices of the shedding edge
+additional_data_per_body(system::RigidWakeBody) = 8 # for the two node indices of the shedding edge
 
 #--- interface functions for O(N) solver ---#
 
@@ -2352,9 +2340,6 @@ function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody{Uni
 end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
-    
-    # get semiinfinite wake direction
-    Dax, Day, Daz = source_system.Das[1, 1], source_system.Das[2, 1], source_system.Das[3, 1]
 
     # loop over targets
     for i_target in target_bodies_index
@@ -2370,15 +2355,28 @@ function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, sourc
 
         # loop over sources
         for i_source in source_bodies_index
-            idx1 = Int(source_buffer[end-1, i_source]) # index of first node of shedding edge
+            idx1 = Int(source_buffer[end-7, i_source]) # index of first node of shedding edge
             if idx1 > 0
+
+                # Da
+                Dax, Day, Daz = source_buffer[end-6, i_source],
+                                source_buffer[end-5, i_source],
+                                source_buffer[end-4, i_source]
+
                 # first vertex
                 v1x = source_buffer[4+NK+1+(idx1-1)*3, i_source]
                 v1y = source_buffer[4+NK+2+(idx1-1)*3, i_source]
                 v1z = source_buffer[4+NK+3+(idx1-1)*3, i_source]
 
                 # second vertex
-                idx2 = Int(source_buffer[end, i_source]) # index of second node of shedding edge
+                idx2 = Int(source_buffer[end-3, i_source]) # index of second node of shedding edge
+
+                # Db
+                Dbx, Dby, Dbz = source_buffer[end-2, i_source],
+                                source_buffer[end-1, i_source],
+                                source_buffer[end, i_source]
+
+                # vertex
                 v2x = source_buffer[4+NK+1+(idx2-1)*3, i_source]
                 v2y = source_buffer[4+NK+2+(idx2-1)*3, i_source]
                 v2z = source_buffer[4+NK+3+(idx2-1)*3, i_source]

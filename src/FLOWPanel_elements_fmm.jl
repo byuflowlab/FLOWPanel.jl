@@ -11,7 +11,9 @@
 
 #-------- high-level interface -------#
 
-function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; include_wake=true, optargs...)
+has_semiinfinite_wake(self::AbstractBody) = false
+
+function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     potential = Vector{TF}(undef, 0) # unused
@@ -25,17 +27,13 @@ function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend;
                                         hessian=false,
                                         gradient=true, 
                                         scalar_potential=false,
-                                        extra_farfield=EXTRA_FARFIELD[1], 
+                                        extra_farfield=has_semiinfinite_wake(self), 
                                         shrink=true)
-
-    if include_wake && !EXTRA_FARFIELD[1]
-        _rigid_wake_U!(self, targets, out; optargs...)
-    end
 
     return nothing
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; include_wake=true, optargs...)
+function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     velocity = Array{TF, 2}(undef, 0, 0)  # unused
@@ -49,13 +47,8 @@ function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; 
                                         hessian=false,
                                         gradient=false, 
                                         scalar_potential=true,
-                                        extra_farfield=EXTRA_FARFIELD[1],
+                                        extra_farfield=has_semiinfinite_wake(self),
                                         shrink=true)
-
-    if include_wake && !EXTRA_FARFIELD[1]
-        println(">>>>>>>>>>>>>> Adding rigid wake contributions to velocity... <<<<<<<<<<<<<<<")
-        _rigid_wake_phi!(self, targets, out; optargs...)
-    end
 
     return nothing
 end
@@ -171,8 +164,8 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    # check for semi-infinite wake (zero if not)
-    p, v, vg = _induced_semiinfinite(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
+    # check for wake (if any)
+    p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
 
     # return potential, velocity, velocity_gradient
     return potential+p, velocity+v, velocity_gradient+vg
@@ -804,31 +797,73 @@ function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantSource
     return zero(eltype(source_buffer))
 end
 
-"Defaults to no semiinfinite wake"
-function _induced_semiinfinite(target::AbstractVector{TF}, vertices::Tuple, source_system::AbstractBody, source_buffer, i_source, derivatives_switch) where TF
-    return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+function _induced_wake(target, (v1, v2, v3), source_system::AbstractBody, source_buffer, i_source, derivatives_switch)
+    return nothing
 end
 
-function _induced_semiinfinite(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, source_buffer, i_source, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {TF,PS,GS,HS}
-    # check if this panel has a semi-infinite wake
-    idx_1 = Int(source_buffer[end-1, i_source])
-    if idx_1 > 0 && EXTRA_FARFIELD[1]
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, source_buffer, i_source, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {TF,PS,GS,HS}
+    # check if this panel has a wake
+    idx_1 = Int(source_buffer[end-7, i_source])
+    if idx_1 > 0
         # check which vertices are used
-        v1x, v1y, v1z = vertices[idx_1]
-        idx_2 = Int(source_buffer[end, i_source])
-        v2x, v2y, v2z = vertices[idx_2]
+        v1 = vertices[idx_1]
+        v1x, v1y, v1z = v1
+        idx_2 = Int(source_buffer[end-3, i_source])
+        v2 = vertices[idx_2]
+        v2x, v2y, v2z = v2
 
-        # get the semi-infinite direction
-        Dax, Day, Daz = source_system.Das[1,1], source_system.Das[2,1], source_system.Das[3,1]
+        # get the wake shedding direction
+        Dax, Day, Daz = source_buffer[end-6, i_source],
+                        source_buffer[end-5, i_source],
+                        source_buffer[end-4, i_source]
 
         # get strength
         strength = get_strength_doublet(source_system, source_buffer, i_source)
 
         # evaluate potential
-        return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+        if source_system.semiinfinite_wake
+            return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+        else
+            # wake node connected to the first vertex
+            v1w_x = v1x + Dax
+            v1w_y = v1y + Day
+            v1w_z = v1z + Daz
+            vw1 = FastMultipole.SVector(v1w_x, v1w_y, v1w_z)
 
+            # influence of first triangle 
+            control_point = (v1 + v2 + vw1) * 0.333333333333333
+            TK = ConstantDoublet
+            strength = FastMultipole.SVector{1}(strength)
+            R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
+            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength, TK, source_system.kerneloffset, R, derivatives_switch)
+            
+            # wake node connected to the second vertex
+            Dbx, Dby, Dbz = source_buffer[end-2, i_source],
+                            source_buffer[end-1, i_source],
+                            source_buffer[end, i_source]
+            v2w_x = v2x + Dbx
+            v2w_y = v2y + Dby
+            v2w_z = v2z + Dbz
+            vw2 = FastMultipole.SVector(v2w_x, v2w_y, v2w_z)
+            
+            # influence of the second triangle
+            control_point = (vw1 + v2 + vw2) * 0.333333333333333
+            R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
+            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength, TK, source_system.kerneloffset, R, derivatives_switch)
+            if PS
+                p += dp
+            end
+            if GS
+                v += dv
+            end
+            if HS
+                g += dg
+            end
+
+            return p, v, g
+        end
     else
-        # no semi-infinite wake
+        # no wake for this panel
         return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     end
 end

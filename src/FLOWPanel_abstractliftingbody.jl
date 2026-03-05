@@ -179,7 +179,7 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
         shedding = overwrite_shedding
     end
 
-    return bodytype(triang_grid, shedding; bodyoptargs...)
+    return bodytype(triang_grid, [shedding]; bodyoptargs...)
 end
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################

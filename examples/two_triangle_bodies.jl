@@ -116,7 +116,6 @@ plt.show()
 
 #--- debug wake ---#
 
-pnl.EXTRA_FARFIELD[1] = false
 body = make_single_triangle_lifting_body()
 
 # get freestream

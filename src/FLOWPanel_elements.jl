@@ -16,6 +16,10 @@ struct VortexRing <: AbstractElement end
 struct ConstantVortexSheet <: AbstractElement end
 struct UniformVortexSheet <: AbstractElement end
 
+kernel_dim(::Type{<:Union{ConstantSource, ConstantDoublet, VortexRing}}) = 1
+kernel_dim(::Type{<:Union{ConstantVortexSheet, UniformVortexSheet}}) = 2
+kernel_dim(::Type{Union{ConstantSource, ConstantDoublet}}) = 2
+
 ################################################################################
 # SOURCE ELEMENTS
 ################################################################################

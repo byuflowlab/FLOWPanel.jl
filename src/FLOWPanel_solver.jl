@@ -304,7 +304,7 @@ function FGSSolver(body::AbstractBody;
 
     # generate solver
     TF = numtype(body)
-    fgs = FastMultipole.FastGaussSeidel((body,), (body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter)
+    fgs = FastMultipole.FastGaussSeidel((body,), (body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=has_semiinfinite_wake(body))
 
     # restore CPoffset
     body.CPoffset = CPoffset_old

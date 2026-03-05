@@ -50,12 +50,12 @@ d               = 2*0.835                   # (m) duct diameter
 
 # ----------------- SOLVER PARAMETERS ------------------------------------------
 # Discretization
-NDIVS_theta     = 80                        # Number of azimuthal panels
+NDIVS_theta     = 20                        # Number of azimuthal panels
 
 # NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
 #       either an integer, or an array of tuples as shown below
 
-n_rfl           = 8                        # This controls the number of chordwise panels
+n_rfl           = 6                        # This controls the number of chordwise panels
 
 NDIVS_rfl_up = [                            # Discretization of airfoil upper surface
             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
@@ -108,7 +108,7 @@ body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                                         kerneloffset=1e-8,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
-                                                        semiinfinite_wake=true
+                                                        semiinfinite_wake=false
                                             )
                                         )
 
@@ -126,8 +126,6 @@ vtks = save_path*"/"                        # String with VTK output files
 
 
 # ----------------- CALL SOLVER ------------------------------------------------
-global solver = nothing
-# for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 i = 2
 AOA = AOAs[i]
     
@@ -137,17 +135,10 @@ AOA = AOAs[i]
     Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
     # Freestream at every control point
-    Uinfs = repeat(Vinf, 1, body.ncells)
+    Uinf(t) = Vinf
 
-    # Unitary direction of semi-infinite vortex at points `a` and `b` of each
-    # trailing edge panel
-    body.Das[1] .= repeat(Vinf/magVinf, 1, body.nsheddings)
-    body.Dbs[1] .= repeat(Vinf/magVinf, 1, body.nsheddings)
-
-    # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-    # `Das` and `Dbs` as trailing edge rigid wake direction
-    # @time pnl.solve(body, Uinfs, Das, Dbs)
-    leaf_size = 50
+    # select backend for N-body interactions
+    leaf_size = 150
     expansion_order = 10
     multipole_acceptance = 0.4
     backend = pnl.FastMultipoleBackend(;
@@ -156,6 +147,7 @@ AOA = AOAs[i]
                                     leaf_size
                                 )
     # backend = pnl.DirectBackend()
+
     # global solver = pnl.Backslash(body; least_squares=true)
     # solver = pnl.KrylovSolver(body;
     #     method=:gmres,
@@ -170,10 +162,10 @@ AOA = AOAs[i]
     #             )
     # )
     println("Initializaing solver...")
-    @time solver = pnl.FGSSolver(body;
-        max_iterations=500,         # Maximum number of iterations
-        tolerance=1.0e-6,            # Convergence tolerance
-        rlx=1.0,                  # Relaxation factor
+    @time body_solver = pnl.FGSSolver(body;
+        max_iterations=100,         # Maximum number of iterations
+        tolerance=1.0e-7,            # Convergence tolerance
+        rlx=0.1,                  # Relaxation factor
         expansion_order,
         multipole_acceptance,
         leaf_size,
@@ -182,81 +174,22 @@ AOA = AOAs[i]
     )
     # solver = pnl.BackslashDirichlet(body)
 
-    println("\nSolving...")
+    # initialize wake
+    wake = pnl.PanelWake(body; nwakerows=10)
 
-    # profile
-    # using Profile, PProf
+    # prepare other inputs
+    eta = 0.3
+    frames = nothing
+    maneuver = (args...; optargs...) -> nothing
+    l = d * aspectratio
+    dt = magVinf / l / (n_rfl * 5)
+    t_range = range(0.0, step=dt, length=15)
 
-    pnl.solve2!(body, Uinfs, solver; backend)
-    # @profile pnl.solve2!(body, Uinfs, solver; backend)
-    # Profile.clear()
-    # @profile pnl.solve2!(body, Uinfs, solver; backend)
-    # pprof()
-
-    # ----------------- POST PROCESSING ----------------------------------------
-    println("\nPost processing...")
-
-    # Calculate surface velocity U on the body
-    @time Us = pnl.calcfield_U(body, body; backend)
-
-    # NOTE: Since the boundary integral equation of the potential flow has a
-    #       discontinuity at the boundary, we need to add the gradient of the
-    #       doublet strength to get an accurate surface velocity
-
-    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-    Gammai = kernel == pnl.VortexRing ? 1 : kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? 2 : 0
-    UDeltaGamma = pnl.calcfield_Ugradmu(body; Gammai)
-    # UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true, force_cellTE=false)
-
-    # Add both velocities together
-    pnl.addfields(body, "Ugradmu", "U")
-
-    # Calculate pressure coefficient (based on U + U_∇μ)
-    @time Cps = pnl.calcfield_Cp(body, magVinf)
-
-    # Calculate the force of each panel (based on Cp)
-    @time Fs = pnl.calcfield_F(body, magVinf, rho)
-
-    # check normal flow condition
-    Us_tot = pnl.get_field(body, "U")["field_data"] # total velocity
-    Us_tot = [Us_tot[j][i] for i=1:3, j=1:size(Us_tot,1)]
-    normals = pnl._calc_normals(body)
-    Udotn = sum(Us_tot .* normals, dims=1)
-    resid = maximum(abs.(Udotn))
-    println("Max flow tangency residual: $resid")
-
-    normals = pnl.calc_normals(body)
-    CPs_inside = pnl._calc_controlpoints(body, normals; off=-1e-10)
-
-    # ----------------- COMPARISON TO EXPERIMENTAL DATA ------------------------
-    # Plot surface pressure along slices of the duct
-    fig, axs = plot_Cp(body, AOA)
-
-    if save_plots
-        fname = "$(run_name)-Cp-AOA$(ceil(Int, AOA)).png"
-        fig.savefig(joinpath(fig_path, fname), dpi=300, transparent=true)
+    println("\nBegin simulation...")
+    @time begin
+        pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
+            eta, body_solver, backend
+        )
     end
 
-    # ----------------- VISUALIZATION ------------------------------------------
-    # Compute fluid domain and save as VTK
-    if fluiddomain
-        global vtks *= generate_fluiddomain(body, AOA, Vinf, d,
-                                                aspectratio, save_path; num=i)
-    end
-
-    # Save body as VTK
-    if paraview
-        name = typeof(solver) <: pnl.BackslashDirichlet ? "duct_dirichlet" : "duct"
-        name *= kernel == pnl.VortexRing ? "_vortexring" :
-                kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
-                ""
-        global vtks *= pnl.save(body, name; path=save_path, num=i,
-                                        wake_panel=false, debug=false, out_wake=false)
-    end
-
-# end
-
-# Call Paraview
-if paraview && call_paraview
-    run(`paraview --data=$(vtks)`)
-end
+    

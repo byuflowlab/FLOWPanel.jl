@@ -111,7 +111,7 @@ println("Solving body...")
 backend = pnl.FastMultipoleBackend(
         expansion_order=7,
         multipole_acceptance=0.4,
-        leaf_size=100000
+        leaf_size=20
     )
 # backend = pnl.DirectBackend()
     

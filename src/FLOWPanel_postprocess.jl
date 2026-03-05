@@ -394,36 +394,24 @@ function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
     end
 
     # Iterate over TE cells
-    for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+    for shedding in body.shedding
+        for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
 
-        sides = pj!=-1 ? ((pi, nia, nib), (pj, nja, njb)) : ((pi, nia, nib),)
+            sides = pj!=-1 ? ((pi, nia, nib), (pj, nja, njb)) : ((pi, nia, nib),)
 
 
-        # for (ci, ei, ej) in sides               # Iterate over both sides
-            # # Identify neighbor index where the wake is
-            # ni =    (ei==1 && ej==2) || (ei==2 && ej==1) ? 1 :
-            #         (ei==2 && ej==3) || (ei==3 && ej==2) ? 2 :
-            #         (ei==3 && ej==1) || (ei==1 && ej==3) ? 3 :
-            #         error("Logic error: Invalid trailing edge!")
+            # for (ci, ei, ej) in sides               # Iterate over both sides
+                # # Identify neighbor index where the wake is
+                # ni =    (ei==1 && ej==2) || (ei==2 && ej==1) ? 1 :
+                #         (ei==2 && ej==3) || (ei==3 && ej==2) ? 2 :
+                #         (ei==3 && ej==1) || (ei==1 && ej==3) ? 3 :
+                #         error("Logic error: Invalid trailing edge!")
 
-        for (ci, _, _) in sides               # Iterate over both sides
+            for (ci, _, _) in sides               # Iterate over both sides
 
-            for ni in 1:3                   # Iterate over neighbors
+                for ni in 1:3                   # Iterate over neighbors
 
-                ccoor = cinc[ci]                # Cartesian indexing of this cell
-
-                # Obtain coordinates of ni-th neighbor
-                ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
-
-                if ncoor[1] != 0
-                    # Linear indexing of this neighbor
-                    nlin = linc[ncoor...]
-
-                    ei, ej = ni, ni%3 + 1
-
-                    # Fetch the cell
-                    panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
-                                    body.grid, collect(Tuple(ccoor)), lin, ndivscells)
+                    ccoor = cinc[ci]                # Cartesian indexing of this cell
 
                     # Obtain coordinates of ni-th neighbor
                     ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
@@ -432,71 +420,85 @@ function calcfield_Ugradmu_cell!(out::AbstractMatrix, body::RigidWakeBody,
                         # Linear indexing of this neighbor
                         nlin = linc[ncoor...]
 
-                        # r = pj - pi
-                        r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
-                        r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
-                        r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
+                        ei, ej = ni, ni%3 + 1
 
-                        # d = r⨉n / |r⨉n| (normal to edge)
-                        d1 = r2*normals[3, ci] - r3*normals[2, ci]
-                        d2 = r3*normals[1, ci] - r1*normals[3, ci]
-                        d3 = r1*normals[2, ci] - r2*normals[1, ci]
+                        # Fetch the cell
+                        panel = gt.get_cell_t!(tri_out, quadcoor, quad_out,
+                                        body.grid, collect(Tuple(ccoor)), lin, ndivscells)
 
-                        # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
-                        # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
-                        # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
-                        # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
+                        # Obtain coordinates of ni-th neighbor
+                        ncoor = gt.neighbor(body.grid, ni, ci; preserveEdge=true)
 
-                        dmag = sqrt(d1^2 + d2^2 + d3^2)
-                        d1 /= dmag
-                        d2 /= dmag
-                        d3 /= dmag
+                        if ncoor[1] != 0
+                            # Linear indexing of this neighbor
+                            nlin = linc[ncoor...]
 
-                        # Use Green-Gauss method to compute gradient of circulation
-                        # where the interpolated gamma at each face (edge) is used
+                            # r = pj - pi
+                            r1 = nodes[1, tri_out[ej]] - nodes[1, tri_out[ei]]
+                            r2 = nodes[2, tri_out[ej]] - nodes[2, tri_out[ei]]
+                            r3 = nodes[3, tri_out[ej]] - nodes[3, tri_out[ei]]
 
-                        # Compute vector from one edge vertex to cell-center
-                        vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
-                        vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
+                            # d = r⨉n / |r⨉n| (normal to edge)
+                            d1 = r2*normals[3, ci] - r3*normals[2, ci]
+                            d2 = r3*normals[1, ci] - r1*normals[3, ci]
+                            d3 = r1*normals[2, ci] - r2*normals[1, ci]
 
-                        # Compute approx. distance of cell-center to edge
-                        # Common denominator has been cancelled out
-                        dMain = norm(cross(vecMain, [r1, r2, r3]))
-                        dNear = norm(cross(vecNear, [r1, r2, r3]))
+                            # # d = (cpj - cpi) / |cpj - cpi| (centroid to centroid)
+                            # d1 = controlpoints[1, nlin] - controlpoints[1, ci]
+                            # d2 = controlpoints[2, nlin] - controlpoints[2, ci]
+                            # d3 = controlpoints[3, nlin] - controlpoints[3, ci]
 
-                        # r = [r1, r2, r3]
-                        # rhat = r/norm(r)
-                        # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
-                        # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
+                            dmag = sqrt(d1^2 + d2^2 + d3^2)
+                            d1 /= dmag
+                            d2 /= dmag
+                            d3 /= dmag
 
-                        # Compute inverse distance weighted interpolation factor
-                        f = dNear/(dMain + dNear)
+                            # Use Green-Gauss method to compute gradient of circulation
+                            # where the interpolated gamma at each face (edge) is used
 
-                        # Override interpolation factor to 0.5 for debugging
-                        # This is just averaging between gamma
-                        # f = 0.5
+                            # Compute vector from one edge vertex to cell-center
+                            vecMain = nodes[1:3, tri_out[ei]] - controlpoints[1:3, ci]
+                            vecNear = nodes[1:3, tri_out[ei]] - controlpoints[1:3, nlin]
 
-                        # Compute face gamma
-                        faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+                            # Compute approx. distance of cell-center to edge
+                            # Common denominator has been cancelled out
+                            dMain = norm(cross(vecMain, [r1, r2, r3]))
+                            dNear = norm(cross(vecNear, [r1, r2, r3]))
 
-                        # Invert direction of vector if normals point inward
-                        sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+                            # r = [r1, r2, r3]
+                            # rhat = r/norm(r)
+                            # dMain = norm( vecMain - dot(vecMain, rhat)*rhat )
+                            # dNear = norm( vecNear - dot(vecNear, rhat)*rhat )
 
-                        # Add contribution from face gamma
-                        mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+                            # Compute inverse distance weighted interpolation factor
+                            f = dNear/(dMain + dNear)
 
-                        # Cancels out the neighbor where the wake is supposed to be
-                        # if abs(mag) < maxgrad
-                            out[1, ci] += 0.5 * sgn * d1 * mag
-                            out[2, ci] += 0.5 * sgn * d2 * mag
-                            out[3, ci] += 0.5 * sgn * d3 * mag
-                        # end
+                            # Override interpolation factor to 0.5 for debugging
+                            # This is just averaging between gamma
+                            # f = 0.5
+
+                            # Compute face gamma
+                            faceGamma = f*Gammas[ci] + (1.0-f)*Gammas[nlin]
+
+                            # Invert direction of vector if normals point inward
+                            sgn = body.CPoffset==0 ? 1 : sign(body.CPoffset)
+
+                            # Add contribution from face gamma
+                            mag = faceGamma * sqrt(r1^2 + r2^2 + r3^2) / areas[ci]
+
+                            # Cancels out the neighbor where the wake is supposed to be
+                            # if abs(mag) < maxgrad
+                                out[1, ci] += 0.5 * sgn * d1 * mag
+                                out[2, ci] += 0.5 * sgn * d2 * mag
+                                out[3, ci] += 0.5 * sgn * d3 * mag
+                            # end
+                        end
                     end
                 end
+
             end
 
         end
-
     end
 
     # Smoothen gradient of edge cells AFTER computation of all gradients
@@ -880,16 +882,18 @@ function calcfield_Ugradmu!(out::AbstractMatrix,
     # node-centered computation along the TE
     if force_cellTE
 
-        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
-            for i in 1:3
+        for shedding in body.shedding
+            for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
+                for i in 1:3
 
-                out_node[i, pi] = out_cell[i, pi]
-                out_node[i, pi+1] = out_cell[i, pi+1]
-                if pj != -1
-                    out_node[i, pj] = out_cell[i, pj]
-                    out_node[i, pj-1] = out_cell[i, pj-1]
+                    out_node[i, pi] = out_cell[i, pi]
+                    out_node[i, pi+1] = out_cell[i, pi+1]
+                    if pj != -1
+                        out_node[i, pj] = out_cell[i, pj]
+                        out_node[i, pj-1] = out_cell[i, pj-1]
+                    end
+
                 end
-
             end
         end
 
@@ -1090,17 +1094,19 @@ function calcfield_Cp!(out::Arr1,
         end
 
         # Iterate over TE panels
-        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
-            if pj != -1
-                ave = (out[pi] + out[pi+1] + out[pj] + out[pj-1]) / 4
-                out[pi] = ave
-                out[pi+1] = ave
-                out[pj] = ave
-                out[pj-1] = ave
-            else
-                ave = (out[pi] + out[pi+1] ) / 2
-                out[pi] = ave
-                out[pi+1] = ave
+        for shedding in body.shedding
+            for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
+                if pj != -1
+                    ave = (out[pi] + out[pi+1] + out[pj] + out[pj-1]) / 4
+                    out[pi] = ave
+                    out[pi+1] = ave
+                    out[pj] = ave
+                    out[pj-1] = ave
+                else
+                    ave = (out[pi] + out[pi+1] ) / 2
+                    out[pi] = ave
+                    out[pi+1] = ave
+                end
             end
         end
 
@@ -1259,53 +1265,54 @@ function calcfield_F!(out::Arr0, body::Union{NonLiftingBody, AbstractLiftingBody
         q = 0.5*rho*Uinf^2
 
         # Iterate over TE panels
-        for (pi, nia, nib, pj, nja, njb) in eachcol(body.shedding)
+        for shedding in body.shedding
+            for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
 
-            if pj != -1
-                # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
-                # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
-                #                 (norm(view(Us, :, pi+1))/Uinf)^2 +
-                #                 (norm(view(Us, :, pj))/Uinf)^2 +
-                #                 (norm(view(Us, :, pj-1))/Uinf)^2
-                #             ) / 4
+                if pj != -1
+                    # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                    # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                    #                 (norm(view(Us, :, pi+1))/Uinf)^2 +
+                    #                 (norm(view(Us, :, pj))/Uinf)^2 +
+                    #                 (norm(view(Us, :, pj-1))/Uinf)^2
+                    #             ) / 4
 
-                # Calculate average Cp
-                aveCp = ( Cps[pi] + Cps[pi+1] + Cps[pj] + Cps[pj-1] ) / 4
+                    # Calculate average Cp
+                    aveCp = ( Cps[pi] + Cps[pi+1] + Cps[pj] + Cps[pj-1] ) / 4
 
-                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
-                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
-                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
-                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
-                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
-                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
-                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
-                out[1, pj] = -aveCp * q * areas[pj] * normals[1, pj]
-                out[2, pj] = -aveCp * q * areas[pj] * normals[2, pj]
-                out[3, pj] = -aveCp * q * areas[pj] * normals[3, pj]
-                out[1, pj-1] = -aveCp * q * areas[pj-1] * normals[1, pj-1]
-                out[2, pj-1] = -aveCp * q * areas[pj-1] * normals[2, pj-1]
-                out[3, pj-1] = -aveCp * q * areas[pj-1] * normals[3, pj-1]
+                    # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                    out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                    out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                    out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                    out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                    out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                    out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+                    out[1, pj] = -aveCp * q * areas[pj] * normals[1, pj]
+                    out[2, pj] = -aveCp * q * areas[pj] * normals[2, pj]
+                    out[3, pj] = -aveCp * q * areas[pj] * normals[3, pj]
+                    out[1, pj-1] = -aveCp * q * areas[pj-1] * normals[1, pj-1]
+                    out[2, pj-1] = -aveCp * q * areas[pj-1] * normals[2, pj-1]
+                    out[3, pj-1] = -aveCp * q * areas[pj-1] * normals[3, pj-1]
 
-            else
-                # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
-                # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
-                #                 (norm(view(Us, :, pi+1))/Uinf)^2
-                #             ) / 2
+                else
+                    # # Calculate average Cp, where Cp = 1 - (u/u∞)^2,
+                    # aveCp = 1 - (   (norm(view(Us, :, pi))/Uinf)^2 +
+                    #                 (norm(view(Us, :, pi+1))/Uinf)^2
+                    #             ) / 2
 
-                # Calculate average Cp
-                aveCp = ( Cps[pi] + Cps[pi+1] ) / 2
+                    # Calculate average Cp
+                    aveCp = ( Cps[pi] + Cps[pi+1] ) / 2
 
-                # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
-                out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
-                out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
-                out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
-                out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
-                out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
-                out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
+                    # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
+                    out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
+                    out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
+                    out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
+                    out[1, pi+1] = -aveCp * q * areas[pi+1] * normals[1, pi+1]
+                    out[2, pi+1] = -aveCp * q * areas[pi+1] * normals[2, pi+1]
+                    out[3, pi+1] = -aveCp * q * areas[pi+1] * normals[3, pi+1]
 
+                end
             end
         end
-
     end
 
     # Save field in body
