@@ -38,6 +38,7 @@ import GeometricTools: Meshes
 import ImplicitAD as IAD
 import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
 import FLOWMath as math
+using WriteVTK
 
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module

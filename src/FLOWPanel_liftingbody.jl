@@ -536,18 +536,21 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, 
     self.strength[:, 2] .= 0.0
 
     # calculate potential due to source strengths
-    _phi!(self, CPs, self.potential, backend; include_wake=false, optargs...) # NOTE: wake is included in the `direct!` function in this line
+    self.potential .= 0.0
+    _phi!(self, CPs, self.potential, backend; include_wake=false, optargs...)
     
     # zero source strengths while we solver for the doublet strengths
     self.strength[:, 1] .= 0.0
 
     # run fgs solver
     FastMultipole.solve!(self, solver.fgs; 
-        max_iterations=solver.max_iterations, 
+        max_iterations=solver.max_iterations,
+        inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance, 
         rlx=solver.rlx,
         derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, to_tuple(_unpack_fmm(self))),
-        reverse_pass=false
+        reverse_pass=solver.reverse_pass,
+        verbose=solver.verbose,
     )
 
     # update source strength
@@ -2063,7 +2066,6 @@ function FastMultipole.body_to_multipole!(system::RigidWakeBody{Union{ConstantSo
             # which vertices connect to the wake
             idx1 = Int(buffer[end-7, i_body])
             if idx1 > 0
-                println("wake...")
                 # first vertex and wake
                 Dax, Day, Daz = buffer[end-6, i_body], buffer[end-5, i_body], buffer[end-4, i_body]
                 Da = FastMultipole.SVector{3}(Dax, Day, Daz)
@@ -2090,7 +2092,6 @@ function FastMultipole.body_to_multipole!(system::RigidWakeBody{Union{ConstantSo
 
                 # doublet strength
                 strength_doublet = FastMultipole.SVector{1,TF}(strength[2])
-                @show Da, Db, v1, v2, v1w, v2w, normal
 
                 # update values
                 element = FastMultipole.Panel{FastMultipole.Dipole}
@@ -2253,7 +2254,7 @@ function additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWake
     end
 
     if !system.semiinfinite_wake
-        buffer[4] += update_radius # conservative update to accomadate wake size
+        buffer[4, i_buffer] += update_radius # conservative update to accomadate wake size
     end
 
     return ilast+8
@@ -2585,41 +2586,41 @@ end
 
 
 ##### INTERNAL FUNCTIONS  ######################################################
-function _get_wakestrength_mu(self::RigidWakeBody, i; stri=1)
+function _get_wakestrength_mu(self::RigidWakeBody, i, isurf=1; stri=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i], zero(self.wake_strength[i])
     # else
-        strength1 = self.strength[self.shedding[1, i], stri]
-        strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0.0
+        strength1 = self.strength[self.shedding[isurf][1, i], stri]
+        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
         return strength1, strength2
     # end
 end
-function _get_wakestrength_mu(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i)
+function _get_wakestrength_mu(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i, isurf=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i], zero(self.wake_strength[i])
     # else
         stri = 2
-        strength1 = self.strength[self.shedding[1, i], stri]
-        strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0.0
+        strength1 = self.strength[self.shedding[isurf][1, i], stri]
+        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
         return strength1, strength2
     # end
 end
-function _get_wakestrength_Gamma(self::RigidWakeBody, i; stri=1)
+function _get_wakestrength_Gamma(self::RigidWakeBody, i, isurf=1; stri=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i]
     # else
-        strength1 = self.strength[self.shedding[1, i], stri]
-        strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0.0
+        strength1 = self.strength[self.shedding[isurf][1, i], stri]
+        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
         return strength1 - strength2
     # end
 end
-function _get_wakestrength_Gamma(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i)
+function _get_wakestrength_Gamma(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i, isurf=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i]
     # else
         stri = 2
-        strength1 = self.strength[self.shedding[1, i], stri]
-        strength2 = self.shedding[4, i] != -1 ? self.strength[self.shedding[4, i], stri] : 0.0
+        strength1 = self.strength[self.shedding[isurf][1, i], stri]
+        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
         return strength1 - strength2
     # end
 end
@@ -2733,3 +2734,72 @@ function _savewake(self::RigidWakeBody, filename::String;
     end
 end
 #### END OF LIFTING BODY  ######################################################
+
+function write_vtk(name::String, body::RigidWakeBody; t=0.0, overwrite::Bool=false, semiinfinite_length=5.0)
+    # set wake length for visualization (if semi-infinite wake is enabled)
+    if body.semiinfinite_wake
+        for (Das, Dbs) in zip(body.Das, body.Dbs)
+            for i in 1:size(Das, 2)
+                # norm_Da = norm(view(Das, :, i))
+                # norm_Db = norm(view(Dbs, :, i))
+                Das[:, i] .*= semiinfinite_length # / norm_Da
+                Dbs[:, i] .*= semiinfinite_length # / norm_Db
+            end
+        end
+    end
+
+    WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+        vtm = WriteVTK.vtk_multiblock(name*"_wake")
+        for i_surf in eachindex(body.shedding)
+            shedding = body.shedding[i_surf]
+            Das = body.Das[i_surf]
+            Dbs = body.Dbs[i_surf]
+            
+            n_wakes = size(shedding, 2)
+            points = zeros(typeof(body.grid._nodes[1]), 3, 4 * n_wakes)
+            cells = Vector{WriteVTK.MeshCell}(undef, n_wakes)
+            strengths = zeros(typeof(body.strength[1]), n_wakes)
+            
+            for i in 1:n_wakes
+                pi = shedding[1, i]
+                nia, nib = shedding[2, i], shedding[3, i]
+                
+                idx1 = body.cells[nia, pi]
+                idx2 = body.cells[nib, pi]
+                
+                p1 = body.grid._nodes[:, idx1]
+                p2 = body.grid._nodes[:, idx2]
+                
+                p3 = p2 + Dbs[:, i]
+                p4 = p1 + Das[:, i]
+                
+                points[:, 1 + 4*(i-1)] = p1
+                points[:, 2 + 4*(i-1)] = p2
+                points[:, 3 + 4*(i-1)] = p3
+                points[:, 4 + 4*(i-1)] = p4
+                
+                cells[i] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD, [1, 2, 3, 4] .+ 4*(i-1))
+
+                mu_upper, mu_lower = _get_wakestrength_mu(body, i)
+                strengths[i] = mu_upper - mu_lower
+            end
+            
+            WriteVTK.vtk_grid(vtm, name * "_wake_$i_surf", points, cells) do vtk
+                vtk["mu"] = strengths
+            end
+        end
+        pvd[t] = vtm
+    end
+
+    # restore original values of Da and Db if they were modified for visualization
+    if body.semiinfinite_wake
+        for (Das, Dbs) in zip(body.Das, body.Dbs)
+            for i in 1:size(Das, 2)
+                # norm_Da = norm(view(Das, :, i))
+                # norm_Db = norm(view(Dbs, :, i))
+                Das[:, i] ./= semiinfinite_length # / norm_Da
+                Dbs[:, i] ./= semiinfinite_length # / norm_Db
+            end
+        end
+    end
+end

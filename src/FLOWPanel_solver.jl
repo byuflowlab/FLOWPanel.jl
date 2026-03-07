@@ -283,19 +283,25 @@ struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
     leaf_size::Int
     multipole_acceptance::Float64
     max_iterations::Int
+    inner_iterations::Int
     tolerance::Float64
     rlx::Float64
+    reverse_pass::Bool
+    verbose::Bool
 end
 
 function FGSSolver(body::AbstractBody; 
         max_iterations::Int=100,         # Maximum number of iterations
+        inner_iterations::Int=1,
         tolerance::Real=1e-6,            # Convergence tolerance
-        rlx::Real=1.0,                  # Relaxation factor
+        rlx::Real=1.0,                   # Relaxation factor
+        reverse_pass::Bool=true,         # Whether to perform reverse pass for adjoint sensitivities
         expansion_order=7,
         multipole_acceptance=0.4,
         leaf_size=10,
         shrink=false,
         recenter=false,
+        verbose=false,
     )
 
     # ensure CPoffset is negative (we'll solve this in the interior)
@@ -309,7 +315,7 @@ function FGSSolver(body::AbstractBody;
     # restore CPoffset
     body.CPoffset = CPoffset_old
 
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Float64(tolerance), Float64(rlx))
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose))
 end
 
 #--- test solve! ---#
@@ -326,7 +332,7 @@ function solve2!(self::AbstractBody{<:Any,1,<:Any}, Uinfs::Array{<:Real, 2}, sol
     self.velocity .= Uinfs
 
     # solve system
-    FastMultipole.solve!(self, solver.fgs; max_iterations=solver.max_iterations, tolerance=solver.tolerance, rlx=solver.rlx)
+    FastMultipole.solve!(self, solver.fgs; max_iterations=solver.max_iterations, inner_iterations=solver.inner_iterations, tolerance=solver.tolerance, rlx=solver.rlx, verbose=solver.verbose)
 
     # store solution
     set_solution(self, self.strength, self.strength, Tuple{Int,Float64}[], Uinfs)

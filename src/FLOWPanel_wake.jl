@@ -44,9 +44,6 @@ function solve!(body::AbstractBody{TB}, wake::AbstractFreeWake, uinf::AbstractAr
     end
 
     # solve body
-    check_nans(body)
-    @show true in body_probes.gradient
-    @show true in body_probes.scalar_potential
     solve2!(body, body_probes.gradient, body_solver; backend)
 
     # body-on-all influence
@@ -110,7 +107,9 @@ function get_probes(body::AbstractBody{TK,NK,TF}) where {TK,NK,TF}
     normals = _calc_normals(body)
     CPs = _calc_controlpoints(body, normals; off=-1e-10)
     @assert !requires_hessian(body) "`get_probes` must be overloaded to support Hessian output for body type $(typeof(body))"
-    body_probes = FastMultipole.ProbeSystemArray(CPs, body.potential, body.velocity, hessian)
+    potential = zeros(TF, size(CPs, 2))
+    velocity = zeros(TF, 3, size(CPs, 2))
+    body_probes = FastMultipole.ProbeSystemArray(CPs, potential, velocity, hessian)
     return body_probes
 end
 

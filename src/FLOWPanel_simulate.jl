@@ -121,11 +121,11 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 
         add_field(system, "U", "vector", collect(eachcol(system.velocity)), "cell")
         if has_grad_mu(system)
-            pnl.calcfield_Ugradmu(body; Gammai=get_Gammai(system))
-            add_fields(system, "Ugradmu", "U")
+            calcfield_Ugradmu(system; Gammai=get_Gammai(system))
+            addfields(system, "Ugradmu", "U")
         end
-        pnl.calcfield_Cp(body, norm(uinf))
-        pnl.calcfield_F(body, norm(uinf), rho)
+        calcfield_Cp(system, norm(uinf))
+        calcfield_F(system, norm(uinf), rho)
         
         #------- other solvers -------#
         
@@ -138,12 +138,12 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 
         if !isnothing(path)
             # panel body
-            # write_vtk(joinpath(path, name * "_step_$i_step"), system; vtk_args...) # trailing_edge_list=.!shedding_surfaces, vtk_args...)
+            save(system, joinpath(path, name * "_vehicle_step_$i_step"))
 
             # particle field
 
             # visualize wake
-            write_vtk(name, wake, i_step, t)
+            write_vtk(joinpath(path, name), wake, i_step, t)
             
         end
 
