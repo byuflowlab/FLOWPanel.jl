@@ -247,12 +247,12 @@ function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs,
 
                 TE1 = nodes_idx[nia]
                 TE2 = nodes_idx[nib]
-                v1x = self.grid._nodes[1, TE1]
-                v1y = self.grid._nodes[2, TE1]
-                v1z = self.grid._nodes[3, TE1]
-                v2x = self.grid._nodes[1, TE2]
-                v2y = self.grid._nodes[2, TE2]
-                v2z = self.grid._nodes[3, TE2]
+                v1x = self.nodes[1, TE1]
+                v1y = self.nodes[2, TE1]
+                v1z = self.nodes[3, TE1]
+                v2x = self.nodes[1, TE2]
+                v2y = self.nodes[2, TE2]
+                v2z = self.nodes[3, TE2]
 
                 # direction of trailing semi-infinite wake
                 da1, da2, da3 = Das[isurf][1, i_source], Das[isurf][2, i_source], Das[isurf][3, i_source]
@@ -278,12 +278,12 @@ function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs,
 
                     TE1 = nodes_idx[nja]
                     TE2 = nodes_idx[njb]
-                    v1x = self.grid._nodes[1, TE1]
-                    v1y = self.grid._nodes[2, TE1]
-                    v1z = self.grid._nodes[3, TE1]
-                    v2x = self.grid._nodes[1, TE2]
-                    v2y = self.grid._nodes[2, TE2]
-                    v2z = self.grid._nodes[3, TE2]
+                    v1x = self.nodes[1, TE1]
+                    v1y = self.nodes[2, TE1]
+                    v1z = self.nodes[3, TE1]
+                    v2x = self.nodes[1, TE2]
+                    v2y = self.nodes[2, TE2]
+                    v2z = self.nodes[3, TE2]
 
                     for i_target in axes(CPs, 2)
                         # get target

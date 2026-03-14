@@ -71,6 +71,7 @@ struct LiftingLine{ R<:Number,
     claeros::VectorType                         # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
     Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
     sigmas::VectorType                          # Source strength of each horseshoe (dragging line)
+    Cps::VectorType                             # Pressure coefficient of each horseshoe
     Us::MatrixType                              # Velocity at each midpoint
     chords::VectorType                          # Dimensional chord of each stripwise element
 
@@ -172,6 +173,7 @@ struct LiftingLine{ R<:Number,
         Gammas = VectorType(undef, nelements)
         Gammas = VectorType(undef, nelements)
         sigmas = VectorType(undef, nelements)
+        Cps = VectorType(undef, nelements)
         Us = MatrixType(undef, 3, nelements)
         chords = VectorType(undef, nelements)
         G = MatrixType(undef, nelements, nelements)
@@ -184,12 +186,14 @@ struct LiftingLine{ R<:Number,
         claeros .= 0
         Gammas .= 0
         sigmas .= 0
+        Cps .= 0
         Us .= 0
         G .= 0
         RHS .= 0
         residuals .= 0
         Geff .= 0
         elements_settings .= 0
+        Cps .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
         aerocenters .= aerodynamic_centers
@@ -245,7 +249,7 @@ struct LiftingLine{ R<:Number,
                                 tangents, spans, normals,
                                 swepttangents, lines, sweptnormals,
                                 auxtangents,
-                                aoas, claeros, Gammas, sigmas, Us, chords,
+                                aoas, claeros, Gammas, sigmas, Cps, Us, chords,
                                 G, RHS, 
                                 residuals, Geff,
                                 kerneloffset, kernelcutoff,
@@ -320,6 +324,7 @@ function remorph!(self::LiftingLine, args...;
     self.claeros .= 0
     self.Gammas .= 0
     self.sigmas .= 0
+    self.Cp .= 0
     self.Us .= 0
 
     return nothing

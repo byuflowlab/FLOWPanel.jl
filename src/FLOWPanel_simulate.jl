@@ -55,8 +55,6 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
                 expansion_order=10,
                 multipole_acceptance=0.4,
                 leaf_size=100,
-                shrink=true,
-                recenter=false,
             ),
         # trailing_vortices=fill(false, length(system.surfaces)),
         # shedding_surfaces=fill(true, length(system.surfaces)),
@@ -81,6 +79,9 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
     dt = t_range[2] - t_range[1]
     update_wake_shedding_locations!(system, uinf, frames, dt, eta)
 
+    # initialize first row of wake nodes at shedding locations
+    update_TE!(wake, system)
+
     # begin simulation
     i_step = 0
     for t in t_range
@@ -103,29 +104,17 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
         # update frames based on maneuver
         # (RPMs, tilting systems, prescribed trajectory, etc.)
         dynamics_toggle = maneuver!(frames, system, wake, t)
-
-        # update kinematic velocity due to rigid body motion
-        # (structural deflections should be remembered from the previous step)
-        # NOTE: this skips the top level frame, which is captured in system.fs
-        # CORRECTION: just changed this to not skip the top level frame
-        # current_surfaces = system.surfaces
-        # kinematic_velocity!(Vcp, Vh, Vv, Vte, current_surfaces, frames; skip_top_level=false)
         
         #------- aerodynamics -------#
 
         uinf = Uinf(t)
         solve!(system, wake, uinf, t;
-            body_solver, backend)
+            frames, body_solver, backend)
 
         #--- forces and moments ---#
 
-        add_field(system, "U", "vector", collect(eachcol(system.velocity)), "cell")
-        if has_grad_mu(system)
-            calcfield_Ugradmu(system; Gammai=get_Gammai(system))
-            addfields(system, "Ugradmu", "U")
-        end
-        calcfield_Cp(system, norm(uinf))
-        calcfield_F(system, norm(uinf), rho)
+        calcfield_Cp!(system, norm(uinf))
+        calcfield_F!(system, norm(uinf), rho)
         
         #------- other solvers -------#
         
@@ -140,10 +129,8 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
             # panel body
             save(system, joinpath(path, name * "_vehicle_step_$i_step"))
 
-            # particle field
-
-            # visualize wake
-            write_vtk(joinpath(path, name), wake, i_step, t)
+            # wake
+            write_vtk(joinpath(path, name), wake, i_step, t; clear=i_step==0)
             
         end
 
@@ -160,6 +147,7 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
             # propagate wake
             propagate!(wake, dt)
 
+
             # dynamics function
             # if dynamics_toggle
             #     apply_dynamics!(system, frames)
@@ -172,8 +160,8 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
             # # store trailing edge location for next step's wsl
             # store_trailing_edge!(wake_shedding_locations, current_surfaces)
             
-            # # propagate rigid-body kinematics
-            # propagate_kinematics!(system, frames, dt)
+            # propagate rigid-body kinematics
+            propagate_kinematics!(system, frames, dt)
 
             # next step's freestream
             idx = i_step == length(t_range) - 1 ? i_step + 1 : i_step + 2
@@ -194,6 +182,8 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 
             #--- shed new wake ---#
 
+            # println("\t\t[NaN check] after shed_wake! wake.nodes: ", any(any(isnan.(n)) for n in wake.nodes),
+            #         " | wake.strength: ", any(any(isnan.(s)) for s in wake.strength))
             shed_wake!(wake, system)
             # shed_wake!(wake, system,  dt, Γ_wake, dΓdt,
             #     particle_trailing_methods, particle_unsteady_methods)
@@ -213,16 +203,156 @@ end
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1
 has_grad_mu(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = TK == ConstantDoublet || TK == VortexRing || TK == Union{ConstantSource, ConstantDoublet}
 
+function get_kinematic_velocity(r::AbstractVector, frames::AbstractVector{<:ReferenceFrame}, i_frame::Int, dx_parent_to_global, R_parent_to_global)
+    frame = frames[i_frame]
+
+    # this frame's origin in global frame
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global # global origin vector
+
+    # this frame's velocity in global frame
+    v_global = R_parent_to_global * frame.v # global velocity vector
+    ω_global = R_parent_to_global * frame.ω_axis * frame.ω # global angular velocity
+
+    v_kin = v_global + cross(ω_global, (r - origin_global))
+    
+    # propagate down the tree if there are child frames, but here we assume we're asking for the net velocity of a node on a particular body.
+    return v_kin
+end
+
+function get_kinematic_velocity(r::AbstractVector, frames::AbstractVector{<:ReferenceFrame}, isurf::Int)
+    # Recursively find the frame that manages `isurf` and return the kinematic velocity at position `r`
+    # We'll just search the tree starting from frame 1
+    function search_tree(i_frame, dx_parent_to_global, R_parent_to_global)
+        frame = frames[i_frame]
+        origin_global = R_parent_to_global * frame.x + dx_parent_to_global
+        
+        if isurf in frame.dependent_index
+            v_global = R_parent_to_global * frame.v
+            ω_global = R_parent_to_global * frame.ω_axis * frame.ω
+            return v_global + cross(ω_global, (r - origin_global))
+        end
+
+        new_dx = origin_global
+        new_R = R_parent_to_global * frame.R
+        for i_child in frame.child_index
+            res = search_tree(i_child, new_dx, new_R)
+            if res !== nothing
+                return res
+            end
+        end
+        return nothing
+    end
+    
+    TF = eltype(frames[1].x)
+    dx0 = zero(SVector{3,TF})
+    R0 = SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    
+    v = search_tree(1, dx0, R0)
+    if v === nothing
+        # Body doesn't belong to any frame, so rigid body kinematic velocity is 0
+        return zero(SVector{3,TF})
+    end
+    return v
+end
+
 function update_wake_shedding_locations!(system, uinf, frames, dt, eta)
-    for i in eachindex(system.Das)
-        for j in axes(system.Das[i], 2)
-            system.Das[i][:, j] .= uinf .* (eta * dt)
-            system.Dbs[i][:, j] .= uinf .* (eta * dt)
+    if frames === nothing
+        for i in eachindex(system.Das)
+            for j in axes(system.Das[i], 2)
+                system.Das[i][:, j] .= uinf .* (eta * dt)
+                system.Dbs[i][:, j] .= uinf .* (eta * dt)
+            end
+        end
+    else
+        for i in eachindex(system.Das)
+            # Find the nodes belonging to shedding edge
+            shedding = system.shedding[i]
+            body = system isa MultiBody ? get_body(system, i) : system
+            
+            for j in axes(system.Das[i], 2)
+                i_panel = shedding[1, j]
+                idx_1 = shedding[3, j] # nib
+                v1 = SVector{3}(
+                    body.grid._nodes[1, body.cells[idx_1, i_panel]],
+                    body.grid._nodes[2, body.cells[idx_1, i_panel]],
+                    body.grid._nodes[3, body.cells[idx_1, i_panel]]
+                )
+                
+                v_kin_b = get_kinematic_velocity(v1, frames, i)
+                system.Dbs[i][:, j] .= (uinf .- v_kin_b) .* (eta * dt)
+                
+                # We need Das for the other node on the trailing edge (first node, nia)
+                if j == size(system.Das[i], 2) # if it's the last one
+                    idx_2 = shedding[2, j] # nia
+                    v2 = SVector{3}(
+                        body.grid._nodes[1, body.cells[idx_2, i_panel]],
+                        body.grid._nodes[2, body.cells[idx_2, i_panel]],
+                        body.grid._nodes[3, body.cells[idx_2, i_panel]]
+                    )
+                    v_kin_a = get_kinematic_velocity(v2, frames, i)
+                    system.Das[i][:, j] .= (uinf .- v_kin_a) .* (eta * dt)
+                else
+                    i_panel_next = shedding[1, j+1]
+                    idx_2 = shedding[2, j]
+                    v2 = SVector{3}(
+                        body.grid._nodes[1, body.cells[idx_2, i_panel]],
+                        body.grid._nodes[2, body.cells[idx_2, i_panel]],
+                        body.grid._nodes[3, body.cells[idx_2, i_panel]]
+                    )
+                    v_kin_a = get_kinematic_velocity(v2, frames, i)
+                    system.Das[i][:, j] .= (uinf .- v_kin_a) .* (eta * dt)
+                end
+            end
         end
     end
 end
 
 #------- wake shedding -------#
+
+function update_TE!(wake::PanelWake, system::AbstractBody)
+
+    # update first row of strength
+    for i_surf in eachindex(wake.strength)
+        for i_shed in axes(wake.strength[i_surf], 3)
+            strengthi, strengthj = _get_wakestrength_mu(system, i_shed, i_surf)
+            # Negate the strength because we are swapping the order of the nodes
+            # to form a contiguous sequence (v1=nib, v4=nia instead of v1=nia, v4=nib)
+            wake.strength[i_surf][1, 1, i_shed] = strengthi - strengthj
+        end
+    end
+
+    # update first row based on system
+    for i_surf in eachindex(wake.nodes)
+        nodes = wake.nodes[i_surf]
+        shedding = system.shedding[i_surf]
+        Das = system.Das[i_surf]
+        Dbs = system.Dbs[i_surf]
+
+        # loop over shedding panels
+        for i_shed in axes(shedding, 2)
+            i_panel = shedding[1, i_shed]
+            idx_1 = shedding[3, i_shed] # nib (second node of the shedding edge)
+            v1 = FastMultipole.SVector{3}(
+                system.nodes[1, system.cells[idx_1, i_panel]],
+                system.nodes[2, system.cells[idx_1, i_panel]],
+                system.nodes[3, system.cells[idx_1, i_panel]],
+            )
+            nodes[:, 1, i_shed] .= v1 .+ view(Dbs, :, i_shed) # shift by Dbs to get shedding location
+        end
+
+        if size(shedding, 2) > 0
+            # final node of this edge
+            i_panel = shedding[1, end]
+            idx_2 = shedding[2, end] # nia (first node of the shedding edge)
+            v2 = FastMultipole.SVector{3}(
+                system.nodes[1, system.cells[idx_2, i_panel]],
+                system.nodes[2, system.cells[idx_2, i_panel]],
+                system.nodes[3, system.cells[idx_2, i_panel]],
+            )
+            nodes[:, 1, end] .= v2 .+ view(Das, :, size(Das, 2)) # shift trailing edge by Das
+        end
+    end
+end
 
 function shed_wake!(wake::PanelWake, system::AbstractBody)
 
@@ -230,45 +360,25 @@ function shed_wake!(wake::PanelWake, system::AbstractBody)
     @assert length(system.Das) == length(system.shedding) == length(wake.nodes) "Length of system.Das ($(length(system.Das))) must match number of surfaces in wake ($(length(wake.nodes)))"
     
     # shift panels back a row
-    n_rows = size(wake.nodes[1], 1)
+    n_rows = size(wake.nodes[1], 2)
     for i_surf in eachindex(wake.nodes)
         nodes = wake.nodes[i_surf]
+        strength = wake.strength[i_surf]
+
         for j_row in min(wake.nwakes[]+1, n_rows-1):-1:1
-            nodes[j_row+1, :] .= nodes[j_row, :]
+            nodes[:, j_row+1, :] .= nodes[:, j_row, :]
+        end
+        for j_row in min(wake.nwakes[], n_rows-2):-1:1
+            strength[:, j_row+1, :] .= strength[:, j_row, :]
         end
     end
 
     # update nwakes
     wake.nwakes[] = min(wake.nwakes[] + 1, n_rows - 1) # ensure we don't exceed storage
 
-    # update first row based on system
-    for i_surf in eachindex(wake.nodes)
-        nodes = wake.nodes[i_surf]
-        shedding = system.shedding[i_surf]
-        Das = system.Das[i_surf]
+    # snap newly shed wake to the trailing edge
+    update_TE!(wake, system)
 
-        # loop over shedding panels
-        for i_shed in axes(shedding, 2)
-            i_panel = shedding[1, i_shed]
-            idx_1 = shedding[2, i_shed]
-            v1 = FastMultipole.SVector{3}(
-                system.grid._nodes[1, system.cells[idx_1, i_panel]],
-                system.grid._nodes[2, system.cells[idx_1, i_panel]],
-                system.grid._nodes[3, system.cells[idx_1, i_panel]],
-            )
-            nodes[:, 1, i_shed] .= v1 .+ view(Das, :, i_shed) # shift by Das to get shedding location
-        end
-
-        # final node of this edge
-        i_panel = shedding[1, end]
-        idx_2 = shedding[3, end]
-        v2 = FastMultipole.SVector{3}(
-            system.grid._nodes[1, system.cells[idx_2, i_panel]],
-            system.grid._nodes[2, system.cells[idx_2, i_panel]],
-            system.grid._nodes[3, system.cells[idx_2, i_panel]],
-        )
-        nodes[:, 1, end] .= v2 .+ view(system.Das[i_surf], :, size(system.Das[i_surf], 2)) # shift trailing edge by Das
-    end
 end
 
 # abstract type WakeSheddingMethod end

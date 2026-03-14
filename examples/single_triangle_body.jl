@@ -5,6 +5,8 @@ using FLOWPanel
 const pnl = FLOWPanel
 using FLOWPanel.gt.Meshes
 import FLOWPanel.PyPlot as plt
+colormap = plt.get_cmap("RdBu",15)
+
 
 function make_single_triangle_body(; semiinfinite_wake=false)
     pnl = FLOWPanel
@@ -31,15 +33,15 @@ function make_single_triangle_body(; semiinfinite_wake=false)
     # body = pnl.NonLiftingBody{pnl.ConstantDoublet}(grid)
     # body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(grid)
 
-    shedding = zeros(Int, 6, 1)
-    shedding[1,1] = 1
-    shedding[2,1] = 2
-    shedding[3,1] = 3
-    shedding[4,1] = -1
+    shedding = zeros(Int, 6, 0)
+    # shedding[1,1] = 1
+    # shedding[2,1] = 2
+    # shedding[3,1] = 3
+    # shedding[4,1] = -1
     body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(grid, [shedding];
         semiinfinite_wake)
-    body.Das[1][2,:] .= -1
-    body.Dbs[1][2,:] .= -1
+    # body.Das[1][2,:] .= -1
+    # body.Dbs[1][2,:] .= -1
 
     return body
 end
@@ -52,13 +54,13 @@ str = 1.0
 # body.strength[1,1] = str
 body.strength[1,2] = str
 
-normals = pnl._calc_normals(body)
+normals = pnl.calc_normals!(body)
 @show normals # outward facing
-cps = pnl._calc_controlpoints(body, normals; off=1e-14)
+cps = pnl.calc_controlpoints!(body, normals; off=1e-14)
 
 # compute velocity at a line of points above the triangle
 npoints = 1000
-dz = range(-1.0, stop=1.0, length=npoints) .* 5.0
+dz = range(-1.0, stop=1.0, length=npoints) .* 1.0
 points = hcat([ cps[:,1] .+ [0.0,0.0,z] for z in dz ]...)  # points above centroid of triangle
 # points = hcat([ cps[:,1] .+ z .* normals[:,1] for z in dz ]...)  # points above centroid of triangle
 # points = hcat([[0.33; 0.33; 0.0] .+ [z; z; z] for z in dz ]...)  # points in y from the centroid
@@ -125,6 +127,21 @@ axs[1].plot(dz, phi_fmm, "--", label="FMM")
 axs[1].plot(dz, phi_semiinfinite, ":", label="semi-infinite panel")
 axs[1].plot(dz, phi_semiinfinite2, ":", label="semi-infinite panel2")
 axs[1].legend()
+plt.tight_layout()
+
+# plot results with flipped axes
+fig3 = plt.figure("verify panel flipped")
+fig3.clf()
+fig3.add_subplot(121, xlabel=L"\phi", ylabel="z")
+fig3.add_subplot(122, xlabel=L"\vec{u} \cdot \hat{n}", ylabel="z")
+axs3 = fig3.get_axes()
+axs3[1].plot(phi_direct, dz, label="direct", color=colormap(14))
+axs3[2].plot(out_direct_z, dz, label="direct", color=colormap(14))
+for ax in axs3
+    ax.spines["top"].set_visible(false)
+    ax.spines["right"].set_visible(false)
+end
+
 plt.tight_layout()
 
 fig2 = plt.figure("error")

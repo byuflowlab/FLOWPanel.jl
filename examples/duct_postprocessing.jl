@@ -26,10 +26,7 @@ function plot_Cp(body, AOA; plot_experimental=true)
 
         # Data filter to get only +z or only -z data points
         slicefilter(x, i) = (x[3] >= 0) == upperside
-
-        slicepoints, sliceCps = pnl.slicefield(body, "Cp",
-                                                position, direction, row;
-                                                filter=slicefilter)
+        slicepoints, sliceCps = pnl.slice_scalarfield(body, :Cp, 2, 0.0, 0.1; filter=slicefilter)
 
         side = upperside ? "upper" : "lower"
 

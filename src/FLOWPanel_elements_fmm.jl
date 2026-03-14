@@ -13,7 +13,7 @@
 
 has_semiinfinite_wake(self::AbstractBody) = false
 
-function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
     # wrap targets in a probe system
     TF = eltype(targets)
     potential = Vector{TF}(undef, 0) # unused
@@ -30,10 +30,23 @@ function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend;
                                         extra_farfield=has_semiinfinite_wake(self), 
                                         shrink=true)
 
-    return nothing
+    return out
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
+function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend)
+    # wrap targets in a probe system
+    TF = eltype(targets)
+    potential = Vector{TF}(undef, 0) # unused
+    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
+
+    # perform N-body calculation
+    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=true, scalar_potential=false)
+
+    return out
+end
+
+function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
     # wrap targets in a probe system
     TF = eltype(targets)
     velocity = Array{TF, 2}(undef, 0, 0)  # unused
@@ -50,7 +63,20 @@ function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; 
                                         extra_farfield=has_semiinfinite_wake(self),
                                         shrink=true)
 
-    return nothing
+    return out
+end
+
+function _phi!(self::AbstractBody, targets, out, backend::DirectBackend)
+    # wrap targets in a probe system
+    TF = eltype(targets)
+    velocity = Array{TF, 2}(undef, 0, 0)  # unused
+    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+    probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
+    
+    # perform N-body calculation
+    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=false, scalar_potential=true)
+
+    return out
 end
 
 "Defaults to do nothing."
@@ -131,6 +157,16 @@ function rotate_to_panel(v1x::TF, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z) where 
     return R, v1, v2, v3
 end
 
+function rotate_to_panel(source_system::AbstractBody, i_source::Int)
+    # get vertices
+    v1i, v2i, v3i = source_system.cells[1, i_source], source_system.cells[2, i_source], source_system.cells[3, i_source]
+    v1x, v1y, v1z = source_system.nodes[1, v1i], source_system.nodes[2, v1i], source_system.nodes[3, v1i]
+    v2x, v2y, v2z = source_system.nodes[1, v2i], source_system.nodes[2, v2i], source_system.nodes[3, v2i]
+    v3x, v3y, v3z = source_system.nodes[1, v3i], source_system.nodes[2, v3i], source_system.nodes[3, v3i]
+
+    return rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
+end
+
 function get_vertices(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
     # get vertices
     v1x = source_buffer[5+NK, i_source]
@@ -144,6 +180,21 @@ function get_vertices(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer
     v3z = source_buffer[13+NK, i_source]
 
     # assemble vertices
+    v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+    v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+    v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
+    return v1, v2, v3
+end
+
+function get_vertices(source_system::AbstractBody, i_source::Int)
+    # get vertices
+    v1i, v2i, v3i = source_system.cells[1, i_source], source_system.cells[2, i_source], source_system.cells[3, i_source]
+    v1x, v1y, v1z = source_system.nodes[1, v1i], source_system.nodes[2, v1i], source_system.nodes[3, v1i]
+    v2x, v2y, v2z = source_system.nodes[1, v2i], source_system.nodes[2, v2i], source_system.nodes[3, v2i]
+    v3x, v3y, v3z = source_system.nodes[1, v3i], source_system.nodes[2, v3i], source_system.nodes[3, v3i]
+
+    # assemble vertices
+    TF = eltype(source_system.nodes)
     v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
     v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
     v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
@@ -171,6 +222,25 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+
+    # get vertices, rotation matrix
+    R, v1, v2, v3 = rotate_to_panel(source_system, i_source)
+
+    # get control point and strength
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
+    strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
+
+    # evaluate influence
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+
+    # check for wake (if any)
+    p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
+
+    # return potential, velocity, velocity_gradient
+    return potential+p, velocity+v, velocity_gradient+vg
+end
+
 function induced(target::AbstractVector{TF}, TK, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF}
 
     R, v1, v2, v3 = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
@@ -188,6 +258,18 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     
     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
+
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    return potential, velocity, velocity_gradient
+end
+
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+    
+    # get vertices
+    v1, v2, v3 = get_vertices(source_system, i_source)
+    
+    strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
 
@@ -798,27 +880,55 @@ function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantSource
 end
 
 function _induced_wake(target, (v1, v2, v3), source_system::AbstractBody, source_buffer, i_source, derivatives_switch)
-    return nothing
+    TF = eltype(target)
+    return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 end
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, source_buffer, i_source, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {TF,PS,GS,HS}
+function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any}, i_source::Int)
+    # get the strength of the doublet
+    return source_system.strength[i_source, 2]
+end
+
+function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantDoublet, VortexRing}, 1, <:Any}, i_source::Int)
+    # get the strength of the doublet
+    return source_system.strength[i_source, 1]
+end
+
+function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantSource, UniformVortexSheet}, 1, <:Any}, i_source::Int)
+    # get the strength of the doublet
+    @warn "get_strength_doublet requested or a system that does not have doublets: returning zero"
+    return zero(eltype(source_system.strength))
+end
+
+function _induced_wake(target, (v1, v2, v3), source_system::AbstractBody, i_source::Int, derivatives_switch)
+    TF = eltype(target)
+    return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+end
+
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,PS,VS,GS}
     # check if this panel has a wake
-    idx_1 = Int(source_buffer[end-7, i_source])
+    idx_1 = source_system.shedding_full[1, i_source]
     if idx_1 > 0
         # check which vertices are used
-        v1 = vertices[idx_1]
-        v1x, v1y, v1z = v1
-        idx_2 = Int(source_buffer[end-3, i_source])
-        v2 = vertices[idx_2]
-        v2x, v2y, v2z = v2
+        v1i, v2i, v3i = source_system.cells[1, i_source], source_system.cells[2, i_source], source_system.cells[3, i_source]
+        nodes_idx = (v1i, v2i, v3i)
+
+        TE1 = nodes_idx[idx_1]
+        v1 = FastMultipole.StaticArrays.SVector{3,TF}(source_system.nodes[1, TE1], source_system.nodes[2, TE1], source_system.nodes[3, TE1])
+        v1x, v1y, v1z = v1[1], v1[2], v1[3]
+
+        idx_2 = source_system.shedding_full[2, i_source]
+        TE2 = nodes_idx[idx_2]
+        v2 = FastMultipole.StaticArrays.SVector{3,TF}(source_system.nodes[1, TE2], source_system.nodes[2, TE2], source_system.nodes[3, TE2])
+        v2x, v2y, v2z = v2[1], v2[2], v2[3]
 
         # get the wake shedding direction
-        Dax, Day, Daz = source_buffer[end-6, i_source],
-                        source_buffer[end-5, i_source],
-                        source_buffer[end-4, i_source]
+        i_surf = source_system.shedding_full[3, i_source]
+        idx   = source_system.shedding_full[4, i_source]
+        Dax, Day, Daz = source_system.Das[i_surf][1, idx], source_system.Das[i_surf][2, idx], source_system.Das[i_surf][3, idx]
 
         # get strength
-        strength = get_strength_doublet(source_system, source_buffer, i_source)
+        strength = get_strength_doublet(source_system, i_source)
 
         # evaluate potential
         if source_system.semiinfinite_wake
@@ -828,35 +938,33 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             v1w_x = v1x + Dax
             v1w_y = v1y + Day
             v1w_z = v1z + Daz
-            vw1 = FastMultipole.SVector(v1w_x, v1w_y, v1w_z)
+            vw1 = FastMultipole.StaticArrays.SVector{3,TF}(v1w_x, v1w_y, v1w_z)
 
             # influence of first triangle 
             control_point = (v1 + v2 + vw1) * 0.333333333333333
             TK = ConstantDoublet
-            strength = FastMultipole.SVector{1}(strength)
+            strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
             R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
-            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength, TK, source_system.kerneloffset, R, derivatives_switch)
+            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
             
             # wake node connected to the second vertex
-            Dbx, Dby, Dbz = source_buffer[end-2, i_source],
-                            source_buffer[end-1, i_source],
-                            source_buffer[end, i_source]
+            Dbx, Dby, Dbz = source_system.Dbs[i_surf][1, idx], source_system.Dbs[i_surf][2, idx], source_system.Dbs[i_surf][3, idx]
             v2w_x = v2x + Dbx
             v2w_y = v2y + Dby
             v2w_z = v2z + Dbz
-            vw2 = FastMultipole.SVector(v2w_x, v2w_y, v2w_z)
+            vw2 = FastMultipole.StaticArrays.SVector{3,TF}(v2w_x, v2w_y, v2w_z)
             
             # influence of the second triangle
             control_point = (vw1 + v2 + vw2) * 0.333333333333333
             R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
-            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength, TK, source_system.kerneloffset, R, derivatives_switch)
+            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
             if PS
                 p += dp
             end
-            if GS
+            if VS
                 v += dv
             end
-            if HS
+            if GS
                 g += dg
             end
 
@@ -864,6 +972,87 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         end
     else
         # no wake for this panel
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+end
+
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{TK,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,TK,NK,PS,VS,GS}
+    # Buffer layout (rows are 1-indexed, NK = number of element types):
+    #   1-3:       center (cx, cy, cz)
+    #   4:         radius
+    #   5..4+NK:   strengths
+    #   5+NK..13+NK: vertices v1, v2, v3 (3 rows each)
+    #   14+NK:     idx1  -- local vertex index (1/2/3) of first TE node, or -1
+    #   15+NK..17+NK: Da (wake direction for first TE node)
+    #   18+NK:     idx2  -- local vertex index of second TE node, or -1
+    #   19+NK..21+NK: Db (wake direction for second TE node)
+
+    idx_1 = round(Int, source_buffer[14+NK, i_source])
+    if idx_1 > 0
+        # vertex row start: vertex i starts at row 2+NK+3*i
+        r1 = 2 + NK + 3*idx_1
+        v1x = source_buffer[r1,   i_source]
+        v1y = source_buffer[r1+1, i_source]
+        v1z = source_buffer[r1+2, i_source]
+
+        idx_2 = round(Int, source_buffer[18+NK, i_source])
+        r2 = 2 + NK + 3*idx_2
+        v2x = source_buffer[r2,   i_source]
+        v2y = source_buffer[r2+1, i_source]
+        v2z = source_buffer[r2+2, i_source]
+
+        v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+        v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+
+        # wake direction from buffer
+        Dax = source_buffer[15+NK, i_source]
+        Day = source_buffer[16+NK, i_source]
+        Daz = source_buffer[17+NK, i_source]
+
+        # doublet strength from buffer (NK-th element = last strength row)
+        strength = source_buffer[4+NK, i_source]
+
+        if source_system.semiinfinite_wake
+            return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+        else
+            # wake node connected to the first vertex
+            v1w_x = v1x + Dax
+            v1w_y = v1y + Day
+            v1w_z = v1z + Daz
+            vw1 = FastMultipole.StaticArrays.SVector{3,TF}(v1w_x, v1w_y, v1w_z)
+
+            # influence of first triangle
+            control_point = (v1 + v2 + vw1) * 0.333333333333333
+            strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
+            R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
+            p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, ConstantDoublet, source_system.kerneloffset, R, derivatives_switch)
+
+            # wake direction for second node (stored at rows 19+NK..21+NK)
+            Dbx = source_buffer[19+NK, i_source]
+            Dby = source_buffer[20+NK, i_source]
+            Dbz = source_buffer[21+NK, i_source]
+            v2w_x = v2x + Dbx
+            v2w_y = v2y + Dby
+            v2w_z = v2z + Dbz
+            vw2 = FastMultipole.StaticArrays.SVector{3,TF}(v2w_x, v2w_y, v2w_z)
+
+            # influence of the second triangle
+            control_point = (vw1 + v2 + vw2) * 0.333333333333333
+            R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
+            dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, ConstantDoublet, source_system.kerneloffset, R, derivatives_switch)
+            if PS
+                p += dp
+            end
+            if VS
+                vel += dvel
+            end
+            if GS
+                g += dg
+            end
+
+            return p, vel, g
+        end
+    else
         return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     end
 end

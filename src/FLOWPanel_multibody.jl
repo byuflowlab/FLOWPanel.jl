@@ -25,18 +25,19 @@ struct MultiBody{E, N, B<:AbstractBody, TF<:Number} <: AbstractBody{E, N, TF}
     # Properties
     nbodies::Int                              # Number of bodies
     nnodes::Int                               # Number of nodes
-    ncells::Int                               # Number of cells
     nsheddings::Int                           # Number of shedding edges
-    fields::Array{String, 1}                  # Available fields (solutions)
+    ncells::Int                               # Number of cells
+    solved::Bool                              # Whether it has been solved
     Oaxis::Array{TF,2}                  # Coordinate system orientation
     O::Array{TF,1}                      # Coordinate system origin
+    Cps::Vector{TF}                           # Pressure coefficient at each cell
 
     function MultiBody{E, N, B, TF}(    bodies, names;
                                     nbodies=length(bodies),
                                     nnodes=sum(body.nnodes for body in bodies; init=0),
                                     ncells=sum(body.ncells for body in bodies; init=0),
                                     nsheddings=_calc_nsheddings(bodies),
-                                    fields=Array{String,1}(),
+                                    solved=false,
                                     Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3)
                                     ) where {E, N, B, TF}
 
@@ -50,10 +51,11 @@ struct MultiBody{E, N, B<:AbstractBody, TF<:Number} <: AbstractBody{E, N, TF}
                         bodies, names,
                         nbodies,
                         nnodes,
-                        ncells,
                         nsheddings,
-                        fields,
+                        ncells,
+                        solved,
                         Oaxis, O,
+                        zeros(TF, ncells)
                       )
     end
 end
@@ -101,154 +103,6 @@ function get_body(self::MultiBody, bodyindex::Int)
     end
 
     return self.bodies[bodyindex]
-end
-
-# """
-#   `get_ndivscells(body::MultiBody)`
-#
-# Returns a tuple with the number of cells in each parametric dimension
-# """
-# get_ndivscells(self::MultiBody) = Tuple(sum(collect(get_ndivscells(body)) for body in self.bodies))
-
-# """
-#   `get_ndivnodes(body::MultiBody)`
-#
-# Returns a tuple with the number of nodes in each parametric dimension
-# """
-# get_ndivsnodes(self::MultiBody) = Tuple(sum(collect(get_ndivsnodes(body)) for body in self.bodies))
-
-get_ndivscells(self::MultiBody) = error("`get_ndivscells(...)` not implemented yet.")
-get_ndivnodes(self::MultiBody) = error("`get_ndivnodes(...)` not implemented yet.")
-get_cart2lin_cells(self::MultiBody) = error("`get_cart2lin_cells(...)` not implemented yet.")
-get_cart2lin_nodes(self::MultiBody) = error("`get_cart2lin_nodes(...)` not implemented yet.")
-
-function add_field(self::MultiBody{E, N, B}, field_name::String,
-                    field_type::String, field_data, entry_type::String;
-                    raise_warn=false) where {E, N, B<:Union{AbstractBody, AbstractLiftingBody}}
-
-    if !(field_name in self.fields)
-        push!(self.fields, field_name)
-    end
-
-    counter = 0
-    prop = entry_type=="node" ? :nnodes : :ncells
-
-    for body in self.bodies
-
-        offset = getproperty(body, prop)
-
-        if entry_type=="system"
-            data_slice = field_data
-        else
-            data_slice = view(collect(field_data), (1:offset) .+ counter)
-        end
-
-        add_field(body, field_name, field_type, data_slice, entry_type;
-                                                          raise_warn=raise_warn)
-        counter += offset
-    end
-
-end
-
-function add_field(self::MultiBody{E, N, B},
-                    field_type::String, field_data, entry_type::String;
-                    raise_warn=false) where {E, N, B<:Union{AbstractBody, AbstractLiftingBody}}
-
-    # if !(field_name in self.fields)
-    #     push!(self.fields, field_name)
-    # end
-
-    counter = 0
-    prop = entry_type=="node" ? :nnodes : :ncells
-
-    for body in self.bodies
-
-        offset = getproperty(body, prop)
-
-        if entry_type=="system"
-            data_slice = field_data
-        else
-            data_slice = view(collect(field_data), (1:offset) .+ counter)
-        end
-
-        add_field(body, field_type, data_slice, entry_type;
-                                                          raise_warn=raise_warn)
-        counter += offset
-    end
-
-end
-
-function remove_field(self::MultiBody, field_name)
-    if check_field(self, field_name)
-
-        i = findfirst(name->name==field_name, self.fields)
-
-        splice!(self.fields, i)
-
-        for body in self.bodies
-            remove_field(body, field_name)
-        end
-    end
-end
-
-
-function get_field(self::MultiBody, field_name::String)
-
-    # Collect all fields
-    fields = [get_field(body, field_name) for body in self.bodies]
-
-    # Concatenate field data
-    if fields[1]["entry_type"]=="system"
-        field_data = mean([field["field_data"] for field in fields])
-    else
-        field_data = vcat([field["field_data"] for field in fields]...)
-    end
-
-    # Create a new field
-    field = Dict( "field_name" => field_name,
-                  "field_type" => fields[1]["field_type"],
-                  "entry_type" => fields[1]["entry_type"],
-                  "field_data" => field_data)
-
-    return field
-end
-
-function get_fieldval(self::MultiBody, field_name::String, i::Int,
-                        entry_type::String; _check::Bool=true)
-
-    prop = entry_type=="node"   ? :nnodes :
-           entry_type=="cell"   ? :ncells :
-           entry_type=="system" ? :ncells :
-           error("Invalid entry type $(entry_type)")
-
-    if entry_type!="system" && (i<=0 || i>getproperty(self, prop))
-        error("Invalid index $(i) requested. Valid range is [1, $(getproperty(self, prop))]")
-    end
-
-    counter = 0
-
-    for body in self.bodies
-        offset = getproperty(body, prop)
-
-        if i>counter && i<=counter+offset
-            if body isa MultiBody
-                return get_fieldval(body, field_name, i-counter, entry_type; _check=_check)
-            else
-                return get_fieldval(body, field_name, i-counter; _check=_check)
-            end
-        end
-
-        counter += offset
-    end
-
-    error("Logic error!")
-end
-
-function get_fieldval(self::MultiBody, field_name::String, i::Int; optargs...)
-
-    error("Invalid method for MultiBody."*
-          " Try `get_fieldval(multibody, field_name, i, entry_type)` instead")
-
 end
 
 function get_strength(self::MultiBody, i)
@@ -836,20 +690,6 @@ function _calc_controlpoints!(self::MultiBody, controlpoints, normals; optargs..
         rng = (1:body.ncells) .+ ncells
         _calc_controlpoints!(body, view(controlpoints, :, rng), view(normals, :, rng); this_optargs...)
 
-        ncells += body.ncells
-    end
-end
-
-function _calc_normals(self::MultiBody; optargs...)
-    normals = zeros(3, self.ncells)
-    _calc_normals!(self, normals; optargs...)
-    return normals
-end
-function _calc_normals!(self::MultiBody, normals; optargs...)
-    ncells = 0
-    for body in self.bodies
-        _calc_normals!(body, view(normals, :, (1:body.ncells) .+ ncells);
-                                                                    optargs...)
         ncells += body.ncells
     end
 end

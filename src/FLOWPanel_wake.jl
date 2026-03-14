@@ -1,5 +1,9 @@
 abstract type AbstractFreeWake end
 
+struct ProbeWrapper{P}
+    system::P
+end
+
 """
     solve!(body::AbstractBody{TB}, wake::AbstractFreeWake{TW}, Uinf::Function, t=0.0; solver::AbstractSolver, backend=FastMultipoleBackend)
 
@@ -16,7 +20,8 @@ Solve for the body panel strengths and wake velocities at time `t` given a frees
 - `backend::AbstractBackend`: the N-body backend to use for evaluating influence of body and wake on each other (default: `FastMultipoleBackend` with expansion order 10, multipole acceptance 0.4, and leaf size 100)
 
 """
-function solve!(body::AbstractBody{TB}, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
+function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
+        frames=nothing,
         body_solver::AbstractSolver=BackslashDirichlet(body), 
         backend=FastMultipoleBackend(;
             expansion_order=10,
@@ -25,93 +30,38 @@ function solve!(body::AbstractBody{TB}, wake::AbstractFreeWake, uinf::AbstractAr
             shrink=true,
             recenter=false,
         )
-    ) where {TB}
+    )
+
+    # reset potential/velocity
+    reset!(wake)
+    reset!(body)
     
     # get probes
-    body_probes = get_probes(body)
+    wake_probes = get_probes(wake)
 
     # wake-on-all velocity
-    evaluate_influence!((body_probes, wake), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    evaluate_influence!((body, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
 
     # freestream
-    eachcol(body_probes.gradient) .+= Ref(uinf)
-    for vel in wake.velocity
-        for ns in axes(vel, 3)
-            for nc in axes(vel, 2)
-                vel[:, nc, ns] .+= uinf
-            end
-        end
+    apply_freestream!(body, uinf)
+    apply_freestream!(wake, uinf)
+
+    # kinematics
+    if !isnothing(frames)
+        kinematic_velocity!(body.velocity, body.position, body, frames; skip_top_level=false)
     end
 
-    # solve body
-    solve2!(body, body_probes.gradient, body_solver; backend)
+    # solve body (shouldn't modify body velocity, but will update body strength)
+    solve2!(body, body.velocity, body_solver; backend)
 
     # body-on-all influence
-    evaluate_influence!((body_probes, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    evaluate_influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
 
     return nothing
 end
 
-function check_nans(solver::FGSSolver)
-    if any(isnan.(solver.fgs.extra_farfield))
-        error("NaN detected in farfield extra points")
-    end
-    if any(isnan.(solver.fgs.source_tree.buffers[1]))
-        error("NaN detected in FMM source buffer")
-    end
-    if any(isnan.(solver.fgs.target_tree.buffers[1]))
-        error("NaN detected in FMM target buffer")
-    end
-    if any(isnan.(solver.fgs.strengths))
-        error("NaN detected in fgs strengths")
-    end
-    if any(isnan.(solver.fgs.old_influence_storage))
-        error("NaN detected in fgs old influence storage")
-    end
-    if any(isnan.(solver.fgs.extra_right_hand_side))    
-        error("NaN detected in fgs extra right hand side")
-    end
-end
-
-function check_nans(body::AbstractBody)
-    if any(isnan.(body.potential))
-        error("NaN detected in body potential")
-    end
-    if any(isnan.(body.velocity))
-        error("NaN detected in body velocity")
-    end
-    if true in isnan.(body.strength)
-        error("NaN detected in body strength")
-    end
-    for das in body.Das
-        if true in isnan.(das)
-            error("NaN detected in Das")
-        end
-    end
-    for dbs in body.Dbs
-        if true in isnan.(dbs)
-            error("NaN detected in Dbs")
-        end
-    end
-    if true in isnan.(body.grid._nodes)
-        error("NaN detected in body grid nodes")
-    end
-
-end
-
 requires_hessian(::AbstractBody) = false # default behavior
 requires_hessian(::AbstractFreeWake) = false # default behavior
-
-function get_probes(body::AbstractBody{TK,NK,TF}) where {TK,NK,TF}
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    normals = _calc_normals(body)
-    CPs = _calc_controlpoints(body, normals; off=-1e-10)
-    @assert !requires_hessian(body) "`get_probes` must be overloaded to support Hessian output for body type $(typeof(body))"
-    potential = zeros(TF, size(CPs, 2))
-    velocity = zeros(TF, 3, size(CPs, 2))
-    body_probes = FastMultipole.ProbeSystemArray(CPs, potential, velocity, hessian)
-    return body_probes
-end
 
 #--- Panel Wake ---#
 
@@ -124,7 +74,7 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
 end
 
 function get_probes(wake::PanelWake)
-    return wake
+    return ProbeWrapper(wake)
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
@@ -150,6 +100,22 @@ end
 PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=ConstantDoublet; nwakerows=100) where {TK,NK,TF} = 
     PanelWake(body.shedding, kernel, TF; kerneloffset=body.kerneloffset, nwakerows)
 
+function reset!(wake::PanelWake)
+    for vel in wake.velocity
+        vel .= zero(eltype(vel))
+    end
+end
+
+function apply_freestream!(wake::PanelWake, uinf)
+    for vel in wake.velocity
+        for ns in axes(vel, 3)
+            for nc in 1:wake.nwakes[]+1
+                vel[:, nc, ns] .+= uinf
+            end
+        end
+    end
+end
+
 # FastMultipole compatibility
 function global_to_matrix_index(wake::PanelWake, i_wake)
 
@@ -159,16 +125,40 @@ function global_to_matrix_index(wake::PanelWake, i_wake)
     i_wake_local = i_wake
     npanels = 0
     for i in eachindex(wake.strength)
-        npanels += size(wake.strength[i], 2) * nwakes
+        npanels += size(wake.strength[i], 3) * nwakes
         if i_wake <= npanels
             break
         end
         isurf += 1 # advance to the next surface
-        i_wake_local -= size(wake.strength[i], 2) * nwakes # adjust local index
+        i_wake_local -= size(wake.strength[i], 3) * nwakes # adjust local index
     end
 
     # convert local index to matrix indices
-    icol, irow = divrem(i_wake_local - 1, size(wake.strength[isurf], 2))
+    icol, irow = divrem(i_wake_local - 1, nwakes)
+    icol += 1 # adjust for 1-based indexing
+    irow += 1 # adjust for 1-based indexing
+
+    return isurf, irow, icol
+end
+
+function global_to_matrix_index(wake::ProbeWrapper{<:PanelWake}, i_wake)
+
+    # determine which shedding surface we're on
+    nrows = wake.system.nwakes[] + 1
+    isurf = 1
+    i_wake_local = i_wake
+    nnodes = 0
+    for i in eachindex(wake.system.nodes)
+        nnodes += size(wake.system.nodes[i], 3) * nrows
+        if i_wake <= nnodes
+            break
+        end
+        isurf += 1 # advance to the next surface
+        i_wake_local -= size(wake.system.nodes[i], 3) * nrows # adjust local index
+    end
+
+    # convert local index to matrix indices
+    icol, irow = divrem(i_wake_local - 1, nrows)
     icol += 1 # adjust for 1-based indexing
     irow += 1 # adjust for 1-based indexing
 
@@ -177,11 +167,23 @@ end
 
 function matrix_to_global_index(wake::PanelWake, isurf, irow, icol)
     # convert matrix indices to local index
-    i_wake = (icol - 1) * size(wake.strength[isurf], 2) + irow
+    i_wake = (icol - 1) * wake.nwakes[] + irow
 
     # account for previous surfaces
-    for isurf in 1:(isurf-1)
-        i_wake += size(wake.strength[isurf], 2) * wake.nwakes[]
+    for i in 1:(isurf-1)
+        i_wake += size(wake.strength[i], 3) * wake.nwakes[]
+    end
+
+    return i_wake
+end
+
+function matrix_to_global_index(wake::ProbeWrapper{<:PanelWake}, isurf, irow, icol)
+    # convert matrix indices to local index
+    i_wake = (icol - 1) * (wake.system.nwakes[] + 1) + irow
+
+    # account for previous surfaces
+    for i in 1:(isurf-1)
+        i_wake += size(wake.system.nodes[i], 3) * (wake.system.nwakes[] + 1)
     end
 
     return i_wake
@@ -235,6 +237,10 @@ end
 
 FastMultipole.numtype(system::PanelWake{TK,NK,TF}) where {TK,NK,TF} = TF
 
+function FastMultipole.numtype(system::ProbeWrapper)
+    return FastMultipole.numtype(system.system)
+end
+
 FastMultipole.data_per_body(system::PanelWake) = 4 + size(system.strength[1], 1) + 12
 
 FastMultipole.has_vector_potential(::PanelWake{TK,NK,TF}) where {TK,NK,TF} = TK<:Union{VortexRing, ConstantVortexSheet}
@@ -258,11 +264,24 @@ function FastMultipole.get_position(system::PanelWake, i)
     return FastMultipole.StaticArrays.SVector{3}(cx, cy, cz)
 end
 
+function FastMultipole.get_position(system::ProbeWrapper{<:PanelWake}, i)
+
+    # get surface index of global `i` index
+    isurf, irow, icol = global_to_matrix_index(system, i)
+
+    # get nodes
+    v1x, v1y, v1z = view(system.system.nodes[isurf], :, irow, icol)
+
+    return FastMultipole.StaticArrays.SVector{3}(v1x, v1y, v1z)
+end
+
 FastMultipole.strength_dims(system::PanelWake) = size(system.strength[1], 1)
 
-FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 2) for s in system.strength)
+FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 3) for s in system.strength)
 
-function FastMultipole.buffer_to_target_system!(target_system::PanelWake, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
+
+function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
     # get surface index of global `i_target` index
     isurf, irow, icol = global_to_matrix_index(target_system, i_target)
 
@@ -273,9 +292,9 @@ function FastMultipole.buffer_to_target_system!(target_system::PanelWake, i_targ
 
     # save velocity
     if VS
-        target_system.velocity[isurf][1, irow, icol] = target_buffer[5, i_buffer]
-        target_system.velocity[isurf][2, irow, icol] = target_buffer[6, i_buffer]
-        target_system.velocity[isurf][3, irow, icol] = target_buffer[7, i_buffer]
+        target_system.system.velocity[isurf][1, irow, icol] += target_buffer[5, i_buffer]
+        target_system.system.velocity[isurf][2, irow, icol] += target_buffer[6, i_buffer]
+        target_system.system.velocity[isurf][3, irow, icol] += target_buffer[7, i_buffer]
     end
 
     # save Hessian (not currently used for PanelWake)
@@ -284,7 +303,7 @@ function FastMultipole.buffer_to_target_system!(target_system::PanelWake, i_targ
     end
 end
 
-function rotate_to_panel(v1, v2, v3)
+function rotate_to_panel(v1::FastMultipole.SVector{3,TF}, v2, v3) where {TF}
     # explicit cross(v2-v1, v3-v1)
     dx1 = v2[1] - v1[1]; dy1 = v2[2] - v1[2]; dz1 = v2[3] - v1[3]
     dx2 = v3[1] - v1[1]; dy2 = v3[2] - v1[2]; dz2 = v3[3] - v1[3]
@@ -389,19 +408,27 @@ FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args..
 
 function propagate!(wake::PanelWake, dt)
     for i_surf in eachindex(wake.nodes)
-        view(wake.velocity[i_surf], 1:wake.nwakes[], :) .*= dt # displacements
-        view(wake.nodes[i_surf], 1:wake.nwakes[], :) .+= view(wake.velocity[i_surf], 1:wake.nwakes[], :) # update nodes
-        view(wake.velocity[i_surf], 1:wake.nwakes[], :) ./= dt # restore velocities
+        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
+        view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
+        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
     end
 end
 
-function write_vtk(name, wake::PanelWake, idx, t)
-    WriteVTK.paraview_collection(name) do pvd
-        vtm = WriteVTK.vtk_multiblock(name * "$idx")
-        for i_surf in eachindex(wake.nodes)
-            WriteVTK.vtk_grid(vtm, name * "$idx", reshape(view(wake.nodes[i_surf], :, 1:wake.nwakes[], :), 3, wake.nwakes[], size(wake.nodes[i_surf], 2), 1)) do vtk
-                vtk["velocity"] = wake.velocity[i_surf]
-                vtk["strength"] = wake.strength[i_surf]
+function write_vtk(name, wake::PanelWake, idx, t; clear=false)
+    WriteVTK.paraview_collection(name; append=!clear) do pvd
+        vtm = WriteVTK.vtk_multiblock(name * "_$idx")
+        if wake.nwakes[] > 0
+            for i_surf in eachindex(wake.nodes)
+                pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
+                pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+                @show size(pts_reshaped)
+                WriteVTK.vtk_grid(vtm, name * "_$(idx)_surf$i_surf", pts_reshaped) do vtk
+                    vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
+                    vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+
+                    str = view(wake.strength[i_surf], :, 1:wake.nwakes[], :)
+                    vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
+                end
             end
         end
         pvd[t] = vtm

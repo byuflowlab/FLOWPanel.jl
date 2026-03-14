@@ -112,14 +112,6 @@ body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                             )
                                         )
 
-# body.shedding = body.shedding[:,1:1]
-# body.nsheddings = 1
-# body.shedding_full .= -1
-# idx_shed = body.shedding[1, 1]
-# body.shedding_full[:, idx_shed] .= view(body.shedding, 2:3, 1)
-# idx_shed = body.shedding[4, 1]
-# body.shedding_full[:, idx_shed] .= view(body.shedding, 5:6, 1)
-
 println("Number of panels:\t$(body.ncells)")
 
 vtks = save_path*"/"                        # String with VTK output files
@@ -137,8 +129,20 @@ AOA = AOAs[i]
     # Freestream at every control point
     Uinf(t) = Vinf
 
+    # prepare other inputs
+    eta = 0.3
+    frames = nothing
+    maneuver = (args...; optargs...) -> nothing
+    l = d * aspectratio
+    dt = magVinf / l / (n_rfl * 500)
+    t_range = range(0.0, step=dt, length=201)
+
+    # update wake directions
+    body.Das[1] .= repeat(Vinf*dt*eta, 1, size(body.Das, 2))
+    body.Dbs[1] .= repeat(Vinf*dt*eta, 1, size(body.Dbs, 2))
+
     # select backend for N-body interactions
-    leaf_size = 150
+    leaf_size = 20
     expansion_order = 10
     multipole_acceptance = 0.4
     backend = pnl.FastMultipoleBackend(;
@@ -163,27 +167,21 @@ AOA = AOAs[i]
     # )
     println("Initializaing solver...")
     @time body_solver = pnl.FGSSolver(body;
-        max_iterations=100,         # Maximum number of iterations
-        tolerance=1.0e-7,            # Convergence tolerance
-        rlx=0.1,                  # Relaxation factor
+        max_iterations=50,         # Maximum number of iterations
+        inner_iterations=10,       # Maximum number of inner iterations
+        reverse_pass=true,        # Whether to do reverse sweeps or not
+        tolerance=1.0e-6,            # Convergence tolerance
+        rlx=1.0,                  # Relaxation factor
         expansion_order,
         multipole_acceptance,
-        leaf_size,
+        leaf_size=150,
         shrink=true,
         recenter=false,
     )
     # solver = pnl.BackslashDirichlet(body)
 
     # initialize wake
-    wake = pnl.PanelWake(body; nwakerows=10)
-
-    # prepare other inputs
-    eta = 0.3
-    frames = nothing
-    maneuver = (args...; optargs...) -> nothing
-    l = d * aspectratio
-    dt = magVinf / l / (n_rfl * 5)
-    t_range = range(0.0, step=dt, length=15)
+    wake = pnl.PanelWake(body; nwakerows=201)
 
     println("\nBegin simulation...")
     @time begin

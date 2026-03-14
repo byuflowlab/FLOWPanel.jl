@@ -69,7 +69,7 @@ function Backslash(self::AbstractBody{TK, 1, <:Any};
 end
 
 function numtype(self::AbstractBody)
-    return promote_type(eltype(self.grid._nodes),
+    return promote_type(eltype(self.nodes),
                         eltype(self.strength),
                         Float64)
 end
@@ -218,7 +218,7 @@ function (solver::KrylovSolver)(C, B, α, β)
 
     # get induced velocity at control points
     solver.Uind .= zero(solver.Uind) # reset induced velocity
-    _Uind!(solver.body, solver.CPs, solver.Uind, solver.backend)
+    _Uind!(solver.body, solver.Cp, solver.Uind, solver.backend)
 
     # dot product with normals
     solver.Uind .*= solver.normals
@@ -234,7 +234,7 @@ function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolv
     
     # update solver fields
     solver.normals .= _calc_normals(self)
-    solver.CPs .= _calc_controlpoints(self, solver.normals) # TODO: avoid allocating here?
+    solver.Cp .= _calc_controlpoints(self, solver.normals) # TODO: avoid allocating here?
 
     # construct matrix-free linear operator
     TF2 = promote_type(eltype(Uinfs), TF)

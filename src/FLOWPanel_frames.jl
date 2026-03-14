@@ -10,12 +10,12 @@
 =###############################################################################
 
 struct ReferenceFrame{TF}
-	x::SVector{3,TF}             # origin in parent frame
-	v::SVector{3,TF}             # velocity in parent frame
-	ω_axis::SVector{3,TF}        # axis of rotation in parent frame
+	x::FastMultipole.SVector{3,TF}             # origin in parent frame
+	v::FastMultipole.SVector{3,TF}             # velocity in parent frame
+	ω_axis::FastMultipole.SVector{3,TF}        # axis of rotation in parent frame
 	ω::TF                        # angular velocity in parent frame
-	R::SMatrix{3,3,TF,9}         # basis vectors expressed in parent frame
-    Rp2g::SMatrix{3,3,TF,9}      # parent frame basis vectors expressed in global frame
+	R::FastMultipole.SMatrix{3,3,TF,9}         # basis vectors expressed in parent frame
+    Rp2g::FastMultipole.SMatrix{3,3,TF,9}      # parent frame basis vectors expressed in global frame
 	name::String                 # name of this frame
 	parent_index::Int            # index of parent frame
 	child_index::Vector{Int}  # child reference frames
@@ -26,24 +26,19 @@ struct ForwardRightDown end
 
 struct BackRightUp end
 
-function propagate_kinematics!(system::System, frames::Vector{<:ReferenceFrame}, dt::Real)
+function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:ReferenceFrame}, dt::Real)
     
     # translation vector from parent to global frame
-    dx_parent_to_global = SVector{3}(0.0, 0.0, 0.0)
+    dx_parent_to_global = FastMultipole.SVector{3}(0.0, 0.0, 0.0)
 
     # global rotation matrix from parent to global frame
-    R_parent_to_global = SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
+    R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
 
     # begin recursion
     propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
-
-    # update panels
-    for isurf = 1:length(system.surfaces)
-        update_surface_panels!(system.surfaces[isurf], system.grids[isurf]; ratios = system.ratios[isurf], fcore = (c, Δs) -> system.core_size)
-    end
 end
 
-function propagate_kinematics!(system::System, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::SMatrix, dt::Real)
+function propagate_kinematics!(system::Union{AbstractBody}, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
     # get frame
     frame = frames[i_frame]
 
@@ -61,7 +56,8 @@ function propagate_kinematics!(system::System, i_frame::Int, frames::Vector{<:Re
 
     # rotate and translate dependent surfaces
     for i in frame.dependent_index
-        rotate_translate!(system, i, origin_global, Rω_global, dx_global)
+        body = system isa MultiBody ? get_body(system, i) : system
+        rotate_translate!(body, origin_global, Rω_global, dx_global)
     end
     
     # Update the frame
@@ -81,28 +77,24 @@ function propagate_kinematics!(system::System, i_frame::Int, frames::Vector{<:Re
     end
 end
 
-function rotate_translate!(system::System, i, origin, Rω, dx)
-    # get grid
-    grid = system.grids[i]
-
-    # grid size
-    _, nc, ns = size(grid)
+function rotate_translate!(body::AbstractBody, origin, Rω, dx)
+    # get grid nodes
+    nodes = body.grid._nodes
+    nnodes = size(nodes, 2)
 
     # rotate/translate
-    for i in 1:ns
-        for j in 1:nc
-            # relative to origin
-            for k in 1:3
-                grid[k,j,i] -= origin[k]
-            end
+    for i in 1:nnodes
+        # relative to origin
+        for k in 1:3
+            nodes[k,i] -= origin[k]
+        end
 
-            # rotate
-            grid[:,j,i] .= Rω * SVector{3}(grid[1,j,i], grid[2,j,i], grid[3,j,i])
+        # rotate
+        nodes[:,i] .= Rω * FastMultipole.SVector{3}(nodes[1,i], nodes[2,i], nodes[3,i])
 
-            # translate and shift origin back
-            for k in 1:3
-                grid[k,j,i] += dx[k] + origin[k]
-            end
+        # translate and shift origin back
+        for k in 1:3
+            nodes[k,i] += dx[k] + origin[k]
         end
     end
 end
@@ -112,39 +104,40 @@ function Rodrigues(axis, angle::TF) where TF
     t = 1 - c
     x, y, z = axis
 
-    return SMatrix{3,3,TF,9}(
+    return FastMultipole.SMatrix{3,3,TF,9}(
         t*x*x + c,     t*x*y - s*z, t*x*z + s*y,
         t*x*y + s*z,   t*y*y + c,   t*y*z - s*x,
         t*x*z - s*y,   t*y*z + s*x, t*z*z + c
     )
 end
 
-function inverse_Rodrigues(R::SMatrix{3,3,TF,9}) where TF
+function inverse_Rodrigues(R::FastMultipole.SMatrix{3,3,TF,9}) where TF
     # inverse Rodrigues rotation matrix
     θ = acos((trace(R) - 1) / 2)
     if θ == 0.0
-        return SVector{3,TF}(0.0, 0.0, 0.0)
+        return FastMultipole.SVector{3,TF}(0.0, 0.0, 0.0)
     end
     s = sin(θ)
     x = (R[3,2] - R[2,3]) / (2 * s)
     y = (R[1,3] - R[3,1]) / (2 * s)
     z = (R[2,1] - R[1,2]) / (2 * s)
-    return SVector{3,TF}(x, y, z) * θ
+    return FastMultipole.SVector{3,TF}(x, y, z) * θ
 end
 
-function ReferenceFrame(system::System{TF}; 
+function ReferenceFrame(system::Union{AbstractBody}; 
         # vvv all in global frame vvv
-        origin = system.reference.rref,
-        v = zero(SVector{3,TF}),
-        ω_axis = SVector{3,TF}(0.0, 1.0, 0.0),
-        ω = zero(TF),
-        R = SMatrix{3,3}(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0),
-        Rp2g = SMatrix{3,3}(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), # rotation from parent frame to global frame
+        origin = system.O,
+        v = zero(FastMultipole.SVector{3,eltype(system.O)}),
+        ω_axis = FastMultipole.SVector{3,eltype(system.O)}(0.0, 1.0, 0.0),
+        ω = zero(eltype(system.O)),
+        R = FastMultipole.SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        Rp2g = FastMultipole.SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), # rotation from parent frame to global frame
         name = "vehicle",  # name of this frame
         child_index = Int[],  # indices of child frames
-        dependent_index = collect(1:length(system.surfaces))  # indices of dependent surfaces
+        dependent_index = system isa MultiBody ? collect(1:system.nbodies) : [1]  # indices of dependent bodies
         # ^^^ all in global frame ^^^
-    ) where TF
+    )
+    TF = eltype(system.O)
     parent_index = -1  # no parent frame
     vehicle_frame = ReferenceFrame{TF}(
         origin, v, ω_axis, ω, R, Rp2g,
@@ -171,22 +164,22 @@ end
 
 #------- kinematic velocity -------#
 
-function kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames::AbstractVector{ReferenceFrame{TF}}; skip_top_level=false) where TF
+function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::Union{AbstractBody}, frames::AbstractVector{ReferenceFrame{TF}}; skip_top_level=false) where TF
 
     # capture the top level frame if requested
     if skip_top_level
         # begin recursion (skipping the top level frame, which is captured by system.fs)
         for i in frames[1].child_index
             frame = frames[1]
-            kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames, i, frame.x, frame.R)
+            kinematic_velocity!(Vcp, CPs, system, frames, i, frame.x, frame.R)
         end
     else
-        kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames, 1, zero(SVector{3,TF}), SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+        kinematic_velocity!(Vcp, CPs, system, frames, 1, zero(FastMultipole.SVector{3,TF}), FastMultipole.SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
     end
 
 end
 
-function kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames::AbstractVector{<:ReferenceFrame}, i_frame::Int, dx_parent_to_global, R_parent_to_global)
+function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::Union{AbstractBody}, frames::AbstractVector{<:ReferenceFrame}, i_frame::Int, dx_parent_to_global, R_parent_to_global)
     # get frame
     frame = frames[i_frame]
 
@@ -198,68 +191,27 @@ function kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames::AbstractVector{
     ω_global = R_parent_to_global * frame.ω_axis * frame.ω # global angular velocity
     
     # update the kinematic velocity of each dependent surface
+    ncells_cum = 0
     for isurf in frame.dependent_index
         
         # unpack containers
-        surface = surfaces[isurf]
-        vcp = Vcp[isurf]
-        vh = Vh[isurf]  # horizontal velocity
-        vv = Vv[isurf]  # vertical velocity
-        vte = Vte[isurf]  # trailing edge velocity
+        body = system isa MultiBody ? get_body(system, isurf) : system
 
-        nc, ns = size(surface)
+        nc = body.ncells
 
-        # velocity at the control points
-        for j = 1:ns, i = 1:nc
-            # unpack panel
-            panel = surface[i,j]
-
-            # control point velocity
-            x = controlpoint(panel)
-            vcp[i,j] -= v_global + cross(ω_global, (x - origin_global))
+        # velocity at the control points, we subtract this from the matrix because FLOWPanel expects rigid body EOM formulation: (U_inf + U_ind - U_kin) \cdot n = 0 
+        for i in 1:nc
+            icell = ncells_cum + i
+            cp = FastMultipole.SVector{3}(CPs[1, icell], CPs[2, icell], CPs[3, icell])
+            
+            # vcp is actually total evaluated velocity, so subtracting kinematic velocity means rigid body motion opposes the freestream
+            dv = v_global + cross(ω_global, (cp - origin_global))
+            Vcp[1, icell] -= dv[1]
+            Vcp[2, icell] -= dv[2]
+            Vcp[3, icell] -= dv[3]
         end
 
-        # velocity at the horizontal bound vortices
-        for j = 1:ns
-            for i = 1:nc
-                # unpack panel
-                panel = surface[i,j]
-
-                # top center velocity
-                x = top_center(panel)
-
-                vh[i, j] -= v_global + cross(ω_global, (x - origin_global))
-            end
-            # unpack panel
-            panel = surface[end,j]
-
-            # bottom center velocity
-            x = bottom_center(panel)
-
-            vh[end,j] -= v_global + cross(ω_global, (x - origin_global))
-        end
-
-        # velocity at the vertical bound vortices
-        for i = 1:nc
-            for j = 1:ns
-                panel = surface[i,j]
-                x = left_center(panel)
-                vv[i,j] -= v_global + cross(ω_global, (x - origin_global))
-            end
-            panel = surface[i,end]
-            x = right_center(panel)
-            vv[i,end] -= v_global + cross(ω_global, (x - origin_global))
-        end
-
-        # velocity at the trailing edge vertices
-        for j = 1:ns
-            panel = surface[end,j]
-            x = bottom_left(panel)
-            vte[j] -= v_global + cross(ω_global, (x - origin_global))
-        end
-        panel = surface[end,end]
-        x = bottom_right(panel)
-        vte[end] -= v_global + cross(ω_global, (x - origin_global))
+        ncells_cum += nc
 
     end
 
@@ -271,9 +223,10 @@ function kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames::AbstractVector{
     
     # propagate to child frames
     for i in frame.child_index
-        kinematic_velocity!(Vcp, Vh, Vv, Vte, surfaces, frames, i, dx_parent_to_global, R_parent_to_global)
+        kinematic_velocity!(Vcp, CPs, system, frames, i, dx_parent_to_global, R_parent_to_global)
     end
 end
+
 
 # function Freestream(frame::ReferenceFrame{TF}, ref::Reference, vinf_ext) where TF
 #     # equivalent freestream about ref.r
@@ -291,11 +244,11 @@ end
 #------- constructors -------#
 
 function add_frame!(frames::Vector{ReferenceFrame{TF}}, name::String, parent_index::Int, origin, surface_indices::Vector{Int};
-    v = zero(SVector{3,TF}),  # velocity in parent frame
-    ω_axis = SVector{3,TF}(0.0, 1.0, 0.0),  # axis of rotation in parent frame
+    v = zero(FastMultipole.SVector{3,TF}),  # velocity in parent frame
+    ω_axis = FastMultipole.SVector{3,TF}(0.0, 1.0, 0.0),  # axis of rotation in parent frame
     ω = zero(TF),  # angular velocity in parent frame
-    R = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),  # basis vectors expressed in parent frame
-    Rp2g = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)  # rotation from parent frame to global frame
+    R = FastMultipole.SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),  # basis vectors expressed in parent frame
+    Rp2g = FastMultipole.SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)  # rotation from parent frame to global frame
 ) where TF
 
     # create new frame

@@ -104,21 +104,23 @@ points = hcat(xs, ys)
 # Generate body of revolution
 body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-14,
+                                                        CPoffset=1e-10,
                                                         kerneloffset=1e-8,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
-                                                        semiinfinite_wake=true
+                                                        semiinfinite_wake=false
                                             )
                                         )
 
-# body.shedding = body.shedding[:,1:1]
+# body.shedding[1] = body.shedding[1][:,1:1]
 # body.nsheddings = 1
 # body.shedding_full .= -1
 # idx_shed = body.shedding[1, 1]
-# body.shedding_full[:, idx_shed] .= view(body.shedding, 2:3, 1)
-# idx_shed = body.shedding[4, 1]
-# body.shedding_full[:, idx_shed] .= view(body.shedding, 5:6, 1)
+# body.shedding_full[1:2, idx_shed] .= view(body.shedding[1], 2:3, 1)
+# body.shedding_full[3:4, idx_shed] .= 1
+# idx_shed = body.shedding[1][4, 1]
+# body.shedding_full[1:2, idx_shed] .= view(body.shedding[1], 5:6, 1)
+# body.shedding_full[3:4, idx_shed] .= 1
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -141,19 +143,19 @@ AOA = AOAs[i]
 
     # Unitary direction of semi-infinite vortex at points `a` and `b` of each
     # trailing edge panel
-    body.Das[1] .= repeat(Vinf/magVinf, 1, body.nsheddings)
-    body.Dbs[1] .= repeat(Vinf/magVinf, 1, body.nsheddings)
+    body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
+    body.Dbs[1] .= repeat(Vinf/magVinf, 1, size(body.Dbs[1], 2))
 
     # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
     # `Das` and `Dbs` as trailing edge rigid wake direction
     # @time pnl.solve(body, Uinfs, Das, Dbs)
-    leaf_size = 50
+    leaf_size = 100
     expansion_order = 10
     multipole_acceptance = 0.4
     backend = pnl.FastMultipoleBackend(;
                                     expansion_order,
                                     multipole_acceptance,
-                                    leaf_size
+                                    leaf_size=20
                                 )
     # backend = pnl.DirectBackend()
     # global solver = pnl.Backslash(body; least_squares=true)
@@ -169,64 +171,61 @@ AOA = AOAs[i]
     #                 leaf_size=10
     #             )
     # )
-    println("Initializaing solver...")
-    @time solver = pnl.FGSSolver(body;
-        max_iterations=500,         # Maximum number of iterations
-        tolerance=1.0e-6,            # Convergence tolerance
-        rlx=1.0,                  # Relaxation factor
-        expansion_order,
-        multipole_acceptance,
-        leaf_size,
-        shrink=true,
-        recenter=false,
-    )
-    # solver = pnl.BackslashDirichlet(body)
+    # function test_solver(inner_iterations, reverse_pass)
+    #     println("Initializing solver with inner_iterations=$inner_iterations, reverse_pass=$reverse_pass...")
+        println("Initializaing solver...")
+        @time solver = pnl.FGSSolver(body;
+            max_iterations=500,         # Maximum number of iterations
+            tolerance=1.0e-6,            # Convergence tolerance
+            rlx=1.0,                  # Relaxation factor
+            expansion_order,
+            multipole_acceptance,
+            leaf_size,
+            shrink=true,
+            recenter=false,
+            inner_iterations=20,
+            reverse_pass=false,
+            verbose=false
+        )
+        # solver = pnl.BackslashDirichlet(body)
 
-    println("\nSolving...")
+        println("\nSolving...")
 
-    # profile
-    # using Profile, PProf
+        # profile
+        # using Profile, PProf
 
-    pnl.solve2!(body, Uinfs, solver; backend)
-    # @profile pnl.solve2!(body, Uinfs, solver; backend)
-    # Profile.clear()
-    # @profile pnl.solve2!(body, Uinfs, solver; backend)
-    # pprof()
+        @time pnl.solve2!(body, Uinfs, solver; backend)
+        # @profile pnl.solve2!(body, Uinfs, solver; backend)
+        # Profile.clear()
+        # @profile pnl.solve2!(body, Uinfs, solver; backend)
+        # pprof()
+
+    # end
+
+    # for reverse_pass in [true, false]
+    #     for inner_iterations in [1, 2, 4, 8, 16, 32]
+    #         test_solver(inner_iterations, reverse_pass)
+    #     end
+    # end
 
     # ----------------- POST PROCESSING ----------------------------------------
     println("\nPost processing...")
 
     # Calculate surface velocity U on the body
-    @time Us = pnl.calcfield_U(body, body; backend)
+    @time Us = pnl.calcfield_U!(body, body; backend)
+    pnl.apply_freestream!(body, Uinfs[:,1])
 
-    # NOTE: Since the boundary integral equation of the potential flow has a
-    #       discontinuity at the boundary, we need to add the gradient of the
-    #       doublet strength to get an accurate surface velocity
-
-    # Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-    Gammai = kernel == pnl.VortexRing ? 1 : kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? 2 : 0
-    UDeltaGamma = pnl.calcfield_Ugradmu(body; Gammai)
-    # UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true, force_cellTE=false)
-
-    # Add both velocities together
-    pnl.addfields(body, "Ugradmu", "U")
-
-    # Calculate pressure coefficient (based on U + U_∇μ)
-    @time Cps = pnl.calcfield_Cp(body, magVinf)
+    # Calculate pressure coefficient (based on body.velocity)
+    @time Cps = pnl.calcfield_Cp!(body.Cp, body, magVinf; correct_kuttacondition=true)
 
     # Calculate the force of each panel (based on Cp)
-    @time Fs = pnl.calcfield_F(body, magVinf, rho)
+    @time Fs = pnl.calcfield_F!(body, magVinf, rho)
 
     # check normal flow condition
-    Us_tot = pnl.get_field(body, "U")["field_data"] # total velocity
-    Us_tot = [Us_tot[j][i] for i=1:3, j=1:size(Us_tot,1)]
-    normals = pnl._calc_normals(body)
+    Us_tot = body.velocity
     Udotn = sum(Us_tot .* normals, dims=1)
     resid = maximum(abs.(Udotn))
     println("Max flow tangency residual: $resid")
-
-    normals = pnl.calc_normals(body)
-    CPs_inside = pnl._calc_controlpoints(body, normals; off=-1e-10)
 
     # ----------------- COMPARISON TO EXPERIMENTAL DATA ------------------------
     # Plot surface pressure along slices of the duct
@@ -250,8 +249,7 @@ AOA = AOAs[i]
         name *= kernel == pnl.VortexRing ? "_vortexring" :
                 kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
                 ""
-        global vtks *= pnl.save(body, name; path=save_path, num=i,
-                                        wake_panel=false, debug=false, out_wake=false)
+        global vtks *= pnl.write_vtk(name, body, i, 0.0; overwrite=true)
     end
 
 # end

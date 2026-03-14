@@ -32,19 +32,32 @@ Non-lifting body that is solved using a combination of N panel elements.
 struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
 
     # User inputs
-    grid::gt.GridTriangleSurface              # Paneled geometry
+    nodes::Matrix{TF}                         # 3xnnodes matrix where nodes[:, i] is the position of the i-th node
     
     # Properties
+    vtk_cells::Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, Vector{Int64}}}      # Vector of WriteVTK cells
+    neighbor::Matrix{Int}                     # 3xncells matrix where neighbor[i, j] is the linear index of the cell neighboring the i-th edge of the j-th cell (or 0 if it's a boundary)
     nnodes::Int                               # Number of nodes
     ncells::Int                               # Number of cells
     cells::Matrix{Int}                        # Cell connectivity (each column is a cell)
-    fields::Array{String, 1}                  # Available fields (solutions)
     Oaxis::Array{TF,2}                  # Coordinate system of original grid
     O::Array{TF,1}                      # Position of CS of original grid
+
+    # Fields
+    Uinf::Matrix{TF}
+    U::Matrix{TF}
+    phi::Vector{TF}
+    Cp::Vector{TF}
+    Cps::Vector{TF}
+    Gamma::Vector{TF}
+    F::Matrix{TF}
+    solved::Bool
 
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     velocity::Array{TF,2}               # Velocity at control points
+    controlpoints::Matrix{TF}           # 3xncells control points
+    normals::Matrix{TF}                 # 3xncells panel normals
     CPoffset::Float64                   # Control point offset in normal direction
     kerneloffset::Float64               # Kernel offset to avoid singularities
     kernelcutoff::Float64               # Kernel cutoff to avoid singularities
@@ -54,13 +67,21 @@ struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
 end
 
 function NonLiftingBody{E, N, TF}(
-                grid;
-                nnodes=grid.nnodes, ncells=grid.ncells,
-                cells=grid2cells(grid),
-                fields=Array{String,1}(),
+                nodes::Matrix{TF}, cells::Matrix{Int};
+                vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
+                neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
+                nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                strength=zeros(grid.ncells, N),
-                velocity=zeros(3, grid.ncells),
+                Uinf=zeros(TF, 0, 0),
+                U=zeros(TF, 0, 0),
+                phi=zeros(TF, 0),
+                Cp=zeros(TF, 0),
+                Cps=zeros(TF, size(cells, 2)),
+                Gamma=zeros(TF, 0),
+                F=zeros(TF, 0, 0),
+                solved=false,
+                strength=zeros(size(cells, 2), N),
+                velocity=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
                 kernelcutoff=1e-14,
@@ -69,16 +90,22 @@ function NonLiftingBody{E, N, TF}(
                 inside_offset=1e-6
               ) where {E, N, TF}
     # check if mesh is watertight
-    if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
-        mesh = grid.orggrid
-        watertight = gt.isclosed(mesh)
+    if check_mesh
+        # Need to implement an equivalent check for standalone nodes/cells here, or simply skip.
+        # Alternatively, we just depend on the watertight flag explicitly given to the constructor.
     end
 
+    # If the user did not provide half-edges via neighbor matrix, compute them:
+    # We will assume that they are either pre-computed via the other constructor or zero unless calculated.
+    # Note: `geometrictools` has functions for finding neighbors, but here we require a manual pass or rely on the grid-based constructor extracting it first.
+    # If a pure nodes/cells constructor is used, we'll assume the user computes their own neighbors and passes them,
+    # or that a boundary defaults to zero.
+
     return NonLiftingBody{E, N, TF}(
-                grid,
+                nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
-                fields,
                 Oaxis, O,
+                Uinf, U, phi, Cp, Cps, Gamma, F, solved,
                 strength,
                 velocity,
                 CPoffset,
@@ -90,8 +117,51 @@ function NonLiftingBody{E, N, TF}(
               )
 end
 
+function NonLiftingBody{E, N, TF}(
+                grid::gt.GridTriangleSurface;
+                optargs...
+              ) where {E, N, TF}
+    
+    nodes = grid._nodes
+    cells = grid2cells(grid)
+    
+    # Extract neighbor info from grid
+    neighbor = zeros(Int, 3, grid.ncells)
+    
+    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells))
+    linc = LinearIndices(ndivscellsc)
+    
+    for ci in 1:grid.ncells
+        for ni in 1:3                   # Iterate over neighbors
+            ncoor = gt.neighbor(grid, ni, ci; preserveEdge=true)
+            if ncoor[1] != 0
+                nlin = linc[ncoor...]
+                neighbor[ni, ci] = nlin
+            end
+        end
+    end
+
+    vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:grid.ncells]
+
+    # check if mesh is watertight
+    watertight_guess = false
+    if typeof(grid.orggrid) <: gt.Meshes.Mesh
+        mesh = grid.orggrid
+        watertight_guess = gt.isclosed(mesh)
+    end
+    
+    return NonLiftingBody{E, N, TF}(
+                nodes, cells;
+                vtk_cells=vtk_cells, neighbor=neighbor, watertight=watertight_guess, optargs...
+              )
+end
+
 function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
     return NonLiftingBody{E, _count(E), eltype(grid._nodes)}(grid; optargs...)
+end
+
+function (NonLiftingBody{E})(nodes::Matrix{TF}, cells::Matrix{Int}; optargs...) where {E, TF}
+    return NonLiftingBody{E, _count(E), TF}(nodes, cells; optargs...)
 end
 
 function save(body::NonLiftingBody, args...; optargs...)
@@ -110,178 +180,90 @@ solved_field_name(::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) =
 #### END OF NON-LIFTING BODY  ##################################################
 
 
-
-
-
-
-
-
 ################################################################################
 # CONSTANT-SOURCE SOLVER
 ################################################################################
-function solve(self::NonLiftingBody{ConstantSource, 1},
-                                              Uinfs::AbstractArray{<:Number, 2})
 
-    if size(Uinfs, 2) != self.ncells
-        error("Invalid Uinfs;"*
-              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    end
-
-    # Compute normals and control points
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
-
-    # Compute geometric matrix (left-hand-side influence matrix)
-    G = zeros(self.ncells, self.ncells)
-    _G_U!(self, G, CPs, normals)
-
-    # Solve system of equations
-    sigma = _solve(self, normals, G, Uinfs)
-
-    # Save solution
-    self.strength[:, 1] .= sigma
-
-    _solvedflag(self, true)
-    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-
-    rhs = .- vec(sum(normals .* Uinfs, dims=1))
-    return G, rhs
-end
-
-function _solve(::NonLiftingBody{ConstantSource, 1}, normals, G, Uinfs)
-
-    # Define right-hand side
-    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
-                                        zip(eachcol(Uinfs), eachcol(normals))]
-
-    # Solve the system of equations
-    sigma = G\lambda
-
-    return sigma
-end
-
-"""
-Computes the geometric matrix (left-hand side matrix of the system of equation)
-and stores it under `G`.
-
-**ARGUMENTS**
-  * `G::Array{T,2}`                     : Pre-allocated output memory.
-  * `CPs::Array{T,2}`                   : Control points.
-  * `normals::Array{T,2}`               : Normal associated to every CP.
-"""
-function _G_U!(self::NonLiftingBody{ConstantSource, 1},
-                    G::Arr1, CPs::Arr2, normals::Arr3;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2},
-                        T3, Arr3<:AbstractArray{T3, 2}}
-
-    println("=====\nHERE,,,,,!!!\n=====")
-    _G_U_constantsource!(self, G, CPs, normals; optargs...)
-end
-
-function _G_U_constantsource!(self, G, CPs, normals; optargs...)
+function _G_U!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, normals, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
     N = self.ncells
     M = size(CPs, 2)
 
     if size(G, 1)!=M || size(G, 2)!=N
         error("Matrix G with invalid dimensions;"*
               " got $(size(G)), expected ($M, $N).")
-    elseif size(normals, 2)!=M
-        error("normals matrix with invalid dimensions;"*
-              " got $(size(normals)), expected (3, $M).")
     end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
 
     # Build geometric matrix
-    for (pj, Gslice) in enumerate(eachcol(G))
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        U_constant_source(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          optargs...
-                         )
+    derivatives_switch = FastMultipole.DerivativesSwitch(false,true,false) # only velocity
+    
+    # store old strength and set to unit
+    old_strength = copy(self.strength)
+    self.strength .= zero(eltype(self.strength))
+    if strength_index > 0
+        self.strength[:, strength_index] .= 1.0
+    else
+        for i in 1:NK
+            self.strength[:, i] .= 1.0
+        end
     end
+
+    Threads.@threads for i_source in 1:N
+        for i_target in 1:M
+            # get target
+            tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+            target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+            # compute influence
+            _, u, _ = induced(target, self, i_source, derivatives_switch; kerneloffset=kerneloffset)
+
+            # update G
+            G[i_target, i_source] = u[1] * normals[1, i_target] + u[2] * normals[2, i_target] + u[3] * normals[3, i_target]
+        end
+    end
+
+    # restore strength
+    self.strength .= old_strength
 end
 
-function _Uind!(self::NonLiftingBody{ConstantSource, 1}, targets, out, backend::DirectBackend;
-                                                                     optargs...)
+function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
+    N = self.ncells
+    M = size(CPs, 2)
 
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Velocity of i-th panel on every target
-        U_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            optargs...
-                         )
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
     end
-end
 
-function _phi!(self::NonLiftingBody{ConstantSource, 1}, targets, out, backend::DirectBackend; optargs...)
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Potential of i-th panel on every target
-        phi_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            optargs...
-                         )
+    # Build geometric matrix
+    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false) # only potential
+    
+    # store old strength and set to unit
+    old_strength = copy(self.strength)
+    self.strength .= zero(eltype(self.strength))
+    if strength_index > 0
+        self.strength[:, strength_index] .= 1.0
+    else
+        for i in 1:NK
+            self.strength[:, i] .= 1.0
+        end
     end
+
+    Threads.@threads for i_source in 1:N
+        for i_target in 1:M
+            # get target
+            tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+            target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+            # compute influence
+            phi, _, _ = induced(target, self, i_source, derivatives_switch; kerneloffset=kerneloffset)
+
+            # update G
+            G[i_target, i_source] = phi
+        end
+    end
+
+    # restore strength
+    self.strength .= old_strength
 end
 
 _get_Gdims(self::NonLiftingBody{ConstantSource, 1}) = (self.ncells, self.ncells)
@@ -291,326 +273,6 @@ _get_Gdims(self::NonLiftingBody{ConstantSource, 1}) = (self.ncells, self.ncells)
 ################################################################################
 # CONSTANT-DOUBLET SOLVER
 ################################################################################
-function solve(self::NonLiftingBody{ConstantDoublet, 1},
-                                              Uinfs::AbstractArray{<:Number, 2})
-
-    if size(Uinfs, 2) != self.ncells
-        error("Invalid Uinfs;"*
-              " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    end
-
-    # Compute normals and control points
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
-
-    # Compute geometric matrix (left-hand-side influence matrix)
-    G = zeros(self.ncells, self.ncells)
-    _G_U!(self, G, CPs, normals)
-
-    # Solve system of equations
-    mu, lambda = _solve(self, normals, G, Uinfs)
-
-    # Save solution
-    self.strength[:, 1] .= mu
-
-    _solvedflag(self, true)
-    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, "mu", "scalar", view(self.strength, :, 1), "cell")
-
-    return G, lambda
-end
-
-function _solve(::NonLiftingBody{ConstantDoublet, 1}, normals, G, Uinfs)
-
-    # Define right-hand side
-    lambda = [-dot(Uinf, normal) for (Uinf, normal) in
-                                        zip(eachcol(Uinfs), eachcol(normals))]
-
-    # Solve the system of equations
-    mu = G\lambda
-
-    return mu, lambda
-end
-
-function _G_U!(self::AbstractBody{<:Any,<:Any,TF}, kernel, G, CPs, normals, backend::FastMultipoleBackend; kerneloffset=1.0e-3, include_wake=true, optargs...) where TF
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Build geometric matrix
-    strength = FastMultipole.StaticArrays.SVector{1,TF}(1.0) # unit strength
-    derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false) # only potential
-    for i_source in 1:N
-
-        # get vertices
-        v1i, v2i, v3i = self.cells[1,i_source], self.cells[2,i_source], self.cells[3,i_source]
-        v1x, v1y, v1z = self.grid._nodes[1, v1i], self.grid._nodes[2, v1i], self.grid._nodes[3, v1i]
-        v2x, v2y, v2z = self.grid._nodes[1, v2i], self.grid._nodes[2, v2i], self.grid._nodes[3, v2i]
-        v3x, v3y, v3z = self.grid._nodes[1, v3i], self.grid._nodes[2, v3i], self.grid._nodes[3, v3i]
-        
-        for i_target in 1:M
-            # get target
-            tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
-            target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
-
-            # compute influence
-            _, u, _ = induced(target, kernel, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength, derivatives_switch; kerneloffset)
-
-            # update G
-            G[i_target, i_source] = u[1] * normals[1, i_target] + u[2] * normals[2, i_target] + u[3] * normals[3, i_target]
-        end
-    end
-
-    # add wake influence
-    if include_wake
-        _G_U_wake!(self, kernel, G, CPs, normals, backend; kerneloffset, optargs...)
-    end
-end
-
-function _G_U_wake!(self::AbstractBody{<:Any,<:Any,TF}, kernel, G, CPs, normals, backend::FastMultipoleBackend; optargs...) where TF
-    return nothing
-end
-
-"""
-Computes the geometric matrix (left-hand side matrix of the system of equation)
-and stores it under `G`.
-
-**ARGUMENTS**
-  * `G::Array{T,2}`                     : Pre-allocated output memory.
-  * `CPs::Array{T,2}`                   : Control points.
-  * `normals::Array{T,2}`               : Normal associated to every CP.
-"""
-function _G_U!(self::NonLiftingBody{<:Union{ConstantDoublet, VortexRing}, 1},
-                    G::Arr1, CPs::Arr2, normals::Arr3;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2},
-                        T3, Arr3<:AbstractArray{T3, 2}}
-
-    _G_U_constantdoublet!(self, G, CPs, normals; optargs...)
-end
-
-function _G_U_constantdoublet!(self, G, CPs, normals; optargs...)
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    elseif size(normals, 2)!=M
-        error("normals matrix with invalid dimensions;"*
-              " got $(size(normals)), expected (3, $M).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix
-    for (pj, Gslice) in enumerate(eachcol(G))
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        U_constant_doublet(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                          optargs...
-                         )
-    end
-end
-
-function _G_phi_constantdoublet!(self, G, CPs, backend::DirectBackend; optargs...)
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix
-    for (pj, Gslice) in enumerate(eachcol(G))
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        phi_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs,                           # Targets
-                            Gslice;                               # Outputs
-                            optargs...
-                         )
-    end
-end
-
-function _G_phi!(self::AbstractBody{<:Any,<:Any,TF}, kernel, G, CPs, backend::FastMultipoleBackend; kerneloffset=1.0e-8, include_wake=true, optargs...) where TF
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Build geometric matrix
-    strength = FastMultipole.StaticArrays.SVector{1,TF}(1.0) # unit strength
-    derivatives_switch=FastMultipole.DerivativesSwitch(true,false,false) # only potential
-    for i_source in 1:N
-
-        # get vertices
-        v1i, v2i, v3i = self.cells[1,i_source], self.cells[2,i_source], self.cells[3,i_source]
-        v1x, v1y, v1z = self.grid._nodes[1, v1i], self.grid._nodes[2, v1i], self.grid._nodes[3, v1i]
-        v2x, v2y, v2z = self.grid._nodes[1, v2i], self.grid._nodes[2, v2i], self.grid._nodes[3, v2i]
-        v3x, v3y, v3z = self.grid._nodes[1, v3i], self.grid._nodes[2, v3i], self.grid._nodes[3, v3i]
-        
-        for i_target in 1:M
-            # get target
-            tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
-            target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
-
-            # compute influence
-            phi, _ = induced(target, kernel, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength, derivatives_switch; kerneloffset)
-
-            # update G
-            G[i_target, i_source] = phi
-        end
-    end
-
-    # add wake influence
-    if include_wake
-        _G_phi_wake!(self, kernel, G, CPs, backend; derivatives_switch, kerneloffset, optargs...)
-    end
-end
-
-function _G_phi_wake!(self::AbstractBody{<:Any,<:Any,TF}, kernel, G, CPs, backend::FastMultipoleBackend; kerneloffset=1.0e-3, optargs...) where TF
-    return nothing
-end
-
-function _G_phi_constantsource!(self, G, CPs; optargs...)
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix
-    for (pj, Gslice) in enumerate(eachcol(G))
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        phi_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs,                               # Targets
-                            Gslice;                            # Outputs
-                            optargs...
-                         )
-    end
-end
-
-function _Uind!(self::NonLiftingBody{<:Union{ConstantDoublet, VortexRing}, 1}, targets, out, backend::DirectBackend;
-                                                                     optargs...)
-
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Velocity of i-th panel on every target
-        U_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                            optargs...
-                         )
-    end
-end
-
-function _phi!(self::NonLiftingBody{ConstantDoublet, 1},
-                                                       targets, out, backend::DirectBackend; optargs...)
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Potential of i-th panel on every target
-        phi_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            optargs...
-                         )
-    end
-end
 
 _get_Gdims(self::NonLiftingBody{ConstantDoublet, 1}) = (self.ncells, self.ncells)
 
@@ -620,552 +282,6 @@ _get_Gdims(self::NonLiftingBody{ConstantDoublet, 1}) = (self.ncells, self.ncells
 # CONSTANT-SOURCE+DOUBLET SOLVER
 ################################################################################
 
-"""
-    freestream_potential(U, x)
-
-Return the potential of a uniform freestream `Uinf` at point `x`, assuming
-φ(0) = 0. Both `U` and `x` must be 3-element vectors.
-"""
-function freestream_potential(x, Uinf)
-    return dot(Uinf, x)
-end
-
-function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any},
-                                          Uinfs::AbstractArray{<:Number, 2}; solve_type=2, backend=DirectBackend(), optargs...)
-
-    if solve_type == 1
-        # --------- Pre-Calculations
-        N = self.ncells
-
-        if size(Uinfs, 2) != N
-            error("Invalid Uinfs; expected size (3, $(N)), got $(size(Uinfs))")
-        end
-
-        # Compute normals and control points
-        normals = _calc_normals(self)
-        CPs = _calc_controlpoints(self, normals, off=1e-6)
-        # CPs_inside = _calc_controlpoints(self, normals; off=-self.inside_offset)
-
-        # --------- Compute geometric matrix
-        G = zeros(N, N)
-        _G_U_constantsource!(self, G, CPs, normals; optargs...)
-        # _G_phi_U!(self, G, CPs, CPs_inside, normals)
-
-        # --------- RHS
-        rhs = zeros(N)
-        rhs .= sum(Uinfs .* normals; dims=1) |> vec .*= -1.0
-
-        # --------- solver for source strengths
-        sigma = G\rhs
-        self.strength[:, 1] .= sigma
-        self.strength[:, 2] .= 0.0
-
-        # --------- use source strengths to evaluate ϕ (doublet RHS)
-        # phis = G * sigma # perturbation potential (due to sources)
-        rhs .= 0.0
-        _phi!(self, CPs, rhs, backend; optargs..., offset=self.kerneloffset)
-        
-        # --------- add freestream potential
-        # phis .+= vec(sum(Uinfs .* CPs, dims=1))
-        
-        # --------- construct influence matrix for doublets
-        G .= 0.0
-        _G_phi_constantdoublet!(self, G, CPs; optargs...)
-        # _G_U_constantdoublet!(self, G, CPs, normals; optargs...)
-        
-        # --------- Solve system of equations
-        mu = G\rhs
-        
-        # --------- Store results
-        # Save solution
-        self.strength[:, 1] .= 0.0
-        self.strength[:, 2] .= mu
-
-        _solvedflag(self, true)
-        add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-        add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-        add_field(self, "mu", "scalar", view(self.strength, :, 2), "cell")
-
-        return G, rhs
-
-    elseif solve_type == 2 # dirichlet bc with doublet panels only
-
-        # --------- Pre-Calculations
-        N = self.ncells
-
-        if size(Uinfs, 2) != N
-            error("Invalid Uinfs; expected size (3, $(N)), got $(size(Uinfs))")
-        end
-
-        # Compute normals and control points
-        normals = _calc_normals(self)
-        # CPs = _calc_controlpoints(self, normals, off=1e-6)
-        CPs_inside = _calc_controlpoints(self, normals; off=0.0)# -self.inside_offset)
-
-        # --------- Compute geometric matrix
-        G = zeros(N, N)
-        _G_phi!(self, ConstantDoublet, G, CPs_inside, backend; optargs...)
-        for i in 1:N
-            G[i,i] = 0.5
-        end
-
-        # --------- RHS
-        # rhs = zeros(N)
-        # rhs .= sum(Uinfs .* normals; dims=1) |> vec .*= -1.0
-        rhs = -vec(sum(Uinfs .* CPs_inside; dims=1)) # dirichlet bc: constant interior potential = 0
-
-        # --------- solver for doublet strengths
-        mu = G\rhs
-        self.strength[:, 1] .= 0.0
-        self.strength[:, 2] .= mu
-        
-        # --------- Store results
-        _solvedflag(self, true)
-        add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-        add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-        add_field(self, "mu", "scalar", view(self.strength, :, 2), "cell")
-
-        return G, rhs
-
-    elseif solve_type == 3
-        #--- Morino formulation ---#
-
-        # get ∂ϕ∂n (boundary condition)
-        normals = _calc_normals(self)
-        ∂ϕ∂n = -vec(sum(Uinfs .* normals; dims=1))
-
-        # compute source term in BIE
-        self.strength[:, 1] .= ∂ϕ∂n
-        self.strength[:, 2] .= 0.0
-
-        # # source-influence
-        CPs = _calc_controlpoints(self, normals; off=1e-8)
-        ϕ_source = zeros(self.ncells)
-        _phi!(self, CPs, ϕ_source, backend; optargs..., offset=self.kerneloffset)
-
-        # compute geometric matrix for doublets
-        N = self.ncells
-        G = zeros(N, N)
-        _G_phi!(self, ConstantDoublet, G, CPs, backend; optargs...)
-        # G .*= -1.0 # move to LHS
-
-        # add I term
-        for i in 1:N
-            G[i,i] += 1.0
-        end
-
-        # solve for doublet strengths
-        μ = G \ ϕ_source
-
-        # store strengths
-        # self.strength[:, 1] .*= 2 # σ = 2 ∂ϕ/∂n
-        self.strength[:, 2] .= μ # μ = 2 * solution of BIE on the boundary
-        # NOTE: the factor of 2 is because the n-body solver is meant for the fluid domain,
-        # and has an extra 1/2 factor
-
-        # --------- Store results
-        _solvedflag(self, true)
-        add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-        add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-        add_field(self, "mu", "scalar", view(self.strength, :, 2), "cell")
-        add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
-
-        return G, ϕ_source
-
-    end
-end
-
-# SIMULTANEOUS SOLVE FOR SOURCES AND DOUBLETS
-# function solve(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any},
-#                                           Uinfs::AbstractArray{<:Number, 2}; _G_fun=_G_phi_U!)
-
-#     # --------- Pre-Calculations
-#     N = self.ncells
-
-#     if size(Uinfs, 2) != N
-#         error("Invalid Uinfs; expected size (3, $(N)), got $(size(Uinfs))")
-#     end
-
-#     # Compute normals and control points
-#     normals = _calc_normals(self)
-#     CPs = _calc_controlpoints(self, normals)
-#     CPs_inside = _calc_controlpoints(self, normals; off=-self.inside_offset)
-
-#     # --------- Compute geometric matrix
-#     G = zeros(2N, 2N)
-#     _G_fun(self, G, CPs, CPs_inside, normals)
-#     # _G_phi_U!(self, G, CPs, CPs_inside, normals)
-
-#     # --------- Define right-hand side
-#     rhs = zeros(2N)
-#     phis_inf = sum(Uinfs .* CPs_inside, dims=1)
-#     rhs[1:N] = -phis_inf[:]
-#     U_normal = sum(Uinfs .* normals, dims=1)
-#     rhs[N+1:2N] .-= U_normal[:]
-
-#     # --------- Solve system of equations
-#     sigma_mu = G\rhs
-
-#     # --------- Store results
-#     # Save solution
-#     self.strength[:, 1] .= sigma_mu[1:N]
-#     self.strength[:, 2] .= sigma_mu[N+1:2N]
-
-#     _solvedflag(self, true)
-#     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-#     add_field(self, "sigma", "scalar", view(self.strength, :, 1), "cell")
-#     add_field(self, "mu", "scalar", view(self.strength, :, 2), "cell")
-
-#     return G, rhs
-# end
-
-function _solve(::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}, G, nphis)
-
-    # Solve the system of equations
-    mu = G\nphis
-
-    return mu
-end
-
-"""
-Computes the geometric matrix (left-hand side matrix of the system of equation)
-and stores it under `G`.
-
-**ARGUMENTS**
-  * `G::Array{T,2}`                     : Pre-allocated output memory.
-  * `CPs::Array{T,2}`                   : Control points.
-  * `normals::Array{T,2}`               : Normal associated to every CP.
-"""
-function _G_phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
-                    G::Arr1, CPs::Arr2;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2}}
-
-    N = self.ncells
-    M = size(CPs, 2)
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    elseif size(normals, 2)!=M
-        error("normals matrix with invalid dimensions;"*
-              " got $(size(normals)), expected (3, $M).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix
-    for (pj, Gslice) in enumerate(eachcol(G))
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        phi_constant_doublet(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          Gslice;                            # Potential of j-th panel on every CP
-                          optargs...
-                         )
-    end
-end
-
-
-"""
-Computes the geometric matrix (left-hand side matrix of the system of equation)
-and stores it under `G`.
-
-**ARGUMENTS**
-  * `G::Array{T,2}`                     : Pre-allocated output memory.
-  * `CPs::Array{T,2}`                   : Control points.
-  * `normals::Array{T,2}`               : Normal associated to every CP.
-"""
-function _G_phi_U!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
-                    G::Arr1, CPs::Arr2, CPs_inside::Arr2, normals::Arr3;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2},
-                        T3, Arr3<:AbstractArray{T3, 2}}
-
-    N = self.ncells * 2
-    M = size(CPs, 2) * 2
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    elseif size(normals, 2)!=M>>1
-        error("normals matrix with invalid dimensions;"*
-              " got $(size(normals)), expected (3, $M).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix: source panels as sending
-    for pj in 1:self.ncells
-
-        # get source panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        # get slice of G
-        Gslice = view(G, 1:self.ncells, pj)
-
-        phi_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs_inside,                           # Targets
-                            Gslice;                               # Outputs
-                            offset=self.kerneloffset           # Offset of kernel to avoid singularities
-                         )
-
-        # get slice of G
-        Gslice = view(G, self.ncells+1:2*self.ncells, pj)
-
-        U_constant_source(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          optargs...
-                         )
-    end
-
-    # Build geometric matrix: doublet panels as sending
-    for pj in 1:self.ncells
-
-        # get source panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        # get slice of G
-        Gslice = view(G, 1:self.ncells, pj + self.ncells)
-
-        phi_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs_inside,                        # Targets
-                            Gslice                                # Result
-                         )
-
-        # get slice of G
-        Gslice = view(G, self.ncells+1:2*self.ncells, pj + self.ncells)
-
-        U_constant_doublet(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          optargs...
-                         )
-    end
-end
-function _G_phi_phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
-                    G::Arr1, CPs::Arr2, CPs_inside::Arr2, normals::Arr3;
-                    optargs...
-               ) where{ T1, Arr1<:AbstractArray{T1, 2},
-                        T2, Arr2<:AbstractArray{T2, 2},
-                        T3, Arr3<:AbstractArray{T3, 2}}
-
-    N = self.ncells * 2
-    M = size(CPs, 2) * 2
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    elseif size(normals, 2)!=M>>1
-        error("normals matrix with invalid dimensions;"*
-              " got $(size(normals)), expected (3, $M).")
-    end
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Build geometric matrix: source panels as sending
-    for pj in 1:self.ncells
-
-        # get source panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        # get slice of G
-        Gslice = view(G, 1:self.ncells, pj)
-
-        phi_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs_inside,                           # Targets
-                            Gslice;                               # Outputs
-                            offset=self.kerneloffset           # Offset of kernel to avoid singularities
-                         )
-
-        # get slice of G
-        Gslice = view(G, self.ncells+1:2*self.ncells, pj)
-
-        U_constant_source(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          optargs...
-                         )
-    end
-
-    # Build geometric matrix: doublet panels as sending
-    for pj in 1:self.ncells
-
-        # get source panel
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                            self.grid, pj, lin, ndivscells, cin)
-
-        # get slice of G
-        Gslice = view(G, 1:self.ncells, pj + self.ncells)
-
-        phi_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            1.0,                               # Unitary strength
-                            CPs_inside,                        # Targets
-                            Gslice                                # Result
-                         )
-
-        # get slice of G
-        Gslice = view(G, self.ncells+1:2*self.ncells, pj + self.ncells)
-
-        U_constant_doublet(
-                          self.grid._nodes,                  # All nodes
-                          panel,                             # Indices of nodes that make this panel
-                          1.0,                               # Unitary strength
-                          CPs,                               # Targets
-                          # view(G, :, pj);                  # Velocity of j-th panel on every CP
-                          Gslice;
-                          dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                          optargs...
-                         )
-    end
-end
-
-function _Uind!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}, targets, out, backend::DirectBackend;
-                                                                     optargs...)
-
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Velocity of i-th panel on every target
-        U_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            optargs...
-                         )
-
-        # Velocity of i-th panel on every target
-        U_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 2],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
-                            optargs...
-                         )
-    end
-end
-
-function _phi!(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2},
-                                                       targets, out, backend::DirectBackend; optargs...)
-
-    # Pre-allocate memory for panel calculation
-    lin = LinearIndices(self.grid._ndivsnodes)
-    ndivscells = vcat(self.grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in self.grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    # Iterates over panels
-    for i in 1:self.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                             self.grid, i, lin, ndivscells, cin)
-
-        # Potential of i-th panel on every target
-        phi_constant_source(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 1],               # Unitary strength
-                            targets,                           # Targets
-                            out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
-                            optargs...
-                         )
-
-        # Potential of i-th panel on every target
-        phi_constant_doublet(
-                            self.grid._nodes,                  # All nodes
-                            panel,                             # Indices of nodes that make this panel
-                            self.strength[i, 2],               # Unitary strength
-                            targets,                           # Targets
-                            out                               # Outputs
-                         )
-    end
-end
-
 _get_Gdims(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) = (self.ncells, self.ncells)
 
 
@@ -1174,41 +290,6 @@ _get_Gdims(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) = (s
 ################################################################################
 # FASTMULTIPOLE BACKEND SUPPORT
 ################################################################################
-# function _Uind!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
-#     # wrap targets in a probe system
-#     TF = eltype(targets)
-#     potential = Vector{TF}(undef, 0) # unused
-#     hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-#     probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
-
-#     # perform N-body calculation
-#     FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
-#                                         multipole_acceptance=backend.multipole_acceptance,
-#                                         leaf_size_source=backend.leaf_size,
-#                                         hessian=false,
-#                                         gradient=true, 
-#                                         scalar_potential=false)
-
-#     return nothing
-# end
-
-# function _phi!(self::NonLiftingBody, targets, out, backend::FastMultipoleBackend; optargs...)
-#     # wrap targets in a probe system
-#     TF = eltype(targets)
-#     velocity = Array{TF, 2}(undef, 0, 0)  # unused
-#     hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-#     probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
-
-#     # perform N-body calculation
-#     FastMultipole.fmm!(probe_system, self; expansion_order=backend.expansion_order,
-#                                         multipole_acceptance=backend.multipole_acceptance,
-#                                         leaf_size_source=backend.leaf_size,
-#                                         hessian=false,
-#                                         gradient=false, 
-#                                         scalar_potential=true)
-
-#     return nothing
-# end
 
 FastMultipole.has_vector_potential(::AbstractBody{ConstantSource, 1}) = false
 
@@ -1274,13 +355,13 @@ function solve2!(self::NonLiftingBody{TK,1,TFG}, Uinfs::Array{TFS, 2}, solver::A
     _Uind!(self, CPs, us_outside, backend; optargs...)
     us_inside = zeros(TF, 3, self.ncells)
     _Uind!(self, CPs_inside, us_inside, backend; optargs...)
-    add_field(self, "us_inside", "vector", collect(eachcol(us_inside)), "cell")
-    add_field(self, "delta_u_normal", "scalar", vec(sum((us_outside - us_inside) .* normals, dims=1)), "cell")
+    # add_field(self, "us_inside", "vector", collect(eachcol(us_inside)), "cell")
+    # add_field(self, "delta_u_normal", "scalar", vec(sum((us_outside - us_inside) .* normals, dims=1)), "cell")
 
     # save solution fields
-    add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, strength_name, "scalar", view(self.strength, :, 1), "cell")
-    add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
+    # add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
+    # add_field(self, strength_name, "scalar", view(self.strength, :, 1), "cell")
+    # add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
 
     return nothing
 end

@@ -817,7 +817,7 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
                     ) where {Arr<:AbstractArray{<:Number,2}}
 
     # Fetch field
-    field = get_field(body, fieldname)["field_data"]
+    field = getfield(body, fieldname)
 
     # Find index of row or column slicing the field
     gdim = row ? 1 : 2                          # Dimension to slice
@@ -825,7 +825,7 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
                                                 xdir=direction, filter=filter)
 
     # Slice field
-    ncell = get_ndivscells(body)[row ? 2 : 1]   # Number of cells in the slice
+    ncell = size(controlpoints, 2)
     indices = collect(row==1 ? lin[islice, j] : lin[j, islice] for j in 1:ncell)
 
     slice = field[indices]
@@ -840,6 +840,24 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
     end
 
     return slicepoints, slice
+end
+
+function slice_scalarfield(body::AbstractBody, fieldname::Symbol, dim::Int, coord::Number, tol::Number; filter=(args...)->true)
+    # find the index of all panels within tolerance
+    controlpoints = body.controlpoints
+    target = fill(coord, size(controlpoints, 2)) .- view(controlpoints, dim, :)
+    target .*= target
+    target .= sqrt.(target)
+
+    # Find which panels are within tolerance
+    idx = (target .<= tol) .&& filter.(eachcol(controlpoints), eachindex(target))
+    field_values = getfield(body, fieldname)[idx]
+
+    if sum(idx) == 0
+        error("No panels found within tolerance $(tol) of coordinate $(coord) in dimension $(dim).")
+    end
+
+    return controlpoints[:, idx], field_values
 end
 
 """

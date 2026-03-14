@@ -18,7 +18,9 @@ element types in this body and `E` is an Union containing the `N` element
 types. `TF` is the floating point type used in this body.
 
 Implementations of AbstractBody are expected to have the following fields
-* `grid::GeometricTools.GridTriangleSurface `     : Paneled geometry
+* `nodes::Matrix{TF}`                 : 3xnnodes matrix where `nodes[:, i]` is the position of the i-th node
+* `vtk_cells::Vector{<:WriteVTK.MeshCell}` : Vector of WriteVTK cells
+* `neighbor::Matrix{Int}`             : 3xncells matrix where `neighbor[i, j]` is the linear index of the cell neighboring the i-th edge of the j-th cell (or 0 if it's a boundary)
 * `nnodes::Int`                       : Number of nodes
 * `ncells::Int`                       : Number of cells
 * `cells::Matrix{Int}`                : Cell connectivity (each column is a cell)
@@ -33,6 +35,7 @@ Implementations of AbstractBody are expected to have the following fields
 * `kerneloffset::Real`                : Kernel offset to avoid singularities
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
 * `watertight::Bool`                  : Whether the body is watertight or not
+* `Cps::Vector{TF}`                   : Pressure coefficient at each cell
 
 and the following functions
 
@@ -86,6 +89,14 @@ and the following functions
 """
 abstract type AbstractBody{E<:AbstractElement, N, TF} end
 
+function reset!(body::AbstractBody)
+    body.velocity .= 0
+    body.potential .= 0
+    body.Cp .= 0
+    body.F .= 0
+    return nothing
+end
+
 """
     `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
 
@@ -94,6 +105,19 @@ velocity at the i-th control point used in the boundary condition.
 """
 function solve(self::AbstractBody, Uinfs::AbstractArray{<:Number, 2})
     error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
+end
+
+"""
+    `grid2cells(grid::GeometricTools.GridTriangleSurface)`
+
+Converts the cells in a `GeometricTools` continuous grid to a `Matrix{Int}` of size `3 x ncells`.
+"""
+function grid2cells(grid::gt.GridTriangleSurface)
+    cells = zeros(Int, 3, grid.ncells)
+    for i in 1:grid.ncells
+        cells[:, i] .= gt.get_cell(grid, i)
+    end
+    return cells
 end
 
 ##### COMMON FUNCTIONS  ########################################################
@@ -132,142 +156,80 @@ function phi!(self::AbstractBody, targets, out, backend::AbstractBackend, args..
     _phi!(self, targets, out, backend::AbstractBackend, args...; optargs...)
 end
 
+strength_names(::AbstractBody{ConstantSource, <:Any}) = ("sigma",)
+strength_names(::AbstractBody{ConstantDoublet, <:Any}) = ("mu",)
+strength_names(::AbstractBody{VortexRing, <:Any}) = ("gamma",)
+strength_names(::AbstractBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = ("sigma", "mu")
+
 """
-    save_base(body::AbstractBody, filename::String; optargs...)
+    write_vtk(name, body::AbstractBody, idx, t; overwrite=false)
 
-Outputs a vtk file of this body. See
-`GeometricTools.save(::GridExtentions, ::String)` for a description of optional
-arguments `optargs...`.
+Write the body mesh and its solution fields to VTK files at timestep `idx` with
+simulation time `t`, following the same pattern as `write_vtk` for `PanelWake`.
+
+Generates:
+- `<name>.pvd`            — Paraview collection (append or create)
+- `<name>_<idx>.vtm`      — VTK multiblock
+- `<name>_<idx>_body.vtu` — unstructured triangular surface mesh with data
+
+All fields stored on the body (strength, `Uinf`, `U`, `phi`, `Cp`, `Cps`,
+`Gamma`, `F`) are written when non-empty.  Body-type-specific fields are added
+via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
+`RigidWakeBody`) can contribute additional data without duplicating the common
+code.
+
+**Arguments**
+- `name`      : Base filename (no extension)
+- `body`      : Body instance to write
+- `idx`       : Integer timestep index (embedded in filenames)
+- `t`         : Simulation time (used as the PVD collection key)
+- `overwrite` : Start a fresh PVD file when `true`; append when `false` (default)
 """
-function save_base(body::AbstractBody, filename::String; out_cellindex::Bool=false,
-                                                 out_cellindexdim::Array{Int64,1}=Int64[],
-                                                 out_nodeindex::Bool=false,
-                                                 out_controlpoints::Bool=false,
-                                                 debug::Bool=false,
-                                                 backend=DirectBackend(),
-                                                 suffix::String="",
-                                                 optargs...)
+function write_vtk(name::String, body::AbstractBody, idx::Int, t::Real;
+                   overwrite::Bool=false)
 
-    str = ""
+    files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+        vtm = WriteVTK.vtk_multiblock(name * ".$idx")
 
-    # Add special fields
-    if out_cellindex || debug
-        gt.add_field(body.grid, "cellindex", "scalar",
-                        [i for i in 1:body.ncells], "cell"; raise_warn=false)
+        WriteVTK.vtk_grid(vtm, name * "_body.$(idx)", body.nodes, body.vtk_cells) do vtk
+
+            # --- Common solution fields ---
+
+            # normals
+            vtk["normals", VTKCellData()] = body.normals
+
+            # Velocity potential  (ncells,)
+            vtk["potential", VTKCellData()] = body.potential
+
+            # Surface velocity  (3 × ncells)
+            vtk["velocity", VTKCellData()] = body.velocity
+
+            # Pressure coefficient (ncells,)
+            vtk["pressure coefficient", VTKCellData()] = body.Cp
+
+            # Distributed forces  (3 × ncells)
+            vtk["F", VTKCellData()] = body.F
+
+            # add strength fields
+            for (i,name) in enumerate(strength_names(body))
+                vtk[name, VTKCellData()] = view(body.strength, :, i)
+            end
+
+            # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
+            _write_vtk_body_fields!(vtk, body)
+        end
+        
+        _write_vtk_other_fields!(vtm, name, body, idx)
+
+        pvd[t] = vtm
     end
 
-    if out_nodeindex || debug
-        gt.add_field(body.grid, "nodeindex", "scalar",
-                        [i for i in 1:body.nnodes], "node"; raise_warn=false)
-    end
-
-    _out_cellindexdim = debug && length(out_cellindexdim)==0 ? [1, 2] : out_cellindexdim
-    for dim in _out_cellindexdim
-        ndivs = gt.get_ndivscells(body.grid)[1:2]
-        data = [ Base._ind2sub(ndivs, i)[dim] for i in 1:body.ncells]
-        gt.add_field(body.grid, "cellindexdim$(dim)", "scalar", data, "cell";
-                                                            raise_warn=false)
-    end
-
-    # Outputs control points
-    if out_controlpoints || debug
-        str *= save_controlpoints(body, filename; debug=debug, backend,
-                                                optargs..., suffix="_cp")
-    end
-
-    # Saves body
-    str *= gt.save(body.grid, filename*suffix; format="vtk", optargs...)
-
-    # Return path to files
-    return str
-
+    return join(files, ", ")
 end
 
-"""
-    save_controlpoints(body::AbstractBody, filename::String;
-                                suffix::String="_cp", optargs...)
-
-Outputs a vtk file with the control points of the body along with associated
-normals and surface velocities.
-"""
-function save_controlpoints(body::AbstractBody, filename::String; debug=false,
-                                              suffix::String="_cp", backend=DirectBackend(), 
-                                              optargs...)
-
-    # Normals
-    normals = _calc_normals(body)
-
-    # Control points
-    CPs = _calc_controlpoints(body, normals)
-
-    # Normals
-    # normals = collect(eachcol(normals))
-    normals = eachcol(normals)
-    data = [
-            Dict( "field_name"  => "normal",
-                  "field_type"  => "vector",
-                  "field_data"  => normals)
-            ]
-
-    if debug
-        # Tangent unitary vectors
-        tangents = _calc_tangents(body)
-        tangents = eachcol(tangents)
-        push!(data,
-                Dict( "field_name"  => "tangent",
-                      "field_type"  => "vector",
-                      "field_data"  => tangents))
-
-        # Oblique unitary vectors
-        obliques = _calc_obliques(body)
-        obliques = eachcol(obliques)
-        push!(data,
-                Dict( "field_name"  => "oblique",
-                      "field_type"  => "vector",
-                      "field_data"  => obliques))
-
-    end
-
-    if check_solved(body) && debug
-        # Surface velocity
-        Usurf = hcat(collect(get_fieldval(body, "Uinf", i) for i in 1:body.ncells)...)
-        Uind!(body, CPs, Usurf, backend)
-
-
-        Usurf = collect(eachcol(Usurf))
-        push!(data,
-                    Dict( "field_name"  => "U",
-                          "field_type"  => "vector",
-                          "field_data"  => Usurf)
-             )
-
-        # Save surface velocity as a field
-        if check_field(body, "U")==false
-            add_field(body, "U", "vector", Usurf, "cell")
-        end
-
-
-        # Surface potential
-        phis = zeros(body.ncells)
-        phi!(body, CPs, phis, backend)
-
-        push!(data,
-                  Dict( "field_name"  => "phi",
-                        "field_type"  => "scalar",
-                        "field_data"  => phis)
-           )
-
-        # Save surface potential as a field
-        if check_field(body, "phi")==false
-            add_field(body, "phi", "scalar", phis, "cell")
-        end
-    end
-
-    CPs = collect(eachcol(CPs))
-
-    # Generates vtk
-    return gt.generateVTK(filename*suffix, CPs; point_data=data, optargs...)
-end
+# Default hook — no extra fields for generic AbstractBody
+_write_vtk_body_fields!(vtk, ::AbstractBody) = nothing
+_write_vtk_other_fields!(vtm, name, body::AbstractBody, idx) = nothing
 
 # """
 #   `get_controlpoint(body::AbstractBody, i::Int64 or coor::Array{Int64,1})`
@@ -281,62 +243,34 @@ end
 """
     get_ndivscells(body::AbstractBody)
 
-Returns a tuple with the number of cells in each parametric dimension
+Not supported for unstructured body variants.
 """
-get_ndivscells(body::AbstractBody) = deepcopy(body.grid._ndivscells)
+get_ndivscells(body::AbstractBody) = error("Not supported.")
 
 """
     get_ndivsnodes(body::AbstractBody)
 
-Returns a tuple with the number of nodes in each parametric dimension
+Not supported for unstructured body variants.
 """
-get_ndivsnodes(body::AbstractBody) = deepcopy(body.grid._ndivsnodes)
+get_ndivsnodes(body::AbstractBody) = error("Not supported.")
 
 
 """
     get_cart2lin_cells(self::AbstractBody)
 
-Returns a `LinearIndices` that converts the coordinates (or "Cartesian index")
-of a cell to its linear index.
-
-!!! tip "Example"
-```julia
-    coordinates = (i, j)                # (i, j) coordinates of an arbitrary cell
-
-    cart2lin = get_cart2lin_cells(body)
-
-    index = cart2lin(coordinates...)    # Linear index of the cell
-```
+Not supported for unstructured body variants.
 """
 function get_cart2lin_cells(self::AbstractBody)
-    # Remove any quasi-dimensions
-    ndivscells = [i for i in get_ndivscells(self) if i!=0]
-
-    # Return linear indexing
-    return LinearIndices(Tuple(ndivscells))
+    error("Not supported.")
 end
 
 """
     get_cart2lin_nodes(self::AbstractBody)
 
-Returns a `LinearIndices` that converts the coordinates (or "Cartesian index")
-of a node to its linear index.
-
-!!! tip "Example"
-```julia
-    coordinates = (i, j)                # (i, j) coordinates of an arbitrary node
-
-    cart2lin = get_cart2lin_nodes(body)
-
-    index = cart2lin(coordinates...)    # Linear index of the node
-```
+Not supported for unstructured body variants.
 """
 function get_cart2lin_nodes(self::AbstractBody)
-    # Remove any quasi-dimensions
-    ndivsnodes = [i for i in get_ndivsnodes(self) if i!=0]
-
-    # Return linear indexing
-    return LinearIndices(Tuple(ndivsnodes))
+    error("Not supported.")
 end
 
 get_strength(self::AbstractBody, i) = view(self.strength, i, :)
@@ -357,158 +291,6 @@ get_unitvectors(body::AbstractBody, args...) = gt.get_unitvectors(body.grid, arg
 Returns the normal vector the i-th panel.
 """
 get_normal(body::AbstractBody, args...) = gt.get_normal(body.grid, args...)
-
-"""
-    get_field(self::AbstractBody, field_name::String)
-
-Returns the requested field.
-"""
-function get_field(self::AbstractBody, field_name::String)
-    if !(field_name in self.fields)
-        error("Field $field_name not found! Available fields: $(self.fields)")
-    end
-
-    return self.grid.field[field_name]
-end
-
-"""
-    get_field(self::AbstractBody, field_name::String, i::Int)
-
-Returns the requested field value of the i-th cell or node (depending of the
-field type). Give it `_check=false` to skip checking logic for faster processing.
-"""
-function get_fieldval(self::AbstractBody, field_name::String, i::Int;
-                      _check::Bool=true)
-    if _check
-        if i<1
-            error("Invalid index $i.")
-        end
-    end
-
-    return gt.get_fieldval(self.grid, field_name, i)
-end
-
-"""
-    get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int,1})
-
-Returns the requested field value of the cell or node (depending of the field
-type) of coordinates `coor` (1-indexed).
-"""
-function get_fieldval(self::AbstractBody, field_name::String, coor::Array{Int,1})
-    return gt.get_fieldval(self.grid, field_name, coor)
-end
-
-
-"""
-    add_field(self::AbstractBody, field_name::String, field_type::String,
-                                                field_data, entry_type::String)
-
-Adds a new field `field_name` to the body (overwriting the field if it already
-existed).
-
-**Expected arguments**
-
-* `field_type=="scalar"`, then `field_data` is a vector of length `n`.
-* `field_type=="vector"`, then `field_data` is an array of 3-dim vectors of
-    length `n`.
-
-* `entry_type=="node"`, then `n=length(field_data)` is the number of nodes in
-    the body and `field_data[i]` is the field value at the i-th node.
-* `entry_type=="cell"`, then `n=length(field_data)` is the number of cells in
-    the body and `field_data[i]` is the field value at the i-th cell.
-* `entry_type=="system"`, then `n=length(field_data)` is any arbritrary number,
-    and `field_data` is a field for the whole body as a system without any
-    data structure.
-"""
-function add_field(self::AbstractBody, field_name::String, field_type::String,
-                    field_data, entry_type::String;
-                    raise_warn=false, collectfield=true)
-
-    # Add field to grid
-    gt.add_field(self.grid, field_name, field_type,
-                    collectfield ? collect(field_data) : field_data, entry_type;
-                    raise_warn=raise_warn)
-
-    # Register the field
-    if !(field_name in self.fields)
-        push!(self.fields, field_name)
-    end
-
-    nothing
-end
-
-function add_field(self::AbstractBody, field_type::String,
-                    field_data, entry_type::String;
-                    raise_warn=false, collectfield=true)
-
-    field_name = solved_field_name(self)
-    add_field(self, field_name, field_type, field_data, entry_type;
-                raise_warn, collectfield)
-end
-
-"""
-    addfields(body::AbstractBody,
-                sourcefieldname::String, targetfieldname::String)
-
-Adds field `sourcefieldname` to field `targetfieldname`.
-"""
-function addfields(body::AbstractBody,
-                    sourcefieldname::String, targetfieldname::String)
-
-    srcfield = get_field(body, sourcefieldname)["field_data"]
-    trgfield = get_field(body, targetfieldname)["field_data"]
-
-    if get_field(body, sourcefieldname)["field_type"]=="vector"
-
-        for (Fsrc, Ftrg) in zip(srcfield, trgfield)
-            Ftrg .+= Fsrc
-        end
-
-    else
-
-        trgfield += srcfield
-
-    end
-
-end
-
-"""
-    remove_field(self::AbstractBody, field_name)
-
-Removes field from body.
-"""
-function remove_field(self::AbstractBody, field_name)
-    if check_field(self, field_name)
-
-        i = findfirst(name->name==field_name, self.fields)
-
-        splice!(self.fields, i)
-
-        gt.remove_field(self.grid, field_name)
-    end
-end
-
-"""
-    check_field(self::AbstractBody, field_name::String)
-
-Returns `true` of the body has the field `field_name`. Returns false otherwise.
-"""
-check_field(self::AbstractBody, field_name::String) = field_name in self.fields
-
-
-"""
-    check_solved(self::AbstractBody)
-
-Returns `true` of the body has been solved. Returns false otherwise.
-"""
-function check_solved(self::AbstractBody)
-    if check_field(self, "solved")
-        return get_fieldval(self, "solved", 1)
-    else
-        return false
-    end
-end
-
 
 """
     `rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
@@ -546,16 +328,26 @@ function rotatetranslate!(body::AbstractBody,
     @assert ndims(M)==2 && size(M, 1)==3 && size(M, 2)==3 ""*
         "Invalid"
 
-    # Bring back to the origin
-    body.O .*= -1
-    gt.lintransform!(body.grid, Im, body.O; optargs...)
-    body.O .*= -1
+    # Translate back to origin
+    for i in 1:body.nnodes
+        body.nodes[1, i] -= body.O[1]
+        body.nodes[2, i] -= body.O[2]
+        body.nodes[3, i] -= body.O[3]
+    end
 
     # Add translation to previous position
     body.O .+= T
 
     # Rotate and translate to new position
-    gt.lintransform!(body.grid, M, body.O; optargs...)
+    for i in 1:body.nnodes
+        v1 = M[1,1]*body.nodes[1,i] + M[1,2]*body.nodes[2,i] + M[1,3]*body.nodes[3,i]
+        v2 = M[2,1]*body.nodes[1,i] + M[2,2]*body.nodes[2,i] + M[2,3]*body.nodes[3,i]
+        v3 = M[3,1]*body.nodes[1,i] + M[3,2]*body.nodes[2,i] + M[3,3]*body.nodes[3,i]
+        
+        body.nodes[1, i] = v1 + body.O[1]
+        body.nodes[2, i] = v2 + body.O[2]
+        body.nodes[3, i] = v3 + body.O[3]
+    end
 
     # Update coordinate system
     body.Oaxis .= M*body.Oaxis
@@ -581,6 +373,22 @@ function set_coordinatesystem(body::AbstractBody,
 
     return nothing
 end
+
+"""
+    check_solved(self::AbstractBody)
+
+Returns `true` if the body has been solved. Returns false otherwise.
+"""
+check_solved(self::AbstractBody) = self.solved
+
+"""
+    _solvedflag(self::AbstractBody, val::Bool)
+
+Sets the `solved` flag of the body.
+"""
+_solvedflag(self::AbstractBody, val::Bool) = self.solved = val
+
+
 
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
@@ -647,107 +455,41 @@ end
 Returns the characteristic length of a panel calculated as the square-root of
 its area.
 """
-characteristiclength_sqrtarea(nodes, panel) = sqrt(gt._get_area(nodes, panel))
-
-function _calc_controlpoint(grid::gt.GridTriangleSurface, pi::Int)
-
-    # float type
-    TF = eltype(grid._nodes)
-
-    # Get panel nodes
-    nodes = grid._nodes
-
-    # initialize as zeros
-    cpx = zero(TF)
-    cpy = zero(TF)
-    cpz = zero(TF)
-
-    # Control point: Average point between nodes
-    p1x = nodes[1, grid._cells[1, pi]]
-    controlpoint /= length(panel)
-
-    return controlpoint
+function characteristiclength_sqrtarea(nodes, panel)
+    i1, i2, i3 = panel[1], panel[2], panel[3]
+    e1x = nodes[1, i2] - nodes[1, i1]
+    e1y = nodes[2, i2] - nodes[2, i1]
+    e1z = nodes[3, i2] - nodes[3, i1]
+    e2x = nodes[1, i3] - nodes[1, i1]
+    e2y = nodes[2, i3] - nodes[2, i1]
+    e2z = nodes[3, i3] - nodes[3, i1]
+    nx = e1y * e2z - e1z * e2y
+    ny = e1z * e2x - e1x * e2z
+    nz = e1x * e2y - e1y * e2x
+    return sqrt(sqrt(nx*nx + ny*ny + nz*nz) * 0.5)
 end
 
-function _calc_controlpoints!(grid::gt.GridTriangleSurface,
+function calc_controlpoints!(nodes::AbstractMatrix, cells::AbstractMatrix,
                                 controlpoints, normals; off::Real=0.005,
                                 characteristiclength::Function=characteristiclength_sqrtarea)
 
-    lin = LinearIndices(grid._ndivsnodes)
-    ndivscells = vcat(grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
+    for pi in axes(cells, 2)
+        i1, i2, i3 = cells[1, pi], cells[2, pi], cells[3, pi]
 
-    nodes = grid._nodes
+        # Centroid of triangle (average of vertices; equals centroid for triangles)
+        controlpoints[1, pi] = (nodes[1, i1] + nodes[1, i2] + nodes[1, i3]) / 3
+        controlpoints[2, pi] = (nodes[2, i1] + nodes[2, i2] + nodes[2, i3]) / 3
+        controlpoints[3, pi] = (nodes[3, i1] + nodes[3, i2] + nodes[3, i3]) / 3
 
-    for pi in 1:grid.ncells
-
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                grid, pi, lin, ndivscells, cin)
-
-        # @show panel
-        # throw()
-
-        controlpoints[:, pi] .= 0
-
-        # Control point: Average point between nodes
-        for ni in panel
-            controlpoints[1, pi] += nodes[1, ni]
-            controlpoints[2, pi] += nodes[2, ni]
-            controlpoints[3, pi] += nodes[3, ni]
-        end
-        controlpoints[:, pi] /= length(panel)
-
-        # Control point: Convert average point into centroid
-        t1, t2, t3 = gt._calc_t1(nodes, panel), gt._calc_t2(nodes, panel), gt._calc_t3(nodes, panel) # Tangent unit vector
-        o1, o2, o3 = gt._calc_o1(nodes, panel), gt._calc_o2(nodes, panel), gt._calc_o3(nodes, panel) # Oblique unit vector
-        c1, c2, c3 = controlpoints[1, pi], controlpoints[2, pi], controlpoints[3, pi]                # Center of panel
-
-        x = controlpoints[1, pi]*0
-        y = controlpoints[1, pi]*0
-        for ni in panel
-            x += (nodes[1, ni]-c1)*t1
-            x += (nodes[2, ni]-c2)*t2
-            x += (nodes[3, ni]-c3)*t3
-            y += (nodes[1, ni]-c1)*o1
-            y += (nodes[2, ni]-c2)*o2
-            y += (nodes[3, ni]-c3)*o3
-        end
-        x /= length(panel)
-        y /= length(panel)
-
-        controlpoints[1, pi] += x*t1 + y*o1
-        controlpoints[2, pi] += x*t2 + y*o2
-        controlpoints[3, pi] += x*t3 + y*o3
-
-        l = characteristiclength(nodes, panel)
+        l = characteristiclength(nodes, view(cells, :, pi))
 
         # Offset the controlpoint in the normal direction
-        controlpoints[1, pi] += off*l*normals[1, pi]
-        controlpoints[2, pi] += off*l*normals[2, pi]
-        controlpoints[3, pi] += off*l*normals[3, pi]
+        controlpoints[1, pi] += off * l * normals[1, pi]
+        controlpoints[2, pi] += off * l * normals[2, pi]
+        controlpoints[3, pi] += off * l * normals[3, pi]
     end
 
-end
-function _calc_controlpoints(grid::gt.GridTriangleSurface, args...; optargs...)
-    controlpoints = zeros(3, grid.ncells)
-    _calc_controlpoints!(grid, controlpoints, args...; optargs...)
     return controlpoints
-end
-function _calc_controlpoints!(self::AbstractBody, args...; optargs...)
-    return _calc_controlpoints!(self.grid, args...;
-                                off=self.CPoffset,
-                                characteristiclength=self.characteristiclength,
-                                optargs...)
-end
-function _calc_controlpoints(self::AbstractBody, args...; optargs...)
-    return _calc_controlpoints(self.grid, args...;
-                                off=self.CPoffset,
-                                characteristiclength=self.characteristiclength,
-                                optargs...)
 end
 
 """
@@ -763,56 +505,21 @@ indexed).
 !!! tip
     Use `normals = calc_normals(body)` to calculate the normals.
 """
-const calc_controlpoints! = _calc_controlpoints!
+function calc_controlpoints!(self::AbstractBody, normals=self.normals; 
+        off=self.CPoffset, characteristiclength=self.characteristiclength)
+    return calc_controlpoints!(self.nodes, self.cells, self.controlpoints, normals;
+                                off, characteristiclength)
+end
 
 """
-    calc_controlpoints(body::AbstractBody)
+    find_panels(body::AbstractBody, dim::Int, coord::Real; tol=1e-6)
 
-Calculates the control point of every cell in `body` returning a 3xN matrix.
-
-See `calc_controlpoints!` documentation for more details.
+Returns the indices of all panels (cells) whose control point is within `tol` of 
+`coord` in the `dim` dimension.
 """
-const calc_controlpoints = _calc_controlpoints
-
-
-function _calc_normals!(grid::gt.GridTriangleSurface, normals)
-
-    lin = LinearIndices(grid._ndivsnodes)
-    ndivscells = vcat(grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    for pi in 1:grid.ncells
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                grid, pi, lin, ndivscells, cin)
-        normals[1, pi] = gt._calc_n1(grid._nodes, panel)
-        normals[2, pi] = gt._calc_n2(grid._nodes, panel)
-        normals[3, pi] = gt._calc_n3(grid._nodes, panel)
-    end
-end
-function _calc_normals(grid::gt.GridTriangleSurface)
-    normals = zeros(3, grid.ncells)
-    _calc_normals!(grid, normals)
-    return normals
-end
-function _calc_normals!(self::AbstractBody, normals; flipbyCPoffset=false)
-    _calc_normals!(self.grid, normals)
-    if flipbyCPoffset
-        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
-    end
-
-    return normals
-end
-function _calc_normals(self::AbstractBody; flipbyCPoffset=false)
-    normals = _calc_normals(self.grid)
-    if flipbyCPoffset
-        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
-    end
-
-    return normals
+function find_panels(body::AbstractBody, dim::Int, coord::Number; tol=1e-6)
+    CPs = body.controlpoints
+    return findall(cp -> abs(cp[dim] - coord) < tol, eachcol(CPs))
 end
 
 """
@@ -836,43 +543,56 @@ indexed).
         lin = LinearIndices(Tuple(ndivscells))
     ```
 """
-const calc_normals! = _calc_normals!
+function calc_normals!(nodes::AbstractMatrix, cells::AbstractMatrix, normals)
+    for pi in axes(cells, 2)
+        i1, i2, i3 = cells[1, pi], cells[2, pi], cells[3, pi]
 
-"""
-    calc_normals(self::AbstractBody)
+        # Edge vectors from vertex 1
+        e1x = nodes[1, i2] - nodes[1, i1]
+        e1y = nodes[2, i2] - nodes[2, i1]
+        e1z = nodes[3, i2] - nodes[3, i1]
 
-Calculates the normal vector of every cell in `grid` returning a 3xN matrix.
+        e2x = nodes[1, i3] - nodes[1, i1]
+        e2y = nodes[2, i3] - nodes[2, i1]
+        e2z = nodes[3, i3] - nodes[3, i1]
 
-See `calc_normals!` documentation for more details.
-"""
-const calc_normals = _calc_normals
+        # Cross product e1 × e2
+        nx = e1y * e2z - e1z * e2y
+        ny = e1z * e2x - e1x * e2z
+        nz = e1x * e2y - e1y * e2x
 
-
-function _calc_tangents!(grid::gt.GridTriangleSurface, tangents)
-
-    lin = LinearIndices(grid._ndivsnodes)
-    ndivscells = vcat(grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    for pi in 1:grid.ncells
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                grid, pi, lin, ndivscells, cin)
-        tangents[1, pi] = gt._calc_t1(grid._nodes, panel)
-        tangents[2, pi] = gt._calc_t2(grid._nodes, panel)
-        tangents[3, pi] = gt._calc_t3(grid._nodes, panel)
+        # Normalize
+        len = sqrt(nx*nx + ny*ny + nz*nz)
+        normals[1, pi] = nx / len
+        normals[2, pi] = ny / len
+        normals[3, pi] = nz / len
     end
 end
-function _calc_tangents(grid::gt.GridTriangleSurface)
-    tangents = zeros(3, grid.ncells)
-    _calc_tangents!(grid, tangents)
+
+function calc_normals!(self::AbstractBody, normals=self.normals; flipbyCPoffset=false)
+    calc_normals!(self.nodes, self.cells, normals)
+    if flipbyCPoffset
+        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
+    end
+
+    return normals
+end
+
+function _calc_tangents!(nodes::AbstractMatrix, cells::AbstractMatrix, tangents)
+    for pi in axes(cells, 2)
+        panel = cells[:, pi]
+        tangents[1, pi] = gt._calc_t1(nodes, panel)
+        tangents[2, pi] = gt._calc_t2(nodes, panel)
+        tangents[3, pi] = gt._calc_t3(nodes, panel)
+    end
+end
+function _calc_tangents(nodes::AbstractMatrix, cells::AbstractMatrix)
+    tangents = zeros(3, size(cells, 2))
+    _calc_tangents!(nodes, cells, tangents)
     return tangents
 end
-_calc_tangents!(self::AbstractBody, tangents) = _calc_tangents!(self.grid, tangents)
-_calc_tangents(self::AbstractBody) = _calc_tangents(self.grid)
+_calc_tangents!(self::AbstractBody, tangents) = _calc_tangents!(self.nodes, self.cells, tangents)
+_calc_tangents(self::AbstractBody) = _calc_tangents(self.nodes, self.cells)
 
 """
     calc_tangents!(body::AbstractBody, tangents::Matrix)
@@ -895,31 +615,21 @@ See `calc_tangents!` documentation for more details.
 const calc_tangents = _calc_tangents
 
 
-function _calc_obliques!(grid::gt.GridTriangleSurface, obliques)
-
-    lin = LinearIndices(grid._ndivsnodes)
-    ndivscells = vcat(grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    for pi in 1:grid.ncells
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                grid, pi, lin, ndivscells, cin)
-        obliques[1, pi] = gt._calc_o1(grid._nodes, panel)
-        obliques[2, pi] = gt._calc_o2(grid._nodes, panel)
-        obliques[3, pi] = gt._calc_o3(grid._nodes, panel)
+function _calc_obliques!(nodes::AbstractMatrix, cells::AbstractMatrix, obliques)
+    for pi in 1:size(cells, 2)
+        panel = cells[:, pi]
+        obliques[1, pi] = gt._calc_o1(nodes, panel)
+        obliques[2, pi] = gt._calc_o2(nodes, panel)
+        obliques[3, pi] = gt._calc_o3(nodes, panel)
     end
 end
-function _calc_obliques(grid::gt.GridTriangleSurface)
-    obliques = zeros(3, grid.ncells)
-    _calc_obliques!(grid, obliques)
+function _calc_obliques(nodes::AbstractMatrix, cells::AbstractMatrix)
+    obliques = zeros(3, size(cells, 2))
+    _calc_obliques!(nodes, cells, obliques)
     return obliques
 end
-_calc_obliques!(self::AbstractBody, obliques) = _calc_obliques!(self.grid, obliques)
-_calc_obliques(self::AbstractBody) = _calc_obliques(self.grid)
+_calc_obliques!(self::AbstractBody, obliques) = _calc_obliques!(self.nodes, self.cells, obliques)
+_calc_obliques(self::AbstractBody) = _calc_obliques(self.nodes, self.cells)
 
 """
     calc_obliques!(body::AbstractBody, obliques::Matrix)
@@ -942,38 +652,49 @@ See `calc_obliques!` documentation for more details.
 const calc_obliques = _calc_obliques
 
 
-function _calc_areas!(grid::gt.GridTriangleSurface, areas)
-
-    lin = LinearIndices(grid._ndivsnodes)
-    ndivscells = vcat(grid._ndivscells...)
-    cin = CartesianIndices(Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells)))
-    tri_out = zeros(Int, 3)
-    tricoor = zeros(Int, 3)
-    quadcoor = zeros(Int, 3)
-    quad_out = zeros(Int, 4)
-
-    for pi in 1:grid.ncells
-        panel = gt.get_cell_t!(tri_out, tricoor, quadcoor, quad_out,
-                                                grid, pi, lin, ndivscells, cin)
-        areas[pi] = gt._get_area(grid._nodes, panel)
-    end
-end
-function _calc_areas(grid::gt.GridTriangleSurface)
-    areas = zeros(grid.ncells)
-    _calc_areas!(grid, areas)
-    return areas
-end
-_calc_areas!(self::AbstractBody, areas) = _calc_areas!(self.grid, areas)
-_calc_areas(self::AbstractBody) = _calc_areas(self.grid)
-
 """
-    calc_areas!(body::AbstractBody, areas::Matrix)
+    calc_areas!(body::AbstractBody, areas)
 
-Calculates the area of every cell in `body` and stores them in the array `areas`.
+Calculates the area of every cell in `body` and stores them in the vector `areas`.
 
 **Output:** `areas[i]` is the area of the i-th cell (linearly indexed).
 """
-const calc_areas! = _calc_areas!
+function calc_areas!(nodes::AbstractMatrix, cells::AbstractMatrix, areas)
+    for pi in 1:size(cells, 2)
+        i1 = cells[1, pi]
+        i2 = cells[2, pi]
+        i3 = cells[3, pi]
+
+        e1x = nodes[1, i2] - nodes[1, i1]
+        e1y = nodes[2, i2] - nodes[2, i1]
+        e1z = nodes[3, i2] - nodes[3, i1]
+
+        e2x = nodes[1, i3] - nodes[1, i1]
+        e2y = nodes[2, i3] - nodes[2, i1]
+        e2z = nodes[3, i3] - nodes[3, i1]
+
+        cx = e1y * e2z - e1z * e2y
+        cy = e1z * e2x - e1x * e2z
+        cz = e1x * e2y - e1y * e2x
+
+        areas[pi] = 0.5 * sqrt(cx*cx + cy*cy + cz*cz)
+    end
+end
+calc_areas!(self::AbstractBody, areas) = calc_areas!(self.nodes, self.cells, areas)
+
+"""
+    calc_areas(body::AbstractBody)
+
+Calculates the area of every cell in `body` returning a vector of length N.
+
+**Output:** `areas[i]` is the area of the i-th cell (linearly indexed).
+"""
+function calc_areas(nodes::AbstractMatrix, cells::AbstractMatrix)
+    areas = zeros(size(cells, 2))
+    calc_areas!(nodes, cells, areas)
+    return areas
+end
+calc_areas(self::AbstractBody) = calc_areas(self.nodes, self.cells)
 
 """
     neighbor(body, ni::Int, ci::Int) -> ncoor
@@ -988,67 +709,17 @@ normals = pnl.calc_normals(body)
 
 # Identify the second neighbor of the 10th cell
 ncoor = pnl.neighbor(body, 2, 10)
-
-# Convert Cartesian coordinates to linear indexing
-ndivscells = Tuple(collect( 1:(d != 0 ? d : 1) for d in body.grid._ndivscells))
-lin = LinearIndices(ndivscells)
-ni = lin[ncoor...]
-
-# Fetch the normal of such neighbor
-normal = normals[:, ni]
-```
-"""
-function neighbor(body::AbstractBody, args...; optargs...)
-    gt.neighbor(body.grid, args...; optargs...)
-end
-
-function isedge(body::AbstractBody, args...)
-    gt.isedge(body.grid, args...)
-end
-
-
-
-"""
-    calc_areas(self::AbstractBody)
-
-Calculates the area of every cell in `grid`, returning an array with all areas.
-
-See `calc_areas!` documentation for more details.
-"""
-const calc_areas = _calc_areas
-
-function _solvedflag(self::AbstractBody, val::Bool)
-    # Remove all existing fields
-    for field in Iterators.reverse(self.fields)
-        remove_field(self, field)
-    end
-
-    # Add solved flag
-    add_field(self, "solved", "scalar", [val], "system")
-end
-
-"Count the number of types in an Union type"
-function _count(type::Type)
-    if type isa Union
-        return _count(type.a) + _count(type.b)
-    elseif type isa Core.TypeofBottom
-        return 0
-    else
-        return 1
-    end
-end
-
-function grid2cells(grid::gt.GridTriangleSurface)
-    cells = zeros(Int, 3, grid.ncells)
-    for i in 1:grid.ncells
-        cells[:, i] .= gt.get_cell(grid, i)
-    end
-    return cells
+```"""
+function neighbor(body::AbstractBody, ni, ci)
+    return body.neighbor[ni, ci]
 end
 
 function get_cell(system::AbstractBody, i::Int)
     return system.cells[1,i], system.cells[2,i], system.cells[3,i]
 end
+
+apply_freestream!(body::AbstractBody, uinf) =
+    eachcol(body.velocity) .+= Ref(uinf)
 
 #------- FastMultipole interface functions -------#
 
@@ -1058,7 +729,7 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     i1, i2, i3 = get_cell(system, i_body)
     
     # extract vertices
-    nodes = system.grid._nodes
+    nodes = system.nodes
     v1x = nodes[1, i1]
     v1y = nodes[2, i1]
     v1z = nodes[3, i1]
@@ -1150,7 +821,7 @@ function FastMultipole.get_position(system::AbstractBody, i)
     i1, i2, i3 = get_cell(system, i)
     
     # extract vertices
-    nodes = system.grid._nodes
+    nodes = system.nodes
     v1x = nodes[1, i1]
     v1y = nodes[2, i1]
     v1z = nodes[3, i1]

@@ -22,7 +22,7 @@ export  solve, save, Uind!, phi!,
 # ------------ GENERIC MODULES -------------------------------------------------
 import Dierckx
 import LinearAlgebra as LA
-import LinearAlgebra: I
+import LinearAlgebra: I, lu!, ldiv!
 import Krylov
 import LinearOperators
 import SimpleNonlinearSolve
@@ -67,12 +67,15 @@ const Im = Array(1.0I, 3, 3)
 # Shedding matrix for a RigidWakeBody without shedding
 const noshedding = zeros(Int, 6, 0)
 
+const SEMIINFINITE_LENGTH = Array{Float64,0}(undef)
+SEMIINFINITE_LENGTH[] = 10.0
+
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver", "fmm",
                     "abstractbody", "solver",
                     "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
-                    "multibody",  "elements_fmm",
+                    "multibody",  "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
                     "wake", "simulate",
