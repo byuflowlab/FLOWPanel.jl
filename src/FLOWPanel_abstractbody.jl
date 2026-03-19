@@ -90,10 +90,13 @@ and the following functions
 abstract type AbstractBody{E<:AbstractElement, N, TF} end
 
 function reset!(body::AbstractBody)
-    body.velocity .= 0
-    body.potential .= 0
-    body.Cp .= 0
-    body.F .= 0
+    body.velocity .= 0.0
+    for vte in body.velocity_te
+        vte .= 0.0
+    end
+    body.potential .= 0.0
+    body.Cp .= 0.0
+    body.F .= 0.0
     return nothing
 end
 
@@ -189,9 +192,9 @@ function write_vtk(name::String, body::AbstractBody, idx::Int, t::Real;
                    overwrite::Bool=false)
 
     files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(name * ".$idx")
+        vtm = WriteVTK.vtk_multiblock(name * ".$idx.vtm")
 
-        WriteVTK.vtk_grid(vtm, name * "_body.$(idx)", body.nodes, body.vtk_cells) do vtk
+        WriteVTK.vtk_grid(vtm, name * ".$(idx).vtu", body.nodes, body.vtk_cells) do vtk
 
             # --- Common solution fields ---
 

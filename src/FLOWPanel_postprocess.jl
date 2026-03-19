@@ -238,7 +238,6 @@ function calcfield_Cp!(out::Arr1,
                         Us::Arr2, Uref::Number;
                         correct_kuttacondition=true,
                         clip::Union{Nothing, Function}=nothing,
-                        fieldname="Cp", addfield=true
                         ) where {Arr1<:AbstractArray{<:Number,1},
                                  Arr2<:AbstractArray{<:Number,2}}
 
@@ -280,39 +279,6 @@ function calcfield_Cp!(out::Arr1,
     return out
 end
 
-
-function calcfield_Cp!(out::AbstractVector, mbody::MultiBody, Us::AbstractMatrix,
-                        args...; addfield=true, fieldname="Cp", optargs...)
-
-
-    # Error cases
-    @assert length(out)==mbody.ncells ""*
-        "Invalid `out` vector."*
-        " Expected length $(mbody.ncells); got $(length(out))."
-    @assert size(Us, 1)==3 && size(Us, 2)==mbody.ncells ""*
-        "Invalid `Us` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(Us))."
-
-    counter = 0
-
-    for body in mbody.bodies
-
-        offset = body.ncells
-        thisout = view(out, (1:offset) .+ counter)
-        thisUs = view(Us, 1:3, (1:offset) .+ counter)
-
-        calcfield_Cp!(thisout, body, thisUs, args...;
-                        fieldname=fieldname, addfield=addfield, optargs...)
-        counter += offset
-    end
-
-    if addfield && !(fieldname in mbody.fields)
-        push!(mbody.fields, fieldname)
-    end
-
-    return out
-end
-
 """
     calcfield_Cp!(out::Vector, body::AbstractBody, Uref;
                             U_fieldname="U", fieldname="Cp")
@@ -325,12 +291,7 @@ as a field named `fieldname`.
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_Cp!(out, body, Uref; optargs...)
-
-    Us = body.velocity
-
-    return calcfield_Cp!(out, body, Us, Uref; optargs...)
-end
+calcfield_Cp!(body, Uref; optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; optargs...)
 
 
 ################################################################################

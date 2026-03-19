@@ -28,7 +28,7 @@ import LinearOperators
 import SimpleNonlinearSolve
 import Requires: @require
 import FastMultipole
-using FastMultipole.StaticArrays: @SVector
+using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl

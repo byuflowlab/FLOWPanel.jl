@@ -230,7 +230,7 @@ function (solver::KrylovSolver)(C, B, α, β)
     C .+= α .* view(solver.Uind, 1, :)
 end
 
-function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing, Dbs=nothing; optargs...) where {B,TF}
+function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
     
     # update solver fields
     solver.normals .= _calc_normals(self)

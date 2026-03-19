@@ -54,8 +54,7 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
     ncells::Int                               # Number of cells
     cells::Matrix{Int}                        # Cell connectivity (each column is a cell)
     nsheddings::Int                           # Number of shedding edges
-    Das::Vector{Array{TF, 2}}                   # Unitary direction of rigid wake
-    Dbs::Vector{Array{TF, 2}}                   # Unitary direction of rigid wake
+    Das::Vector{Array{TF, 2}}                   # Unitary direction of rigid wake (vertex-based)
     Oaxis::Array{TF,2}                  # Coordinate system of original grid
     O::Array{TF,1}                      # Position of CS of original grid
 
@@ -70,6 +69,7 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
     velocity::Array{TF, 2}              # velocity induced at control points
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
+    velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
     CPoffset::Float64                         # Control point offset in normal direction
     kerneloffset::Float64                     # Kernel offset to avoid singularities
     kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
@@ -90,13 +90,13 @@ function RigidWakeBody{E, N, TF}(
                                 Cp=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
                                 solved=false,
-                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)) for s in shedding],
-                                Dbs::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)) for s in shedding],
+                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in shedding],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
+                                velocity_te=[zeros(TF, 3, size(s,2)+1) for s in shedding],
                                 CPoffset=1e-14,
                                 kerneloffset=1e-8,
                                 kernelcutoff=1e-14,
@@ -125,8 +125,8 @@ function RigidWakeBody{E, N, TF}(
         for i in axes(this_shedding, 2)
             idx = this_shedding[1,i]
             shedding_full[1:2, idx] .= view(this_shedding, 2:3, i)
-            shedding_full[3, idx] = i_surf # which i_surf of Das/Dbs to use
-            shedding_full[4, idx] = i # which index of Das/Dbs to use
+            shedding_full[3, idx] = i_surf # which i_surf of Das to use
+            shedding_full[4, idx] = i # which edge index of Das to use
         end
 
         # lower shedding edge
@@ -145,7 +145,7 @@ function RigidWakeBody{E, N, TF}(
                     nodes, shedding, vtk_cells, neighbor, shedding_full,
                     nnodes, ncells, cells,
                     nsheddings,
-                    Das, Dbs,
+                    Das,
                     Oaxis, O,
                     Cp, F, solved,
                     strength,
@@ -153,6 +153,7 @@ function RigidWakeBody{E, N, TF}(
                     velocity,
                     controlpoints,
                     normals,
+                    velocity_te,
                     CPoffset,
                     kerneloffset,
                     kernelcutoff,
@@ -279,32 +280,27 @@ solved_field_name(::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, <:Any}
 ################################################################################
 function solve(self::RigidWakeBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
-                Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3};
+                Das::AbstractMatrix{T2};
                 solver=solve_ludiv!, solver_optargs=(),
                 optargs...
-                ) where {T1, T2, T3}
+                ) where {T1, T2}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2)
 
     # Compute normals and control points
     normals = _calc_normals(self)
     CPs = _calc_controlpoints(self, normals)
 
-    # update Das and Dbs
+    # update Das
     self.Das .= Das
-    self.Dbs .= Dbs
 
     # Compute geometric matrix (left-hand-side influence matrix)
     G = zeros(T, self.ncells, self.ncells)
@@ -323,7 +319,6 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 end
 
@@ -469,26 +464,22 @@ end
 
 function solve(self::RigidWakeBody{VortexRing, 2},
                 Uinfs::AbstractMatrix{T1},
-                Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3};
+                Das::AbstractMatrix{T2};
                 solver=solve_ludiv!, solver_optargs=(),
                 elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
-                GPUArray=Array{promote_type(T1, T2, T3)},
+                GPUArray=Array{promote_type(T1, T2)},
                 optargs...
-                ) where {T1, T2, T3}
+                ) where {T1, T2}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2)
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -497,7 +488,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     println("BEGIN CONSTRUCTING G...")
-    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, Das, Dbs, elprescribe;
+    G, RHS = _G_U_RHS(self, Uinfs, CPs, normals, elprescribe;
                                                 GPUArray=GPUArray,
                                                 optargs...)
     println("FINISHED CONSTRUCTING G.")
@@ -514,7 +505,7 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     end
 
     # Save solution
-    set_solution(self, nothing, Gamma, elprescribe, Uinfs, Das, Dbs)
+    set_solution(self, nothing, Gamma, elprescribe, Uinfs)
 
 end
 
@@ -709,7 +700,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
     N = self.ncells
     M = size(CPs, 2)
 
-    Das, Dbs = self.Das, self.Dbs
+    Das = self.Das
 
     if size(G, 1)!=M || size(G, 2)!=N
         error("Matrix G with invalid dimensions;"*
@@ -766,8 +757,8 @@ function _G_Uvortexring!(self::RigidWakeBody,
             # Indicate nodes in the upper shedding edge
             TE[1] = self.cells[nia, pi]
             TE[2] = self.cells[nib, pi]
-            da1, da2, da3 = Das[1, ei], Das[2, ei], Das[3, ei]
-            db1, db2, db3 = Dbs[1, ei], Dbs[2, ei], Dbs[3, ei]
+            da1, da2, da3 = Das[1, ei+1], Das[2, ei+1], Das[3, ei+1]
+            db1, db2, db3 = Das[1, ei], Das[2, ei], Das[3, ei]
 
             U_semiinfinite_horseshoe(
                               self.nodes,                        # All nodes
@@ -820,29 +811,24 @@ end
 
 function solve(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
                 Uinfs::AbstractMatrix{T1},
-                Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3};
+                Das::AbstractMatrix{T2};
                 solver=solve_ludiv!, solver_optargs=(),
                 elprescribe_index::Int=1, elprescribe_value=0,
                 weight_gammat=0, weight_gammao=1
-                ) where {T1, T2, T3}
+                ) where {T1, T2}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2)
 
-    # store Das and Dbs
+    # store Das
     self.Das .= Das
-    self.Dbs .= Dbs
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -875,7 +861,6 @@ function solve(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 
     tangents = _calc_tangents(self)
@@ -898,10 +883,6 @@ function solve2!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
     end
-
-    # store Das and Dbs
-    self.Das .= Das
-    self.Dbs .= Dbs
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -933,8 +914,7 @@ function solve2!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
 
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
+    add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
 
     tangents = _calc_tangents(self)
@@ -1093,7 +1073,6 @@ function FastMultipole.body_to_multipole!(system::RigidWakeBody{Union{ConstantSo
                 Dbx, Dby, Dbz = buffer[end-2, i_body], buffer[end-1, i_body], buffer[end, i_body]
                 Db = FastMultipole.SVector{3}(Dbx, Dby, Dbz)
                 v2w = v2 + Db
-
                 
                 # body-to-multipole: first triangle
                 x0 = v1 - center
@@ -1242,27 +1221,29 @@ beginning with row `ilast+1`:
 
 """
 function additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWakeBody, i_body, ilast)
-    # index of first node of shedding edge
+    # index of first node of shedding edge (nia)
     idx1 = system.shedding_full[1, i_body]
     buffer[ilast+1, i_buffer] = idx1
 
-    # wake delta from the first node
+    # wake delta from the first node (nia = vertex edge_idx+1 in Das)
     update_radius = zero(eltype(buffer))
     if idx1 > 0
-        idx_Das = system.shedding_full[3, i_body]
-        Dax, Day, Daz = view(system.Das[idx_Das], :, system.shedding_full[4, i_body])
+        i_surf = system.shedding_full[3, i_body]
+        edge_idx = system.shedding_full[4, i_body]
+        Dax, Day, Daz = view(system.Das[i_surf], :, edge_idx + 1)
         buffer[ilast+2:ilast+4, i_buffer] .= (Dax, Day, Daz)
         update_radius = sqrt(Dax*Dax + Day*Day + Daz*Daz)
     end
 
-    # index of second node of shedding edge
+    # index of second node of shedding edge (nib)
     idx2 = system.shedding_full[2, i_body]
     buffer[ilast+5, i_buffer] = system.shedding_full[2, i_body]
 
-    # wake delta from the second node
+    # wake delta from the second node (nib = vertex edge_idx in Das)
     if idx2 > 0
-        idx_Das = system.shedding_full[3, i_body]
-        Dax, Day, Daz = view(system.Das[idx_Das], :, system.shedding_full[4, i_body])
+        i_surf = system.shedding_full[3, i_body]
+        edge_idx = system.shedding_full[4, i_body]
+        Dax, Day, Daz = view(system.Das[i_surf], :, edge_idx)
         buffer[ilast+6:ilast+8, i_buffer] .= (Dax, Day, Daz)
         update_radius = max(update_radius, sqrt(Dax*Dax + Day*Day + Daz*Daz))
     end
@@ -1656,10 +1637,9 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
 
     # set wake length for visualization (if semi-infinite wake is enabled)
     if body.semiinfinite_wake
-        for (Das, Dbs) in zip(body.Das, body.Dbs)
+        for Das in body.Das
             for i in axes(Das, 2)
                 Das[:, i] .*= SEMIINFINITE_LENGTH[]
-                Dbs[:, i] .*= SEMIINFINITE_LENGTH[]
             end
         end
     end
@@ -1668,48 +1648,46 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
     for i_surf in eachindex(body.shedding)
         shedding = body.shedding[i_surf]
         Das = body.Das[i_surf]
-        Dbs = body.Dbs[i_surf]
-        
+
         n_wakes = size(shedding, 2)
         points = zeros(typeof(body.nodes[1]), 3, 4 * n_wakes)
         cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, FastMultipole.SVector{4,Int64}}}(undef, n_wakes)
         strengths = zeros(typeof(body.strength[1]), n_wakes)
-        
+
         for i in 1:n_wakes
             pi = shedding[1, i]
             nia, nib = shedding[2, i], shedding[3, i]
-            
+
             idx1 = body.cells[nia, pi]
             idx2 = body.cells[nib, pi]
-            
+
             p1 = body.nodes[:, idx1]
             p2 = body.nodes[:, idx2]
-            
-            p3 = p2 + Dbs[:, i]
-            p4 = p1 + Das[:, i]
-            
+
+            p3 = p2 + Das[:, i]
+            p4 = p1 + Das[:, i+1]
+
             points[:, 1 + 4*(i-1)] = p1
             points[:, 2 + 4*(i-1)] = p2
             points[:, 3 + 4*(i-1)] = p3
             points[:, 4 + 4*(i-1)] = p4
-            
+
             cells[i] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD, FastMultipole.SVector{4,Int64}(1+4*(i-1), 2+4*(i-1), 3+4*(i-1), 4+4*(i-1)))
 
             mu_upper, mu_lower = _get_wakestrength_mu(body, i, i_surf)
             strengths[i] = mu_upper - mu_lower
         end
-        
-        WriteVTK.vtk_grid(vtm, name * "_wake.$idx.$i_surf", points, cells) do vtk
+
+        WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells) do vtk
             vtk["mu"] = strengths
         end
     end
 
-    # restore original values of Da and Db if they were modified for visualization
+    # restore original values of Da if they were modified for visualization
     if body.semiinfinite_wake
-        for (Das, Dbs) in zip(body.Das, body.Dbs)
+        for Das in body.Das
             for i in axes(Das, 2)
                 Das[:, i] ./= SEMIINFINITE_LENGTH[]
-                Dbs[:, i] ./= SEMIINFINITE_LENGTH[]
             end
         end
     end

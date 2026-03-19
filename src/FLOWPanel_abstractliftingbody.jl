@@ -53,13 +53,13 @@ abstract type AbstractLiftingBody{E, N, TF} <: AbstractBody{E, N, TF} end
 Impose boundary conditions to solve for element strengths. `Uinds[:, i]` is the
 velocity at the i-th control point used in the boundary condition.
 
-`Das[:, i]` is the unitary vector pointing in the direction that the
-semi-infinite wake is shed from the first node of the i-th shedding edge, while
-`Dbs[:, i]` is for the second node.
+`Das[:, i]` is the wake direction at the i-th vertex along the shedding edge
+chain. For edge `ei`: `Das[:, ei]` is the nib (first) vertex direction and
+`Das[:, ei+1]` is the nia (second) vertex direction.
 NOTE: These directions are expected to point from the node out to infinite.
 """
 function solve(self::AbstractLiftingBody, Uinfs::AbstractMatrix,
-               Das::AbstractMatrix, Dbs::AbstractMatrix)
+               Das::AbstractMatrix)
     error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
 end
 
@@ -229,7 +229,7 @@ function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs,
     # Add wake contributions
     sheddings = 1:self.nsheddings
     chunks = collect(Iterators.partition(sheddings, max(length(sheddings) ÷ Threads.nthreads(), 3*Threads.nthreads())))
-    Das, Dbs = self.Das, self.Dbs
+    Das = self.Das
     derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false)
 
     for isurf in eachindex(self.shedding)
@@ -255,8 +255,8 @@ function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs,
                 v2z = self.nodes[3, TE2]
 
                 # direction of trailing semi-infinite wake
-                da1, da2, da3 = Das[isurf][1, i_source], Das[isurf][2, i_source], Das[isurf][3, i_source]
-                db1, db2, db3 = Dbs[isurf][1, i_source], Dbs[isurf][2, i_source], Dbs[isurf][3, i_source]
+                da1, da2, da3 = Das[isurf][1, i_source+1], Das[isurf][2, i_source+1], Das[isurf][3, i_source+1]
+                db1, db2, db3 = Das[isurf][1, i_source], Das[isurf][2, i_source], Das[isurf][3, i_source]
                 @assert isapprox(da1, db1) && isapprox(da2, db2) && isapprox(da3, db3) "Inconsistent wake directions in _G_phi_wake!"
 
                 for i_target in axes(CPs, 2)

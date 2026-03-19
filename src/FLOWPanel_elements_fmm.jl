@@ -13,7 +13,7 @@
 
 has_semiinfinite_wake(self::AbstractBody) = false
 
-function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
+function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     potential = Vector{TF}(undef, 0) # unused
@@ -30,10 +30,10 @@ function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
                                         extra_farfield=has_semiinfinite_wake(self), 
                                         shrink=true)
 
-    return out
+    return nothing
 end
 
-function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend)
+function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     potential = Vector{TF}(undef, 0) # unused
@@ -43,10 +43,10 @@ function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend)
     # perform N-body calculation
     FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=true, scalar_potential=false)
 
-    return out
+    return nothing
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
+function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     velocity = Array{TF, 2}(undef, 0, 0)  # unused
@@ -63,10 +63,10 @@ function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend)
                                         extra_farfield=has_semiinfinite_wake(self),
                                         shrink=true)
 
-    return out
+    return nothing
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::DirectBackend)
+function _phi!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
     velocity = Array{TF, 2}(undef, 0, 0)  # unused
@@ -76,7 +76,7 @@ function _phi!(self::AbstractBody, targets, out, backend::DirectBackend)
     # perform N-body calculation
     FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=false, scalar_potential=true)
 
-    return out
+    return nothing
 end
 
 "Defaults to do nothing."

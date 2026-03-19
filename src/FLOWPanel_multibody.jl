@@ -195,8 +195,7 @@ end
 ################################################################################
 function solve(self::MultiBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
-                Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3}; optargs...) where {T1, T2, T3}
+                Das::AbstractMatrix{T2}; optargs...) where {T1, T2}
 
     # Compute normals and control points
     normals = _calc_normals(self)
@@ -204,31 +203,28 @@ function solve(self::MultiBody{VortexRing, 1},
 
     # Compute geometric matrix (left-hand-side influence matrix)
     Gdims = _get_Gdims(self)
-    G = zeros(promote_type(T1, T2, T3), Gdims)
+    G = zeros(promote_type(T1, T2), Gdims)
 
-    solve!(self, G, normals, CPs, Uinfs, Das, Dbs; optargs...)
+    solve!(self, G, normals, CPs, Uinfs, Das; optargs...)
 end
 
 function solve!(self::MultiBody{VortexRing, 1},
                 G::AbstractMatrix{T1},
                 normals::AbstractMatrix{T2}, CPs::AbstractMatrix,
-                Uinfs::AbstractMatrix{T3}, Das::AbstractMatrix, Dbs::AbstractMatrix;
+                Uinfs::AbstractMatrix{T3}, Das::AbstractMatrix;
                 solver=solve_ludiv!, solver_optargs=(), optargs...
                 ) where {T1, T2, T3}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
     # Compute geometric matrix (left-hand-side influence matrix)
-    _G_U!(self, G, CPs, normals, Das, Dbs; optargs...)
+    _G_U!(self, G, CPs, normals, Das; optargs...)
 
     # Calculate boundary conditions (right-hand side of system of equations)
     RHS = calc_bc_noflowthrough(Uinfs, normals)
@@ -243,7 +239,6 @@ function solve!(self::MultiBody{VortexRing, 1},
     _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(Dbs)), "system")
     add_field(self, "Gamma", "scalar", Gamma, "cell")
 end
 
@@ -261,12 +256,6 @@ function solve2!(self::MultiBody,
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    # elseif size(Das) != (3, self.nsheddings)
-    #     error("Invalid Das;"*
-    #           " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    # elseif size(Dbs) != (3, self.nsheddings)
-    #     error("Invalid Dbs;"*
-    #           " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
     end
 
     # get CPs and normals
@@ -296,13 +285,12 @@ end
 ################################################################################
 function solve(self::MultiBody{VortexRing, 2},
                 Uinfs::AbstractMatrix{T1},
-                Das::AbstractMatrix{T2},
-                Dbs::AbstractMatrix{T3};
+                Das::AbstractMatrix{T2};
                 elprescribe="automatic",
                 optargs...
-                ) where {T1, T2, T3}
+                ) where {T1, T2}
 
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2)
 
     # Determine prescribed elements
     _elprescribe = elprescribe=="automatic" ? calc_elprescribe(self) : elprescribe
@@ -318,7 +306,7 @@ function solve(self::MultiBody{VortexRing, 2},
     solve!(self, Gamma, Gammals,
             G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
             normals, CPs,
-            Uinfs, Das, Dbs; elprescribe=_elprescribe, optargs...)
+            Uinfs, Das; elprescribe=_elprescribe, optargs...)
 end
 
 function allocate_solver(self::AbstractBody, _elprescribe, T::Type)
@@ -343,7 +331,7 @@ function solve!(self::MultiBody{VortexRing, 2},
                 Gamma, Gammals,
                 G::AbstractMatrix, Gred, tGred, gpuGred, Gls, RHS, RHSls,
                 normals::AbstractMatrix, CPs::AbstractMatrix,
-                Uinfs::AbstractMatrix, Das::AbstractMatrix, Dbs::AbstractMatrix;
+                Uinfs::AbstractMatrix, Das::AbstractMatrix;
                 solver=solve_ludiv!, solver_optargs=(),
                 elprescribe=Tuple{Int, Float64}[],
                 optargs...
@@ -355,12 +343,9 @@ function solve!(self::MultiBody{VortexRing, 2},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
     @assert length(Gammals)==n-npres ""*
@@ -371,7 +356,7 @@ function solve!(self::MultiBody{VortexRing, 2},
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     _G_U_RHS!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-                        Uinfs, CPs, normals, Das, Dbs, elprescribe; optargs...)
+                        Uinfs, CPs, normals, Das, elprescribe; optargs...)
 
     # Solve system of equations
     solver(Gammals, Gls, RHSls; solver_optargs...)
@@ -383,31 +368,28 @@ end
 function solve2!(self::MultiBody,
                 Uinfs::AbstractMatrix{T1},
                 solver::AbstractMatrixfulSolver{true},
-                Das::AbstractMatrix{T2}, Dbs::AbstractMatrix{T3};
+                Das::AbstractMatrix{T2};
                     update_G::Bool=true,
                     solver_optargs=(),
                     elprescribe="automatic",
                     optargs...
                     # elprescribe_index::Int=1, elprescribe_value=0,
                     # weight_gammat=0, weight_gammao=1
-                ) where {T1, T2, T3}
+                ) where {T1, T2}
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings)
+    elseif size(Das) != (3, self.nsheddings+1)
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Das))")
-    elseif size(Dbs) != (3, self.nsheddings)
-        error("Invalid Dbs;"*
-              " expected size (3, $(self.nsheddings)), got $(size(Dbs))")
+              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
     end
 
     # Determine prescribed elements
     _elprescribe = elprescribe=="automatic" ? calc_elprescribe(self) : elprescribe
 
     # Allocate solver memory
-    T = promote_type(T1, T2, T3)
+    T = promote_type(T1, T2)
     (; Gamma, Gammals, G, Gred, tGred, gpuGred, Gls, RHS, RHSls) = allocate_solver(self, _elprescribe, T)
 
     # Compute normals and control points
@@ -417,7 +399,7 @@ function solve2!(self::MultiBody,
     # Compute geometric matrix (left-hand-side influence matrix) and boundary
     # conditions (right-hand-side) converted into a least-squares problem
     _G_U_RHS!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-                        Uinfs, CPs, normals, Das, Dbs, _elprescribe; optargs...)
+                        Uinfs, CPs, normals, Das, _elprescribe; optargs...)
 
     # Solve system of equations
     solve_matrix!(Gammals, Gls, RHSls, solver; solver_optargs...)
@@ -474,7 +456,6 @@ end
 
 function add_field_D(self::RigidWakeBody)
     add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
-    add_field(self, "Db", "vector", collect(eachcol(self.Dbs)), "system")
 end
 
 function set_solution(self::MultiBody,

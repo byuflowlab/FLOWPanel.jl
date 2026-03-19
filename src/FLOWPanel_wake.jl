@@ -21,7 +21,6 @@ Solve for the body panel strengths and wake velocities at time `t` given a frees
 
 """
 function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
-        frames=nothing,
         body_solver::AbstractSolver=BackslashDirichlet(body), 
         backend=FastMultipoleBackend(;
             expansion_order=10,
@@ -47,9 +46,7 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     apply_freestream!(wake, uinf)
 
     # kinematics
-    if !isnothing(frames)
-        kinematic_velocity!(body.velocity, body.position, body, frames; skip_top_level=false)
-    end
+    kinematic_velocity!(body, frames; skip_top_level=false)
 
     # solve body (shouldn't modify body velocity, but will update body strength)
     solve2!(body, body.velocity, body_solver; backend)
@@ -414,15 +411,15 @@ function propagate!(wake::PanelWake, dt)
     end
 end
 
-function write_vtk(name, wake::PanelWake, idx, t; clear=false)
-    WriteVTK.paraview_collection(name; append=!clear) do pvd
-        vtm = WriteVTK.vtk_multiblock(name * "_$idx")
+function write_vtk(name, wake::PanelWake, idx, t; overwrite=false)
+    WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+        vtm = WriteVTK.vtk_multiblock(name * ".$idx.vtm")
         if wake.nwakes[] > 0
             for i_surf in eachindex(wake.nodes)
                 pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
                 pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
                 @show size(pts_reshaped)
-                WriteVTK.vtk_grid(vtm, name * "_$(idx)_surf$i_surf", pts_reshaped) do vtk
+                WriteVTK.vtk_grid(vtm, name * ".$(i_surf).$(idx).vtu", pts_reshaped) do vtk
                     vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
                     vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
 

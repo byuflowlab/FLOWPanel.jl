@@ -79,7 +79,7 @@ end
 
 function rotate_translate!(body::AbstractBody, origin, Rω, dx)
     # get grid nodes
-    nodes = body.grid._nodes
+    nodes = body.nodes
     nnodes = size(nodes, 2)
 
     # rotate/translate
@@ -164,22 +164,14 @@ end
 
 #------- kinematic velocity -------#
 
-function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::Union{AbstractBody}, frames::AbstractVector{ReferenceFrame{TF}}; skip_top_level=false) where TF
+function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}) where TF
 
-    # capture the top level frame if requested
-    if skip_top_level
-        # begin recursion (skipping the top level frame, which is captured by system.fs)
-        for i in frames[1].child_index
-            frame = frames[1]
-            kinematic_velocity!(Vcp, CPs, system, frames, i, frame.x, frame.R)
-        end
-    else
-        kinematic_velocity!(Vcp, CPs, system, frames, 1, zero(FastMultipole.SVector{3,TF}), FastMultipole.SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
-    end
+    # begin recursion
+    kinematic_velocity!(systems, frames, 1, zero(FastMultipole.SVector{3,TF}), FastMultipole.SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
 
 end
 
-function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::Union{AbstractBody}, frames::AbstractVector{<:ReferenceFrame}, i_frame::Int, dx_parent_to_global, R_parent_to_global)
+function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}, i_frame::Int, dx_parent_to_global, R_parent_to_global) where TF
     # get frame
     frame = frames[i_frame]
 
@@ -191,28 +183,56 @@ function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::U
     ω_global = R_parent_to_global * frame.ω_axis * frame.ω # global angular velocity
     
     # update the kinematic velocity of each dependent surface
-    ncells_cum = 0
     for isurf in frame.dependent_index
         
         # unpack containers
-        body = system isa MultiBody ? get_body(system, isurf) : system
+        body = systems[isurf]
+        Vcp = body.velocity
+        CPs = body.controlpoints
 
-        nc = body.ncells
+        # velocity at the control points
+        for i in axes(Vcp, 2)
 
-        # velocity at the control points, we subtract this from the matrix because FLOWPanel expects rigid body EOM formulation: (U_inf + U_ind - U_kin) \cdot n = 0 
-        for i in 1:nc
-            icell = ncells_cum + i
-            cp = FastMultipole.SVector{3}(CPs[1, icell], CPs[2, icell], CPs[3, icell])
+            # extract control point
+            cp = FastMultipole.SVector{3}(CPs[1, i], CPs[2, i], CPs[3, i])
             
             # vcp is actually total evaluated velocity, so subtracting kinematic velocity means rigid body motion opposes the freestream
             dv = v_global + cross(ω_global, (cp - origin_global))
-            Vcp[1, icell] -= dv[1]
-            Vcp[2, icell] -= dv[2]
-            Vcp[3, icell] -= dv[3]
+            Vcp[:, i] .+= dv
         end
 
-        ncells_cum += nc
+        # trailing edges
+        for ishedding in eachindex(body.Das)
+            Vte = body.velocity_te[ishedding]
+            shedding = body.shedding[ishedding]
 
+            # nib nodes (columns 1..nshed)
+            for j in axes(shedding, 2)
+                i_panel = shedding[1, j]
+                idx_nib = shedding[3, j]
+                node_idx = body.cells[idx_nib, i_panel]
+                te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+                if j == 1
+                    @show te
+                end
+                dv = v_global + cross(ω_global, (te - origin_global))
+                Vte[1, j] += dv[1]
+                Vte[2, j] += dv[2]
+                Vte[3, j] += dv[3]
+            end
+
+            # final nia node (column nshed+1)
+            if size(shedding, 2) > 0
+                i_panel = shedding[1, end]
+                idx_nia = shedding[2, end]
+                node_idx = body.cells[idx_nia, i_panel]
+                te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+                dv = v_global + cross(ω_global, (te - origin_global))
+                Vte[1, end] += dv[1]
+                Vte[2, end] += dv[2]
+                Vte[3, end] += dv[3]
+            end
+        end
     end
 
     # new dx_parent_to_global
@@ -223,23 +243,10 @@ function kinematic_velocity!(Vcp::AbstractMatrix, CPs::AbstractMatrix, system::U
     
     # propagate to child frames
     for i in frame.child_index
-        kinematic_velocity!(Vcp, CPs, system, frames, i, dx_parent_to_global, R_parent_to_global)
+        kinematic_velocity!(systems, frames, i, dx_parent_to_global, R_parent_to_global)
     end
 end
 
-
-# function Freestream(frame::ReferenceFrame{TF}, ref::Reference, vinf_ext) where TF
-#     # equivalent freestream about ref.r
-#     dx = ref.r - frame.x  # vector from frame origin to reference point
-#     ω = frame.ω_axis * frame.ω
-#     V = vinf_ext - frame.v - ω × dx  # freestream velocity in South-East-Up convention
-
-#     # create freestream object
-#     Omega = frame.ω_axis * frame.ω
-#     fs = velocity_to_freestream(V, -Omega)
-
-#     return fs
-# end
 
 #------- constructors -------#
 
