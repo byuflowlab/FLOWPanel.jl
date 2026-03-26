@@ -297,6 +297,8 @@ FastMultipole.has_vector_potential(::AbstractBody{ConstantDoublet, 1}) = false
 
 FastMultipole.has_vector_potential(::AbstractBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any}) = false
 
+FastMultipole.has_vector_potential(::AbstractBody{Union{ConstantSource, VortexRing}, 2, <:Any}) = false
+
 FastMultipole.body_to_multipole!(system::AbstractBody{ConstantSource, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Source}, system, args...)
 
@@ -304,6 +306,9 @@ FastMultipole.body_to_multipole!(system::AbstractBody{ConstantDoublet, 1, <:Any}
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...; scale_strength=1.0)
 
 FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,ConstantDoublet}, 2, <:Any}, args...) =
+    FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...; scale_strength=FastMultipole.StaticArrays.SVector(1.0, 1.0))
+
+FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,VortexRing}, 2, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...; scale_strength=FastMultipole.StaticArrays.SVector(1.0, 1.0))
 
 ##### END OF FASTMULTIPOLE BACKEND SUPPORT #####################################

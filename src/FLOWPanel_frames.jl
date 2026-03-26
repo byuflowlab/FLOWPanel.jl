@@ -198,7 +198,7 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
             
             # vcp is actually total evaluated velocity, so subtracting kinematic velocity means rigid body motion opposes the freestream
             dv = v_global + cross(ω_global, (cp - origin_global))
-            Vcp[:, i] .+= dv
+            Vcp[:, i] .-= dv
         end
 
         # trailing edges
@@ -212,13 +212,10 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
                 idx_nib = shedding[3, j]
                 node_idx = body.cells[idx_nib, i_panel]
                 te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
-                if j == 1
-                    @show te
-                end
                 dv = v_global + cross(ω_global, (te - origin_global))
-                Vte[1, j] += dv[1]
-                Vte[2, j] += dv[2]
-                Vte[3, j] += dv[3]
+                Vte[1, j] -= dv[1]
+                Vte[2, j] -= dv[2]
+                Vte[3, j] -= dv[3]
             end
 
             # final nia node (column nshed+1)
@@ -228,9 +225,9 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
                 node_idx = body.cells[idx_nia, i_panel]
                 te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
                 dv = v_global + cross(ω_global, (te - origin_global))
-                Vte[1, end] += dv[1]
-                Vte[2, end] += dv[2]
-                Vte[3, end] += dv[3]
+                Vte[1, end] -= dv[1]
+                Vte[2, end] -= dv[2]
+                Vte[3, end] -= dv[3]
             end
         end
     end

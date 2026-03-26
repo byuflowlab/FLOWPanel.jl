@@ -114,12 +114,15 @@ function RigidWakeBody{E, N, TF}(
     end
 
     # generate full shedding map
-    shedding_full = zeros(Int, 4, ncells)
+    # Rows: [1]=TE1 cell-local index, [2]=TE2 cell-local index,
+    #        [3]=i_surf (which Das surface), [4]=edge index,
+    #        [5]=Das column for TE1 vertex, [6]=Das column for TE2 vertex
+    shedding_full = zeros(Int, 6, ncells)
     shedding_full .= -1
 
     # loop over shedding surfaces
     for i_surf in eachindex(shedding)
-    
+
         # upper shedding edge
         this_shedding = shedding[i_surf]
         for i in axes(this_shedding, 2)
@@ -127,6 +130,9 @@ function RigidWakeBody{E, N, TF}(
             shedding_full[1:2, idx] .= view(this_shedding, 2:3, i)
             shedding_full[3, idx] = i_surf # which i_surf of Das to use
             shedding_full[4, idx] = i # which edge index of Das to use
+            # Upper panel: TE1=nia uses Das[:,i+1], TE2=nib uses Das[:,i]
+            shedding_full[5, idx] = i + 1  # Das column for TE1 (nia vertex)
+            shedding_full[6, idx] = i      # Das column for TE2 (nib vertex)
         end
 
         # lower shedding edge
@@ -136,6 +142,10 @@ function RigidWakeBody{E, N, TF}(
                 shedding_full[1:2, idx] .= view(this_shedding, 5:6, i)
                 shedding_full[3, idx] = i_surf
                 shedding_full[4, idx] = i
+                # Lower panel: TE edge is reversed, so TE1 is at the physical
+                # nib position and TE2 is at the physical nia position
+                shedding_full[5, idx] = i      # Das column for TE1 (physical nib)
+                shedding_full[6, idx] = i + 1  # Das column for TE2 (physical nia)
             end
         end
 
@@ -273,6 +283,12 @@ solved_field_name(::RigidWakeBody{ConstantSource, <:Any}) = "sigma"
 solved_field_name(::RigidWakeBody{ConstantDoublet, <:Any}) = "mu"
 solved_field_name(::RigidWakeBody{VortexRing, <:Any}) = "gamma"
 solved_field_name(::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = "mu"
+solved_field_name(::RigidWakeBody{Union{ConstantSource, VortexRing}, <:Any}) = "gamma"
+
+wake_name(::RigidWakeBody{ConstantDoublet, <:Any}) = "mu"
+wake_name(::RigidWakeBody{VortexRing, <:Any}) = "gamma"
+wake_name(::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = "mu"
+wake_name(::RigidWakeBody{Union{ConstantSource, VortexRing}, <:Any}) = "gamma"
 
 
 ################################################################################
@@ -361,7 +377,7 @@ function solve2!(self::RigidWakeBody{TK, 1},
     _solvedflag(self, true)
 end
 
-function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, TF}, Uinfs::Matrix{<:Real}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, Uinfs::Matrix{<:Real}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
     
     # ensure CPoffset is negative (we'll solve this in the interior)
     CPoffset_old = self.CPoffset
@@ -382,7 +398,8 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, T
 
     # add source-induced potential to RHS
     rhs = solver.rhs
-    rhs .= 0.0
+    rhs .= zero(eltype(rhs))
+    # rhs .= self.potential
     _phi!(self, CPs_inside, rhs, backend; optargs...)
 
     rhs .*= -1.0 # move to RHS
@@ -402,14 +419,17 @@ function solve2!(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, T
 
     # Save solution
     _solvedflag(self, true)
+
+    # restore CPoffset
+    self.CPoffset = CPoffset_old
 end
 
 to_tuple(val::Tuple) = val
 to_tuple(val) = (val,)
 
-function solve2!(self::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
-        expansion_order=solver.expansion_order, 
-        multipole_acceptance=solver.multipole_acceptance, 
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
+        expansion_order=solver.expansion_order,
+        multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...) where TF
 
@@ -1028,7 +1048,7 @@ FastMultipole.has_vector_potential(::AbstractBody{Union{VortexRing, UniformVorte
 
 has_semiinfinite_wake(self::RigidWakeBody) = self.semiinfinite_wake
 
-function FastMultipole.body_to_multipole!(system::RigidWakeBody{Union{ConstantSource,ConstantDoublet}, 2, TF}, multipole_coefficients, buffer, center, bodies_index, harmonics, expansion_order) where TF
+function FastMultipole.body_to_multipole!(system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, multipole_coefficients, buffer, center, bodies_index, harmonics, expansion_order) where TF
     # loop over bodies
     for i_body in bodies_index
         # relative body position
@@ -1221,29 +1241,29 @@ beginning with row `ilast+1`:
 
 """
 function additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWakeBody, i_body, ilast)
-    # index of first node of shedding edge (nia)
+    # index of first node of shedding edge (TE1)
     idx1 = system.shedding_full[1, i_body]
     buffer[ilast+1, i_buffer] = idx1
 
-    # wake delta from the first node (nia = vertex edge_idx+1 in Das)
+    # wake delta from the first node (TE1), using correct Das column
     update_radius = zero(eltype(buffer))
     if idx1 > 0
         i_surf = system.shedding_full[3, i_body]
-        edge_idx = system.shedding_full[4, i_body]
-        Dax, Day, Daz = view(system.Das[i_surf], :, edge_idx + 1)
+        das_col_1 = system.shedding_full[5, i_body]
+        Dax, Day, Daz = view(system.Das[i_surf], :, das_col_1)
         buffer[ilast+2:ilast+4, i_buffer] .= (Dax, Day, Daz)
         update_radius = sqrt(Dax*Dax + Day*Day + Daz*Daz)
     end
 
-    # index of second node of shedding edge (nib)
+    # index of second node of shedding edge (TE2)
     idx2 = system.shedding_full[2, i_body]
     buffer[ilast+5, i_buffer] = system.shedding_full[2, i_body]
 
-    # wake delta from the second node (nib = vertex edge_idx in Das)
+    # wake delta from the second node (TE2), using correct Das column
     if idx2 > 0
         i_surf = system.shedding_full[3, i_body]
-        edge_idx = system.shedding_full[4, i_body]
-        Dax, Day, Daz = view(system.Das[i_surf], :, edge_idx)
+        das_col_2 = system.shedding_full[6, i_body]
+        Dax, Day, Daz = view(system.Das[i_surf], :, das_col_2)
         buffer[ilast+6:ilast+8, i_buffer] .= (Dax, Day, Daz)
         update_radius = max(update_radius, sqrt(Dax*Dax + Day*Day + Daz*Daz))
     end
@@ -1263,16 +1283,16 @@ function FastMultipole.value_to_strength!(source_buffer, ::RigidWakeBody{<:Any,1
     source_buffer[5, i_body] = value
 end
 
-function FastMultipole.value_to_strength!(source_buffer, ::RigidWakeBody{Union{ConstantSource, ConstantDoublet},2,<:Any}, i_body, value)
+function FastMultipole.value_to_strength!(source_buffer, ::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i_body, value)
     source_buffer[5, i_body] = zero(value)
     source_buffer[6, i_body] = value
 end
 
-function FastMultipole.strength_to_value(strength, source_system::RigidWakeBody{Union{ConstantSource, ConstantDoublet}, 2, <:Any})
+function FastMultipole.strength_to_value(strength, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, <:Any})
     return strength[2] # strength of constant doublet
 end
 
-function FastMultipole.buffer_to_system_strength!(system::RigidWakeBody{Union{ConstantSource, ConstantDoublet},2,<:Any}, i_body, source_buffer, i_buffer)
+function FastMultipole.buffer_to_system_strength!(system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i_body, source_buffer, i_buffer)
     system.strength[i_body, 1] = zero(eltype(source_buffer))
     system.strength[i_body, 2] = source_buffer[6, i_buffer]
 end
@@ -1284,11 +1304,11 @@ function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, deri
     target_buffer[7, i_buffer] = vz
 end
 
-function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i_target)
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i_target)
     target_buffer[4, i_buffer] = target_system.potential[i_target]
 end
 
-function FastMultipole.influence!(influence, target_buffer, source_system::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, source_buffer)
+function FastMultipole.influence!(influence, target_buffer, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, source_buffer)
     influence .= view(target_buffer, 4, :)
 end
 
@@ -1319,21 +1339,22 @@ end
 # end
 
 function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
-    vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
-    target_system.velocity[1, i_target] = vx
-    target_system.velocity[2, i_target] = vy
-    target_system.velocity[3, i_target] = vz
+    phi, vx, vy, vz = target_buffer[4, i_buffer], target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+    target_system.potential[i_target] += phi
+    target_system.velocity[1, i_target] += vx
+    target_system.velocity[2, i_target] += vy
+    target_system.velocity[3, i_target] += vz
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody{Union{ConstantSource, ConstantDoublet},2,<:Any}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer) where {PS,VS,GS}
-    for i_target in 1:target_system.ncells
-        phi, vx, vy, vz = target_buffer[4, i_target], target_buffer[5, i_target], target_buffer[6, i_target], target_buffer[7, i_target]
-        target_system.potential[i_target] += phi
-        target_system.velocity[1, i_target] += vx
-        target_system.velocity[2, i_target] += vy
-        target_system.velocity[3, i_target] += vz
-    end
-end
+# function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody{Union{ConstantSource, ConstantDoublet},2,<:Any}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer) where {PS,VS,GS}
+#     for i_target in 1:target_system.ncells
+#         phi, vx, vy, vz = target_buffer[4, i_target], target_buffer[5, i_target], target_buffer[6, i_target], target_buffer[7, i_target]
+#         target_system.potential[i_target] += phi
+#         target_system.velocity[1, i_target] += vx
+#         target_system.velocity[2, i_target] += vy
+#         target_system.velocity[3, i_target] += vz
+#     end
+# end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
 
@@ -1600,7 +1621,7 @@ function _get_wakestrength_mu(self::RigidWakeBody, i, isurf=1; stri=1)
         return strength1, strength2
     # end
 end
-function _get_wakestrength_mu(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i, isurf=1)
+function _get_wakestrength_mu(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i, isurf=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i], zero(self.wake_strength[i])
     # else
@@ -1619,7 +1640,7 @@ function _get_wakestrength_Gamma(self::RigidWakeBody, i, isurf=1; stri=1)
         return strength1 - strength2
     # end
 end
-function _get_wakestrength_Gamma(self::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, i, isurf=1)
+function _get_wakestrength_Gamma(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i, isurf=1)
     # if self.use_wake_strength
     #     return self.wake_strength[i]
     # else
@@ -1645,6 +1666,7 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
     end
 
     # save wake as doublet panels
+    strength_label = wake_name(body)
     for i_surf in eachindex(body.shedding)
         shedding = body.shedding[i_surf]
         Das = body.Das[i_surf]
@@ -1679,7 +1701,7 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
         end
 
         WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells) do vtk
-            vtk["mu"] = strengths
+            vtk[strength_label] = strengths
         end
     end
 

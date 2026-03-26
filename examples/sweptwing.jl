@@ -101,8 +101,7 @@ bodyoptargs_r = (;
                             span_NDIVS=NDIVS_span_l,
                             b_low=-1.0, b_up=0.0
                            )
-wing_left.Das .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings)
-wing_left.Dbs .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings)
+wing_left.Das .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings+1)
 
 # Loft right side of the wing from right to left
 @time wing_right = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
@@ -114,8 +113,7 @@ wing_left.Dbs .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings)
                             span_NDIVS=NDIVS_span_r,
                             b_low=1.0, b_up=0.0,
                            )
-wing_right.Das .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings)
-wing_right.Dbs .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings)
+wing_right.Das .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings+1)
 
 # Put both sides together to make a wing with symmetric discretization
 bodies = [wing_left, wing_right]
@@ -133,12 +131,11 @@ println("Number of panels:\t$(body.ncells)")
 println("Solving body...")
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-# `Das` and `Dbs` as trailing edge rigid wake direction
+# `Das` as trailing edge rigid wake direction
 
 # # uncomment to use original (unabstracted) solver
-# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings)
-# Dbs = repeat(Vinf ./ magVinf, 1, body.nsheddings)
-# @time pnl.solve(body, Uinfs, Das, Dbs)
+# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings+1)
+# @time pnl.solve(body, Uinfs, Das)
 
 solver = pnl.Backslash(body; least_squares=false)
 # elprescribe = Tuple{Int,Float64}[] # [(1, 0.0)]   # Prescribe strength of first panel to be zero

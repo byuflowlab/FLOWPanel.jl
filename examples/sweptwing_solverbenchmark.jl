@@ -70,7 +70,7 @@ end
 
 
 # ----- Linear solver test: backslash \ operator
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_backslash!)
+t = @elapsed pnl.solve(body, Uinfs, Das; solver=pnl.solve_backslash!)
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="Backslash")
 
@@ -84,7 +84,7 @@ println(str)
 
 
 # ----- Linear solver test: LU decomposition + div
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs; solver=pnl.solve_ludiv!)
+t = @elapsed pnl.solve(body, Uinfs, Das; solver=pnl.solve_ludiv!)
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="LUdiv")
 
@@ -100,7 +100,7 @@ println(str)
 # ----- Linear solver test: GMRES tol=1e-8
 stats = []                      # Stats of GMRES get stored here
 
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+t = @elapsed pnl.solve(body, Uinfs, Das;
                         solver = pnl.solve_gmres!,
                         solver_optargs = (atol=1e-8, rtol=1e-8, out=stats))
 
@@ -119,7 +119,7 @@ println(str)
 # ----- Linear solver test: GMRES tol=1e-2
 stats = []                      # Stats of GMRES get stored here
 
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+t = @elapsed pnl.solve(body, Uinfs, Das;
                         solver = pnl.solve_gmres!,
                         solver_optargs = (atol=1e-2, rtol=1e-2, out=stats))
 
@@ -139,7 +139,7 @@ println(str)
 # ----- Linear solver test: GMRES tol=1e-1
 stats = []                      # Stats of GMRES get stored here
 
-t = @elapsed pnl.solve(body, Uinfs, Das, Dbs;
+t = @elapsed pnl.solve(body, Uinfs, Das;
                         solver = pnl.solve_gmres!,
                         solver_optargs = (atol=1e-1, rtol=1e-1, out=stats))
 

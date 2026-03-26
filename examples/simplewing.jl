@@ -116,8 +116,7 @@ bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
 @show typeof(wing)
 
 if typeof(wing) <: Union{pnl.MultiBody, pnl.AbstractLiftingBody}
-    wing.Das .= repeat(Vinf ./ magVinf, 1, wing.nsheddings)
-    wing.Dbs .= repeat(Vinf ./ magVinf, 1, wing.nsheddings)
+    wing.Das .= repeat(Vinf ./ magVinf, 1, wing.nsheddings+1)
 end
 
 # Freestream at every control point
@@ -130,12 +129,11 @@ println("Number of panels:\t$(wing.ncells)")
 println("Solving body...")
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-# `Das` and `Dbs` as trailing edge rigid wake direction
+# `Das` as trailing edge rigid wake direction
 
 # # uncomment to use original (unabstracted) solver
-# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings)
-# Dbs = repeat(Vinf ./ magVinf, 1, body.nsheddings)
-# @time pnl.solve(body, Uinfs, Das, Dbs)
+# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings+1)
+# @time pnl.solve(body, Uinfs, Das)
 
 # solver = pnl.Backslash(wing; least_squares=false)
 # # elprescribe = Tuple{Int,Float64}[] # [(1, 0.0)]   # Prescribe strength of first panel to be zero

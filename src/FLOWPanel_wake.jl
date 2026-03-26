@@ -59,6 +59,7 @@ end
 
 requires_hessian(::AbstractBody) = false # default behavior
 requires_hessian(::AbstractFreeWake) = false # default behavior
+requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
 #--- Panel Wake ---#
 
@@ -67,35 +68,44 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nodes::Vector{Array{TF, 3}}
     strength::Vector{Array{TF, 3}}
     velocity::Vector{Array{TF, 3}}
-    kerneloffset::Float64
+    core_size::Float64
+    overflowed::Array{Bool, 0}
 end
 
 function get_probes(wake::PanelWake)
-    return ProbeWrapper(wake)
+    return (ProbeWrapper(wake),)
+end
+
+function get_sources(wake::PanelWake)
+    return (wake, FilamentWrapper(wake))
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
-        kerneloffset=1e-10, nwakerows=100
+        core_size=1e-3, nwakerows=100
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
     nwakes[] = 0
-
+    
     # nodes
     nodes = [zeros(TF, 3, nwakerows+1, size(s, 2)+1) for s in shedding]
-
+    
     # strength
     dim = kernel_dim(kernel)
-    strength = [zeros(TF, dim, nwakerows, size(s, 2)) for s in shedding]
-
+    strength = [zeros(TF, dim, nwakerows+1, size(s, 2)) for s in shedding]
+    
     # velocity
     velocity = [zeros(TF, size(n)) for n in nodes]
+    
+    # overflowed
+    overflowed = Array{Bool,0}(undef)
+    overflowed[] = false
 
-    return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, kerneloffset)
+    return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, core_size, overflowed)
 end
 
-PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=ConstantDoublet; nwakerows=100) where {TK,NK,TF} = 
-    PanelWake(body.shedding, kernel, TF; kerneloffset=body.kerneloffset, nwakerows)
+PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100) where {TK,NK,TF} =
+    PanelWake(body.shedding, kernel, TF; nwakerows)
 
 function reset!(wake::PanelWake)
     for vel in wake.velocity
@@ -240,7 +250,7 @@ end
 
 FastMultipole.data_per_body(system::PanelWake) = 4 + size(system.strength[1], 1) + 12
 
-FastMultipole.has_vector_potential(::PanelWake{TK,NK,TF}) where {TK,NK,TF} = TK<:Union{VortexRing, ConstantVortexSheet}
+FastMultipole.has_vector_potential(::PanelWake{TK,NK,TF}) where {TK,NK,TF} = false # TK<:Union{VortexRing, ConstantVortexSheet}
 
 function FastMultipole.get_position(system::PanelWake, i)
 
@@ -296,7 +306,7 @@ function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:Pa
 
     # save Hessian (not currently used for PanelWake)
     if GS
-        @warn "Hessian output not currently implemented for PanelWake targets"
+        # @warn "Hessian output not currently implemented for PanelWake targets"
     end
 end
 
@@ -349,7 +359,7 @@ function induced(target::AbstractVector{TF}, source_system::PanelWake{TK,NK,<:An
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # evaluate influence
-    kerneloffset = source_system.kerneloffset
+    kerneloffset = source_system.core_size
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
     #--- second triangle ---#
@@ -378,7 +388,7 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
 
         for i_source in source_index # loop over sources
             # evaluate influence due to this source
-            phi, U, _ = induced(target, source_system, source_buffer, i_source, derivatives_switch)
+            phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch)
             phi_out += phi
             U_out += U
         end
@@ -393,7 +403,7 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
             target_system[7, i_target] += U_out[3]
         end
         if HS
-            @warn "Hessian output not currently implemented for PanelWake targets"
+            # @warn "Hessian output not currently implemented for PanelWake targets"
         end
     end
 end
@@ -401,7 +411,8 @@ end
 FastMultipole.body_to_multipole!(system::PanelWake{ConstantDoublet, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole_quad!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args...) = @error "Multipole expansion not currently implemented for VortexRing kernel"
+FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args...) =
+    FastMultipole.body_to_multipole_quad!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
 function propagate!(wake::PanelWake, dt)
     for i_surf in eachindex(wake.nodes)
@@ -411,15 +422,25 @@ function propagate!(wake::PanelWake, dt)
     end
 end
 
+# Forward declaration (methods defined later in the vortex filament section)
+struct FilamentWrapper{TS}
+    system::TS
+end
+
 function write_vtk(name, wake::PanelWake, idx, t; overwrite=false)
+    # Route block files to a subdirectory named after the PVD
+    _parent, _base = splitdir(name)
+    subdir = joinpath(_parent, _base)
+    mkpath(subdir)
+    block_name = joinpath(subdir, _base)
+
     WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(name * ".$idx.vtm")
+        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
         if wake.nwakes[] > 0
             for i_surf in eachindex(wake.nodes)
                 pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
                 pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
-                @show size(pts_reshaped)
-                WriteVTK.vtk_grid(vtm, name * ".$(i_surf).$(idx).vtu", pts_reshaped) do vtk
+                WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts_reshaped) do vtk
                     vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
                     vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
 
@@ -430,4 +451,476 @@ function write_vtk(name, wake::PanelWake, idx, t; overwrite=false)
         end
         pvd[t] = vtm
     end
+
+    # filaments at trailing edge of last panel row
+    write_vtk(name * "_filaments", FilamentWrapper(wake), idx, t; overwrite)
+end
+
+function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwrite=false)
+    wake = filaments.system
+    if !wake.overflowed[]
+        # no filaments yet — still write an empty PVD entry
+        _parent, _base = splitdir(name)
+        subdir = joinpath(_parent, _base)
+        mkpath(subdir)
+        block_name = joinpath(subdir, _base)
+        WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+            vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+            pvd[t] = vtm
+        end
+        return
+    end
+
+    i_row = wake.nwakes[]
+
+    _parent, _base = splitdir(name)
+    subdir = joinpath(_parent, _base)
+    mkpath(subdir)
+    block_name = joinpath(subdir, _base)
+
+    WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+
+        for i_surf in eachindex(wake.nodes)
+            n_fils = size(wake.strength[i_surf], 3)
+
+            # build points array (3, 2*n_fils) and VTK_LINE cells
+            points = zeros(eltype(wake.nodes[i_surf]), 3, 2 * n_fils)
+            cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, Vector{Int}}}(undef, n_fils)
+            strengths = zeros(eltype(wake.strength[i_surf]), n_fils)
+
+            for j in 1:n_fils
+                ip = 2 * (j - 1)
+                points[:, ip + 1] .= view(wake.nodes[i_surf], :, i_row + 1, j)
+                points[:, ip + 2] .= view(wake.nodes[i_surf], :, i_row + 1, j + 1)
+                cells[j] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_LINE, [ip + 1, ip + 2])
+                strengths[j] = -wake.strength[i_surf][1, i_row + 1, j]
+            end
+
+            WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vtu", points, cells) do vtk
+                vtk["strength", WriteVTK.VTKCellData()] = strengths
+            end
+        end
+
+        pvd[t] = vtm
+    end
+end
+
+#--- Wake Shedding Methods ---#
+
+abstract type WakeSheddingMethod end
+
+struct NoShed <: WakeSheddingMethod end
+
+struct SigmaPPS{TF} <: WakeSheddingMethod
+    sigma::TF
+    p_per_step::Int
+end
+
+struct OverlapPPS{TF} <: WakeSheddingMethod
+    overlap::TF
+    p_per_step::Int
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, method::OverlapPPS)
+    dist = LA.norm(r2 - r1)
+    dist < eps(typeof(dist)) && return nothing
+    sigma = dist * method.overlap / method.p_per_step
+    return _shed_particles!(pfield, r1, r2, Γ, SigmaPPS(sigma, method.p_per_step))
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, method::SigmaPPS)
+    sigma = method.sigma
+    p_per_step = method.p_per_step
+    distance_vector = (r2 - r1) / p_per_step
+    Xp = r1 + distance_vector * 0.5
+    Γp = Γ * distance_vector
+    for _ in 1:p_per_step
+        FLOWVPM.add_particle(pfield, Xp, Γp, sigma; circulation=Γ)
+        Xp += distance_vector
+    end
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, ::NoShed)
+    return nothing
+end
+
+#------- Vortex Particle Wake -------#
+
+struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
+    panel_wake::PanelWake{TK,NK,TF}
+    pfield::TPF                           # FLOWVPM.ParticleField object
+    method_trailing::MT                             # particle shedding method
+    method_unsteady::MU                             # particle shedding method
+end
+
+function PanelParticleWake(body::AbstractLiftingBody;
+        nwakerows=3, max_particles=10000,
+        method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
+        method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
+        kwargs...)
+
+    panel_wake = PanelWake(body; nwakerows, kwargs...)
+    TF = FastMultipole.numtype(panel_wake)
+
+    # Create particle field with default settings (disable autotune_reg_error to avoid convergence issues)
+    pfield = FLOWVPM.ParticleField(max_particles, TF;
+        fmm=FLOWVPM.FMM(autotune_reg_error=false))
+
+    # Infer type params from the actual panel_wake
+    WTK = typeof(panel_wake).parameters[1]
+    WNK = typeof(panel_wake).parameters[2]
+    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
+        panel_wake, pfield, method_trailing, method_unsteady
+    )
+end
+
+"""
+Run SFS pre-calculations for particle field before evaluating the velocity field.
+"""
+function pre_evaluate_influence!(pfield::FLOWVPM.ParticleField)
+    pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+end
+
+#--- Delegation methods ---#
+
+get_probes(w::PanelParticleWake) = (get_probes(w.panel_wake)..., w.pfield)
+get_sources(w::PanelParticleWake) = (get_sources(w.panel_wake)..., w.pfield)
+
+function reset!(w::PanelParticleWake)
+    # reset panel wake
+    reset!(w.panel_wake)
+
+    # reset particle velocity and Jacobian fields (preserve position and strength)
+    FLOWVPM._reset_particles(w.pfield)
+    
+    # reset particle SFS properties
+    FLOWVPM._reset_particles_sfs(w.pfield)
+end
+
+function apply_freestream!(w::PanelParticleWake, uinf)
+    # apply to panel wake
+    apply_freestream!(w.panel_wake, uinf)
+
+    # Add freestream to particle velocities
+    for i in 1:w.pfield.np
+        for d in 1:3
+            w.pfield.particles[FLOWVPM.U_INDEX[d], i] += uinf[d]
+        end
+    end
+end
+
+update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
+
+function propagate!(w::PanelParticleWake, dt; relax=true)
+
+    # panel wake
+    propagate!(w.panel_wake, dt)
+
+    # convect particles
+    FLOWVPM._euler(w.pfield, dt; relax)
+end
+
+function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
+    # panel wake (includes filaments)
+    write_vtk(name, w.panel_wake, idx, t; overwrite)
+
+    # particle wake — route block files to subdirectory
+    vpm_path, vpm_name = splitdir(name)
+    particles_pvd_name = joinpath(vpm_path, vpm_name * "_particles")
+    particles_subdir = joinpath(vpm_path, vpm_name * "_particles")
+    mkpath(particles_subdir)
+    particles_block = joinpath(particles_subdir, vpm_name * "_particles")
+
+    np = w.pfield.np
+    X = view(w.pfield.particles, FLOWVPM.X_INDEX, 1:np)
+    cells = [WriteVTK.MeshCell(WriteVTK.PolyData.Verts(), 1:np)]
+
+    vtp_filename = particles_block * ".$idx.vtp"
+    vtp = WriteVTK.vtk_grid(vtp_filename, X, cells)
+
+    if np > 0
+        vtp["gamma", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:np)
+        vtp["sigma", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.SIGMA_INDEX, 1:np)
+        vtp["vol", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.VOL_INDEX, 1:np)
+        vtp["circulation", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.CIRCULATION_INDEX, 1:np)
+        vtp["velocity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.U_INDEX, 1:np)
+        vtp["vorticity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.VORTICITY_INDEX, 1:np)
+        vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(view(w.pfield.particles, FLOWVPM.J_INDEX, 1:np), 3, 3, np)
+    end
+
+    pvd = WriteVTK.paraview_collection(particles_pvd_name; append=!overwrite)
+    pvd[t] = vtp
+
+    WriteVTK.vtk_save(pvd)
+end
+
+requires_hessian(::FLOWVPM.ParticleField) = true
+
+# --- FastMultipole compatibility ---
+
+# Ensure ParticleField has numtype for FastMultipole integration
+FastMultipole.numtype(pf::FLOWVPM.ParticleField) = eltype(pf)
+
+# --- Save and convert last row to particles ---
+
+function _convert_to_particles!(wake::PanelParticleWake)
+
+    nwakes = wake.panel_wake.nwakes[]
+    
+    for i_surf in eachindex(wake.panel_wake.nodes)
+        nodes = wake.panel_wake.nodes[i_surf]
+        strength = wake.panel_wake.strength[i_surf]
+        n_cols = size(nodes, 3) - 1
+
+        # check if this surface wraps on itself
+        r1_le = SVector{3}(nodes[1, nwakes, 1], nodes[2, nwakes, 1], nodes[3, nwakes, 1])
+        rend_le = SVector{3}(nodes[1, nwakes, n_cols+1], nodes[2, nwakes, n_cols+1], nodes[3, nwakes, n_cols+1])
+        wraps = norm(r1_le - rend_le) < 5*eps()
+        Γ_last = wraps ? strength[1,nwakes,n_cols] : zero(eltype(strength))
+
+        for icol in 1:n_cols
+
+            # left trailing filament (streamwise direction)
+            Γ = strength[1,nwakes,icol]
+            r1_le = SVector{3}(nodes[1, nwakes, icol], nodes[2, nwakes, icol], nodes[3, nwakes, icol])
+            r1_te = SVector{3}(nodes[1, nwakes+1, icol], nodes[2, nwakes+1, icol], nodes[3, nwakes+1, icol])
+            _shed_particles!(wake.pfield, r1_le, r1_te, Γ-Γ_last, wake.method_trailing)
+
+            # unsteady particle
+            r2_te = SVector{3}(nodes[1, nwakes+1, icol+1], nodes[2, nwakes+1, icol+1], nodes[3, nwakes+1, icol+1])
+            Γ_tm1 = strength[1,nwakes+1,icol]
+            _shed_particles!(wake.pfield, r1_te, r2_te, Γ-Γ_tm1, wake.method_unsteady)
+
+            Γ_last = Γ
+        end
+
+        if !wraps
+            # right trailing particles (streamwise direction)
+            Γ = strength[1,nwakes,n_cols]
+            r1_le = SVector{3}(nodes[1, nwakes, n_cols+1], nodes[2, nwakes, n_cols+1], nodes[3, nwakes, n_cols+1])
+            r1_te = SVector{3}(nodes[1, nwakes+1, n_cols+1], nodes[2, nwakes+1, n_cols+1], nodes[3, nwakes+1, n_cols+1])
+            _shed_particles!(wake.pfield, r1_le, r1_te, -Γ, wake.method_trailing)
+        end
+    end
+end
+
+
+# #------- Particle Wake (immediate shedding) -------#
+
+# struct ParticleWake{TK,NK,TF,TPF,M<:WakeSheddingMethod} <: AbstractFreeWake
+#     panel_wake::PanelWake{TK,NK,TF}   # nwakerows=0: filament carrier only (no wake panels)
+#     pfield::TPF                        # FLOWVPM.ParticleField
+#     method::M                          # particle shedding method
+#     prev_strength::Vector{Vector{TF}}  # [i_surf]: previous step's shedding strengths
+# end
+
+# function ParticleWake(body::AbstractLiftingBody;
+#         max_particles=10000,
+#         method::WakeSheddingMethod=OverlapPPS(1.3, 2),
+#         kwargs...)
+
+#     panel_wake = PanelWake(body; nwakerows=0, kwargs...)
+#     TF = FastMultipole.numtype(panel_wake)
+
+#     # Filaments are always active (no panel buffer to overflow)
+#     panel_wake.overflowed[] = true
+
+#     # Pre-allocate previous strength arrays (one per shedding surface)
+#     prev_strength = [zeros(TF, size(s, 2)) for s in body.shedding]
+
+#     # Create particle field
+#     pfield = FLOWVPM.ParticleField(max_particles, TF;
+#         fmm=FLOWVPM.FMM(autotune_reg_error=false))
+
+#     WTK = typeof(panel_wake).parameters[1]
+#     WNK = typeof(panel_wake).parameters[2]
+#     return ParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method)}(
+#         panel_wake, pfield, method, prev_strength
+#     )
+# end
+
+# #--- Delegation methods ---#
+
+# get_probes(w::ParticleWake) = (get_probes(w.panel_wake)..., w.pfield)
+# get_sources(w::ParticleWake) = (FilamentWrapper(w.panel_wake), w.pfield)
+
+# function reset!(w::ParticleWake)
+#     reset!(w.panel_wake)
+#     FLOWVPM._reset_particles(w.pfield)
+#     FLOWVPM._reset_particles_sfs(w.pfield)
+# end
+
+# function apply_freestream!(w::ParticleWake, uinf)
+#     apply_freestream!(w.panel_wake, uinf)
+#     for i in 1:w.pfield.np
+#         for d in 1:3
+#             w.pfield.particles[FLOWVPM.U_INDEX[d], i] += uinf[d]
+#         end
+#     end
+# end
+
+# function propagate!(w::ParticleWake, dt; relax=true)
+#     # "convect" the particle shed line
+#     propagate!(w.panel_wake, dt)
+
+#     # convect particles
+#     FLOWVPM._euler(w.pfield, dt; relax)
+# end
+
+# function write_vtk(name, w::ParticleWake, idx, t; overwrite=false)
+#     # panel wake (transition panel + filaments)
+#     write_vtk(name, w.panel_wake, idx, t; overwrite)
+
+#     # particle wake
+#     vpm_path, vpm_name = splitdir(name)
+#     particles_pvd_name = joinpath(vpm_path, vpm_name * "_particles")
+#     particles_subdir = joinpath(vpm_path, vpm_name * "_particles")
+#     mkpath(particles_subdir)
+#     particles_block = joinpath(particles_subdir, vpm_name * "_particles")
+
+#     np = w.pfield.np
+#     X = view(w.pfield.particles, FLOWVPM.X_INDEX, 1:np)
+#     cells = [WriteVTK.MeshCell(WriteVTK.PolyData.Verts(), 1:np)]
+
+#     vtp_filename = particles_block * ".$idx.vtp"
+#     vtp = WriteVTK.vtk_grid(vtp_filename, X, cells)
+
+#     if np > 0
+#         vtp["gamma", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:np)
+#         vtp["sigma", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.SIGMA_INDEX, 1:np)
+#         vtp["vol", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.VOL_INDEX, 1:np)
+#         vtp["circulation", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.CIRCULATION_INDEX, 1:np)
+#         vtp["velocity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.U_INDEX, 1:np)
+#         vtp["vorticity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.VORTICITY_INDEX, 1:np)
+#         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(view(w.pfield.particles, FLOWVPM.J_INDEX, 1:np), 3, 3, np)
+#     end
+
+#     pvd = WriteVTK.paraview_collection(particles_pvd_name; append=!overwrite)
+#     pvd[t] = vtp
+#     WriteVTK.vtk_save(pvd)
+# end
+
+
+#------- vortex filament (methods for FilamentWrapper, struct defined above) -------#
+
+FastMultipole.numtype(fw::FilamentWrapper) = FastMultipole.numtype(fw.system)
+
+function fmm_to_filament_index(filaments::FilamentWrapper{<:PanelWake}, n)
+    n_counter = 0
+    system = filaments.system
+    for k in eachindex(system.nodes)
+        ns = size(system.strength[k], 3)
+        if n_counter + ns >= n # found the surface
+            i_filament = n - n_counter
+            i_surf = k
+            return i_surf, i_filament
+        end
+        n_counter += ns
+    end
+end
+
+function FastMultipole.source_system_to_buffer!(buffer, i_buffer, filaments::FilamentWrapper{<:PanelWake}, i_body)
+    
+    # vlm index
+    wake = filaments.system
+    i_surf, j = fmm_to_filament_index(filaments, i_body)
+
+    # which row of panels we're on
+    i_row = wake.nwakes[]
+
+    # get strength
+    strength = -wake.strength[i_surf][1, i_row+1, j]
+    # if i_row > 0
+    #     strength += wake.strength[i_surf][1, i_row, j]
+    # end
+
+    # nodes
+    v1 = SVector{3}(view(wake.nodes[i_surf], :, i_row+1, j))
+    v2 = SVector{3}(view(wake.nodes[i_surf], :, i_row+1, j+1))
+
+    # update buffer
+    buffer[1:3, i_buffer] .= 0.5 * (v1 + v2)
+    buffer[4, i_buffer] = 0.5 * norm(v2 - v1) + wake.core_size
+    buffer[5, i_buffer] = strength
+    buffer[6:8,i_buffer] .= v1
+    buffer[9:11,i_buffer] .= v2
+    buffer[12,i_buffer] = wake.core_size
+end
+
+function FastMultipole.data_per_body(wakes::FilamentWrapper{<:PanelWake})
+    return 12
+end
+
+function FastMultipole.get_position(filaments::FilamentWrapper{<:PanelWake}, i)
+    wake = filaments.system
+    i_surf, j = fmm_to_filament_index(filaments, i)
+    i_row = wake.nwakes[]
+
+    # nodes
+    v1 = SVector{3}(view(wake.nodes[i_surf], :, i_row+1, j))
+    v2 = SVector{3}(view(wake.nodes[i_surf], :, i_row+1, j+1))
+
+    return 0.5 * (v1 + v2)
+end
+
+function FastMultipole.strength_dims(filaments::FilamentWrapper{<:PanelWake})
+    return 1
+end
+
+FastMultipole.has_vector_potential(filaments::FilamentWrapper{<:PanelWake}) = true
+
+function FastMultipole.get_n_bodies(filaments::FilamentWrapper{<:PanelWake})
+    nwakes = 0
+    if filaments.system.overflowed[]
+        wake = filaments.system
+        for str in wake.strength
+            ns = size(str, 3)
+            nwakes += ns
+        end
+    end
+    return nwakes
+end
+
+function FastMultipole.body_to_multipole!(filaments::FilamentWrapper{<:PanelWake}, multipole_coefficients, buffer::Matrix, center, bodies_index, harmonics, expansion_order)
+    # loop over bodies
+    for i_body in bodies_index
+       
+        # extract vertices from buffer
+        rtl = FastMultipole.get_vertex(buffer, filaments, i_body, 1)
+        rtr = FastMultipole.get_vertex(buffer, filaments, i_body, 2)
+
+        # extract strength from buffer
+        gamma = FastMultipole.get_strength(buffer, filaments, i_body)[1]
+
+        # top bound vortex
+        body_to_multipole_vl!(multipole_coefficients, harmonics, rtl, rtr, center, gamma, expansion_order)
+    end
+end
+
+function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::FilamentWrapper, source_buffer, source_index) where {PS,VS,GS}
+    TF = FastMultipole.numtype(source_system)
+    @inbounds for j_target in target_index
+        target = FastMultipole.get_position(target_system, j_target)
+        v = SVector{3,TF}(0.0, 0.0, 0.0)
+        g = zero(SMatrix{3,3,TF,9})
+        @inbounds for i_source in source_index
+            v1 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 1)
+            v2 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 2)
+            gamma = FastMultipole.get_strength(source_buffer, source_system, i_source)[1]
+            cs = source_buffer[12, i_source]
+            if VS
+                v += _bound_vortex_velocity(target-v1, target-v2, true, cs) * gamma
+            end
+            if GS
+                g += _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
+            end
+        end
+        VS && FastMultipole.set_gradient!(target_system, j_target, v)
+        GS && FastMultipole.set_hessian!(target_system, j_target, g)
+    end
+end
+
+function FastMultipole.buffer_to_target_system!(target_system::FilamentWrapper, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+    @warn "A `::FilamentWrapper` object should not be used as a target in an FMM call."
 end

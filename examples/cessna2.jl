@@ -91,12 +91,11 @@ Uinfs = repeat(Vinf, 1, body.ncells)
 
 # Unitary direction of semi-infinite vortex at points `a` and `b` of each
 # trailing edge panel
-Das = repeat(Vinf/magVinf, 1, body.nsheddings)
-Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
+Das = repeat(Vinf/magVinf, 1, body.nsheddings+1)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-# `Das` and `Dbs` as trailing edge rigid wake direction
-@time pnl.solve(body, Uinfs, Das, Dbs; elprescribe=elsprescribe)
+# `Das` as trailing edge rigid wake direction
+@time pnl.solve(body, Uinfs, Das; elprescribe=elsprescribe)
 
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")

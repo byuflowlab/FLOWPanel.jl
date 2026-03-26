@@ -241,14 +241,14 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-function induced(target::AbstractVector{TF}, TK, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF}
+# function induced(target::AbstractVector{TF}, TK, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF}
 
-    R, v1, v2, v3 = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
-    control_point = (v1 + v2 + v3) * 0.3333333333333333
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+#     R, v1, v2, v3 = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
+#     control_point = (v1 + v2 + v3) * 0.3333333333333333
+#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    return potential, velocity, velocity_gradient
-end
+#     return potential, velocity, velocity_gradient
+# end
 
 "Overload for non-rotated kernels"
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
@@ -276,16 +276,46 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     return potential, velocity, velocity_gradient
 end
 
-function induced(target::AbstractVector{TF1}, TK::Type{VortexRing}, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF2}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF1,TF2}
+# function induced(target::AbstractVector{TF}, source_system::AbstractBody{Union{ConstantSource, VortexRing},2,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where TF
+    
+#     # get vertices
+#     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
+    
+#     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
+#     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
-    TF = promote_type(TF1,TF2)
-    v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
-    v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
-    v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, TK, kerneloffset, derivatives_switch)
+#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
 
-    return potential, velocity, velocity_gradient
-end
+#     return potential, velocity, velocity_gradient
+# end
+
+# function induced(target::AbstractVector{TF}, source_system::AbstractBody{Union{ConstantSource, VortexRing},2,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where TF
+    
+#     # get vertices
+#     v1, v2, v3 = get_vertices(source_system, i_source)
+    
+#     sigma, gamma = view(source_system.strength, i_source, :)
+
+#     # source panel influence
+#     R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], v3[1], v3[2], v3[3])
+#     p, v, vg = _induced(target, (v1, v2, v3), control_point, FastMultipole.SVector{1}(sigma), ConstantSource, kerneloffset, R, derivatives_switch)
+
+#     # vortex ring influence
+#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), FastMultipole.SVector{1}(gamma), VortexRing, kerneloffset, derivatives_switch)
+
+#     return potential + p, velocity + v, velocity_gradient + vg
+# end
+
+# function induced(target::AbstractVector{TF1}, TK::Type{VortexRing}, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF2}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF1,TF2}
+
+#     TF = promote_type(TF1,TF2)
+#     v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+#     v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+#     v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
+#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, TK, kerneloffset, derivatives_switch)
+
+#     return potential, velocity, velocity_gradient
+# end
 
 # Function to calculate the distance from point P to the line segment AB
 function minimum_distance(A, B, target)
@@ -740,75 +770,97 @@ end
 
 #------- vortex ring panel -------#
 
-function _induced(target, vertices::NTuple{NS}, strength, kernel::Type{VortexRing}, core_radius, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {NS,PS,VS,GS}
+function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {NS,PS,VS,GS}
     TFT = eltype(target)
     TFP = eltype(strength)
     TF = promote_type(TFT,TFP)
+    potential = zero(TF)
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 
-    # finite core settings
+    # finite core toggle
     finite_core = true
-    core_size = core_radius
+    
+    # evaluate potential
+    if PS
+        @assert NS == 3
+        v1, v2, v3 = vertices
+        control_point = (v1 + v2 + v3) * 0.3333333333333333
+        R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], v3[1], v3[2], v3[3])
+        p, _ = _induced(target, vertices, control_point, strength, ConstantDoublet, core_size, R, FastMultipole.DerivativesSwitch{true, false, false}())
+        potential += p
+    end
 
     # evaluate velocity/gradient
-    for i in 1:NS
-        ip1 = i < NS ? i+1 : 1
+    if VS || GS
+        for i in 1:NS
+            ip1 = i < NS ? i+1 : 1
 
-        # filament
-        r1 = vertices[i] - target
-        r2 = vertices[ip1] - target
+            # filament
+            r1 = vertices[i] - target
+            r2 = vertices[ip1] - target
 
-        if VS
-            # velocity
-            v = _bound_vortex_velocity(r1, r2, finite_core, core_size)
-            velocity += v
-        end
-        if GS
-            # velocity gradient
-            g = _bound_vortex_gradient(r1, r2, finite_core, core_size)
-            gradient += g
+            if VS
+                # velocity
+                # println("\nEvaluating Vortex Velocity")
+                # @show vertices[i], vertices[ip1], target, strength[1]
+                if strength[1] > 0.0 && false
+                    DEBUG[] = true
+                    @show vertices[i], vertices[ip1], target
+                end
+                v = _bound_vortex_velocity(r1, r2, finite_core, core_size)
+                velocity += v
+            end
+            if GS
+                # velocity gradient
+                g = _bound_vortex_gradient(r1, r2, finite_core, core_size)
+                gradient += g
+            end
         end
     end
 
-    return zero(TF), velocity * strength[1], gradient * strength[1]
+    return potential, velocity * strength[1], gradient * strength[1]
 end
 
-@inline function get_δ(distance, core_size)
-    δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
-    return δ
-end
+_induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch) =
+    _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
+
+# NOTE: get_δ commented out — replaced by Vatistas n=2 core model
+# @inline function get_δ(distance, core_size)
+#     δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
+#     return δ
+# end
 
 function _bound_vortex_velocity(r1, r2, finite_core, core_size)
-    # intermediate values
+    # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)
+    TF = eltype(r1)
     nr1 = norm(r1)
     nr2 = norm(r2)
-    num = cross(r1, r2)
-    denom = nr1 * nr2 + dot(r1, r2)
 
-    if finite_core
-        # core size comes into play here
-        # nr3 = norm(r1 - r2) # length of the segment
-        # distance_line = norm(num) / nr3
-        δ0 = get_δ(denom, core_size)
-        δ1 = get_δ(nr1, core_size) # distance to first endpoint
-        δ2 = get_δ(nr2, core_size) # distance to second endpoint
-        # nr3 = norm(r1 - r2) # length of the filament
-        # distance_3 = sqrt(max(2*nr1*nr1 + 2*nr2*nr2 - nr3*nr3, zero(nr3)))*0.5 # distance to midpoint
-        # δ3 = get_δ(distance_3, core_size)
-    else
-        δ0 = zero(denom)
-        δ1 = zero(nr1)
-        δ2 = zero(nr2)
+    # target coincides with a filament endpoint: induced velocity is zero in the limit
+    if nr1 < 5*eps(TF) || nr2 < 5*eps(TF)
+        return zero(r1)
     end
 
-    # desingularized terms
-    f1 = num/(denom + δ0)
-    f2 = 1/(nr1+δ1)
-    f3 = 1/(nr2+δ2)
+    num = cross(r1, r2)
+    r0 = r1 - r2
+    dotrixrj = dot(num, num)        # |r1×r2|^2
+    r0sqr = dot(r0, r0)             # |r0|^2
+    rijdothat = dot(r0, r1/nr1 - r2/nr2)
 
-    # evaluate vector field
-    V = (f1*(f2+f3))/(4*pi)
+    if finite_core
+        V = num * rijdothat / sqrt(dotrixrj*dotrixrj + core_size*core_size*core_size*core_size * r0sqr*r0sqr) / (4*pi)
+    else
+        # singular kernel (no regularization)
+        V = num * rijdothat / dotrixrj / (4*pi)
+    end
+
+    # if norm(V) > 500.0 && DEBUG[]
+    #     @warn "V large!"
+    #     @show V, nr1, nr2, finite_core, core_size
+    #     stop
+    #     println("============================================================================")
+    # end
 
     return V
 end
@@ -817,12 +869,20 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
     # preliminaries
     r1norm = norm(r1)
     r2norm = norm(r2)
-    # r1normr2norm = r1norm * r2norm
-    rdot = dot(r1, r2)
-    # rcross = cross(r1, r2)
 
-    # zeta
-    t1 = 1/(r1norm*r2norm + rdot)
+    # target coincides with a filament endpoint: induced gradient is zero in the limit
+    if r1norm < 5*eps(TF) || r2norm < 5*eps(TF)
+        return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
+    rdot = dot(r1, r2)
+
+    # zeta (with Vatistas-style core regularization: add core_size² to denominator)
+    denom = r1norm*r2norm + rdot
+    if finite_core
+        denom += core_size*core_size
+    end
+    t1 = 1/denom
     t2 = 1/r1norm + 1/r2norm
     z = t1*t2*ONE_OVER_4PI
 
@@ -850,7 +910,20 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
     )
     gradient = transpose(zgrad * transpose(o)) + z * ograd
 
+    gradient = zero(SMatrix{3,3,TF,9})
+
     return gradient
+end
+
+function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch)
+
+    # source influence
+    p, v, vg = _induced(target, vertices, centroid, SVector{1}(strength[1]), ConstantSource, core_radius, R, derivatives_switch)
+
+    # vortex ring
+    p_vr, v_vr, vg_vr = _induced(target, vertices, SVector{1}(strength[2]), VortexRing, core_radius, derivatives_switch)
+
+    return p + p_vr, v + v_vr, vg + vg_vr
 end
 
 #------- regularization functions -------#
@@ -889,6 +962,11 @@ function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, 
     return source_system.strength[i_source, 2]
 end
 
+function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, VortexRing}, 2, <:Any}, i_source::Int)
+    # get the strength of the doublet
+    return source_system.strength[i_source, 2]
+end
+
 function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantDoublet, VortexRing}, 1, <:Any}, i_source::Int)
     # get the strength of the doublet
     return source_system.strength[i_source, 1]
@@ -904,6 +982,11 @@ function _induced_wake(target, (v1, v2, v3), source_system::AbstractBody, i_sour
     TF = eltype(target)
     return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 end
+
+get_wake_kernel(::AbstractBody{Union{ConstantSource, ConstantDoublet}}) = ConstantDoublet
+get_wake_kernel(::AbstractBody{Union{ConstantSource, VortexRing}}) = VortexRing
+get_wake_kernel(::AbstractBody{VortexRing}) = VortexRing
+get_wake_kernel(::AbstractBody{ConstantDoublet}) = ConstantDoublet
 
 function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,PS,VS,GS}
     # check if this panel has a wake
@@ -922,33 +1005,34 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         v2 = FastMultipole.StaticArrays.SVector{3,TF}(source_system.nodes[1, TE2], source_system.nodes[2, TE2], source_system.nodes[3, TE2])
         v2x, v2y, v2z = v2[1], v2[2], v2[3]
 
-        # get the wake shedding direction
+        # get the wake shedding direction using correct Das columns
         i_surf = source_system.shedding_full[3, i_source]
-        idx   = source_system.shedding_full[4, i_source]
-        Dax, Day, Daz = source_system.Das[i_surf][1, idx], source_system.Das[i_surf][2, idx], source_system.Das[i_surf][3, idx]
+        das_col_1 = source_system.shedding_full[5, i_source]  # Das column for TE1
+        das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
+        Dax, Day, Daz = source_system.Das[i_surf][1, das_col_1], source_system.Das[i_surf][2, das_col_1], source_system.Das[i_surf][3, das_col_1]
 
         # get strength
         strength = get_strength_doublet(source_system, i_source)
+        TK = get_wake_kernel(source_system)
 
         # evaluate potential
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
         else
-            # wake node connected to the first vertex
+            # wake node connected to the first vertex (TE1)
             v1w_x = v1x + Dax
             v1w_y = v1y + Day
             v1w_z = v1z + Daz
             vw1 = FastMultipole.StaticArrays.SVector{3,TF}(v1w_x, v1w_y, v1w_z)
 
-            # influence of first triangle 
+            # influence of first triangle
             control_point = (v1 + v2 + vw1) * 0.333333333333333
-            TK = ConstantDoublet
             strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
             R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
             p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
-            
-            # wake node connected to the second vertex
-            Dbx, Dby, Dbz = source_system.Dbs[i_surf][1, idx], source_system.Dbs[i_surf][2, idx], source_system.Dbs[i_surf][3, idx]
+
+            # wake node connected to the second vertex (TE2)
+            Dbx, Dby, Dbz = source_system.Das[i_surf][1, das_col_2], source_system.Das[i_surf][2, das_col_2], source_system.Das[i_surf][3, das_col_2]
             v2w_x = v2x + Dbx
             v2w_y = v2y + Dby
             v2w_z = v2z + Dbz
@@ -976,7 +1060,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
     end
 end
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{TK,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,TK,NK,PS,VS,GS}
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,NK,PS,VS,GS}
     # Buffer layout (rows are 1-indexed, NK = number of element types):
     #   1-3:       center (cx, cy, cz)
     #   4:         radius
@@ -1011,21 +1095,16 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
 
         # doublet strength from buffer (NK-th element = last strength row)
         strength = source_buffer[4+NK, i_source]
+        TK = get_wake_kernel(source_system)
 
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
         else
             # wake node connected to the first vertex
             v1w_x = v1x + Dax
             v1w_y = v1y + Day
             v1w_z = v1z + Daz
             vw1 = FastMultipole.StaticArrays.SVector{3,TF}(v1w_x, v1w_y, v1w_z)
-
-            # influence of first triangle
-            control_point = (v1 + v2 + vw1) * 0.333333333333333
-            strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
-            R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
-            p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, ConstantDoublet, source_system.kerneloffset, R, derivatives_switch)
 
             # wake direction for second node (stored at rows 19+NK..21+NK)
             Dbx = source_buffer[19+NK, i_source]
@@ -1035,25 +1114,56 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             v2w_y = v2y + Dby
             v2w_z = v2z + Dbz
             vw2 = FastMultipole.StaticArrays.SVector{3,TF}(v2w_x, v2w_y, v2w_z)
+            
+            # strength
+            strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
 
-            # influence of the second triangle
-            control_point = (vw1 + v2 + vw2) * 0.333333333333333
-            R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
-            dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, ConstantDoublet, source_system.kerneloffset, R, derivatives_switch)
-            if PS
-                p += dp
-            end
-            if VS
-                vel += dvel
-            end
-            if GS
-                g += dg
-            end
+            # induced influence due to the quad
+            return _induced_quad(target, (v1, v2, vw2, vw1), strength_vec, TK, source_system.kerneloffset, derivatives_switch)
 
-            return p, vel, g
         end
     else
         return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+end
+
+function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}, kerneloffset, derivatives_switch)
+    # influence of first triangle
+    v1 = vertices[1]
+    v2 = vertices[2]
+    vw1 = vertices[4]
+    control_point = (v1 + v2 + vw1) * 0.333333333333333
+    R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
+    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, kerneloffset, R, derivatives_switch)
+
+    # influence of the second triangle
+    vw2 = vertices[3]
+    control_point = (vw1 + v2 + vw2) * 0.333333333333333
+    R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
+    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, kerneloffset, R, derivatives_switch)
+
+    return p+dp, vel+dvel, g+dg
+end
+
+function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
+    if PS
+        # influence of first triangle
+        v1 = vertices[1]
+        v2 = vertices[2]
+        vw1 = vertices[4]
+        control_point = (v1 + v2 + vw1) * 0.333333333333333
+        R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
+        p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+
+        # influence of the second triangle
+        vw2 = vertices[3]
+        control_point = (vw1 + v2 + vw2) * 0.333333333333333
+        R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
+        dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+
+        return p+dp, vel+dvel, g+dg
+    else
+        return _induced(target, vertices, strength, kernel, kerneloffset, derivatives_switch)
     end
 end
 
@@ -1227,32 +1337,16 @@ function _U_boundvortex( pa1::TF1, pa2::Number, pa3::Number,
     # ‖ ri × rj ‖^2
     dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
 
-    # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
-    normri = sqrt(ri1*ri1 + ri2*ri2 + ri3*ri3) + offset
-    normrj = sqrt(rj1*rj1 + rj2*rj2 + rj3*rj3) + offset
-    # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
-    # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
+    # rij ⋅ (hat{ri} - hat{rj})
+    normri = sqrt(ri1*ri1 + ri2*ri2 + ri3*ri3)
+    normrj = sqrt(rj1*rj1 + rj2*rj2 + rj3*rj3)
     rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
 
     if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
-        # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-        aux = strength * rijdothat / ((dotrixrj + offset^2))
-
-        #=
-        # Singular kernel
-        aux = strength * rijdothat / (4*π*dotrixrj)
-
-        # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
-        r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
-        di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
-        dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
-        # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
-        h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
-        modh = h + ( (di - dj) - r0 )               # h + projected edge distance
-
-        aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
-        =#
+        # Vatistas n=2 core model: 1/|r1×r2|^2 → 1/sqrt(|r1×r2|^4 + rc^4*|r0|^4)
+        r0sqr = rij1^2 + rij2^2 + rij3^2
+        aux = strength * rijdothat / sqrt(dotrixrj^2 + offset^4 * r0sqr^2)
 
         # NOTE: Negative sign is not needed since we defined rij = rj - ri
         Ux += aux * rixrj1 * scaling_factor
@@ -1316,32 +1410,16 @@ function _U_semiinfinite_vortex(p1::TF1, p2::Number, p3::Number,
         # ‖ ri × rj ‖^2
         dotrixrj = rixrj1^2 + rixrj2^2 + rixrj3^2
 
-        # rij ⋅ (hat{ri} - hat{rj}), add core offset to avoid singularity
-        normri = sqrt(ri1^2 + ri2^2 + ri3^2) + offset
-        normrj = sqrt(rj1^2 + rj2^2 + rj3^2) + offset
-        # normri = sqrt(ri1^2 + ri2^2 + ri3^2)
-        # normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
+        # rij ⋅ (hat{ri} - hat{rj})
+        normri = sqrt(ri1^2 + ri2^2 + ri3^2)
+        normrj = sqrt(rj1^2 + rj2^2 + rj3^2)
         rijdothat = rij1*(ri1/normri - rj1/normrj) + rij2*(ri2/normri - rj2/normrj) + rij3*(ri3/normri - rj3/normrj)
 
         if dotrixrj > cutoff^2 # This makes the self induced velocity zero
 
-            # aux = strength * rijdothat / (4*π*(sqrt(dotrixrj) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-            aux = strength * rijdothat / ((dotrixrj + offset^2))
-
-            #=
-            # Singular kernel
-            aux = strength * rijdothat / (4*π*dotrixrj)
-
-            # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
-            r0 = sqrt(rij1^2 + rij2^2 + rij3^2)         # r0 = | pj - pi |
-            di = (rij1*ri1 + rij2*ri2 + rij3*ri3) / r0  # di = hat{r0}⋅(x - pi)
-            dj = (rij1*rj1 + rij2*rj2 + rij3*rj3) / r0  # dj = hat{r0}⋅(x - pj)
-            # h = sqrt(dotrixrj) / r0                     # h = | r1 × r2 | / r0
-            h = sqrt( (ri1 - di*rij1/r0)^2 + (ri2 - di*rij2/r0)^2 + (ri3 - di*rij3/r0)^2 ) # h = | (x - pi) - (hat{r0}⋅(x - pi))*hat{r0}  |
-            modh = h + ( (di - dj) - r0 )               # h + projected edge distance
-
-            aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
-            =#
+            # Vatistas n=2 core model: 1/|r1×r2|^2 → 1/sqrt(|r1×r2|^4 + rc^4*|r0|^4)
+            r0sqr = rij1^2 + rij2^2 + rij3^2
+            aux = strength * rijdothat / sqrt(dotrixrj^2 + offset^4 * r0sqr^2)
 
             # NOTE: Negative sign is not needed since we defined rij = rj - ri
             vx += aux * rixrj1 * scaling_factor
@@ -1372,21 +1450,8 @@ function _U_semiinfinite_vortex(p1::TF1, p2::Number, p3::Number,
     # if h > cutoff # This makes the self induced velocity zero
     if hsqr > cutoff^2
 
-        # aux = strength / (4*π*(h + offset))
-        # aux = strength / (4*π*(sqrt(h2) + offset)^2) # NOTE: This is the correct expression, but it adds an extra sqrt
-        aux = strength / ((hsqr + offset^2))
-
-        #=
-        # Singular kernel
-        aux = strength / (4*π*hsqr)
-
-        # Vatistas regularization factor (Eq. 41.100 in Branlard 2017)
-        dp = d1*h1 + d2*h2 + d3*h3                  # dp = hat{d}⋅(x - p0)
-        h = sqrt(n1^2 + n2^2 + n3^2)                # h = | d × (x - p0) |
-        modh = h + max(0, -dp)                     # h + projected edge distance
-
-        aux *= 1 / sqrt( (cutoff/modh)^4 + 1 )      # Kv = h^2 / sqrt( rc^4 + h^4 )
-        =#
+        # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)
+        aux = strength / sqrt(hsqr^2 + offset^4)
 
         vx += aux * n1 * scaling_factor
         vy += aux * n2 * scaling_factor

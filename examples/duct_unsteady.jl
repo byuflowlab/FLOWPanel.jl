@@ -16,6 +16,7 @@
 import FLOWPanel as pnl
 import CSV
 import DataFrames: DataFrame
+using FLOWPanel.FastMultipole.StaticArrays
 
 include(joinpath(pnl.examples_path, "duct_postprocessing.jl"))
 
@@ -50,7 +51,7 @@ d               = 2*0.835                   # (m) duct diameter
 
 # ----------------- SOLVER PARAMETERS ------------------------------------------
 # Discretization
-NDIVS_theta     = 20                        # Number of azimuthal panels
+NDIVS_theta     = 21                        # Number of azimuthal panels
 
 # NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
 #       either an integer, or an array of tuples as shown below
@@ -76,7 +77,8 @@ NDIVS_rfl_lo = NDIVS_rfl_up                 # Discretization of airfoil lower su
 # Solver: Vortex-ring least-squares
 # bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64} # Elements and wake model
 # bodytype        = pnl.RigidWakeBody{pnl.ConstantDoublet, 1, Float64} # Elements and wake model
-kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
+# kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 # kernel = pnl.VortexRing
 bodytype = pnl.RigidWakeBody{kernel} # Elements and wake model
 
@@ -104,7 +106,7 @@ points = hcat(xs, ys)
 # Generate body of revolution
 body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-14,
+                                                        CPoffset=1e-12,
                                                         kerneloffset=1e-8,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
@@ -135,11 +137,10 @@ AOA = AOAs[i]
     maneuver = (args...; optargs...) -> nothing
     l = d * aspectratio
     dt = magVinf / l / (n_rfl * 500)
-    t_range = range(0.0, step=dt, length=201)
+    t_range = range(0.0, step=dt, length=101)
 
     # update wake directions
-    body.Das[1] .= repeat(Vinf*dt*eta, 1, size(body.Das, 2))
-    body.Dbs[1] .= repeat(Vinf*dt*eta, 1, size(body.Dbs, 2))
+    body.Das[1] .= repeat(Vinf*dt*eta, 1, size(body.Das[1], 2))
 
     # select backend for N-body interactions
     leaf_size = 20
@@ -170,7 +171,7 @@ AOA = AOAs[i]
         max_iterations=50,         # Maximum number of iterations
         inner_iterations=10,       # Maximum number of inner iterations
         reverse_pass=true,        # Whether to do reverse sweeps or not
-        tolerance=1.0e-6,            # Convergence tolerance
+        tolerance=1.0e-5,            # Convergence tolerance
         rlx=1.0,                  # Relaxation factor
         expansion_order,
         multipole_acceptance,
@@ -178,16 +179,26 @@ AOA = AOAs[i]
         shrink=true,
         recenter=false,
     )
-    # solver = pnl.BackslashDirichlet(body)
+    body_solver = pnl.BackslashDirichlet(body)
 
     # initialize wake
-    wake = pnl.PanelWake(body; nwakerows=201)
+    wake = pnl.PanelWake(body; nwakerows=100)
+
+    # set up reference frames
+    frames = pnl.ReferenceFrame(body;
+        origin = SVector{3}(0.0, 0.0, 0.0),
+        v = SVector{3}(0.0, 0.0, 0.0),
+        ω_axis = SVector{3}(0.0, 1.0, 0.0),
+        ω = 0.1 * 2 * pi,
+        R = SMatrix{3,3}(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0),
+        name = "vehicle",
+        child_index = Int[],
+        dependent_index = [1]
+    )
 
     println("\nBegin simulation...")
     @time begin
         pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
-            eta, body_solver, backend
+            eta, body_solver, backend, verbose=true
         )
     end
-
-    

@@ -27,8 +27,17 @@ struct DirectBackend <: AbstractBackend
 end
 
 function evaluate_influence!(targets::Tuple, sources::Tuple, ::DirectBackend; 
-        scalar_potential=true, gradient=true, hessian=false
+        scalar_potential=true, gradient=true, hessian=false, precalc=false
     )
+    
+    # apply pre-calculations per system
+    if precalc
+        for target in targets
+            pre_evaluate_influence!(target)
+        end
+    end
+
+    # n-body solve
     FastMultipole.direct!(targets, sources; scalar_potential, gradient, hessian)
 end
 
@@ -51,8 +60,16 @@ function FastMultipoleBackend(; expansion_order::Int=5,
 end
 
 function evaluate_influence!(targets::Tuple, sources::Tuple, backend::FastMultipoleBackend; 
-        scalar_potential=true, gradient=true, hessian=false
+        scalar_potential=true, gradient=true, hessian=false, precalc=false
     )
+
+    # apply pre-calculations per system
+    if precalc
+        for target in targets
+            pre_evaluate_influence!(target)
+        end
+    end
+
     # unpack backend
     expansion_order = backend.expansion_order
     multipole_acceptance = backend.multipole_acceptance
@@ -63,6 +80,11 @@ function evaluate_influence!(targets::Tuple, sources::Tuple, backend::FastMultip
         expansion_order, multipole_acceptance, leaf_size_source=leaf_size,
         scalar_potential, gradient, hessian
     )
+end
+
+function pre_evaluate_influence!(system)
+    # default behavior
+    return nothing
 end
 
 #--- overload FastMultipole functions ---#

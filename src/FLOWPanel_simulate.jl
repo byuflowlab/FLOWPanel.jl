@@ -25,24 +25,7 @@ struct FrameForcesMonitor{TF,F}
     frame::F
 end
 
-function simulate!(system::AbstractBody, frames#=::AbstractVector{<:ReferenceFrame}=#, maneuver!::Function, Vinf::Function, t_range;
-        # particle_trailing_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
-        # particle_unsteady_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
-        wake_args=(), kwargs...)
-
-    # construct particle field
-    # n_particles_per_step = get_max_particles(system, particle_trailing_methods, particle_unsteady_methods)
-    # wake = ParticleField(n_particles_per_step * length(t_range), TF; Uinf=Vinf, wake_args...)
-    wake = PanelWake(system)
-    
-    # begin simulation
-    simulate!(system, wake, frames, maneuver!, Vinf, t_range) 
-        # particle_trailing_methods, particle_unsteady_methods, kwargs...)
-
-    return wake
-end
-
-function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::AbstractVector{<:ReferenceFrame}=#, maneuver!::Function, Uinf::Function, t_range; # Ωinf=(t)->SVector{3}(0.0, 0.0, 0.0);
+function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames#=::AbstractVector{<:ReferenceFrame}=#, maneuver!::Function, Uinf::Function, t_range; # Ωinf=(t)->SVector{3}(0.0, 0.0, 0.0);
         name="default_sim", path="./default_simulation",
         # vtk_args=(trailing_vortices=false, write_wakes=false), vtk_postshed=false,
         # fmm_wake_args=(), fmm_vehicle_args=(),
@@ -62,35 +45,21 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
         monitors=(),
         cp_correct_kuttacondition=true,
         cp_clip=nothing,
+        verbose=false
     ) where {TK, NK, TF}
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
         mkpath(path)
     end
 
-    # empty wake shedding locations
-    # empty_wake_shedding_locations = fill(nothing, length(system.surfaces))
-
-    # no wake panels to begin with
-    wake.nwakes[] = 0
-
-    # freestream for initial step
-    uinf = Uinf(t_range[1])
-
-    # velocity due to kinematics
-    kinematic_velocity!((system,), frames)
-
-    # set wake shedding locations
-    dt = t_range[2] - t_range[1]
-    update_wake_shedding_locations!(system, uinf, dt, eta)
-
-    # initialize first row of wake nodes at shedding locations
-    update_TE!(wake, system)
+    # update control points and normals
+    calc_normals!(system)
+    calc_controlpoints!(system; off=abs(system.CPoffset))
 
     # begin simulation
     i_step = 0
     for t in t_range
-        println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+        verbose && println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
 
         # particle field
         # FLOWVPM._reset_particles(wake)
@@ -107,12 +76,10 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
         # reset potential/velocity
         reset!(wake)
         reset!(system)
-        
+
         # get probes
-        wake_probes = get_probes(wake)
-        
-        # wake-on-all velocity
-        evaluate_influence!((system, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(system), requires_hessian(wake)))
+        targets = (system, get_probes(wake)...)
+        wake_sources = Tuple(w for w in get_sources(wake))
 
         # freestream
         uinf = Uinf(t)
@@ -122,11 +89,24 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
         # kinematics
         kinematic_velocity!((system,), frames)
 
+        # set wake shedding locations
+        dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
+        update_wake_shedding_locations!(system, dt, eta)
+
+        # snap first row of wake nodes to the trailing edge
+        update_TE!(wake, system)
+
+        # apply wake potential to body surface
+        evaluate_influence!(targets, wake_sources, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+
         # solve system (shouldn't modify system velocity, but will update system strength)
         solve2!(system, system.velocity, body_solver; backend)
 
+        # update control points (normals should not have changed)
+        calc_controlpoints!(system; off=abs(system.CPoffset))
+
         # system-on-all influence
-        evaluate_influence!((system, wake_probes), (system,), backend; gradient=true, hessian=(requires_hessian(system), requires_hessian(wake)))
+        evaluate_influence!(targets, (system,), backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
@@ -148,7 +128,6 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 
             # wake
             write_vtk(joinpath(path, name*"_wake"), wake, i_step, t; overwrite=i_step==0)
-            
         end
 
         for monitor in monitors
@@ -161,9 +140,8 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 
             #--- state evolution ---#
             
-            # propagate wake
+            # propagate wake (and save )
             propagate!(wake, dt)
-
 
             # dynamics function
             # if dynamics_toggle
@@ -180,28 +158,31 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
             # propagate rigid-body kinematics
             propagate_kinematics!(system, frames, dt)
 
-            # next step's freestream
-            idx = i_step == length(t_range) - 1 ? i_step + 1 : i_step + 2
-            uinf = Uinf(t_range[idx])
-            # Ω = Ωinf(t_range[idx])
-            # fs = Freestream(frames[1], ref, vinf)
-            # fs = velocity_to_freestream(vinf, Ω)
-            # system.freestream[] = fs
+            # update control points and normals
+            calc_normals!(system)
+            calc_controlpoints!(system; off=abs(system.CPoffset))
 
-            # next step's freestream
-            uinf = Uinf(t_range[i_step + 2])
+            # # next step's freestream
+            # idx = i_step == length(t_range) - 1 ? i_step + 1 : i_step + 2
+            # uinf = Uinf(t_range[idx])
+            # # Ω = Ωinf(t_range[idx])
+            # # fs = Freestream(frames[1], ref, vinf)
+            # # fs = velocity_to_freestream(vinf, Ω)
+            # # system.freestream[] = fs
 
-            # next step's dt
-            dt = t_range[i_step + 2] - t_range[i_step + 1]
+            # # next step's freestream
+            # uinf = Uinf(t_range[i_step + 2])
+
+            # # next step's dt
+            # dt = t_range[i_step + 2] - t_range[i_step + 1]
 
             # update wake shedding locations / wake leading edge
-            update_wake_shedding_locations!(system, uinf, dt, eta)
+            update_wake_shedding_locations!(system, dt, eta)
 
             #--- shed new wake ---#
 
-            # println("\t\t[NaN check] after shed_wake! wake.nodes: ", any(any(isnan.(n)) for n in wake.nodes),
-            #         " | wake.strength: ", any(any(isnan.(s)) for s in wake.strength))
             shed_wake!(wake, system)
+
             # shed_wake!(wake, system,  dt, Γ_wake, dΓdt,
             #     particle_trailing_methods, particle_unsteady_methods)
 
@@ -218,35 +199,22 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelWake, frames#=::Ab
 end
 
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1
-has_grad_mu(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = TK == ConstantDoublet || TK == VortexRing || TK == Union{ConstantSource, ConstantDoublet}
+has_grad_mu(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = TK == ConstantDoublet || TK == VortexRing || TK == Union{ConstantSource, ConstantDoublet} || TK == Union{ConstantSource, VortexRing}
 
-function update_wake_shedding_locations!(system, uinf, dt, eta)
+function update_wake_shedding_locations!(system, dt, eta)
     for i in eachindex(system.Das)
-        # trailing edge velocity (one per vertex, size (3, nshed+1))
-        Vte = system.velocity_te[i]
 
         # update Das (vertex-based, size (3, nshed+1))
-        Das = system.Das[i]
-        Das .= Vte
-        Das .*= -1.0
-        Das .+= uinf
-        Das .*= eta * dt
+        system.Das[i] .= system.velocity_te[i]
+
+        # uinf and kinematic velocities are already included in Vte
+        system.Das[i] .*= eta * dt
     end
 end
 
 #------- wake shedding -------#
 
 function update_TE!(wake::PanelWake, system::AbstractBody)
-
-    # update first row of strength
-    for i_surf in eachindex(wake.strength)
-        for i_shed in axes(wake.strength[i_surf], 3)
-            strengthi, strengthj = _get_wakestrength_mu(system, i_shed, i_surf)
-            # Negate the strength because we are swapping the order of the nodes
-            # to form a contiguous sequence (v1=nib, v4=nia instead of v1=nia, v4=nib)
-            wake.strength[i_surf][1, 1, i_shed] = strengthi - strengthj
-        end
-    end
 
     # update first row based on system
     for i_surf in eachindex(wake.nodes)
@@ -266,19 +234,21 @@ function update_TE!(wake::PanelWake, system::AbstractBody)
             nodes[:, 1, i_shed] .= v1 .+ view(Das, :, i_shed) # nib = vertex i_shed in Das
         end
 
-        if size(shedding, 2) > 0
-            # final node of this edge (nia of last edge = last vertex in Das)
-            i_panel = shedding[1, end]
-            idx_2 = shedding[2, end] # nia (first node of the shedding edge)
-            v2 = FastMultipole.SVector{3}(
-                system.nodes[1, system.cells[idx_2, i_panel]],
-                system.nodes[2, system.cells[idx_2, i_panel]],
-                system.nodes[3, system.cells[idx_2, i_panel]],
-            )
-            nodes[:, 1, end] .= v2 .+ view(Das, :, size(Das, 2)) # nia of last edge = last vertex
-        end
+        # final node of this edge (nia of last edge = last vertex in Das)
+        i_panel = shedding[1, end]
+        idx_2 = shedding[2, end] # nia (first node of the shedding edge)
+        v2 = FastMultipole.SVector{3}(
+            system.nodes[1, system.cells[idx_2, i_panel]],
+            system.nodes[2, system.cells[idx_2, i_panel]],
+            system.nodes[3, system.cells[idx_2, i_panel]],
+        )
+        nodes[:, 1, end] .= v2 .+ view(Das, :, size(Das, 2)) # nia of last edge = last vertex
     end
 end
+
+update_TE!(wake::PanelParticleWake, system::AbstractBody) = update_TE!(wake.panel_wake, system)
+
+# update_TE!(w::ParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
 function shed_wake!(wake::PanelWake, system::AbstractBody)
 
@@ -294,172 +264,301 @@ function shed_wake!(wake::PanelWake, system::AbstractBody)
         for j_row in min(wake.nwakes[]+1, n_rows-1):-1:1
             nodes[:, j_row+1, :] .= nodes[:, j_row, :]
         end
-        for j_row in min(wake.nwakes[], n_rows-2):-1:1
+        for j_row in min(wake.nwakes[], n_rows-1):-1:1
             strength[:, j_row+1, :] .= strength[:, j_row, :]
         end
     end
 
-    # update nwakes
-    wake.nwakes[] = min(wake.nwakes[] + 1, n_rows - 1) # ensure we don't exceed storage
+    # update first row of strengths
+    for i_surf in eachindex(wake.strength)
+        for i_shed in axes(wake.strength[i_surf], 3)
+            strengthi, strengthj = _get_wakestrength_mu(system, i_shed, i_surf)
+            # Negate the strength because we are swapping the order of the nodes
+            # to form a contiguous sequence (v1=nib, v4=nia instead of v1=nia, v4=nib)
+            wake.strength[i_surf][1, 1, i_shed] = strengthi - strengthj
+        end
+    end
 
-    # snap newly shed wake to the trailing edge
-    update_TE!(wake, system)
+    # update nwakes
+    if wake.nwakes[] == n_rows - 1 # about to overflow
+        wake.overflowed[] = true
+    end
+    wake.nwakes[] = min(wake.nwakes[] + 1, n_rows - 1) # ensure we don't exceed storage
 
 end
 
-# abstract type WakeSheddingMethod end
+#------- PanelParticleWake shedding -------#
 
-# struct NoShed <: WakeSheddingMethod end
+function shed_wake!(wake::PanelParticleWake, system::AbstractBody)
+    pw = wake.panel_wake
+    n_rows = size(pw.nodes[1], 2)
+    buffer_full = pw.nwakes[] >= n_rows - 1
 
-# struct SigmaPPS{TF} <: WakeSheddingMethod
-#     sigma::TF
-#     p_per_step::Int
-# end
+    if buffer_full
+        # new particles
+        _convert_to_particles!(wake)
+    end
 
-# struct SigmaOverlap{TF} <: WakeSheddingMethod
-#     sigma::TF
-#     overlap::TF
-# end
+    # Shift panel rows (existing PanelWake method)
+    shed_wake!(pw, system)
+end
 
-# struct OverlapPPS{TF} <: WakeSheddingMethod
-#     overlap::TF
-#     p_per_step::Int
-# end
+#------- ParticleWake shedding -------#
 
-# function shed_wake!(pfield::FLOWVPM.ParticleField, system, dt, Γ, dΓdt,
-#         shedding_trailing::AbstractVector{<:WakeSheddingMethod}, shedding_unsteady::AbstractVector{<:WakeSheddingMethod})
-#     # shed trailing edge particles
-#     shed_trailing_edge!(pfield, system.surfaces, system.wakes, Γ, shedding_trailing)
+# function shed_wake!(wake::ParticleWake, system::AbstractBody)
+#     pw = wake.panel_wake
 
-#     # shed unsteady particles
-#     shed_unsteady!(pfield, system.surfaces, system.wakes, dΓdt, dt, shedding_unsteady)
-# end
+#     # At this point in simulate!, propagate! has already convected pw.nodes,
+#     # and update_wake_shedding_locations! has updated system.Das for the next step.
+#     #
+#     # pw.nodes[:, 1, :] = OLD TE+Das convected by velocity*dt (trailing edge of shed strip)
+#     # body TE + new Das = NEXT step's filament position (leading edge of shed strip)
+#     # Shedding circulation is read directly from system.strength via _get_wakestrength_mu
 
-# function shed_trailing_edge!(pfield::FLOWVPM.ParticleField, surfaces, wakes, Γ, shedding_methods)
-#     # loop over surfaces
-#     iΓ = 0
-#     for isurf = eachindex(surfaces)
-#         surface = surfaces[isurf]
-#         wake = wakes[isurf]
-#         method = shedding_methods[isurf]
-#         nc, ns = size(surface)
-#         Γlast = zero(eltype(Γ))
-#         for j in 1:ns
-#             # strength
-#             iΓ += nc
+#     for i_surf in eachindex(pw.nodes)
+#         convected_nodes = pw.nodes[i_surf]  # (3, 1, nshed+1) — convected old TE+Das
+#         strength = pw.strength[i_surf]
+#         shedding = system.shedding[i_surf]
+#         Das = system.Das[i_surf]
+#         n_cols = size(strength, 3)
 
-#             # get vertices
-#             panel = wake[1, j]
-#             r2 = top_left(panel)
-#             r1 = bottom_left(panel)
+#         # Check if this surface wraps on itself
+#         r1 = SVector{3}(view(convected_nodes, :, 1, 1))
+#         rend = SVector{3}(view(convected_nodes, :, 1, n_cols + 1))
+#         wraps = norm(r1 - rend) < 5 * eps()
 
-#             # shed left particles
-#             Γthis = Γ[iΓ]
-#             shed_particles!(pfield, r1, r2, Γthis - Γlast, method)
-
-#             # recurse
-#             Γlast = Γthis
+#         # Read shedding circulation directly from solved body strengths
+#         if wraps
+#             si, sj = _get_wakestrength_mu(system, n_cols, i_surf)
+#             Γ_last = si - sj
+#         else
+#             Γ_last = zero(eltype(strength))
 #         end
 
-#         # get vertices
-#         panel = wake[1, end]
-#         r1 = top_right(panel)
-#         r2 = bottom_right(panel)
+#         for icol in 1:n_cols
+#             si, sj = _get_wakestrength_mu(system, icol, i_surf)
+#             Γ = si - sj
 
-#         # shed right particles
-#         shed_particles!(pfield, r1, r2, Γlast, method)
-#     end
-# end
+#             # New TE+Das (leading edge of shed strip = next step's filament position)
+#             i_panel = shedding[1, icol]
+#             idx_1 = shedding[3, icol]  # nib
+#             r_le = SVector{3}(
+#                 system.nodes[1, system.cells[idx_1, i_panel]] + Das[1, icol],
+#                 system.nodes[2, system.cells[idx_1, i_panel]] + Das[2, icol],
+#                 system.nodes[3, system.cells[idx_1, i_panel]] + Das[3, icol],
+#             )
 
-# function shed_unsteady!(pfield::FLOWVPM.ParticleField, surfaces, wakes, dΓdt, dt, shedding_methods)
-#     # loop over surfaces
-#     iΓ = 0
-#     for isurf = eachindex(surfaces)
-#         surface = surfaces[isurf]
-#         wake = wakes[isurf]
-#         method = shedding_methods[isurf]
-#         nc, ns = size(surface)
-#         for j in 1:ns
-#             # strength
-#             iΓ += nc
+#             # Convected old TE+Das (trailing edge of shed strip)
+#             r_te = SVector{3}(view(convected_nodes, :, 2, icol))
 
-#             # get vertices
-#             panel = wake[1, j]
-#             r2 = bottom_left(panel)
-#             r1 = bottom_right(panel)
-#             Γ = dΓdt[iΓ] * dt
+#             # Trailing (streamwise) particles: net spanwise gradient
+#             _shed_particles!(wake.pfield, r_le, r_te, Γ - Γ_last, wake.method)
 
-#             # shed unsteady particles
-#             shed_particles!(pfield, r1, r2, Γ, method)
+#             # Unsteady (spanwise) particles: time variation along trailing edge
+#             r_te_next = SVector{3}(view(convected_nodes, :, 1, icol + 1))
+#             Γ_prev = wake.prev_strength[i_surf][icol]
+#             _shed_particles!(wake.pfield, r_te, r_te_next, Γ - Γ_prev, wake.method)
+
+#             # Update tracking
+#             wake.prev_strength[i_surf][icol] = Γ
+#             Γ_last = Γ
+#         end
+
+#         if !wraps
+#             # Right trailing (streamwise) particles
+#             si, sj = _get_wakestrength_mu(system, n_cols, i_surf)
+#             Γ = si - sj
+
+#             # Last new TE+Das node (nia of last shedding edge + Das)
+#             i_panel = shedding[1, end]
+#             idx_2 = shedding[2, end]  # nia
+#             das_col = size(Das, 2)
+#             r_le = SVector{3}(
+#                 system.nodes[1, system.cells[idx_2, i_panel]] + Das[1, das_col],
+#                 system.nodes[2, system.cells[idx_2, i_panel]] + Das[2, das_col],
+#                 system.nodes[3, system.cells[idx_2, i_panel]] + Das[3, das_col],
+#             )
+#             r_te = SVector{3}(view(convected_nodes, :, 1, n_cols + 1))
+#             _shed_particles!(wake.pfield, r_le, r_te, -Γ, wake.method)
 #         end
 #     end
+
+#     # No-op shift (nwakerows=0, nwakes stays 0)
+#     shed_wake!(pw, system)
 # end
 
-# function shed_particles!(pfield, r1, r2, Γ, method::OverlapPPS)
-#     # shed particles with overlap and p_per_step
-#     overlap = method.overlap
-#     p_per_step = method.p_per_step
-#     sigma = norm(r2 - r1) * overlap / p_per_step
-#     return shed_particles!(pfield, r1, r2, Γ, SigmaPPS(sigma, p_per_step))
-# end
+#------- PanelParticleWake simulate! -------#
 
-# function shed_particles!(pfield, r1, r2, Γ, method::SigmaOverlap)
-#     # shed particles with sigma and overlap
-#     sigma = method.sigma
-#     overlap = method.overlap
-#     p_per_step = ceil(Int, overlap * norm(r2 - r1) / sigma)
-#     return shed_particles!(pfield, r1, r2, Γ, SigmaPPS(sigma, p_per_step))
-# end
+# function simulate!(system::AbstractBody{TK,NK,TF}, wake::PanelParticleWake, frames, maneuver!::Function, Uinf::Function, t_range;
+#         name="default_sim", path="./default_simulation",
+#         eta=0.3,
+#         body_solver=BackslashDirichlet(system),
+#         backend=FastMultipoleBackend(;
+#                 expansion_order=10,
+#                 multipole_acceptance=0.4,
+#                 leaf_size=100,
+#             ),
+#         rho=1.225,
+#         monitors=(),
+#         cp_correct_kuttacondition=true,
+#         cp_clip=nothing,
+#         verbose=false
+#     ) where {TK, NK, TF}
 
-# function shed_particles!(pfield, r1, r2, Γ, method::SigmaPPS)
-#     # shed particles with sigma and p_per_step
-#     sigma = method.sigma
-#     p_per_step = method.p_per_step
-
-#     # add particles
-#     distance_vector = (r2 - r1) / p_per_step
-#     Xp = r1 + distance_vector * 0.5
-#     Γp = Γ * distance_vector
-#     for i in 1:p_per_step
-#         FLOWVPM.add_particle(pfield, Xp, Γp, sigma; circulation=Γ)
-#         Xp += distance_vector
+#     # create save path if it does not exist
+#     if !isnothing(path) && !isdir(path)
+#         mkpath(path)
 #     end
-# end
 
-# function shed_particles!(pfield, r1, r2, Γ, method::NoShed)
-#     # do not shed particles
-#     return nothing
-# end
+#     pw = wake.panel_wake
+#     pf = wake.pfield
 
-# function get_max_particles(surface::AbstractMatrix{<:SurfacePanel}, method::Union{<:SigmaPPS, <:OverlapPPS})
-#     pps = method.p_per_step
-#     _, ns = size(surface)
-#     np = (ns + 1) * pps # pps particles at each trailing edge vertex
-#     return np
-# end
+#     # no wake panels to begin with
+#     pw.nwakes[] = 0
 
-# function get_max_particles(surface::AbstractMatrix{<:SurfacePanel}, method::SigmaOverlap)
-#     # estimate p_per_step
-#     pps = 8
+#     # freestream for initial step
+#     uinf = Uinf(t_range[1])
+#     apply_freestream!(system, uinf)
 
-#     return get_max_particles(surface, SigmaPPS(method.sigma, pps))
-# end
-    
-# function get_max_particles(surface::AbstractMatrix{<:SurfacePanel}, method::NoShed)
-#     # no particles shed
-#     return 0
-# end
+#     # velocity due to kinematics
+#     kinematic_velocity!((system,), frames)
 
-# function get_max_particles(system::System, particle_trailing_methods)
-#     np = 0
-#     for (isurf, surface) in enumerate(system.surfaces)
-#         np += get_max_particles(surface, particle_trailing_methods[isurf])
+#     # set wake shedding locations
+#     dt = t_range[2] - t_range[1]
+#     update_wake_shedding_locations!(system, uinf, dt, eta)
+
+#     # initialize first row of wake nodes at shedding locations
+#     update_TE!(wake, system)
+
+#     # update control points and normals
+#     calc_normals!(system)
+#     calc_controlpoints!(system; off=abs(system.CPoffset))
+
+#     # begin simulation
+#     i_step = 0
+#     for t in t_range
+#         verbose && println("\tstep $(i_step)/$(length(t_range)-1) at time $(t), particles=$(pf.np)")
+
+#         #------- controls -------#
+
+#         dynamics_toggle = maneuver!(frames, system, wake, t)
+
+#         #------- aerodynamics -------#
+
+#         # reset potential/velocity
+#         reset!(wake)
+#         reset!(system)
+
+#         # get probes (delegates to panel_wake)
+#         wake_targets = get_probes(wake)
+#         wake_sources = get_sources(wake)
+
+#         # freestream
+#         uinf = Uinf(t)
+#         apply_freestream!(system, uinf)
+#         apply_freestream!(wake, uinf)
+
+#         # kinematics
+#         kinematic_velocity!((system,), frames)
+
+#         # snap newly shed wake to the trailing edge
+#         update_TE!(wake, system)
+
+#         # wake-on-all velocity (particles + panel wake as sources)
+#         has_particles = pf.np > 0
+#         if has_particles
+#             targets = (system, wake_targets...)
+#             evaluate_influence!(
+#                 targets,
+#                 (wake_sources...),
+#                 backend;
+#                 scalar_potential=false,
+#                 gradient=true,
+#                 hessian=Tuple(requires_hessian(sys) for sys in targets)
+#             )
+#         else
+#             evaluate_influence!(
+#                 (system, wake_probes...),
+#                 (pw,),
+#                 backend;
+#                 scalar_potential=(false, false),
+#                 gradient=(true, true),
+#                 hessian=(requires_hessian(system), false)
+#             )
+#         end
+
+#         # solve system
+#         solve2!(system, system.velocity, body_solver; backend)
+
+#         # update control points (normals should not have changed)
+#         calc_controlpoints!(system; off=abs(system.CPoffset))
+
+#         # body-on-all influence
+#         if has_particles
+#             evaluate_influence!(
+#                 (system, wake_probes, pf),
+#                 (system,),
+#                 backend;
+#                 scalar_potential=(false, false, false),
+#                 gradient=(true, true, true),
+#                 hessian=(requires_hessian(system), false, false)
+#             )
+#         else
+#             evaluate_influence!(
+#                 (system, wake_probes),
+#                 (system,),
+#                 backend;
+#                 scalar_potential=(false, false),
+#                 gradient=true,
+#                 hessian=(requires_hessian(system), false)
+#             )
+#         end
+
+#         #--- forces and moments ---#
+
+#         calcfield_Cp!(system, norm(uinf); correct_kuttacondition=cp_correct_kuttacondition, clip=cp_clip)
+#         calcfield_F!(system, norm(uinf), rho)
+
+#         #------- save state -------#
+
+#         if !isnothing(path)
+#             write_vtk(joinpath(path, name), system, i_step, t; overwrite=i_step==0)
+#             write_vtk(joinpath(path, name*"_wake"), wake, i_step, t; overwrite=i_step==0)
+#         end
+
+#         for monitor in monitors
+#             monitor(system, wake, i_step)
+#         end
+
+#         #------- propagate system -------#
+
+#         if i_step < length(t_range) - 1
+
+#             # propagate wake (panels + particles)
+#             propagate!(wake, dt)
+
+#             # propagate rigid-body kinematics
+#             propagate_kinematics!(system, frames, dt)
+
+#             # update control points and normals
+#             calc_normals!(system)
+#             calc_controlpoints!(system; off=abs(system.CPoffset))
+
+#             # next step's freestream
+#             uinf = Uinf(t_range[i_step + 2])
+
+#             # next step's dt
+#             dt = t_range[i_step + 2] - t_range[i_step + 1]
+
+#             # update wake shedding locations
+#             update_wake_shedding_locations!(system, uinf, dt, eta)
+
+#             # shed new wake (saves last row → shifts → converts to particles)
+#             shed_wake!(wake, system)
+
+#         end
+
+#         # increment step
+#         i_step += 1
 #     end
-#     return np
-# end
-
-# function get_max_particles(system, particle_trailing_methods, particle_unsteady_methods)
-#     np_trailing = get_max_particles(system, particle_trailing_methods)
-#     np_unsteady = get_max_particles(system, particle_unsteady_methods)
-#     return np_trailing + np_unsteady
 # end

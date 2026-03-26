@@ -32,11 +32,10 @@ for AOA in AOAs
     # ----------------- CALL SOLVER --------------------------------------------
     # Freestream at every control point
     Uinfs = repeat(Vinf, 1, body.ncells)
-    Das = repeat(Vinf/magVinf, 1, body.nsheddings)
-    Dbs = repeat(Vinf/magVinf, 1, body.nsheddings)
+    Das = repeat(Vinf/magVinf, 1, body.nsheddings+1)
 
     # Solve body
-    @time pnl.solve(body, Uinfs, Das, Dbs)
+    @time pnl.solve(body, Uinfs, Das)
 
     # ----------------- POST PROCESSING ----------------------------------------
     # Calculate velocity away from the body

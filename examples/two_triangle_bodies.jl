@@ -123,8 +123,7 @@ Uinfs = zeros(3, body.ncells)
 alpha = 25.0 * pi/180
 Uinfs[1, :] .= cos(alpha)
 Uinfs[3, :] .= sin(alpha)
-body.Das .= repeat(Uinfs[:, 1] ./ norm(Uinfs[:, 1]), 1, body.nsheddings)
-body.Dbs .= repeat(Uinfs[:, 1] ./ norm(Uinfs[:, 1]), 1, body.nsheddings)
+body.Das .= repeat(Uinfs[:, 1] ./ norm(Uinfs[:, 1]), 1, body.nsheddings+1)
 
 # get solver
 solver = pnl.BackslashDirichlet(body)
@@ -146,7 +145,6 @@ name="two_triangle_body"
 # normals = pnl.calc_normals(body)
 # add_field(body, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
 # add_field(body, "Da", "vector", collect(eachcol(body.Das)), "system")
-# add_field(body, "Db", "vector", collect(eachcol(body.Dbs)), "system")
 # add_field(body, "sigma", "scalar", view(body.strength, :, 1), "cell")
 # add_field(body, "mu", "scalar", view(body.strength, :, 2), "cell")
 # add_field(body, "normals", "vector", collect(eachcol(normals)), "cell")

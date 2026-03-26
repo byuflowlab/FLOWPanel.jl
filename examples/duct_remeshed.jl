@@ -104,8 +104,7 @@ if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
     body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
     body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
-    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings)
-    body.Dbs .= repeat(Vinf/magVinf, 1, body.nsheddings)
+    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
 else
     error("Unsupported body type")
 end
@@ -117,8 +116,7 @@ println("Solving body...")
 
 # Unitary direction of semi-infinite vortex at points `a` and `b` of each
 # trailing edge panel
-# body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings)
-# body.Dbs .= repeat(Vinf/magVinf, 1, body.nsheddings)
+# body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
 
 # select backend for n-body calculation
 backend = pnl.FastMultipoleBackend(

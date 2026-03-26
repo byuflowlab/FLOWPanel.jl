@@ -38,10 +38,9 @@ function make_single_triangle_body(; semiinfinite_wake=false)
     # shedding[2,1] = 2
     # shedding[3,1] = 3
     # shedding[4,1] = -1
-    body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(grid, [shedding];
+    body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.VortexRing}}(grid, [shedding];
         semiinfinite_wake)
     # body.Das[1][2,:] .= -1
-    # body.Dbs[1][2,:] .= -1
 
     return body
 end

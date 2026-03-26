@@ -163,6 +163,7 @@ strength_names(::AbstractBody{ConstantSource, <:Any}) = ("sigma",)
 strength_names(::AbstractBody{ConstantDoublet, <:Any}) = ("mu",)
 strength_names(::AbstractBody{VortexRing, <:Any}) = ("gamma",)
 strength_names(::AbstractBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = ("sigma", "mu")
+strength_names(::AbstractBody{Union{ConstantSource, VortexRing}, <:Any}) = ("sigma", "gamma")
 
 """
     write_vtk(name, body::AbstractBody, idx, t; overwrite=false)
@@ -191,10 +192,16 @@ code.
 function write_vtk(name::String, body::AbstractBody, idx::Int, t::Real;
                    overwrite::Bool=false)
 
-    files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(name * ".$idx.vtm")
+    # Route block files to a subdirectory named after the PVD
+    _parent, _base = splitdir(name)
+    subdir = joinpath(_parent, _base)
+    mkpath(subdir)
+    block_name = joinpath(subdir, _base)
 
-        WriteVTK.vtk_grid(vtm, name * ".$(idx).vtu", body.nodes, body.vtk_cells) do vtk
+    files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
+        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+
+        WriteVTK.vtk_grid(vtm, block_name * ".$(idx).vtu", body.nodes, body.vtk_cells) do vtk
 
             # --- Common solution fields ---
 
@@ -222,7 +229,7 @@ function write_vtk(name::String, body::AbstractBody, idx::Int, t::Real;
             _write_vtk_body_fields!(vtk, body)
         end
         
-        _write_vtk_other_fields!(vtm, name, body, idx)
+        _write_vtk_other_fields!(vtm, block_name, body, idx)
 
         pvd[t] = vtm
     end
@@ -480,9 +487,9 @@ function calc_controlpoints!(nodes::AbstractMatrix, cells::AbstractMatrix,
         i1, i2, i3 = cells[1, pi], cells[2, pi], cells[3, pi]
 
         # Centroid of triangle (average of vertices; equals centroid for triangles)
-        controlpoints[1, pi] = (nodes[1, i1] + nodes[1, i2] + nodes[1, i3]) / 3
-        controlpoints[2, pi] = (nodes[2, i1] + nodes[2, i2] + nodes[2, i3]) / 3
-        controlpoints[3, pi] = (nodes[3, i1] + nodes[3, i2] + nodes[3, i3]) / 3
+        controlpoints[1, pi] = (nodes[1, i1] + nodes[1, i2] + nodes[1, i3]) * 0.3333333333333333
+        controlpoints[2, pi] = (nodes[2, i1] + nodes[2, i2] + nodes[2, i3]) * 0.3333333333333333
+        controlpoints[3, pi] = (nodes[3, i1] + nodes[3, i2] + nodes[3, i3]) * 0.3333333333333333
 
         l = characteristiclength(nodes, view(cells, :, pi))
 
@@ -721,8 +728,13 @@ function get_cell(system::AbstractBody, i::Int)
     return system.cells[1,i], system.cells[2,i], system.cells[3,i]
 end
 
-apply_freestream!(body::AbstractBody, uinf) =
+function apply_freestream!(body::AbstractBody, uinf)
     eachcol(body.velocity) .+= Ref(uinf)
+    for i in eachindex(body.velocity_te)
+        eachcol(body.velocity_te[i]) .+= Ref(uinf)
+    end
+end
+
 
 #------- FastMultipole interface functions -------#
 

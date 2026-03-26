@@ -76,7 +76,8 @@ NDIVS_rfl_lo = NDIVS_rfl_up                 # Discretization of airfoil lower su
 # Solver: Vortex-ring least-squares
 # bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64} # Elements and wake model
 # bodytype        = pnl.RigidWakeBody{pnl.ConstantDoublet, 1, Float64} # Elements and wake model
-kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
+# kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 # kernel = pnl.VortexRing
 bodytype = pnl.RigidWakeBody{kernel} # Elements and wake model
 
@@ -144,11 +145,10 @@ AOA = AOAs[i]
     # Unitary direction of semi-infinite vortex at points `a` and `b` of each
     # trailing edge panel
     body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
-    body.Dbs[1] .= repeat(Vinf/magVinf, 1, size(body.Dbs[1], 2))
 
     # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-    # `Das` and `Dbs` as trailing edge rigid wake direction
-    # @time pnl.solve(body, Uinfs, Das, Dbs)
+    # `Das` as trailing edge rigid wake direction
+    # @time pnl.solve(body, Uinfs, Das)
     leaf_size = 100
     expansion_order = 10
     multipole_acceptance = 0.4
@@ -216,14 +216,14 @@ AOA = AOAs[i]
     pnl.apply_freestream!(body, Uinfs[:,1])
 
     # Calculate pressure coefficient (based on body.velocity)
-    @time Cps = pnl.calcfield_Cp!(body.Cp, body, magVinf; correct_kuttacondition=true)
+    @time Cps = pnl.calcfield_Cp!(body, magVinf; correct_kuttacondition=true)
 
     # Calculate the force of each panel (based on Cp)
     @time Fs = pnl.calcfield_F!(body, magVinf, rho)
 
     # check normal flow condition
     Us_tot = body.velocity
-    Udotn = sum(Us_tot .* normals, dims=1)
+    Udotn = sum(Us_tot .* body.normals, dims=1)
     resid = maximum(abs.(Udotn))
     println("Max flow tangency residual: $resid")
 

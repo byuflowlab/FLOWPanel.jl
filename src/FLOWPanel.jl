@@ -29,6 +29,7 @@ import SimpleNonlinearSolve
 import Requires: @require
 import FastMultipole
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
+using WriteVTK
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
@@ -38,7 +39,7 @@ import GeometricTools: Meshes
 import ImplicitAD as IAD
 import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
 import FLOWMath as math
-using WriteVTK
+import FLOWVPM
 
 # ------------ GLOBAL VARIABLES AND DATA STRUCTURES ----------------------------
 const module_path = splitdir(@__FILE__)[1]      # Path to this module
@@ -83,7 +84,8 @@ for header_name in ["elements", "linearsolver", "fmm",
   include("FLOWPanel_"*header_name*".jl")
 end
 
-
+const DEBUG = Array{Bool,0}(undef)
+DEBUG[] = false
 
 function __init__()
 
