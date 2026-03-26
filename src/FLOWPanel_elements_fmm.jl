@@ -241,15 +241,6 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-# function induced(target::AbstractVector{TF}, TK, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF}
-
-#     R, v1, v2, v3 = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
-#     control_point = (v1 + v2 + v3) * 0.3333333333333333
-#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
-
-#     return potential, velocity, velocity_gradient
-# end
-
 "Overload for non-rotated kernels"
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
     
@@ -275,47 +266,6 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
 
     return potential, velocity, velocity_gradient
 end
-
-# function induced(target::AbstractVector{TF}, source_system::AbstractBody{Union{ConstantSource, VortexRing},2,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where TF
-    
-#     # get vertices
-#     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
-    
-#     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
-#     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
-
-#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
-
-#     return potential, velocity, velocity_gradient
-# end
-
-# function induced(target::AbstractVector{TF}, source_system::AbstractBody{Union{ConstantSource, VortexRing},2,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where TF
-    
-#     # get vertices
-#     v1, v2, v3 = get_vertices(source_system, i_source)
-    
-#     sigma, gamma = view(source_system.strength, i_source, :)
-
-#     # source panel influence
-#     R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], v3[1], v3[2], v3[3])
-#     p, v, vg = _induced(target, (v1, v2, v3), control_point, FastMultipole.SVector{1}(sigma), ConstantSource, kerneloffset, R, derivatives_switch)
-
-#     # vortex ring influence
-#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), FastMultipole.SVector{1}(gamma), VortexRing, kerneloffset, derivatives_switch)
-
-#     return potential + p, velocity + v, velocity_gradient + vg
-# end
-
-# function induced(target::AbstractVector{TF1}, TK::Type{VortexRing}, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z, strength::AbstractVector{TF2}, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF1,TF2}
-
-#     TF = promote_type(TF1,TF2)
-#     v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
-#     v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
-#     v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
-#     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, TK, kerneloffset, derivatives_switch)
-
-#     return potential, velocity, velocity_gradient
-# end
 
 # Function to calculate the distance from point P to the line segment AB
 function minimum_distance(A, B, target)
@@ -825,11 +775,6 @@ end
 _induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch) =
     _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
 
-# NOTE: get_δ commented out — replaced by Vatistas n=2 core model
-# @inline function get_δ(distance, core_size)
-#     δ = distance < core_size ? (distance-core_size) * (distance-core_size) : zero(distance)
-#     return δ
-# end
 
 function _bound_vortex_velocity(r1, r2, finite_core, core_size)
     # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)

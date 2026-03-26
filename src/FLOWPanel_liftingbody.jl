@@ -1172,10 +1172,6 @@ function FastMultipole.body_to_multipole!(system::AbstractBody{VortexRing, NK}, 
     end
 end
 
-# multipole coefficients for a vortex ring are equivalent to those for a constant doublet panel
-# FastMultipole.body_to_multipole!(system::AbstractBody{VortexRing, 1, <:Any}, args...) =
-#     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
-
 # multipole coefficients for vortex ring + uniform vortex sheet
 function FastMultipole.body_to_multipole!(::AbstractBody{Union{VortexRing, UniformVortexSheet}, 2, <:Any}, multipole_coefficients, source_buffer::Matrix{TF}, center, bodies_index, harmonics, expansion_order) where {TF}
     # loop over bodies
@@ -1313,31 +1309,6 @@ function FastMultipole.influence!(influence, target_buffer, source_system::Rigid
 end
 
 
-# function FastMultipole.target_influence_to_buffer!(target_buffer::Matrix, target_system::RigidWakeBody{Union{ConstantSource,ConstantDoublet},2,<:Any}, derivatives_switch, sort_index=1:FastMultipole.get_n_bodies(target_system))
-    
-#     # # use external velocity to set source strengths (assumes velocity due to all external influences, e.g. freestream, free wake, etc., has been stored in `target_system.velocity`)
-#     # normals = calc_normals(target_system)
-#     # for i_body in 1:target_system.ncells
-#     #     # extract normal and velocity
-#     #     nx, ny, nz = normals[1, i_body], normals[2, i_body], normals[3, i_body]
-#     #     vx, vy, vz = target_system.velocity[1, i_body], target_system.velocity[2, i_body], target_system.velocity[3, i_body]
-
-#     #     # set strength of constant source to be the negative normal velocity (no flow through condition)
-#     #     target_system.strength[i_body, 1] = -(vx*nx + vy*ny + vz*nz)
-#     # end
-#     # target_system.strength[:, 2] .= 0 # set strength of constant doublet to zero
-
-#     # # compute induced potential due to constant source panels
-#     # targets = calc_controlpoints(target_system, normals; offset=target_system.CPoffset)
-#     # out = zeros(eltype(target_buffer), target_system.ncells)
-#     # _phi!(target_system, targets, out, target_system.backend; include_wake=false)
-
-#     # store induced potential in target buffer
-#     for i_buffer in 1:target_system.ncells
-#         target_buffer[4, i_buffer] = target_system.potential[sort_index[i_buffer]]
-#     end
-# end
-
 function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
     phi, vx, vy, vz = target_buffer[4, i_buffer], target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
     target_system.potential[i_target] += phi
@@ -1345,16 +1316,6 @@ function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_
     target_system.velocity[2, i_target] += vy
     target_system.velocity[3, i_target] += vz
 end
-
-# function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody{Union{ConstantSource, ConstantDoublet},2,<:Any}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer) where {PS,VS,GS}
-#     for i_target in 1:target_system.ncells
-#         phi, vx, vy, vz = target_buffer[4, i_target], target_buffer[5, i_target], target_buffer[6, i_target], target_buffer[7, i_target]
-#         target_system.potential[i_target] += phi
-#         target_system.velocity[1, i_target] += vx
-#         target_system.velocity[2, i_target] += vy
-#         target_system.velocity[3, i_target] += vz
-#     end
-# end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
 

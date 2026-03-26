@@ -50,12 +50,6 @@ const def_rfl_path = joinpath(def_data_path, "airfoils")
                                                 # Path to examples
 const examples_path = joinpath(module_path, "..", "examples")
 
-# const RType = Union{Float64,                    # Concrete real types
-#                     Int64,
-#                     # ForwardDiff.Dual{Nothing,Float64,3},
-#                     # ForwardDiff.Dual{Nothing,Int64,3}
-#                     }
-
 # 1/4pi
 const ONE_OVER_4PI = 1.0 / (4.0 * pi)
 
@@ -94,7 +88,6 @@ function __init__()
         @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
 
             import .PyPlot as plt
-            # import .PyPlot: @L_str
 
             for header_name in ["monitor"]
               include("FLOWPanel_"*header_name*".jl")
@@ -105,21 +98,6 @@ function __init__()
     catch e
         @warn "PyPlot is not available; monitors will not be loaded"
     end
-
-
-    # Conditionally load FMM solver if FastMultipole is available
-    # try
-    #     @require FastMultipole="ce07d0d3-2b9f-49ba-89eb-12c800257c85" begin
-
-    #         for header_name in ["fmm"]
-    #           include("FLOWPanel_"*header_name*".jl")
-    #         end
-
-    #     end
-
-    # catch e
-    #     @warn "FastMultipole is not available; FMM solvers will not be loaded"
-    # end
 
 end
 

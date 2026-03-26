@@ -241,15 +241,6 @@ end
 _write_vtk_body_fields!(vtk, ::AbstractBody) = nothing
 _write_vtk_other_fields!(vtm, name, body::AbstractBody, idx) = nothing
 
-# """
-#   `get_controlpoint(body::AbstractBody, i::Int64 or coor::Array{Int64,1})`
-#
-# Returns the control point on the i-th panel.
-# """
-# function get_controlpoint(body::AbstractBody, args...)
-#   return _get_controlpoint(body.grid, args...)
-# end
-
 """
     get_ndivscells(body::AbstractBody)
 
@@ -878,10 +869,6 @@ function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_t
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
 end
 
-# function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::AbstractBody, source_buffer, source_index) where {PS,VS,GS}
-#     throw("FastMultipole.direct! is not implemented for `<:AbstractBody` systems of type $(typeof(source_system))")
-# end
-
 function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
@@ -914,10 +901,6 @@ end
 function FastMultipole.buffer_to_system_strength!(system::AbstractBody{<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
     system.strength[i_body, 1] = source_buffer[5, i_buffer]
 end
-
-# function FastMultipole.strength_to_value(strength, source_system::AbstractBody{<:Any, 1, <:Any})
-#     return strength[1]
-# end
 
 function FastMultipole.influence!(influence, target_buffer, source_system::AbstractBody, source_buffer)
     for i in 1:size(target_buffer, 2)

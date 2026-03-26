@@ -98,45 +98,6 @@ function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     return BackslashDirichlet{TF}(G, rhs)
 end
 
-# function BackslashDirichlet(body::RigidWakeBody{<:Any,<:Any,TF}) where TF 
-#     G = zeros(TF, body.ncells + body.nsheddings, body.ncells + body.nsheddings)
-#     rhs = zeros(TF, body.ncells + body.nsheddings)
-#     return BackslashDirichlet{TF}(G, rhs)
-# end
-
-# function BackslashDirichlet(body::AbstractBody{<:Any,2,TF}) where TF 
-#     G = zeros(TF, body.ncells * 2, body.ncells * 2)
-#     rhs = zeros(TF, body.ncells * 2)
-#     return BackslashDirichlet{TF}(G, rhs)
-# end
-
-
-################################################################################
-# LU Decomposition Solver
-################################################################################
-
-# struct LUDecomposition{TF,TP,LS<:Bool} <: AbstractSolver{false}
-#     G::Matrix{TF}    # Coefficient matrix
-#     store_LU::Bool   # Whether to store the LU decomposition
-#     ALU::Matrix{TP}  # LU decomposition of G (using primal type TP)
-# end
-
-# function LUDecomposition(self::AbstractBody; 
-#         store_LU::Bool=true,         # Whether to store the LU decomposition
-#         TFG=eltype(self.grid._nodes) # Type for G matrix
-#     )
-
-#     # Compute normals and control points
-#     normals = _calc_normals(self)
-#     CPs = _calc_controlpoints(self, normals)
-
-#     # Compute geometric matrix (left-hand-side influence matrix)
-#     G = zeros(TFG, self.ncells, self.ncells)
-#     _G_U!(self, G, CPs, normals, Das, Dbs; optargs...)
-# end
-
-# solve_matrix!(y, A, b, ::LU; Alu=nothing) = solve_ludiv!(y, A, b; Alu)
-
 ################################################################################
 # GMRES Solver
 ################################################################################
@@ -160,7 +121,6 @@ function KrylovSolver(body::AbstractBody;
         itmax::Int=20,         # Maximum number of iterations
         atol::Real=1e-6,            # Convergence tolerance
         rtol::Real=1e-6,            # Relative convergence tolerance
-        # restart::Int=50,           # Number of iterations between restarts
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
         elprescribe="automatic"      # Prescribed element indices and values
     )
@@ -269,9 +229,6 @@ function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolv
     # store solution
     set_solution(self, solver.unabbreviated_strengths, workspace.x, solver.elprescribe, Uinfs)
 end
-
-# solve_matrix!(y, A, b, ::GMRES; Avalue=nothing, optargs...) =
-#     solve_gmres!(y, A, b; Avalue=Avalue, optargs...)
 
 ###############################################################################
 # FGS Solver
