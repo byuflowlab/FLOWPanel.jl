@@ -1480,13 +1480,18 @@ function FastMultipole.influence!(influence, target_buffer, source_system::Rigid
     influence .= view(target_buffer, 4, :)
 end
 
-
 function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
-    phi, vx, vy, vz = target_buffer[4, i_buffer], target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
-    target_system.potential[i_target] += phi
-    target_system.velocity[1, i_target] += vx
-    target_system.velocity[2, i_target] += vy
-    target_system.velocity[3, i_target] += vz
+    if PS
+        phi = target_buffer[4, i_buffer]
+        target_system.potential[i_target] += phi
+    end
+
+    if VS
+        vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+        target_system.velocity[1, i_target] += vx
+        target_system.velocity[2, i_target] += vy
+        target_system.velocity[3, i_target] += vz
+    end
 end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
