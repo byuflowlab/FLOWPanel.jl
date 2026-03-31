@@ -427,6 +427,178 @@ end
 to_tuple(val::Tuple) = val
 to_tuple(val) = (val,)
 
+### overwrite for tuple, but make sure that every body in the tuple is a RigidWakeBody with the kernel below.
+function solve2!(bodies, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
+        expansion_order=solver.expansion_order,
+        multipole_acceptance=solver.multipole_acceptance,
+        leaf_size=solver.leaf_size
+    ), optargs...)
+
+    # If bodies is a tuple, continue. If not, wrap bodies to make a tuple.
+    if !(bodies isa Tuple)
+        bodies = (bodies,)
+    end
+
+    # Check all the elements in bodies to make sure they are the correct body{kernel}
+    valid = all(body ->
+        body isa RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF},
+        bodies
+    )
+
+    @assert valid "Solve only works for a tuple where every body is RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}"
+    
+    # Store CP offsets
+    CPoffset_old = map(body -> body.CPoffset, bodies)
+
+    # Flip CP offset
+    for body in bodies
+        body.CPoffset = -abs(body.CPoffset)
+    end
+
+    # Geometry + source strengths
+    for body in bodies
+        calc_normals!(body)
+        calc_controlpoints!(body)
+
+        normals = body.normals
+
+        body.strength[:, 1] .= 0.0
+
+        for d in 1:3
+            @views body.strength[:, 2] .= Uinfs[d, :]
+            @views body.strength[:, 2] .*= normals[d, :]
+            body.strength[:, 1] .-= body.strength[:, 2]
+        end
+
+        body.strength[:, 2] .= 0.0
+    end
+
+    # Add source-induced RHS
+    _phi!(bodies, backend; optargs...)
+
+    # Solve
+    FastMultipole.solve!(bodies, solver.fgs;
+        max_iterations=solver.max_iterations,
+        inner_iterations=solver.inner_iterations,
+        tolerance=solver.tolerance,
+        rlx=solver.rlx,
+        derivatives_switches=FastMultipole.DerivativesSwitch(
+            true, false, false,
+            to_tuple(_unpack_fmm(bodies))
+        ),
+        reverse_pass=solver.reverse_pass,
+        verbose=solver.verbose,
+        final_update=false
+    )
+
+    # Interior potential
+    for body in bodies
+        body.potential .= 0
+        _phi!(body, backend; optargs...)
+    end
+
+    # Restore CP offsets
+    for (body, old) in zip(bodies, CPoffset_old)
+        body.CPoffset = old
+    end
+
+    # Mark solved
+    for body in bodies
+        _solvedflag(body, true)
+    end
+end
+
+function solve2!(
+    bodies::Tuple,
+    Uinfs::AbstractMatrix{<:Real},
+    solver::BackslashDirichlet;
+    backend = DirectBackend(),
+    optargs...
+)
+
+    # Ensure tuple
+    if !(bodies isa Tuple)
+        bodies = (bodies,)
+    end
+
+    TF  = eltype(solver.G)
+
+    # Type TF
+    valid = all(body ->
+        body isa RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF},
+        bodies
+    )
+    @assert valid "Solve only works for RigidWakeBody tuple"
+
+    # Panel bookkeeping
+    n_panels = [body.ncells for body in bodies]
+    offsets = cumsum(vcat(0, n_panels))
+    npanels = offsets[end]
+
+    CPoffset_old = [body.CPoffset for body in bodies]
+
+    for body in bodies
+        body.CPoffset = -abs(body.CPoffset)
+    end
+
+    # Global storage
+    normals_all = Matrix{TF}(undef, 3, npanels)
+    CPs_all     = Matrix{TF}(undef, 3, npanels)
+
+    # Geometry + RHS
+    for (bi, body) in enumerate(bodies)
+
+        r = offsets[bi]+1 : offsets[bi+1]
+
+        normals = calc_normals!(body)
+        cps     = calc_controlpoints!(body, normals)
+
+        @views normals_all[:, r] .= normals
+        @views CPs_all[:, r]     .= cps
+
+        body.strength[:, 1] .= 0.0
+
+        for d in 1:3
+            @views body.strength[:, 1] .-= Uinfs[d, r] .* normals[d, :]
+        end
+
+        body.strength[:, 2] .= 0.0
+    end
+
+    # Add source-induced potential to RHS
+    _phi!(bodies, backend; optargs...)
+
+    # Build RHS
+    rhs = solver.rhs
+    fill!(rhs, 0.0)
+
+    for (bi, body) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        @views rhs[r] .= -body.potential   # Dirichlet condition
+    end
+
+    # Build influence matrix
+    G = solver.G
+    fill!(G, 0.0)
+    _G_phi!(bodies, ConstantDoublet, G, CPs_all, backend; kerneloffset=1e-8)
+
+    # Solve
+    μ = G \ rhs
+
+    for (bi, body) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        @views body.strength[:, 2] .= μ[r]
+    end
+
+    # -------------------------------
+    # Restore + finalize
+    # -------------------------------
+    for (i, body) in enumerate(bodies)
+        body.CPoffset = CPoffset_old[i]
+        _solvedflag(body, true)
+    end
+end
+
 function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,

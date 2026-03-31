@@ -13,6 +13,8 @@
 
 has_semiinfinite_wake(self::AbstractBody) = false
 
+has_semiinfinite_wake(bodies::Tuple) = any(has_semiinfinite_wake, bodies)
+
 function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
@@ -46,6 +48,46 @@ function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optarg
     return nothing
 end
 
+### Make work for a tuple for both backends
+function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
+    # wrap targets in a probe system
+    TF = eltype(targets)
+    potential = Vector{TF}(undef, 0) # unused
+    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
+    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
+
+    # perform N-body calculation
+    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=true, scalar_potential=false)
+
+    return nothing
+end
+
+function Uind!(sources::Tuple, targets::Tuple, backend::DirectBackend; optargs...)
+
+    # optional safety check
+    @assert all(check_solved(sb) for sb in sources) "All source bodies must be solved."
+
+    # loop over targets
+    for tb in targets
+        _Uind!(sources, tb.controlpoints, tb.velocity, backend; optargs...)
+    end
+
+    return nothing
+end
+
+function Uind!(sources::Tuple, targets::Tuple, backend::FastMultipoleBackend; optargs...)
+
+    # optional safety check
+    @assert all(check_solved(sb) for sb in sources) "All source bodies must be solved."
+
+    # loop over targets
+    for tb in targets
+        _Uind!(sources, tb.controlpoints, tb.velocity, backend; optargs...)
+    end
+
+    return nothing
+end
+
 function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system
     TF = eltype(targets)
@@ -75,6 +117,29 @@ function _phi!(self::AbstractBody, targets, out, backend::DirectBackend; optargs
     
     # perform N-body calculation
     FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=false, scalar_potential=true)
+
+    return nothing
+end
+
+### Overload for bodies as a tuple instead of self
+function _phi!(bodies::Tuple, backend::DirectBackend; optargs...)
+
+    FastMultipole.direct!(bodies; hessian=false, gradient=false, scalar_potential=true)
+
+    return nothing
+end
+
+### Overload for bodies as a tuple instead of self
+function _phi!(bodies::Tuple, backend::FastMultipoleBackend; optargs...)
+
+    FastMultipole.fmm!(bodies; expansion_order=backend.expansion_order,
+                                        multipole_acceptance=backend.multipole_acceptance,
+                                        leaf_size_source=backend.leaf_size,
+                                        hessian=false,
+                                        gradient=false, 
+                                        scalar_potential=true,
+                                        extra_farfield=has_semiinfinite_wake(bodies),
+                                        shrink=true)
 
     return nothing
 end

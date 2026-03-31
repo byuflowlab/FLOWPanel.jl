@@ -579,6 +579,48 @@ function calc_normals!(self::AbstractBody, normals=self.normals; flipbyCPoffset=
     return normals
 end
 
+# ---------------------------
+# calc_normals! for a tuple of bodies
+# ---------------------------
+function calc_normals!(bodies; flipbyCPoffset=false)
+    # wrap single body into tuple if needed
+    if !(bodies isa Tuple)
+        bodies = (bodies,)
+    end
+
+    # loop over each body
+    for body in bodies
+        # use the body's normals field (or provided key)
+        normals = body.normals
+        calc_normals!(body.nodes, body.cells, normals)
+        if flipbyCPoffset
+            normals .*= sign(body.CPoffset) != 0 ? sign(body.CPoffset) : 1
+        end
+    end
+
+    return nothing
+end
+
+# ---------------------------
+# calc_controlpoints! for a tuple of bodies
+# ---------------------------
+function calc_controlpoints!(bodies; charlen_key=:characteristiclength)
+    # wrap single body into tuple if needed
+    if !(bodies isa Tuple)
+        bodies = (bodies,)
+    end
+
+    for body in bodies
+        normals = body.normals
+        off = body.CPoffset
+        charlen = getfield(body, charlen_key)
+        calc_controlpoints!(body.nodes, body.cells, body.controlpoints, normals;
+                            off=off, characteristiclength=charlen)
+    end
+
+    return nothing
+end
+
 function _calc_tangents!(nodes::AbstractMatrix, cells::AbstractMatrix, tangents)
     for pi in axes(cells, 2)
         panel = cells[:, pi]

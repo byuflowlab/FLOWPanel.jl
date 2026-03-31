@@ -266,6 +266,40 @@ function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::Abstr
     self.strength .= old_strength
 end
 
+function _G_phi!(bodies::Tuple, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); 
+                 strength_index=nothing, kerneloffset=nothing, optargs...)
+    # Track starting column index in G for each body
+    col_start = 1
+
+    for body in bodies
+        N = body.ncells
+        col_end = col_start + N - 1
+
+        # slice G for this body's columns
+        G_body = view(G, :, col_start:col_end)
+
+        # Determine strength_index for this body if not passed
+        si = strength_index
+        if si === nothing
+            si = kernel == ConstantDoublet && body.NK > 1 ? 2 : 1
+        end
+
+        # Determine kerneloffset for this body if not passed
+        ko = kerneloffset
+        if ko === nothing
+            ko = getproperty(body, :kerneloffset)
+        end
+
+        # Call the single-body version on the slice of G
+        _G_phi!(body, kernel, G_body, CPs, backend; 
+                strength_index=si, kerneloffset=ko, optargs...)
+
+        # Update column start for the next body
+        col_start = col_end + 1
+    end
+end
+
+
 _get_Gdims(self::NonLiftingBody{ConstantSource, 1}) = (self.ncells, self.ncells)
 
 

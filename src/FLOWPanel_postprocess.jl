@@ -27,53 +27,111 @@ using `offset` and `characteristiclength`, and save it as a field in
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
+
 function calcfield_U!(targetbody, sourcebody;
-        backend::AbstractBackend=DirectBackend(),
-        reset=true,
-        convolve_panels=true,
-        doublet_gradient=true
-    )
+    backend::AbstractBackend=DirectBackend(),
+    reset=true,
+    convolve_panels=true,
+    doublet_gradient=true
+)
+
+    # tuple wrapping
+    if !(sourcebody isa Tuple)
+        sourcebody = (sourcebody,)
+    end
+    if !(targetbody isa Tuple)
+        targetbody = (targetbody,)
+    end
 
     # ERROR CASES
-    if check_solved(sourcebody)==false
-        error("Source body hasn't been solved yet."*
-              " Please call `solve(...)` function first.")
+    for sb in sourcebody
+        if !check_solved(sb)
+            error("Source body hasn't been solved yet. Please call `solve(...)` first.")
+        end
     end
 
-    # reset velocity
-    reset && (targetbody.velocity .= zero(eltype(targetbody.velocity)))
-
-    # recalculate normals/control points on the target body
-    calc_normals!(targetbody)
-    calc_controlpoints!(targetbody)
-    
-    # Add induced velocity at each control point
-    convolve_panels && Uind!(sourcebody, targetbody.controlpoints, targetbody.velocity, backend)
-
-    # add doublet gradient (if applicable)
-    if has_grad_mu(targetbody) && doublet_gradient
-        compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
-            targetbody.cells,
-            targetbody.neighbor,
-            view(targetbody.strength, :, get_Gammai(targetbody)),
-            view(targetbody.shedding_full, 1:2, :), 
-            scale=0.5)
-        
-        # alternatively, comment out the above function and:
-        # targetbody.velocity .*= 2.0
-
-        # alternatively, comment out the above and:
-        # targetbody.velocity .= zero(eltype(targetbody.velocity))
-        # compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
-            # targetbody.cells,
-            # targetbody.neighbor,
-            # view(targetbody.strength, :, get_Gammai(targetbody)),
-            # view(targetbody.shedding_full, 1:2, :), 
-            # scale=1.0)
+    # reset + geometry prep
+    for tb in targetbody
+        reset && (tb.velocity .= zero(eltype(tb.velocity)))
     end
 
-    return targetbody.velocity
+    # induced velocity (now tuple-aware)  -- Make Uind!() accept a tuple DONE
+    if convolve_panels
+        Uind!(sourcebody, targetbody, backend)
+    end
+
+    calc_normals!(targetbody)  # -- make accept a tuple DONE
+    calc_controlpoints!(targetbody) # -- make accept a tuple DONE
+
+    # doublet gradient
+    if doublet_gradient
+        for tb in targetbody
+            if has_grad_mu(tb)
+                compute_mu_gradient!(
+                    tb.velocity,
+                    tb.controlpoints,
+                    tb.normals,
+                    tb.cells,
+                    tb.neighbor,
+                    view(tb.strength, :, get_Gammai(tb)),
+                    view(tb.shedding_full, 1:2, :),
+                    scale=0.5
+                )
+            end
+        end
+    end
+
+    # return (match original behavior: single vs tuple)
+    return length(targetbody) == 1 ? targetbody[1].velocity : map(tb -> tb.velocity, targetbody)
 end
+
+# function calcfield_U!(targetbody, sourcebody;
+#         backend::AbstractBackend=DirectBackend(),
+#         reset=true,
+#         convolve_panels=true,
+#         doublet_gradient=true
+#     )
+
+#     # ERROR CASES
+#     if check_solved(sourcebody)==false
+#         error("Source body hasn't been solved yet."*
+#               " Please call `solve(...)` function first.")
+#     end
+
+#     # reset velocity
+#     reset && (targetbody.velocity .= zero(eltype(targetbody.velocity)))
+
+#     # recalculate normals/control points on the target body
+#     calc_normals!(targetbody)
+#     calc_controlpoints!(targetbody)
+    
+#     # Add induced velocity at each control point
+#     convolve_panels && Uind!(sourcebody, targetbody.controlpoints, targetbody.velocity, backend)
+
+#     # add doublet gradient (if applicable)
+#     if has_grad_mu(targetbody) && doublet_gradient
+#         compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
+#             targetbody.cells,
+#             targetbody.neighbor,
+#             view(targetbody.strength, :, get_Gammai(targetbody)),
+#             view(targetbody.shedding_full, 1:2, :), 
+#             scale=0.5)
+        
+#         # alternatively, comment out the above function and:
+#         # targetbody.velocity .*= 2.0
+
+#         # alternatively, comment out the above and:
+#         # targetbody.velocity .= zero(eltype(targetbody.velocity))
+#         # compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
+#             # targetbody.cells,
+#             # targetbody.neighbor,
+#             # view(targetbody.strength, :, get_Gammai(targetbody)),
+#             # view(targetbody.shedding_full, 1:2, :), 
+#             # scale=1.0)
+#     end
+
+#     return targetbody.velocity
+# end
 
 
 ################################################################################
@@ -293,6 +351,22 @@ starts with all zeroes).
 """
 calcfield_Cp!(body, Uref; optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; optargs...)
 
+# Tuple-aware version
+function calcfield_Cp!(bodies::Tuple, Urefs::Union{Number,AbstractVector}; kwargs...)
+    n_total = sum(b.ncells for b in bodies)
+    out = zeros(n_total)
+
+    offset = 0
+    for (i, b) in enumerate(bodies)
+        n = b.ncells
+        thisout = view(out, (1:n) .+ offset)
+        Uref = isa(Urefs, AbstractVector) ? Urefs[i] : Urefs
+        calcfield_Cp!(thisout, b, b.velocity, Uref; kwargs...)
+        offset += n
+    end
+
+    return out
+end
 
 ################################################################################
 # FORCE FIELDS
@@ -429,6 +503,28 @@ function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
 
     if addfield && !(fieldname in mbody.fields)
         push!(mbody.fields, fieldname)
+    end
+
+    return out
+end
+
+# Tuple-aware version
+function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; kwargs...)
+    n_total = sum(b.ncells for b in bodies)
+    out = zeros(3, n_total)
+    areas = vcat([calc_areas(b) for b in bodies]...)
+    normals = hcat([b.normals for b in bodies]...)
+    Cps = vcat([b.Cp for b in bodies]...)
+
+    offset = 0
+    for b in bodies
+        n = b.ncells
+        thisout = view(out, 1:3, (1:n) .+ offset)
+        thisareas = view(areas, (1:n) .+ offset)
+        thisnormals = view(normals, 1:3, (1:n) .+ offset)
+        thisCps = view(Cps, (1:n) .+ offset)
+        calcfield_F!(thisout, b, thisareas, thisnormals, thisCps, Uinf, rho; kwargs...)
+        offset += n
     end
 
     return out
@@ -730,6 +826,59 @@ not needed).
 """
 calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
 
+"""
+    calcfield_LDS!(out::Matrix, bodies::Tuple, Lhat::Vector, Dhat::Vector, Shat::Vector;
+                   F_fieldname="F")
+
+Calculate the integrated force decomposed as lift, drag, and sideslip for a tuple of
+bodies according to the orthonormal basis `Lhat`, `Dhat`, `Shat`. The total force
+is obtained by summing the panel forces of all bodies.
+
+`out[:, 1]` is lift, `out[:, 2]` is drag, `out[:, 3]` is sideslip.
+"""
+function calcfield_LDS!(out::AbstractMatrix, bodies::Tuple, 
+                        Lhat::AbstractVector, Dhat::AbstractVector, Shat::AbstractVector;
+                        F_fieldname="F", optargs...)
+
+    # Error case
+    @assert size(out) == (3,3) "Invalid `out` matrix. Expected size (3,3); got $(size(out))."
+    for v in (Lhat, Dhat, Shat)
+        @assert abs(norm(v) - 1) <= 2*eps() "$v is not a unitary vector"
+    end
+
+    # Initialize total force
+    Ftot = zeros(3)
+
+    # Sum forces from all bodies
+    for body in bodies
+        @assert check_field(body, F_fieldname) "Field $F_fieldname not found in body."
+        Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+        Ftot .+= sum(Fs; dims=2)[:,1]   # sum over columns (panels)
+    end
+
+    # Store total force in out[:,3]
+    out[:,3] .= Ftot
+
+    # Project total force along each direction
+    out[:,1] .= Lhat .* dot(Ftot, Lhat)
+    out[:,2] .= Dhat .* dot(Ftot, Dhat)
+    out[:,3] .= Shat .* dot(Ftot, Shat)
+
+    return out
+end
+
+# Convenience method: compute Shat automatically
+calcfield_LDS!(out, bodies::Tuple, Lhat::Vector, Dhat::Vector; optargs...) =
+    calcfield_LDS!(out, bodies, Lhat, Dhat, cross(Lhat,Dhat); optargs...)
+
+
+"""
+    calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
+
+Similar to [`calcfield_LDS!`](@ref) but without in-place calculation (`out` is
+not needed).
+"""
+calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
 
 
 

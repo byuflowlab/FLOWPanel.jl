@@ -68,8 +68,7 @@ SEMIINFINITE_LENGTH[] = 10.0
 # ------------ HEADERS ---------------------------------------------------------
 for header_name in ["elements", "linearsolver", "fmm",
                     "abstractbody", "solver",
-                    "nonliftingbody",
-                    "abstractliftingbody", "liftingbody",
+                    "abstractliftingbody", "liftingbody", "nonliftingbody",
                     "multibody",  "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",

@@ -98,6 +98,16 @@ function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     return BackslashDirichlet{TF}(G, rhs)
 end
 
+function BackslashDirichlet(bodies::Tuple) 
+    total_cells = sum(body -> body.ncells, bodies)
+
+    # assume all bodies have the same type
+    TF = eltype(bodies[1].Das[1])  # each Das[j] is Array{TF,2}
+    G = zeros(total_cells, total_cells)
+    rhs = zeros(total_cells)
+    return BackslashDirichlet{TF}(G, rhs)
+end
+
 ################################################################################
 # GMRES Solver
 ################################################################################
