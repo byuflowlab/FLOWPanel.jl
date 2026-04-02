@@ -58,6 +58,7 @@ function propagate_kinematics!(system::Union{AbstractBody}, i_frame::Int, frames
     for i in frame.dependent_index
         body = system isa MultiBody ? get_body(system, i) : system
         rotate_translate!(body, origin_global, Rω_global, dx_global)
+        rotate_Das!(body, Rω_global)
     end
     
     # Update the frame
@@ -98,6 +99,15 @@ function rotate_translate!(body::AbstractBody, origin, Rω, dx)
         end
     end
 end
+
+function rotate_Das!(body::AbstractLiftingBody, Rω)
+    for das in body.Das
+        for j in axes(das, 2)
+            das[:, j] .= Rω * FastMultipole.SVector{3}(das[1,j], das[2,j], das[3,j])
+        end
+    end
+end
+rotate_Das!(body::AbstractBody, Rω) = nothing
 
 function Rodrigues(axis, angle::TF) where TF
     s, c = sincos(-angle)

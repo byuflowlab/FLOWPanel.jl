@@ -16,7 +16,7 @@
 import FLOWPanel as pnl
 import CSV
 import DataFrames: DataFrame
-using FLOWPanel.FastMultipole.StaticArrays
+using LinearAlgebra
 
 include(joinpath(pnl.examples_path, "duct_postprocessing.jl"))
 
@@ -104,101 +104,82 @@ ys .+= d/2
 points = hcat(xs, ys)
 
 # Generate body of revolution
-body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+generate_body() = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-12,
-                                                        kerneloffset=1e-8,
+                                                        CPoffset=1e-10,
+                                                        kerneloffset=1e-10,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
                                                         semiinfinite_wake=false
                                             )
                                         )
+body_fgs = generate_body()
+body_bsd = generate_body()
 
-println("Number of panels:\t$(body.ncells)")
+# body.shedding[1] = body.shedding[1][:,1:1]
+# body.nsheddings = 1
+# body.shedding_full .= -1
+# idx_shed = body.shedding[1, 1]
+# body.shedding_full[1:2, idx_shed] .= view(body.shedding[1], 2:3, 1)
+# body.shedding_full[3:4, idx_shed] .= 1
+# idx_shed = body.shedding[1][4, 1]
+# body.shedding_full[1:2, idx_shed] .= view(body.shedding[1], 5:6, 1)
+# body.shedding_full[3:4, idx_shed] .= 1
+
+println("Number of panels:\t$(body_fgs.ncells)")
 
 vtks = save_path*"/"                        # String with VTK output files
 
 
 # ----------------- CALL SOLVER ------------------------------------------------
+global solver = nothing
+# for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 i = 2
 AOA = AOAs[i]
     
-    println("Solving body...")
+# println("Solving body...")
 
-    # Freestream vector
-    Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
+# Freestream vector
+Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
-    # Freestream at every control point
-    Uinf(t) = Vinf
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body_fgs.ncells)
+leaf_size = 100
+expansion_order = 10
+multipole_acceptance = 0.4
+backend = pnl.FastMultipoleBackend(;
+                                expansion_order,
+                                multipole_acceptance,
+                                leaf_size=20
+                            )
 
-    # prepare other inputs
-    eta = 0.3
-    frames = nothing
-    maneuver = (args...; optargs...) -> nothing
-    l = d * aspectratio
-    dt = magVinf / l / (n_rfl * 500)
-    t_range = range(0.0, step=dt, length=11)
+dt_val = 0.00998003992015968
+eta = 0.3
+body_bsd.Das[1] .= repeat(Vinf * dt_val * eta, 1, size(body_bsd.Das[1], 2))
+body_fgs.Das[1] .= repeat(Vinf * dt_val * eta, 1, size(body_fgs.Das[1], 2))
 
-    # update wake directions
-    body.Das[1] .= repeat(Vinf*dt*eta, 1, size(body.Das[1], 2))
+body_bsd.velocity .= repeat(Vinf, 1, body_bsd.ncells)
+body_fgs.velocity .= repeat(Vinf, 1, body_fgs.ncells)
 
-    # select backend for N-body interactions
-    leaf_size = 20
-    expansion_order = 10
-    multipole_acceptance = 0.4
-    backend = pnl.FastMultipoleBackend(;
-                                    expansion_order,
-                                    multipole_acceptance,
-                                    leaf_size
-                                )
-    # backend = pnl.DirectBackend()
+println("Initializaing...")
+solver_fgs = pnl.FGSSolver(body_fgs;
+    max_iterations=500,         # Maximum number of iterations
+    tolerance=1.0e-6,            # Convergence tolerance
+    rlx=1.0,                  # Relaxation factor
+    expansion_order,
+    multipole_acceptance,
+    leaf_size=100,
+    shrink=true,
+    recenter=false,
+    inner_iterations=20,
+    reverse_pass=false,
+    verbose=false
+)
+solver_bsd = pnl.BackslashDirichlet(body_bsd)
 
-    # global solver = pnl.Backslash(body; least_squares=true)
-    # solver = pnl.KrylovSolver(body;
-    #     method=:gmres,
-    #     itmax=20,
-    #     atol=1e-4,
-    #     rtol=1e-4,
-    #     # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
-    #     backend=pnl.FastMultipoleBackend(
-    #                 expansion_order=7,
-    #                 multipole_acceptance=0.4,
-    #                 leaf_size=10
-    #             )
-    # )
-    println("Initializaing solver...")
-    @time body_solver = pnl.FGSSolver(body;
-        max_iterations=50,         # Maximum number of iterations
-        inner_iterations=10,       # Maximum number of inner iterations
-        reverse_pass=true,        # Whether to do reverse sweeps or not
-        tolerance=1.0e-5,            # Convergence tolerance
-        rlx=1.0,                  # Relaxation factor
-        expansion_order,
-        multipole_acceptance,
-        leaf_size=150,
-        shrink=true,
-        recenter=false,
-    )
-    body_solver = pnl.BackslashDirichlet(body)
+println("solving...")
+pnl.solve2!(body_bsd, solver_bsd; backend)
+pnl.solve2!(body_fgs, solver_fgs; backend)
 
-    # initialize wake
-    wake = pnl.PanelWake(body; nwakerows=100)
-
-    # set up reference frames
-    frames = pnl.ReferenceFrame(body;
-        origin = SVector{3}(0.0, 0.0, 0.0),
-        v = SVector{3}(0.0, 0.0, 0.0),
-        ω_axis = SVector{3}(0.0, 1.0, 0.0),
-        ω = 0.1 * 2 * pi,
-        R = SMatrix{3,3}(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0),
-        name = "vehicle",
-        child_index = Int[],
-        dependent_index = [1]
-    )
-
-    println("\nBegin simulation...")
-    @time begin
-        pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
-            eta, body_solver, backend, verbose=true
-        )
-    end
+err = norm(body_bsd.strength - body_fgs.strength) / norm(body_bsd.strength)
+println("Relative error: ", err)

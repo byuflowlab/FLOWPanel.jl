@@ -225,7 +225,7 @@ function _G_U!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, normals, backend
     self.strength .= old_strength
 end
 
-function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
+function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet || kernel==VortexRing && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
     N = self.ncells
     M = size(CPs, 2)
 
@@ -317,7 +317,7 @@ FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,Vorte
 # ABSTRACT SOLVER INTERFACE
 ################################################################################
 
-function solve2!(self::NonLiftingBody{TK,1,TFG}, Uinfs::Array{TFS, 2}, solver::AbstractMatrixfulSolver{false};
+function solve2!(self::NonLiftingBody{TK,1,TFG}, solver::AbstractMatrixfulSolver{false};
         backend=DirectBackend(),
         update_G::Bool=false,   # Whether to update the influence matrix G
         strength_name=get_strength_name(self),  # Name of the strength field to solve for
@@ -329,14 +329,13 @@ function solve2!(self::NonLiftingBody{TK,1,TFG}, Uinfs::Array{TFS, 2}, solver::A
 
     # Compute normals and control points
     normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
-    CPs_inside = _calc_controlpoints(self, normals; off=-1e-10)
-    
+    calc_controlpoints!(self, normals)
+
     # update influence matrix (if requested)
     if update_G
 
         # Update geometric matrix (left-hand-side influence matrix)
-        _G_U!(self, TK, solver.G, CPs, normals, backend; optargs...)
+        _G_U!(self, TK, solver.G, self.controlpoints, normals, backend; optargs...)
     end
 
     # generate RHS
@@ -347,26 +346,29 @@ function solve2!(self::NonLiftingBody{TK,1,TFG}, Uinfs::Array{TFS, 2}, solver::A
     # Solve system of equations
     solution = zeros(TF, self.ncells)
     solve_matrix!(solution, solver.G, RHS, solver)
-    
+
     # set solved flag
     _solvedflag(self, true)
-    
+
     # Assign solution to body element strengths
-    # _assign_elementstrengths!(self, solution)
     self.strength .= solution
 
     # verify that source strength is equal to -∂ϕ/∂n on the boundary
-    us_outside = zeros(TF, 3, self.ncells)
-    _Uind!(self, CPs, us_outside, backend; optargs...)
-    us_inside = zeros(TF, 3, self.ncells)
-    _Uind!(self, CPs_inside, us_inside, backend; optargs...)
-    # add_field(self, "us_inside", "vector", collect(eachcol(us_inside)), "cell")
-    # add_field(self, "delta_u_normal", "scalar", vec(sum((us_outside - us_inside) .* normals, dims=1)), "cell")
+    Uext = copy(self.velocity)
 
-    # save solution fields
-    # add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
-    # add_field(self, strength_name, "scalar", view(self.strength, :, 1), "cell")
-    # add_field(self, "normals", "vector", collect(eachcol(normals)), "cell")
+    # outside control points
+    calc_controlpoints!(self, normals)
+    self.velocity .= 0
+    influence!(self, self, backend; velocity=true, optargs...)
+    us_outside = copy(self.velocity)
+
+    # inside control points
+    calc_controlpoints!(self, normals; off=-1e-10)
+    self.velocity .= 0
+    influence!(self, self, backend; velocity=true, optargs...)
+
+    # restore external velocity
+    self.velocity .= Uext
 
     return nothing
 end

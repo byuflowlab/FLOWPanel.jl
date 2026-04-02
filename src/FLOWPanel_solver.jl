@@ -34,7 +34,7 @@ abstract type AbstractMatrixFreeSolver <: AbstractSolver end
 "LS indicates whether the solver uses least-squares solution."
 abstract type AbstractMatrixfulSolver{LS} <: AbstractSolver end
 
-function solve2!(self, Uinfs, solver; optargs...)
+function solve2!(self, solver; optargs...)
     throw(ErrorException("solve2! not implemented for body of type $(typeof(self)) and solver of type $(typeof(solver))"))
 end
 
@@ -87,15 +87,19 @@ solve_matrix!(y, A, b, ::Backslash) = solve_backslash!(y, A, b)
 
 #--- Dirichlet formulation ---#
 
-struct BackslashDirichlet{TF} <: AbstractMatrixfulSolver{false} 
+struct BackslashDirichlet{TF} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
     rhs::Vector{TF}
+    Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
+    phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
 end
 
-function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF 
+function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     G = zeros(TF, body.ncells, body.ncells)
     rhs = zeros(TF, body.ncells)
-    return BackslashDirichlet{TF}(G, rhs)
+    Uext = zeros(TF, 3, body.ncells)
+    phi_ext = zeros(TF, body.ncells)
+    return BackslashDirichlet{TF}(G, rhs, Uext, phi_ext)
 end
 
 ################################################################################
@@ -105,8 +109,7 @@ end
 struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
     body::TB
     backend::B
-    Uind::Array{TF, 2}    # induced velocity storage
-    CPs::Array{TF, 2}     # Control points
+    Uext::Array{TF, 2}    # storage for external velocity (saved/restored around solve)
     normals::Array{TF, 2} # Normals
     unabbreviated_strengths::Array{TF, 1} # Storage for unabbreviated strengths
     elprescribe::Vector{Tuple{Int,Float64}} # Prescribed element indices and values
@@ -116,7 +119,7 @@ struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number} <: AbstractM
     rtol::Float64          # relative tolerance
 end
 
-function KrylovSolver(body::AbstractBody; 
+function KrylovSolver(body::AbstractBody;
         method::Symbol=:gmres,    # Krylov method to use
         itmax::Int=20,         # Maximum number of iterations
         atol::Real=1e-6,            # Convergence tolerance
@@ -125,12 +128,11 @@ function KrylovSolver(body::AbstractBody;
         elprescribe="automatic"      # Prescribed element indices and values
     )
     TF = numtype(body)
-    Uind = zeros(TF, 3, body.ncells)
+    Uext = zeros(TF, 3, body.ncells)
     unabbreviated_strengths = zeros(TF, body.ncells)
     normals = _calc_normals(body)
-    CPs = _calc_controlpoints(body, normals)
     elprescribe = elprescribe == "automatic" ? calc_elprescribe(body) : elprescribe
-    return KrylovSolver{typeof(body), typeof(backend), TF}(body, backend, Uind, CPs, normals, unabbreviated_strengths, elprescribe, method, itmax, Float64(atol), Float64(rtol))#, restart)
+    return KrylovSolver{typeof(body), typeof(backend), TF}(body, backend, Uext, normals, unabbreviated_strengths, elprescribe, method, itmax, Float64(atol), Float64(rtol))
 end
 
 function _set_strength(body::AbstractBody, strengths, C, elprescribe=Tuple{Int,Float64}[])
@@ -177,27 +179,28 @@ function (solver::KrylovSolver)(C, B, α, β)
     _set_strength(solver.body, solver.unabbreviated_strengths, B, solver.elprescribe)
 
     # get induced velocity at control points
-    solver.Uind .= zero(solver.Uind) # reset induced velocity
-    _Uind!(solver.body, solver.Cp, solver.Uind, solver.backend)
+    solver.body.velocity .= 0
+    influence!(solver.body, solver.body, solver.backend; velocity=true)
 
     # dot product with normals
-    solver.Uind .*= solver.normals
-    solver.Uind[1,:] .+= view(solver.Uind, 2, :)
-    solver.Uind[1,:] .+= view(solver.Uind, 3, :)
-    
+    solver.body.velocity .*= solver.normals
+    solver.body.velocity[1,:] .+= view(solver.body.velocity, 2, :)
+    solver.body.velocity[1,:] .+= view(solver.body.velocity, 3, :)
+
     # scale and add
     C .*= β
-    C .+= α .* view(solver.Uind, 1, :)
+    C .+= α .* view(solver.body.velocity, 1, :)
 end
 
-function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
-    
-    # update solver fields
+function solve2!(self::AbstractBody, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+
+    # save external velocity and update solver fields
+    solver.Uext .= self.velocity
     solver.normals .= _calc_normals(self)
-    solver.Cp .= _calc_controlpoints(self, solver.normals) # TODO: avoid allocating here?
+    calc_controlpoints!(self, solver.normals)
 
     # construct matrix-free linear operator
-    TF2 = promote_type(eltype(Uinfs), TF)
+    TF2 = TF
     nrows = self.ncells
     ncols = self.ncells - length(solver.elprescribe)
     symmetric, hermitian = false, false
@@ -228,6 +231,9 @@ function solve2!(self::AbstractBody, Uinfs::Array{<:Real, 2}, solver::KrylovSolv
     
     # store solution
     set_solution(self, solver.unabbreviated_strengths, workspace.x, solver.elprescribe, Uinfs)
+
+    # restore external velocity
+    self.velocity .= solver.Uext
 end
 
 ###############################################################################
@@ -245,6 +251,8 @@ struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
     rlx::Float64
     reverse_pass::Bool
     verbose::Bool
+    Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
+    phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
 end
 
 function FGSSolver(body::AbstractBody; 
@@ -259,34 +267,40 @@ function FGSSolver(body::AbstractBody;
         shrink=false,
         recenter=false,
         verbose=false,
+        calc_cps=true,
     )
 
     # ensure CPoffset is negative (we'll solve this in the interior)
     CPoffset_old = body.CPoffset
     body.CPoffset = -abs(CPoffset_old)
 
+    # calculate control points if needed
+    if calc_cps
+        calc_normals!(body)
+        calc_controlpoints!(body)
+    end
+
     # generate solver
     TF = numtype(body)
-    fgs = FastMultipole.FastGaussSeidel((body,), (body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=has_semiinfinite_wake(body))
+    fgs = FastMultipole.FastGaussSeidel((body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=has_semiinfinite_wake(body))
 
     # restore CPoffset
     body.CPoffset = CPoffset_old
 
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose))
+    Uext = zeros(TF, 3, body.ncells)
+    phi_ext = zeros(TF, body.ncells)
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext)
 end
 
 #--- test solve! ---#
 
-function solve2!(self::AbstractBody{<:Any,1,<:Any}, Uinfs::Array{<:Real, 2}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
+function solve2!(self::AbstractBody{<:Any,1,<:Any}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
     
     # construct right-hand side
     # TF2 = promote_type(eltype(Uinfs), TF)
     # RHS = zeros(TF2, self.ncells)
     # normals = _calc_normals(self)
     # calc_bc_noflowthrough!(RHS, Uinfs, normals)
-
-    # apply freestream
-    self.velocity .= Uinfs
 
     # solve system
     FastMultipole.solve!(self, solver.fgs; max_iterations=solver.max_iterations, inner_iterations=solver.inner_iterations, tolerance=solver.tolerance, rlx=solver.rlx, verbose=solver.verbose)

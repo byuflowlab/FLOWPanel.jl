@@ -9,7 +9,7 @@
 """
 module FLOWPanel
 
-export  solve, save, Uind!, phi!,
+export  solve, save, influence!,
         get_ndivscells, get_ndivsnodes,
         get_cart2lin_cells, get_cart2lin_nodes,
         get_field, get_fieldval, add_field,

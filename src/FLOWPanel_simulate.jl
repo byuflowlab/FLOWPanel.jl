@@ -30,7 +30,6 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
         # vtk_args=(trailing_vortices=false, write_wakes=false), vtk_postshed=false,
         # fmm_wake_args=(), fmm_vehicle_args=(),
         # derivatives=false, nonlinear_analysis=false, nonlinear_args=(),
-        eta=0.3, 
         # particle_trailing_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
         # particle_unsteady_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
         body_solver=BackslashDirichlet(system), 
@@ -73,6 +72,9 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
         
         #------- aerodynamics -------#
         
+        # store -φ_old for dφ/dt computation (before reset wipes potential)
+        system.dphidt .= .-system.potential
+
         # reset potential/velocity
         reset!(wake)
         reset!(system)
@@ -89,28 +91,30 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
         # kinematics
         kinematic_velocity!((system,), frames)
 
-        # set wake shedding locations
+        # dt for this step
         dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
-        update_wake_shedding_locations!(system, dt, eta)
 
         # snap first row of wake nodes to the trailing edge
         update_TE!(wake, system)
 
         # apply wake potential to body surface
-        evaluate_influence!(targets, wake_sources, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        evaluate_influence!(targets, wake_sources, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         # solve system (shouldn't modify system velocity, but will update system strength)
-        solve2!(system, system.velocity, body_solver; backend)
+        solve2!(system, body_solver; backend)
 
         # update control points (normals should not have changed)
         calc_controlpoints!(system; off=abs(system.CPoffset))
 
         # system-on-all influence
-        evaluate_influence!(targets, (system,), backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        evaluate_influence!(targets, (system,), backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
-        calcfield_Cp!(system, norm(uinf); correct_kuttacondition=cp_correct_kuttacondition, clip=cp_clip)
+        # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt
+        system.dphidt .= (system.dphidt .+ system.potential) ./ dt
+
+        calcfield_Cp!(system, norm(uinf); dphidt=system.dphidt, correct_kuttacondition=cp_correct_kuttacondition, clip=cp_clip)
         calcfield_F!(system, norm(uinf), rho)
         
         #------- other solvers -------#
@@ -176,9 +180,6 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
             # # next step's dt
             # dt = t_range[i_step + 2] - t_range[i_step + 1]
 
-            # update wake shedding locations / wake leading edge
-            update_wake_shedding_locations!(system, dt, eta)
-
             #--- shed new wake ---#
 
             shed_wake!(wake, system)
@@ -200,17 +201,6 @@ end
 
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1
 has_grad_mu(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = TK == ConstantDoublet || TK == VortexRing || TK == Union{ConstantSource, ConstantDoublet} || TK == Union{ConstantSource, VortexRing}
-
-function update_wake_shedding_locations!(system, dt, eta)
-    for i in eachindex(system.Das)
-
-        # update Das (vertex-based, size (3, nshed+1))
-        system.Das[i] .= system.velocity_te[i]
-
-        # uinf and kinematic velocities are already included in Vte
-        system.Das[i] .*= eta * dt
-    end
-end
 
 #------- wake shedding -------#
 

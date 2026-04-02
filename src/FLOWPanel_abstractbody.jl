@@ -125,39 +125,6 @@ end
 
 ##### COMMON FUNCTIONS  ########################################################
 
-"""
-    Uind!(self::AbstractBody, targets, out, args...; optargs...)
-
-Returns the velocity induced by the body on the targets `targets`, which is a
-3xn matrix. It adds the velocity at the i-th target to `out[:, i]`.
-"""
-function Uind!(self::AbstractBody, targets, out, backend::AbstractBackend, args...; optargs...)
-
-    # ERROR CASES
-    if check_solved(self)==false
-        error("Body hasn't been solved yet."*
-              " Please call `solve()` function first.")
-    end
-
-    _Uind!(self, targets, out, backend::AbstractBackend, args...; optargs...)
-end
-
-"""
-    phi!(self::AbstractBody, targets, out, args...; optargs...)
-
-Returns the potential induced by the body on the targets `targets`. It adds the
-potential at the i-th target to `out[:, i]`.
-"""
-function phi!(self::AbstractBody, targets, out, backend::AbstractBackend, args...; optargs...)
-
-    # ERROR CASES
-    if check_solved(self)==false
-        error("Body hasn't been solved yet."*
-              " Please call `solve()` function first.")
-    end
-
-    _phi!(self, targets, out, backend::AbstractBackend, args...; optargs...)
-end
 
 strength_names(::AbstractBody{ConstantSource, <:Any}) = ("sigma",)
 strength_names(::AbstractBody{ConstantDoublet, <:Any}) = ("mu",)
@@ -822,43 +789,7 @@ FastMultipole.data_per_body(system::AbstractBody) = 4 + size(system.strength, 2)
 additional_data_per_body(system::AbstractBody) = 0 # by default, no additional data is added to the buffer
 
 function FastMultipole.get_position(system::AbstractBody, i)
-
-    # vertex indices for this panel
-    i1, i2, i3 = get_cell(system, i)
-    
-    # extract vertices
-    nodes = system.nodes
-    v1x = nodes[1, i1]
-    v1y = nodes[2, i1]
-    v1z = nodes[3, i1]
-    v2x = nodes[1, i2]
-    v2y = nodes[2, i2]
-    v2z = nodes[3, i2]
-    v3x = nodes[1, i3]
-    v3y = nodes[2, i3]
-    v3z = nodes[3, i3]
-
-    # get normal vector
-    dx1 = v2x - v1x
-    dy1 = v2y - v1y
-    dz1 = v2z - v1z
-    dx2 = v3x - v1x
-    dy2 = v3y - v1y
-    dz2 = v3z - v1z
-    normal_x = dy1*dz2 - dz1*dy2
-    normal_y = dz1*dx2 - dx1*dz2
-    normal_z = dx1*dy2 - dy1*dx2
-    norm_inv = system.CPoffset / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
-    normal_x *= norm_inv
-    normal_y *= norm_inv
-    normal_z *= norm_inv
-
-    # get centroid
-    cx = (v1x + v2x + v3x) * 0.3333333333333333 + normal_x
-    cy = (v1y + v2y + v3y) * 0.3333333333333333 + normal_y
-    cz = (v1z + v2z + v3z) * 0.3333333333333333 + normal_z
-
-    return cx, cy, cz
+    return system.controlpoints[1, i], system.controlpoints[2, i], system.controlpoints[3, i]
 end
 
 FastMultipole.strength_dims(system::AbstractBody) = size(system.strength, 2)

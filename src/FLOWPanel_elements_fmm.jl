@@ -13,68 +13,41 @@
 
 has_semiinfinite_wake(self::AbstractBody) = false
 
-function _Uind!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    potential = Vector{TF}(undef, 0) # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
+function influence!(self::AbstractBody, target_body::AbstractBody, backend::FastMultipoleBackend;
+                     scalar_potential=false, velocity=false,
+                     velocity_gradient=false, optargs...)
+    TF = eltype(target_body.controlpoints)
+    pot  = scalar_potential ? target_body.potential : Vector{TF}(undef, 0)
+    vel  = velocity ? target_body.velocity : Matrix{TF}(undef, 0, 0)
+    hess = velocity_gradient ? Array{TF,3}(undef, 3, 3, target_body.ncells) : Array{TF,3}(undef, 0, 0, 0)
+    probe_system = FastMultipole.ProbeSystemArray(target_body.controlpoints, pot, vel, hess)
 
-    # perform N-body calculation
-    FastMultipole.fmm!(probe_system, _unpack_fmm(self); expansion_order=backend.expansion_order,
-                                        multipole_acceptance=backend.multipole_acceptance,
-                                        leaf_size_source=backend.leaf_size,
-                                        hessian=false,
-                                        gradient=true, 
-                                        scalar_potential=false,
-                                        extra_farfield=has_semiinfinite_wake(self), 
-                                        shrink=true)
-
-    return nothing
-end
-
-function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    potential = Vector{TF}(undef, 0) # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
-
-    # perform N-body calculation
-    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=true, scalar_potential=false)
+    FastMultipole.fmm!(probe_system, _unpack_fmm(self);
+        expansion_order=backend.expansion_order,
+        multipole_acceptance=backend.multipole_acceptance,
+        leaf_size_source=backend.leaf_size,
+        scalar_potential=scalar_potential,
+        gradient=velocity,
+        hessian=velocity_gradient,
+        extra_farfield=has_semiinfinite_wake(self),
+        shrink=true)
 
     return nothing
 end
 
-function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    velocity = Array{TF, 2}(undef, 0, 0)  # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
-    
-    # perform N-body calculation
-    FastMultipole.fmm!(probe_system, _unpack_fmm(self); expansion_order=backend.expansion_order,
-                                        multipole_acceptance=backend.multipole_acceptance,
-                                        leaf_size_source=backend.leaf_size,
-                                        hessian=false,
-                                        gradient=false, 
-                                        scalar_potential=true,
-                                        extra_farfield=has_semiinfinite_wake(self),
-                                        shrink=true)
+function influence!(self::AbstractBody, target_body::AbstractBody, backend::DirectBackend;
+                     scalar_potential=false, velocity=false,
+                     velocity_gradient=false, optargs...)
+    TF = eltype(target_body.controlpoints)
+    pot  = scalar_potential ? target_body.potential : Vector{TF}(undef, 0)
+    vel  = velocity ? target_body.velocity : Matrix{TF}(undef, 0, 0)
+    hess = velocity_gradient ? Array{TF,3}(undef, 3, 3, target_body.ncells) : Array{TF,3}(undef, 0, 0, 0)
+    probe_system = FastMultipole.ProbeSystemArray(target_body.controlpoints, pot, vel, hess)
 
-    return nothing
-end
-
-function _phi!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    velocity = Array{TF, 2}(undef, 0, 0)  # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, out, velocity, hessian)
-    
-    # perform N-body calculation
-    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=false, scalar_potential=true)
+    FastMultipole.direct!(probe_system, _unpack_fmm(self);
+        scalar_potential=scalar_potential,
+        gradient=velocity,
+        hessian=velocity_gradient)
 
     return nothing
 end

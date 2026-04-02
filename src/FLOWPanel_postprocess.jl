@@ -48,7 +48,7 @@ function calcfield_U!(targetbody, sourcebody;
     calc_controlpoints!(targetbody)
     
     # Add induced velocity at each control point
-    convolve_panels && Uind!(sourcebody, targetbody.controlpoints, targetbody.velocity, backend)
+    convolve_panels && influence!(sourcebody, targetbody, backend; scalar_potential=false, velocity=true)
 
     # add doublet gradient (if applicable)
     if has_grad_mu(targetbody) && doublet_gradient
@@ -236,6 +236,7 @@ starts with all zeroes).
 function calcfield_Cp!(out::Arr1,
                         body::Union{NonLiftingBody, AbstractLiftingBody},
                         Us::Arr2, Uref::Number;
+                        dphidt::Union{Nothing, AbstractVector}=nothing,
                         correct_kuttacondition=true,
                         clip::Union{Nothing, Function}=nothing,
                         ) where {Arr1<:AbstractArray{<:Number,1},
@@ -244,6 +245,14 @@ function calcfield_Cp!(out::Arr1,
     # Calculate pressure coefficient
     for (i, U) in enumerate(eachcol(Us))
         out[i] += 1 - (norm(U)/Uref)^2
+    end
+
+    # Unsteady Bernoulli term: -2(∂φ/∂t) / V∞²
+    if !isnothing(dphidt)
+        inv_Uref2 = 2.0 / Uref^2
+        for i in eachindex(out)
+            out[i] -= inv_Uref2 * dphidt[i]
+        end
     end
 
     # Kutta-condition correction bringing the pressure on both sides of the TE
@@ -291,7 +300,7 @@ as a field named `fieldname`.
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-calcfield_Cp!(body, Uref; optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; optargs...)
+calcfield_Cp!(body, Uref; dphidt=nothing, optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt, optargs...)
 
 
 ################################################################################

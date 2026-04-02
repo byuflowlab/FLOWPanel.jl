@@ -66,6 +66,7 @@ mutable struct RigidWakeBody{E, N, TF} <: AbstractLiftingBody{E, N, TF}
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Vector{TF}
+    dphidt::Vector{TF}                   # Time derivative of perturbation potential (∂φ/∂t)
     velocity::Array{TF, 2}              # velocity induced at control points
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
@@ -93,6 +94,7 @@ function RigidWakeBody{E, N, TF}(
                                 Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in shedding],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
+                                dphidt=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
@@ -160,6 +162,7 @@ function RigidWakeBody{E, N, TF}(
                     Cp, F, solved,
                     strength,
                     potential,
+                    dphidt,
                     velocity,
                     controlpoints,
                     normals,
@@ -172,6 +175,9 @@ function RigidWakeBody{E, N, TF}(
                     semiinfinite_wake
                 )
 end
+
+_write_vtk_body_fields!(vtk, body::RigidWakeBody) =
+    (vtk["dphidt", WriteVTK.VTKCellData()] = body.dphidt)
 
 function RigidWakeBody{E, N, TF}(
                                 grid::gt.GridTriangleSurface, shedding;
@@ -341,7 +347,6 @@ end
 
 
 function solve2!(self::RigidWakeBody{TK, 1},
-                    Uinfs::AbstractMatrix{T},
                     solver::AbstractMatrixfulSolver{false};
                     backend=FastMultipoleBackend(),
                     solver_optargs=(),
@@ -377,61 +382,69 @@ function solve2!(self::RigidWakeBody{TK, 1},
     _solvedflag(self, true)
 end
 
-function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, Uinfs::Matrix{<:Real}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
-    
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
+
+    # save external velocity and potential
+    solver.Uext .= self.velocity
+    solver.phi_ext .= self.potential
+
     # ensure CPoffset is negative (we'll solve this in the interior)
     CPoffset_old = self.CPoffset
     self.CPoffset = -abs(CPoffset_old)
-    
-    # get normals and control points
-    normals = calc_normals!(self)
-    CPs_inside = calc_controlpoints!(self, normals; off=-1e-10)
-    
+
+    # get normals and control points (inside)
+    calc_normals!(self)
+    calc_controlpoints!(self)
+
     # get source strengths
     self.strength[:, 1] .= 0.0
     for d in (1,2,3)
-        self.strength[:, 2] .= view(Uinfs, d, :) 
-        self.strength[:, 2] .*= view(normals, d, :)
+        self.strength[:, 2] .= view(self.velocity, d, :)
+        self.strength[:, 2] .*= view(self.normals, d, :)
         self.strength[:, 1] .-= self.strength[:, 2]
     end
     self.strength[:, 2] .= 0.0
 
     # add source-induced potential to RHS
-    rhs = solver.rhs
-    rhs .= zero(eltype(rhs))
-    # rhs .= self.potential
-    _phi!(self, CPs_inside, rhs, backend; optargs...)
+    self.potential .= 0
+    influence!(self, self, backend; scalar_potential=true, optargs...)
+    solver.rhs .= self.potential
+    solver.rhs .*= -1.0 # move to RHS
 
-    rhs .*= -1.0 # move to RHS
-    
     # influence matrix for ϕ
     G = solver.G
     G .= 0.0
 
     # solve for doublet strengths such that the interior perturbation potential vanishes everywhere
-    # then, the resulting velocity outside will be equal to the source strength, which satifsied flow tangency
-    _G_phi!(self, ConstantDoublet, G, CPs_inside, backend; kerneloffset=1.0e-8)
+    # then, the resulting velocity outside will be equal to the source strength, which satisfied flow tangency
+    _G_phi!(self, ConstantDoublet, G, self.controlpoints, backend; kerneloffset=self.kerneloffset)
     Glu = lu!(G)
-        
+
     # Solve system of equations for the potential
     # μ = G \ rhs
-    ldiv!(view(self.strength, :, 2), Glu, rhs)
+    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
 
     # Save solution
     _solvedflag(self, true)
 
-    # restore CPoffset
+    # restore CPoffset, external velocity and potential
     self.CPoffset = CPoffset_old
+    self.velocity .= solver.Uext
+    self.potential .= solver.phi_ext
 end
 
 to_tuple(val::Tuple) = val
 to_tuple(val) = (val,)
 
-function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, Uinfs::Matrix{<:Real}, solver::FGSSolver; backend = FastMultipoleBackend(
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...) where TF
+
+    # save external velocity and potential
+    solver.Uext .= self.velocity
+    solver.phi_ext .= self.potential
 
     # ensure CPoffset is negative (we'll solve this in the interior)
     CPoffset_old = self.CPoffset
@@ -439,43 +452,51 @@ function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vo
 
     # get normals and control points
     normals = calc_normals!(self)
-    CPs_inside = calc_controlpoints!(self, normals)
-    
+    calc_controlpoints!(self, normals)
+
     # get source strengths
     self.strength[:, 1] .= 0.0
     for d in (1,2,3)
-        self.strength[:, 2] .= view(Uinfs, d, :) 
-        self.strength[:, 2] .*= view(normals, d, :)
+        self.strength[:, 2] .= view(self.velocity, d, :)
+        self.strength[:, 2] .*= view(self.normals, d, :)
         self.strength[:, 1] .-= self.strength[:, 2]
     end
     sigma = self.strength[:,1]
     self.strength[:, 2] .= 0.0
 
-    # add source-induced potential to RHS
-    _phi!(self, CPs_inside, self.potential, backend; optargs...)
-    # self.potential .*= -1.0
+    # add source-induced potential
+    self.potential .= 0
+    influence!(self, self, backend; scalar_potential=true, optargs...)
+
+    # # rebuild FGS solver with current body state (Das may have changed since construction)
+    # NOTE: we now assume Das has NOT changed
+    # fgs_new = FastMultipole.FastGaussSeidel((self,), (self,);
+    #     expansion_order=solver.expansion_order,
+    #     multipole_acceptance=solver.multipole_acceptance,
+    #     leaf_size=solver.leaf_size,
+    #     shrink=true, recenter=false,
+    #     extra_farfield=has_semiinfinite_wake(self)
+    # )
 
     # run fgs solver
-    FastMultipole.solve!(self, solver.fgs; 
+    FastMultipole.solve!(self, solver.fgs;
         max_iterations=solver.max_iterations,
         inner_iterations=solver.inner_iterations,
-        tolerance=solver.tolerance, 
+        tolerance=solver.tolerance,
         rlx=solver.rlx,
         derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, to_tuple(_unpack_fmm(self))),
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false
     )
-    
-    # get source strengths again
+
+    # restore source strengths (FGS zeros them during solve)
     self.strength[:, 1] .= sigma
 
-    # get interior potential
-    self.potential .= 0.0
-    _phi!(self, CPs_inside, self.potential, backend; optargs...)
-
-    # restore CPoffset
+    # restore CPoffset, external velocity and potential
     self.CPoffset = CPoffset_old
+    self.velocity .= solver.Uext
+    self.potential .= solver.phi_ext
 
     # Save solution
     _solvedflag(self, true)
@@ -530,7 +551,6 @@ function solve(self::RigidWakeBody{VortexRing, 2},
 end
 
 function solve2!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1},
-                Uinfs::Matrix{T},
                 solver::AbstractMatrixfulSolver{true};
                     solver_optargs=(),
                     elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
@@ -892,7 +912,6 @@ function solve(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
 end
 
 function solve2!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
-                Uinfs::AbstractMatrix{T},
                 solver::AbstractMatrixfulSolver{true};
                     solver_optargs=(),
                     elprescribe_index::Int=1, elprescribe_value=0,
@@ -996,14 +1015,16 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3}
     return G, RHS
 end
 
-function _Uind!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
-                                            targets, out, backend::DirectBackend; optargs...)
-
-    # Velocity induced by vortex rings
-    _Uvortexring!(self, targets, out, backend; stri=1, optargs...)
-
-    # Velocity induced by vortex sheets
-    _Uconstantvortexsheet!(self, targets, out; strti=2, stroi=3, optargs...)
+function influence!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
+                     target_body::AbstractBody, backend::DirectBackend;
+                     scalar_potential=false, velocity=false,
+                     velocity_gradient=false, optargs...)
+    # scalar_potential is a no-op for this body type
+    if velocity
+        _Uvortexring!(self, target_body.controlpoints, target_body.velocity, backend; stri=1, optargs...)
+        _Uconstantvortexsheet!(self, target_body.controlpoints, target_body.velocity; strti=2, stroi=3, optargs...)
+    end
+    return nothing
 end
 
 
@@ -1032,9 +1053,6 @@ function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
 end
 
 
-function _phi!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3}, args...; optargs...)
-    nothing
-end
 
 
 
