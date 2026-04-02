@@ -48,45 +48,47 @@ function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optarg
     return nothing
 end
 
-### Make work for a tuple for both backends
-function _Uind!(self::AbstractBody, targets, out, backend::DirectBackend; optargs...)
-    # wrap targets in a probe system
-    TF = eltype(targets)
-    potential = Vector{TF}(undef, 0) # unused
-    hessian = Array{TF, 3}(undef, 0, 0, 0)  # unused
-    probe_system = FastMultipole.ProbeSystemArray(targets, potential, out, hessian)
-
-    # perform N-body calculation
-    FastMultipole.direct!(probe_system, _unpack_fmm(self); hessian=false, gradient=true, scalar_potential=false)
-
-    return nothing
-end
-
+## Design Uind! so it doesn't have a target or out argument, and instead directly updates
+## Each body will have a velocity field and control points that will be the target locations
 function Uind!(sources::Tuple, targets::Tuple, backend::DirectBackend; optargs...)
 
     # optional safety check
     @assert all(check_solved(sb) for sb in sources) "All source bodies must be solved."
 
+    # stack all control points horizontally into one matrix (3 × Ntotal)
+    targets_cps = hcat([tb.controlpoints for tb in targets]...)  # Matrix{Float64}
+
+    # allocate a velocity matrix of the same size
+    targets_velocity = zeros(size(targets_cps)) 
+
     # loop over targets
-    for tb in targets
-        _Uind!(sources, tb.controlpoints, tb.velocity, backend; optargs...)
+    for src in sources
+        _Uind!(src, targets_cps, targets_velocity, backend; optargs...)
+    end
+
+    # write back velocities to each body
+    offset = 0
+    for src in sources
+        ncps = size(src.controlpoints, 2)  # number of control points for this body
+        src.velocity .= targets_velocity[:, offset+1 : offset+ncps]  # slice
+        offset += ncps
     end
 
     return nothing
 end
 
-function Uind!(sources::Tuple, targets::Tuple, backend::FastMultipoleBackend; optargs...)
+# function Uind!(sources::Tuple, targets::Tuple, backend::FastMultipoleBackend; optargs...)
 
-    # optional safety check
-    @assert all(check_solved(sb) for sb in sources) "All source bodies must be solved."
+#     # optional safety check
+#     @assert all(check_solved(sb) for sb in sources) "All source bodies must be solved."
 
-    # loop over targets
-    for tb in targets
-        _Uind!(sources, tb.controlpoints, tb.velocity, backend; optargs...)
-    end
+#     # loop over targets
+#     for tb in targets
+#         _Uind!(sources, tb.controlpoints, tb.velocity, backend; optargs...)
+#     end
 
-    return nothing
-end
+#     return nothing
+# end
 
 function _phi!(self::AbstractBody, targets, out, backend::FastMultipoleBackend; optargs...)
     # wrap targets in a probe system

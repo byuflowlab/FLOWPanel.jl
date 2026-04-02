@@ -168,6 +168,11 @@ function save(body::NonLiftingBody, args...; optargs...)
     return save_base(body, args...; optargs...)
 end
 
+# Save function for RigidWakeBody (and other lifting bodies)
+function save(body::AbstractLiftingBody, args...; optargs...)
+    return save_base(body, args...; optargs...)
+end
+
 calc_elprescribe(::NonLiftingBody{ConstantSource, 1}) = Tuple{Int,Float64}[]
 calc_elprescribe(body::NonLiftingBody{VortexRing, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
 calc_elprescribe(body::NonLiftingBody{ConstantDoublet, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]

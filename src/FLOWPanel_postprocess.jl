@@ -362,6 +362,7 @@ function calcfield_Cp!(bodies::Tuple, Urefs::Union{Number,AbstractVector}; kwarg
         thisout = view(out, (1:n) .+ offset)
         Uref = isa(Urefs, AbstractVector) ? Urefs[i] : Urefs
         calcfield_Cp!(thisout, b, b.velocity, Uref; kwargs...)
+        b.Cp .= thisout
         offset += n
     end
 
@@ -508,26 +509,63 @@ function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
     return out
 end
 
-# Tuple-aware version
-function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; kwargs...)
-    n_total = sum(b.ncells for b in bodies)
-    out = zeros(3, n_total)
-    areas = vcat([calc_areas(b) for b in bodies]...)
-    normals = hcat([b.normals for b in bodies]...)
-    Cps = vcat([b.Cp for b in bodies]...)
+"""
+    calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; kwargs...)
 
-    offset = 0
-    for b in bodies
-        n = b.ncells
-        thisout = view(out, 1:3, (1:n) .+ offset)
-        thisareas = view(areas, (1:n) .+ offset)
-        thisnormals = view(normals, 1:3, (1:n) .+ offset)
-        thisCps = view(Cps, (1:n) .+ offset)
-        calcfield_F!(thisout, b, thisareas, thisnormals, thisCps, Uinf, rho; kwargs...)
-        offset += n
+Compute aerodynamic forces for each body and return a matrix `Fs` of size (3, total_panels).
+Also updates each body's `.F` in-place.
+"""
+function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; correct_kuttacondition=true)
+    
+    # total panels across all bodies
+    total_cells = sum(b.ncells for b in bodies)
+    
+    # global force matrix
+    Fs = zeros(Float64, 3, total_cells)
+
+    counter = 0
+    for body in bodies
+        nc = body.ncells
+        
+        # slice of Fs for this body
+        thisout = view(Fs, 1:3, (1:nc) .+ counter)
+        
+        # start fresh
+        thisout .= 0.0
+        body.F .= 0.0  # reset body's F to zeros
+        
+        # get body arrays
+        areas = calc_areas(body)
+        normals = body.normals
+        Cps = body.Cp
+
+        # compute forces panel-wise
+        for (i, (Cp, area, normal)) in enumerate(zip(Cps, areas, eachcol(normals)))
+            val = -0.5*rho*Uinf^2 * Cp * area
+            thisout[:, i] .= val .* normal
+        end
+        
+        # Kutta TE correction
+        if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
+            q = 0.5*rho*Uinf^2
+            for shedding in body.shedding
+                for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
+                    if pj != -1
+                        aveCp = (Cps[pi] + Cps[pj]) / 2
+                        thisout[:, pi] .= -aveCp * q * areas[pi] .* normals[:, pi]
+                        thisout[:, pj] .= -aveCp * q * areas[pj] .* normals[:, pj]
+                    end
+                end
+            end
+        end
+        
+        # copy computed forces to body.F
+        body.F .= thisout
+        
+        counter += nc
     end
 
-    return out
+    return Fs
 end
 
 """
@@ -789,88 +827,45 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
-"""
-    calcfield_LDS!(out::Matrix, body::AbstractBody,
-                    Lhat::Vector, Dhat::Vector, Shat::Vector; F_fieldname="F")
+# """
+#     calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
 
-Calculate the integrated force decomposed as lift, drag, and sideslip according
-to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
-This is calculated from the force field `F_fieldname`.
-"""
-function calcfield_LDS!(out, body, Lhat, Dhat, Shat; F_fieldname="F", optargs...)
+# Similar to [`calcfield_LDS!`](@ref) but without in-place calculation (`out` is
+# not needed).
+# """
+# calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
+
+function calcfield_LDS!(out::AbstractMatrix, bodies::Tuple,
+                        Fs::AbstractMatrix,
+                        Lhat::AbstractVector, Dhat::AbstractVector,
+                        Shat::AbstractVector;
+                        addfield=true)
     # Error case
-    @assert check_field(body, F_fieldname) ""*
-        "Field $(F_fieldname) not found;"*
-        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
+    @assert size(out, 1)==3 && size(out, 2)==3 ""*
+        "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
+    @assert abs(norm(Lhat) - 1) <= 2*eps() ""*
+        "Lhat=$(Lhat) is not a unitary vector"
+    @assert abs(norm(Dhat) - 1) <= 2*eps() ""*
+        "Dhat=$(Dhat) is not a unitary vector"
+    @assert abs(norm(Shat) - 1) <= 2*eps() ""*
+        "Shat=$(Shat) is not a unitary vector"
 
-    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+    offsets = cumsum(vcat(0, (b.ncells for b in bodies)...))
+    fill!(view(out, :, 3), 0.0)
 
-    return calcfield_LDS!(out, body, Fs, Lhat, Dhat, Shat; optargs...)
-end
-
-"""
-    calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
-
-`Shat` is calculated automatically from `Lhat` and `Dhat`,
-"""
-function calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
-    return calcfield_LDS!(out, body, Lhat, Dhat, cross(Lhat, Dhat); optargs...)
-end
-
-
-"""
-    calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
-
-Similar to [`calcfield_LDS!`](@ref) but without in-place calculation (`out` is
-not needed).
-"""
-calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
-
-"""
-    calcfield_LDS!(out::Matrix, bodies::Tuple, Lhat::Vector, Dhat::Vector, Shat::Vector;
-                   F_fieldname="F")
-
-Calculate the integrated force decomposed as lift, drag, and sideslip for a tuple of
-bodies according to the orthonormal basis `Lhat`, `Dhat`, `Shat`. The total force
-is obtained by summing the panel forces of all bodies.
-
-`out[:, 1]` is lift, `out[:, 2]` is drag, `out[:, 3]` is sideslip.
-"""
-function calcfield_LDS!(out::AbstractMatrix, bodies::Tuple, 
-                        Lhat::AbstractVector, Dhat::AbstractVector, Shat::AbstractVector;
-                        F_fieldname="F", optargs...)
-
-    # Error case
-    @assert size(out) == (3,3) "Invalid `out` matrix. Expected size (3,3); got $(size(out))."
-    for v in (Lhat, Dhat, Shat)
-        @assert abs(norm(v) - 1) <= 2*eps() "$v is not a unitary vector"
+    # Calculate Ftot (integrated force)
+    for (bi, b) in enumerate(bodies)
+        r = offsets[bi] + 1 : offsets[bi+1]
+        @views out[:, 3] .+= vec(sum(Fs[:, r], dims=2))
     end
 
-    # Initialize total force
-    Ftot = zeros(3)
-
-    # Sum forces from all bodies
-    for body in bodies
-        @assert check_field(body, F_fieldname) "Field $F_fieldname not found in body."
-        Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
-        Ftot .+= sum(Fs; dims=2)[:,1]   # sum over columns (panels)
-    end
-
-    # Store total force in out[:,3]
-    out[:,3] .= Ftot
-
-    # Project total force along each direction
-    out[:,1] .= Lhat .* dot(Ftot, Lhat)
-    out[:,2] .= Dhat .* dot(Ftot, Dhat)
-    out[:,3] .= Shat .* dot(Ftot, Shat)
+    # Project Ftot in each direction
+    out[:, 1] = Lhat .* dot(view(out, :, 3), Lhat)
+    out[:, 2] = Dhat .* dot(view(out, :, 3), Dhat)
+    out[:, 3] = Shat .* dot(view(out, :, 3), Shat)
 
     return out
 end
-
-# Convenience method: compute Shat automatically
-calcfield_LDS!(out, bodies::Tuple, Lhat::Vector, Dhat::Vector; optargs...) =
-    calcfield_LDS!(out, bodies, Lhat, Dhat, cross(Lhat,Dhat); optargs...)
-
 
 """
     calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
