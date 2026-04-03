@@ -38,7 +38,7 @@ function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:Ref
     propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
 end
 
-function propagate_kinematics!(system::Union{AbstractBody}, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
     # get frame
     frame = frames[i_frame]
 
@@ -56,7 +56,7 @@ function propagate_kinematics!(system::Union{AbstractBody}, i_frame::Int, frames
 
     # rotate and translate dependent surfaces
     for i in frame.dependent_index
-        body = system isa MultiBody ? get_body(system, i) : system
+        body = system
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
     end
@@ -134,7 +134,7 @@ function inverse_Rodrigues(R::FastMultipole.SMatrix{3,3,TF,9}) where TF
     return FastMultipole.SVector{3,TF}(x, y, z) * θ
 end
 
-function ReferenceFrame(system::Union{AbstractBody}; 
+function ReferenceFrame(system::AbstractBody; 
         # vvv all in global frame vvv
         origin = system.O,
         v = zero(FastMultipole.SVector{3,eltype(system.O)}),
@@ -144,7 +144,7 @@ function ReferenceFrame(system::Union{AbstractBody};
         Rp2g = FastMultipole.SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), # rotation from parent frame to global frame
         name = "vehicle",  # name of this frame
         child_index = Int[],  # indices of child frames
-        dependent_index = system isa MultiBody ? collect(1:system.nbodies) : [1]  # indices of dependent bodies
+        dependent_index = [1]  # indices of dependent bodies
         # ^^^ all in global frame ^^^
     )
     TF = eltype(system.O)

@@ -54,27 +54,8 @@ end
 
 to_tuple(val::Tuple) = val
 to_tuple(val) = (val,)
-influence!(target, source, backend; optargs...) = influence!(to_tuple(target), to_tuple(source), backend; optargs...)
-
-"Defaults to do nothing."
-_rigid_wake_phi!(self::AbstractBody, targets, out; optargs...) = nothing
-
-"Defaults to do nothing."
-_rigid_wake_U!(self::AbstractBody, targets, out; optargs...) = nothing
-
-"Recursively applies rigid wake contributions from each member body."
-function _rigid_wake_U!(self::MultiBody, targets, out; optargs...)
-    for body in self.bodies
-        _rigid_wake_U!(body, targets, out; optargs...)
-    end
-end
-
-"Defaults to do nothing."
-_unpack_fmm(self::AbstractBody) = self
-
-"Recursively unpacks multibody objects."
-function _unpack_fmm(self::MultiBody)
-    return Tuple(_unpack_fmm.(self.bodies))
+function influence!(target, source, backend; optargs...)
+    influence!(to_tuple(target), to_tuple(source), backend; optargs...)
 end
 
 #-------- panel kernels -------#

@@ -47,7 +47,6 @@ Plots and outputs a slice of field `fieldname`.
 * `proc_xfun::Function`         :   Process slice and output x-values for plots
 * `proc_yfun::Function`         :   Process slice and output y-values for plots
 
-NOTE: Current implementation of `find_i` does not work on MultiBody.
 """
 function monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
                         controlpoints, fieldname, sliceposs;
@@ -279,23 +278,6 @@ function monitor_loading(body::Union{NonLiftingBody, AbstractLiftingBody}, Lhat,
                                                     dpi=300, transparent=true)
         end
 
-    end
-
-    return fig, axs
-
-end
-
-
-function monitor_loading(multibody::MultiBody, args...;
-                            _fig=nothing, _axs=nothing,
-                            filepref="loading", optargs...)
-
-    fig, axs = _fig, _axs
-
-    for (bi, body) in enumerate(multibody.bodies)
-
-        fig, axs = monitor_loading(body, args...; _fig=fig, _axs=axs,
-                                    filepref=filepref*"-b$(bi)", optargs...)
     end
 
     return fig, axs

@@ -352,7 +352,7 @@ function solve2!(self::RigidWakeBody{TK, 1},
                     solver_optargs=(),
                     update_G::Bool=true,
                     optargs...
-                ) where {TK<:Union{VortexRing, ConstantDoublet},T}
+                ) where {TK<:Union{VortexRing, ConstantDoublet}}
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
@@ -382,7 +382,7 @@ function solve2!(self::RigidWakeBody{TK, 1},
     _solvedflag(self, true)
 end
 
-function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), optargs...) where TF
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), update_G=false, optargs...) where TF
 
     # save external velocity and potential
     solver.Uext .= self.velocity
@@ -411,14 +411,18 @@ function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vo
     solver.rhs .= self.potential
     solver.rhs .*= -1.0 # move to RHS
 
-    # influence matrix for ϕ
-    G = solver.G
-    G .= 0.0
+    if update_G
+        # influence matrix for ϕ
+        G = solver.G
+        G .= 0.0
 
-    # solve for doublet strengths such that the interior perturbation potential vanishes everywhere
-    # then, the resulting velocity outside will be equal to the source strength, which satisfied flow tangency
-    _G_phi!(self, ConstantDoublet, G, self.controlpoints, backend; kerneloffset=self.kerneloffset)
-    Glu = lu!(G)
+        # solve for doublet strengths such that the interior perturbation potential vanishes everywhere
+        # then, the resulting velocity outside will be equal to the source strength, which satisfied flow tangency
+        _G_phi!(self, ConstantDoublet, G, self.controlpoints; kerneloffset=self.kerneloffset)
+        Glu = lu!(G)
+    else
+        Glu = solver.Glu
+    end
 
     # Solve system of equations for the potential
     # μ = G \ rhs
@@ -456,7 +460,7 @@ function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBacken
         body.CPoffset = -abs(body.CPoffset)
     end
 
-    # get normals and control points per body
+    # update normals and control points
     for body in bodies
         normals = calc_normals!(body)
         calc_controlpoints!(body, normals)
@@ -479,14 +483,7 @@ function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBacken
     for body in bodies
         body.potential .= 0
     end
-    for source in bodies
-        for target in bodies
-            influence!(target, source, backend; scalar_potential=true, optargs...)
-        end
-    end
-
-    # flatten all bodies for DerivativesSwitch
-    all_unpacked = Tuple(unpacked for body in bodies for unpacked in to_tuple(_unpack_fmm(body)))
+    influence!(bodies, bodies, backend; scalar_potential=true, velocity=false, optargs...)
 
     # run fgs solver
     FastMultipole.solve!(bodies, solver.fgs;
@@ -494,7 +491,9 @@ function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBacken
         inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance,
         rlx=solver.rlx,
-        derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, all_unpacked),
+        scalar_potential=true,
+        gradient=false,
+        hessian=false,
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false
@@ -508,17 +507,14 @@ function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBacken
         body.potential .= solver.phi_ext[i]
         _solvedflag(body, true)
     end
-
 end
 
 # Multi-body solve with per-body solvers via outer fixed-point iteration
 function solve2!(bodies::Tuple, solvers::Tuple;
-    backend::AbstractBackend = fill(DirectBackend(), length(bodies)),
+    backend = fill(DirectBackend(), length(bodies)),
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
-    scalar_potential::Bool = fill(false, length(bodies)),
-    velocity::Bool = fill(true, length(bodies)),
     optargs...)
 
     N = length(bodies)
@@ -540,9 +536,9 @@ function solve2!(bodies::Tuple, solvers::Tuple;
             # Accumulate cross-body induced velocity from all OTHER bodies
             for (j, source) in enumerate(bodies)
                 j == i && continue
-                influence!(body, source, backend=backend[j]; 
-                    scalar_potential=scalar_potential[i], 
-                    velocity=velocity[i], 
+                influence!(body, source, backend[j]; 
+                    scalar_potential=false, 
+                    velocity=true,
                     optargs...)
             end
 
@@ -997,7 +993,7 @@ function solve2!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
                     solver_optargs=(),
                     elprescribe_index::Int=1, elprescribe_value=0,
                     weight_gammat=0, weight_gammao=1
-                ) where T
+                )
 
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*

@@ -225,6 +225,18 @@ function _checkTE(grid, shedding::Array{Int, 2}; tol=1e1*eps())
     return true
 end
 
+function extra_reset!(body::AbstractLiftingBody)
+    for vte in body.velocity_te
+        vte .= 0.0
+    end
+end
+
+function extra_apply_freestream!(body::AbstractLiftingBody, uinf)
+    for i in eachindex(body.velocity_te)
+        eachcol(body.velocity_te[i]) .+= Ref(uinf)
+    end
+end
+
 function _G_phi_wake!(self::AbstractLiftingBody{<:Any,<:Any,TF}, kernel, G, CPs, backend::FastMultipoleBackend; kerneloffset=1.0e-8, optargs...) where TF
     # Add wake contributions
     sheddings = 1:self.nsheddings

@@ -40,11 +40,13 @@ NDIVS_rfl_up    = [(0.25, n_rfl, 10.0, false),
                    (0.25, n_rfl,  0.1, false)]
 NDIVS_rfl_lo    = NDIVS_rfl_up
 
-kernel   = Union{pnl.ConstantSource, pnl.VortexRing}
-bodytype = pnl.RigidWakeBody{kernel}
-
 # ----------------- HELPER: GENERATE A DUCT ------------------------------------
-function make_duct()
+function make_duct(;
+        kernel = Union{pnl.ConstantSource, pnl.VortexRing},
+        bodytype = pnl.RigidWakeBody
+    )
+    bodytype = bodytype{kernel}
+
     xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                           NDIVS_rfl_up, NDIVS_rfl_lo;
                                           verify_spline=false)
@@ -60,7 +62,6 @@ function make_duct()
                     kerneloffset=1e-2,
                     kernelcutoff=1e-14,
                     characteristiclength=(args...)->d*aspectratio,
-                    semiinfinite_wake=false
                 ))
     return body
 end
@@ -68,6 +69,10 @@ end
 # ----------------- GENERATE TWO DUCTS ----------------------------------------
 body1 = make_duct()
 body2 = make_duct()
+# body2 = make_duct(;
+#             kernel = pnl.ConstantSource,
+#             bodytype = pnl.NonLiftingBody
+#         )
 
 # Offset second duct in z by 1.5 diameters
 pnl.rotate!(body2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
@@ -76,33 +81,25 @@ println("Body 1 panels: $(body1.ncells)")
 println("Body 2 panels: $(body2.ncells)")
 
 # ----------------- HELPER: SETUP & POST-PROCESS ------------------------------
-function setup_bodies!(body1, body2, Vinf, magVinf)
+function setup_bodies!(body, Vinf, magVinf)
     # Reset fields
-    pnl.reset!(body1)
-    pnl.reset!(body2)
+    pnl.reset!(body)
 
     # Apply freestream
-    pnl.apply_freestream!(body1, Vinf)
-    pnl.apply_freestream!(body2, Vinf)
+    pnl.apply_freestream!(body, Vinf)
 
     # Set wake directions
-    body1.Das[1] .= repeat(Vinf/magVinf, 1, size(body1.Das[1], 2))
-    body2.Das[1] .= repeat(Vinf/magVinf, 1, size(body2.Das[1], 2))
+    if typeof(body) <: pnl.RigidWakeBody
+        body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
+        body.semiinfinite_wake = false
+    end
 end
 
-function postprocess!(body1, body2, Vinf, magVinf, rho, backend)
-    for (body, other) in ((body1, body2), (body2, body1))
-        # Self-induced velocity (includes doublet gradient)
-        pnl.calcfield_U!(body, body; backend)
-        # Add cross-body velocity
-        pnl.influence!(body, other, backend; velocity=true)
-        # Add freestream
-        pnl.apply_freestream!(body, Vinf)
-        # Pressure coefficient
-        pnl.calcfield_Cp!(body, magVinf; correct_kuttacondition=true)
-        # Forces
-        pnl.calcfield_F!(body, magVinf, rho)
-    end
+function postprocess!(bodies, Vinf, magVinf, rho, backend)
+    pnl.calcfield_U!(bodies; backend)
+    pnl.apply_freestream!(bodies, Vinf)
+    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_F!(bodies, magVinf, rho)
 end
 
 function report_tangency(bodies, label)
@@ -122,24 +119,25 @@ println("\n" * "="^60)
 println("TEST 1: BackslashDirichlet multi-body solve")
 println("="^60)
 
-setup_bodies!(body1, body2, Vinf, magVinf)
+setup_bodies!(body1, Vinf, magVinf)
+setup_bodies!(body2, Vinf, magVinf)
 
 solver1 = pnl.BackslashDirichlet(body1)
 solver2 = pnl.BackslashDirichlet(body2)
+# solver2 = pnl.BackslashNeumann(body2)
 
 backend_direct = pnl.DirectBackend()
 
 println("\nSolving...")
 @time pnl.solve2!((body1, body2), (solver1, solver2);
-    backend=backend_direct,
+    backend=fill(backend_direct, 2),
     max_outer_iterations=50,
     outer_tolerance=1e-8,
-    verbose=true,
-    scalar_potential=true,
-    velocity=true)
+    verbose=true)
 
 println("\nPost-processing...")
-postprocess!(body1, body2, Vinf, magVinf, rho, backend_direct)
+@show typeof(Vinf), typeof(magVinf), typeof(rho), typeof(backend_direct)
+postprocess!((body1, body2), Vinf, magVinf, rho, backend_direct)
 report_tangency((body1, body2), "BackslashDirichlet")
 
 # Save for comparison
@@ -153,7 +151,8 @@ println("\n" * "="^60)
 println("TEST 2: FGSSolver multi-body solve (leaf_size=10000)")
 println("="^60)
 
-setup_bodies!(body1, body2, Vinf, magVinf)
+setup_bodies!(body1, Vinf, magVinf)
+setup_bodies!(body2, Vinf, magVinf)
 body1.strength .= 0.0
 body2.strength .= 0.0
 
@@ -191,20 +190,24 @@ backend_fmm = pnl.FastMultipoleBackend(
 
 println("\nSolving...")
 @time pnl.solve2!((body1, body2), (fgs1, fgs2);
-    backend=backend_fmm,
+    backend=fill(backend_direct, 2),
     max_outer_iterations=50,
     outer_tolerance=1e-8,
-    verbose=true,
-    scalar_potential=true,
-    velocity=true)
+    verbose=true)
 
 println("\nPost-processing...")
-postprocess!(body1, body2, Vinf, magVinf, rho, backend_fmm)
+postprocess!((body1, body2), Vinf, magVinf, rho, backend_direct)
 report_tangency((body1, body2), "FGSSolver (per-body)")
 
 # Save for comparison
 fgs_strengths1 = copy(body1.strength)
 fgs_strengths2 = copy(body2.strength)
+
+backend_fmm = pnl.FastMultipoleBackend(
+    expansion_order=10,
+    multipole_acceptance=0.4,
+    leaf_size=10000
+)
 
 # ============================================================================
 # TEST 3: Single coupled FGSSolver (both bodies in one solver)
@@ -213,7 +216,8 @@ println("\n" * "="^60)
 println("TEST 3: Single coupled FGSSolver (leaf_size=10000)")
 println("="^60)
 
-setup_bodies!(body1, body2, Vinf, magVinf)
+setup_bodies!(body1, Vinf, magVinf)
+setup_bodies!(body2, Vinf, magVinf)
 body1.strength .= 0.0
 body2.strength .= 0.0
 
@@ -224,7 +228,7 @@ println("\nInitializing coupled FGSSolver...")
     multipole_acceptance=0.4,
     max_iterations=500,
     inner_iterations=20,
-    tolerance=1e-6,
+    tolerance=1e-8,
     rlx=1.0,
     shrink=true,
     reverse_pass=false,
@@ -235,7 +239,7 @@ println("\nSolving...")
 @time pnl.solve2!((body1, body2), fgs_coupled; backend=backend_fmm)
 
 println("\nPost-processing...")
-postprocess!(body1, body2, Vinf, magVinf, rho, backend_fmm)
+postprocess!((body1, body2), Vinf, magVinf, rho, backend_fmm)
 report_tangency((body1, body2), "FGSSolver (coupled)")
 
 # ============================================================================

@@ -45,27 +45,27 @@ end
 # Backslash Operator
 ################################################################################
 
-struct Backslash{TF,LS} <: AbstractMatrixfulSolver{LS}
+struct BackslashNeumann{TF,TGLU,LS} <: AbstractMatrixfulSolver{LS}
     G::Matrix{TF}    # Coefficient matrix
+    Glu::TGLU
+    rhs::Vector{TF}
 end
 
-function Backslash(self::AbstractBody{TK, 1, <:Any};
-        backend::AbstractBackend=FastMultipoleBackend(),  # Backend to use for matrix construction
-        kernel=TK,                      # Kernel type for matrix construction
-        TFG=numtype(self), # Type for G matrix
-        least_squares::Bool=true,     # Whether to use least squares solution
-        optargs...                    # Additional optional arguments
-    ) where TK
+function BackslashNeumann(body::AbstractBody{TK,1,TF}) where {TK,TF}
+    
+    # update control points (exterior)
+    calc_normals!(body)
+    calc_controlpoints!(body; off=abs(body.CPoffset))
+    
+    # populate G
+    G = zeros(TF, body.ncells, body.ncells)
+    _G_U!(body, TK, G, body.controlpoints, body.normals; kerneloffset=body.kerneloffset)
 
-    # Compute normals and control points
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
+    # factorization
+    Glu = lu!(G)
 
-    # Compute geometric matrix (left-hand-side influence matrix)
-    G = zeros(TFG, self.ncells, self.ncells)
-    _G_U!(self, kernel, G, CPs, normals, backend; optargs...)
-
-    return Backslash{TFG, least_squares}(G)
+    # construct solver
+    return BackslashNeumann{TF,typeof(Glu),false}(G, Glu, zeros(TF, body.ncells))
 end
 
 function numtype(self::AbstractBody)
@@ -82,13 +82,11 @@ get_strength_name(::AbstractBody{ConstantSource, 1, <:Any}) = "sigma"
 get_strength_name(::AbstractBody{ConstantDoublet, 1, <:Any}) = "mu"
 get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
 
-# interface with existing methods
-solve_matrix!(y, A, b, ::Backslash) = solve_backslash!(y, A, b)
-
 #--- Dirichlet formulation ---#
 
-struct BackslashDirichlet{TF} <: AbstractMatrixfulSolver{false}
+struct BackslashDirichlet{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
+    Glu::TGLU
     rhs::Vector{TF}
     Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
     phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
@@ -99,7 +97,18 @@ function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     rhs = zeros(TF, body.ncells)
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
-    return BackslashDirichlet{TF}(G, rhs, Uext, phi_ext)
+
+    # update control points (interior)
+    calc_normals!(body)
+    calc_controlpoints!(body; off=-abs(body.CPoffset))
+
+    # populate G
+    _G_phi!(body, ConstantDoublet, G, body.controlpoints; kerneloffset=body.kerneloffset)
+    
+    # factorization
+    Glu = lu!(G)
+
+    return BackslashDirichlet{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
 end
 
 ################################################################################

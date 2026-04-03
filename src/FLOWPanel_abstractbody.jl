@@ -91,14 +91,14 @@ abstract type AbstractBody{E<:AbstractElement, N, TF} end
 
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
-    for vte in body.velocity_te
-        vte .= 0.0
-    end
     body.potential .= 0.0
     body.Cp .= 0.0
     body.F .= 0.0
+    extra_reset!(body)
     return nothing
 end
+
+extra_reset!(body::AbstractBody) = nothing
 
 """
     `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
@@ -688,11 +688,16 @@ end
 
 function apply_freestream!(body::AbstractBody, uinf)
     eachcol(body.velocity) .+= Ref(uinf)
-    for i in eachindex(body.velocity_te)
-        eachcol(body.velocity_te[i]) .+= Ref(uinf)
+    extra_apply_freestream!(body, uinf)
+end
+
+function apply_freestream!(bodies::Tuple, uinf)
+    for body in bodies
+        apply_freestream!(body, uinf)
     end
 end
 
+extra_apply_freestream!(body::AbstractBody, uinf) = nothing
 
 #------- FastMultipole interface functions -------#
 

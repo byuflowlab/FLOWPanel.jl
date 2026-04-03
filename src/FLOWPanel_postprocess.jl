@@ -27,7 +27,7 @@ using `offset` and `characteristiclength`, and save it as a field in
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-function calcfield_U!(targetbody, sourcebody;
+function calcfield_U!(bodies::Tuple;
         backend::AbstractBackend=DirectBackend(),
         reset=true,
         convolve_panels=true,
@@ -35,46 +35,55 @@ function calcfield_U!(targetbody, sourcebody;
     )
 
     # ERROR CASES
-    if check_solved(sourcebody)==false
-        error("Source body hasn't been solved yet."*
-              " Please call `solve(...)` function first.")
+    for body in bodies
+        @assert check_solved(body) == true ""*
+            "Body hasn't been solved yet."*
+            " Please call `solve(...)` function first on this body."
     end
 
     # reset velocity
-    reset && (targetbody.velocity .= zero(eltype(targetbody.velocity)))
-
-    # recalculate normals/control points on the target body
-    calc_normals!(targetbody)
-    calc_controlpoints!(targetbody)
-    
-    # Add induced velocity at each control point
-    convolve_panels && influence!(targetbody, sourcebody, backend; scalar_potential=false, velocity=true)
-
-    # add doublet gradient (if applicable)
-    if has_grad_mu(targetbody) && doublet_gradient
-        compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
-            targetbody.cells,
-            targetbody.neighbor,
-            view(targetbody.strength, :, get_Gammai(targetbody)),
-            view(targetbody.shedding_full, 1:2, :), 
-            scale=0.5)
-        
-        # alternatively, comment out the above function and:
-        # targetbody.velocity .*= 2.0
-
-        # alternatively, comment out the above and:
-        # targetbody.velocity .= zero(eltype(targetbody.velocity))
-        # compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
-            # targetbody.cells,
-            # targetbody.neighbor,
-            # view(targetbody.strength, :, get_Gammai(targetbody)),
-            # view(targetbody.shedding_full, 1:2, :), 
-            # scale=1.0)
+    if reset
+        for body in bodies
+            body.velocity .= zero(eltype(body.velocity))
+        end
     end
 
-    return targetbody.velocity
+    # recalculate normals/control points on the target body
+    for body in bodies
+        calc_normals!(body)
+        calc_controlpoints!(body; off=abs(body.CPoffset))
+    end
+
+    # Add induced velocity at each control point
+    convolve_panels && influence!(bodies, bodies, backend; scalar_potential=false, velocity=true)
+
+    # add doublet gradient (if applicable)
+    for body in bodies
+        if has_grad_mu(body) && doublet_gradient
+            compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
+                body.cells,
+                body.neighbor,
+                view(body.strength, :, get_Gammai(body)),
+                view(body.shedding_full, 1:2, :), scale=0.5)
+            
+            # alternatively, comment out the above function and:
+            # targetbody.velocity .*= 2.0
+
+            # alternatively, comment out the above and:
+            # targetbody.velocity .= zero(eltype(targetbody.velocity))
+            # compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
+                # targetbody.cells,
+                # targetbody.neighbor,
+                # view(targetbody.strength, :, get_Gammai(targetbody)),
+                # view(targetbody.shedding_full, 1:2, :), 
+                # scale=1.0)
+        end
+    end
+
+    return nothing
 end
 
+calcfield_U!(targetbody; optargs...) = calcfield_U!((targetbody,); optargs...)
 
 ################################################################################
 # GRADIENT COMPUTATION
@@ -300,8 +309,13 @@ as a field named `fieldname`.
 The field is calculated in-place and added to `out` (hence, make sure that `out`
 starts with all zeroes).
 """
-calcfield_Cp!(body, Uref; dphidt=nothing, optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt, optargs...)
+calcfield_Cp!(body::AbstractBody, Uref; dphidt=nothing, optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt, optargs...)
 
+function calcfield_Cp!(bodies::Tuple, Uref; dphidt=fill(nothing, length(bodies)), correct_kuttacondition=fill(true, length(bodies)), optargs...) 
+    for (i, body) in enumerate(bodies)
+        calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt=dphidt[i], correct_kuttacondition=correct_kuttacondition[i], optargs...)
+    end
+end
 
 ################################################################################
 # FORCE FIELDS
@@ -399,48 +413,10 @@ end
 calcfield_F!(body::AbstractBody, Uinf::Number, rho::Number; correct_kuttacondition=true) =
     calcfield_F!(body.F, body, calc_areas(body), body.normals, body.Cp, Uinf, rho; correct_kuttacondition)
 
-function calcfield_F!(out::AbstractMatrix, mbody::MultiBody,
-                        areas::AbstractVector, normals::AbstractMatrix, Cps::AbstractVector,
-                        args...;
-                        optargs...)
-
-
-    # Error cases
-    @assert size(out, 1)==3 && size(out, 2)==mbody.ncells ""*
-        "Invalid `out` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(out))."
-    @assert length(areas)==mbody.ncells ""*
-        "Invalid `areas` vector."*
-        " Expected length $(mbody.ncells); got $(length(areas))."
-    @assert size(normals, 1)==3 && size(normals, 2)==mbody.ncells ""*
-        "Invalid `normals` matrix."*
-        " Expected size $((3, mbody.ncells)); got $(size(normals))."
-    @assert length(Cps)==mbody.ncells ""*
-        "Invalid `Cps` vector."*
-        " Expected length $(mbody.ncells); got $(length(Cps))."
-
-    counter = 0
-
-    for body in mbody.bodies
-
-        offset = body.ncells
-        thisout = view(out, 1:3, (1:offset) .+ counter)
-        thisareas = view(areas, (1:offset) .+ counter)
-        thisnormals = view(normals, 1:3, (1:offset) .+ counter)
-        thisCps = view(Cps, (1:offset) .+ counter)
-
-        calcfield_F!(thisout, body, thisareas, thisnormals,
-                                thisCps, args...;
-                                fieldname=fieldname, addfield=addfield,
-                                optargs...)
-        counter += offset
+function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; correct_kuttacondition=fill(true, length(bodies)))
+    for (i, body) in enumerate(bodies)
+        calcfield_F!(body.F, body, calc_areas(body), body.normals, body.Cp, Uinf, rho; correct_kuttacondition=correct_kuttacondition[i])
     end
-
-    if addfield && !(fieldname in mbody.fields)
-        push!(mbody.fields, fieldname)
-    end
-
-    return out
 end
 
 """

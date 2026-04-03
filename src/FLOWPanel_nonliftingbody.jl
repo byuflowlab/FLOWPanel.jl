@@ -29,7 +29,7 @@ Non-lifting body that is solved using a combination of N panel elements.
   * `O::Vector`                         : Origin of body w.r.t. global
 
 """
-struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
+mutable struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
 
     # User inputs
     nodes::Matrix{TF}                         # 3xnnodes matrix where nodes[:, i] is the position of the i-th node
@@ -44,17 +44,13 @@ struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
     O::Array{TF,1}                      # Position of CS of original grid
 
     # Fields
-    Uinf::Matrix{TF}
-    U::Matrix{TF}
-    phi::Vector{TF}
     Cp::Vector{TF}
-    Cps::Vector{TF}
-    Gamma::Vector{TF}
     F::Matrix{TF}
     solved::Bool
 
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
+    potential::Array{TF,1}              # Potential at control points
     velocity::Array{TF,2}               # Velocity at control points
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
@@ -72,42 +68,32 @@ function NonLiftingBody{E, N, TF}(
                 neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                Uinf=zeros(TF, 0, 0),
-                U=zeros(TF, 0, 0),
-                phi=zeros(TF, 0),
                 Cp=zeros(TF, 0),
-                Cps=zeros(TF, size(cells, 2)),
-                Gamma=zeros(TF, 0),
                 F=zeros(TF, 0, 0),
                 solved=false,
                 strength=zeros(size(cells, 2), N),
+                potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
+                controlpoints=zeros(3, size(cells, 2)),
+                normals=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
                 kernelcutoff=1e-14,
                 characteristiclength=characteristiclength_unitary,
-                check_mesh=true, watertight=false,
+                watertight=false,
                 inside_offset=1e-6
               ) where {E, N, TF}
-    # check if mesh is watertight
-    if check_mesh
-        # Need to implement an equivalent check for standalone nodes/cells here, or simply skip.
-        # Alternatively, we just depend on the watertight flag explicitly given to the constructor.
-    end
-
-    # If the user did not provide half-edges via neighbor matrix, compute them:
-    # We will assume that they are either pre-computed via the other constructor or zero unless calculated.
-    # Note: `geometrictools` has functions for finding neighbors, but here we require a manual pass or rely on the grid-based constructor extracting it first.
-    # If a pure nodes/cells constructor is used, we'll assume the user computes their own neighbors and passes them,
-    # or that a boundary defaults to zero.
 
     return NonLiftingBody{E, N, TF}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
-                Uinf, U, phi, Cp, Cps, Gamma, F, solved,
+                Cp, F, solved,
                 strength,
+                potential,
                 velocity,
+                controlpoints,
+                normals,
                 CPoffset,
                 kerneloffset,
                 kernelcutoff,
@@ -156,6 +142,13 @@ function NonLiftingBody{E, N, TF}(
               )
 end
 
+_count(::Type{ConstantSource}) = 1
+_count(::Type{ConstantDoublet}) = 1
+_count(::Type{VortexRing}) = 1
+_count(::Type{Union{ConstantSource, ConstantDoublet}}) = 2
+_count(::Type{Union{ConstantSource, VortexRing}}) = 2
+_count(::Type{<:Any}) = error("Unsupported kernel type for NonLiftingBody.")
+
 function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
     return NonLiftingBody{E, _count(E), eltype(grid._nodes)}(grid; optargs...)
 end
@@ -184,7 +177,7 @@ solved_field_name(::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) =
 # CONSTANT-SOURCE SOLVER
 ################################################################################
 
-function _G_U!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, normals, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
+function _G_U!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, normals; strength_index=kernel==ConstantDoublet && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
     N = self.ncells
     M = size(CPs, 2)
 
@@ -225,7 +218,7 @@ function _G_U!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, normals, backend
     self.strength .= old_strength
 end
 
-function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet || kernel==VortexRing && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
+function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs; strength_index=kernel==ConstantDoublet || kernel==VortexRing && NK>1 ? 2 : 1, kerneloffset=self.kerneloffset, optargs...) where {NK,TF}
     N = self.ncells
     M = size(CPs, 2)
 
@@ -240,13 +233,7 @@ function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs, backend::Abstr
     # store old strength and set to unit
     old_strength = copy(self.strength)
     self.strength .= zero(eltype(self.strength))
-    if strength_index > 0
-        self.strength[:, strength_index] .= 1.0
-    else
-        for i in 1:NK
-            self.strength[:, i] .= 1.0
-        end
-    end
+    self.strength[:, strength_index] .= 1.0
 
     Threads.@threads for i_source in 1:N
         for i_target in 1:M
@@ -317,58 +304,34 @@ FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,Vorte
 # ABSTRACT SOLVER INTERFACE
 ################################################################################
 
-function solve2!(self::NonLiftingBody{TK,1,TFG}, solver::AbstractMatrixfulSolver{false};
-        backend=DirectBackend(),
+function solve2!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, <:Any, false};
+        backend=DirectBackend(), strength_index=1,
         update_G::Bool=false,   # Whether to update the influence matrix G
-        strength_name=get_strength_name(self),  # Name of the strength field to solve for
         optargs...              # Additional optional arguments to _G_U!
-    ) where {TK, TFG, TFS<:Real}
-
-    # formatting assertions
-    @assert size(self.strength, 2) == 1 "AbstractBody{<:Any, 1} expected to have single strength per element; got size $(size(self.strength, 2))."
+    ) where {TK, NK, TF}
 
     # Compute normals and control points
-    normals = _calc_normals(self)
-    calc_controlpoints!(self, normals)
+    normals = calc_normals!(body)
+    calc_controlpoints!(body)
 
     # update influence matrix (if requested)
+    Glu = solver.Glu
     if update_G
-
-        # Update geometric matrix (left-hand-side influence matrix)
-        _G_U!(self, TK, solver.G, self.controlpoints, normals, backend; optargs...)
+        solver.G .= zero(eltype(solver.G))
+        _G_U!(body, TK, solver.G, body.controlpoints, normals; optargs...)
+        Glu = lu!(solver.G)
     end
 
     # generate RHS
-    TF = promote_type(TFG, TFS)
-    RHS = zeros(TF, self.ncells)
-    calc_bc_noflowthrough!(RHS, Uinfs, normals)
+    rhs = solver.rhs
+    rhs .= zero(eltype(rhs))
+    calc_bc_noflowthrough!(rhs, body.velocity, normals)
 
-    # Solve system of equations
-    solution = zeros(TF, self.ncells)
-    solve_matrix!(solution, solver.G, RHS, solver)
+    # solver for strengths
+    ldiv!(view(body.strength, :, strength_index), Glu, rhs)
 
     # set solved flag
-    _solvedflag(self, true)
-
-    # Assign solution to body element strengths
-    self.strength .= solution
-
-    # verify that source strength is equal to -∂ϕ/∂n on the boundary
-    Uext = copy(self.velocity)
-
-    # outside control points
-    calc_controlpoints!(self, normals)
-    self.velocity .= 0
-    influence!(self, self, backend; velocity=true, optargs...)
-    us_outside = copy(self.velocity)
-
-    # inside control points
-    calc_controlpoints!(self, normals; off=-1e-10)
-    self.velocity .= 0
-    influence!(self, self, backend; velocity=true, optargs...)
-
-    # restore external velocity
-    self.velocity .= Uext
+    _solvedflag(body, true)
 
     return nothing
 end
@@ -444,3 +407,34 @@ function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
 end
 
 ##### END OF COMMON FUNTIONS ###################################################
+
+
+function generate_revolution_liftbody(bodytype::Type{B}, args...; bodyoptargs=(),
+                                                  gridprocessing=nothing,
+                                                  dimsplit::Int=1,
+                                                  # loop_dim::Int=1,
+                                                  loop_dim::Int=2,
+                                                  axis_angle=270,
+                                                  optargs...) where {B<:NonLiftingBody}
+    # Revolves the geometry
+    grid = gt.surface_revolution(args...; loop_dim=loop_dim,
+                                            axis_angle=axis_angle, optargs...)
+
+    # Intermediate processing of grid: rotate to align centerline with x-axis
+    if gridprocessing==nothing
+        Oaxis = gt.rotation_matrix2(0, 0, 90)
+        O = zeros(3)
+        gt.lintransform!(grid, Oaxis, O)
+
+    # User-defined intermediate processing of grid
+    else
+        gridprocessing(grid)
+    end
+
+    # Splits the quadrialateral panels into triangles
+    # dimsplit = 2              # Dimension along which to split
+    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
+
+    # construct body
+    return bodytype(triang_grid; bodyoptargs...)
+end
