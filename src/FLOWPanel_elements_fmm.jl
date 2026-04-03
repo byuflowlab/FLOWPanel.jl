@@ -13,44 +13,48 @@
 
 has_semiinfinite_wake(self::AbstractBody) = false
 
-function influence!(self::AbstractBody, target_body::AbstractBody, backend::FastMultipoleBackend;
+function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, optargs...)
-    TF = eltype(target_body.controlpoints)
-    pot  = scalar_potential ? target_body.potential : Vector{TF}(undef, 0)
-    vel  = velocity ? target_body.velocity : Matrix{TF}(undef, 0, 0)
-    hess = velocity_gradient ? Array{TF,3}(undef, 3, 3, target_body.ncells) : Array{TF,3}(undef, 0, 0, 0)
-    probe_system = FastMultipole.ProbeSystemArray(target_body.controlpoints, pot, vel, hess)
 
-    FastMultipole.fmm!(probe_system, _unpack_fmm(self);
+    # determine if extra_farfield is needed based
+    extra_farfield = false
+    for body in source_bodies
+        if has_semiinfinite_wake(body)
+            extra_farfield = true
+            break
+        end
+    end
+
+    FastMultipole.fmm!(target_bodies, source_bodies;
         expansion_order=backend.expansion_order,
         multipole_acceptance=backend.multipole_acceptance,
         leaf_size_source=backend.leaf_size,
-        scalar_potential=scalar_potential,
-        gradient=velocity,
+        scalar_potential, gradient=velocity,
         hessian=velocity_gradient,
-        extra_farfield=has_semiinfinite_wake(self),
-        shrink=true)
+        extra_farfield,
+        shrink=true,
+        optargs...)
 
     return nothing
 end
 
-function influence!(self::AbstractBody, target_body::AbstractBody, backend::DirectBackend;
+function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, optargs...)
-    TF = eltype(target_body.controlpoints)
-    pot  = scalar_potential ? target_body.potential : Vector{TF}(undef, 0)
-    vel  = velocity ? target_body.velocity : Matrix{TF}(undef, 0, 0)
-    hess = velocity_gradient ? Array{TF,3}(undef, 3, 3, target_body.ncells) : Array{TF,3}(undef, 0, 0, 0)
-    probe_system = FastMultipole.ProbeSystemArray(target_body.controlpoints, pot, vel, hess)
 
-    FastMultipole.direct!(probe_system, _unpack_fmm(self);
+    FastMultipole.direct!(target_bodies, source_bodies;
         scalar_potential=scalar_potential,
         gradient=velocity,
-        hessian=velocity_gradient)
+        hessian=velocity_gradient, 
+        optargs...)
 
     return nothing
 end
+
+to_tuple(val::Tuple) = val
+to_tuple(val) = (val,)
+influence!(target, source, backend; optargs...) = influence!(to_tuple(target), to_tuple(source), backend; optargs...)
 
 "Defaults to do nothing."
 _rigid_wake_phi!(self::AbstractBody, targets, out; optargs...) = nothing
@@ -749,9 +753,8 @@ _induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_si
     _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
 
 
-function _bound_vortex_velocity(r1, r2, finite_core, core_size)
+function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_core, core_size) where TF
     # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)
-    TF = eltype(r1)
     nr1 = norm(r1)
     nr2 = norm(r2)
 

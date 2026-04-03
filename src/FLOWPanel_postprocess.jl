@@ -48,7 +48,7 @@ function calcfield_U!(targetbody, sourcebody;
     calc_controlpoints!(targetbody)
     
     # Add induced velocity at each control point
-    convolve_panels && influence!(sourcebody, targetbody, backend; scalar_potential=false, velocity=true)
+    convolve_panels && influence!(targetbody, sourcebody, backend; scalar_potential=false, velocity=true)
 
     # add doublet gradient (if applicable)
     if has_grad_mu(targetbody) && doublet_gradient

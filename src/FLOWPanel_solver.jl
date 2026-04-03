@@ -240,7 +240,7 @@ end
 # FGS Solver
 ################################################################################
 
-struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
+struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     fgs::TFGS
     expansion_order::Int
     leaf_size::Int
@@ -251,11 +251,14 @@ struct FGSSolver{TFGS,TF<:Number} <: AbstractMatrixFreeSolver
     rlx::Float64
     reverse_pass::Bool
     verbose::Bool
-    Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
-    phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
+    Uext::Vector{Matrix{TF}}            # vector of per-body external velocity storage
+    phi_ext::Vector{Vector{TF}}         # vector of per-body external potential storage
 end
 
-function FGSSolver(body::AbstractBody; 
+# Single-body convenience constructor
+FGSSolver(body::AbstractBody; kwargs...) = FGSSolver((body,); kwargs...)
+
+function FGSSolver(bodies::Tuple;
         max_iterations::Int=100,         # Maximum number of iterations
         inner_iterations::Int=1,
         tolerance::Real=1e-6,            # Convergence tolerance
@@ -270,40 +273,42 @@ function FGSSolver(body::AbstractBody;
         calc_cps=true,
     )
 
-    # ensure CPoffset is negative (we'll solve this in the interior)
-    CPoffset_old = body.CPoffset
-    body.CPoffset = -abs(CPoffset_old)
+    # save and set CPoffset to negative for each body (interior solve)
+    CPoffset_olds = Tuple(body.CPoffset for body in bodies)
+    for body in bodies
+        body.CPoffset = -abs(body.CPoffset)
+    end
 
     # calculate control points if needed
     if calc_cps
-        calc_normals!(body)
-        calc_controlpoints!(body)
+        for body in bodies
+            calc_normals!(body)
+            calc_controlpoints!(body)
+        end
     end
 
     # generate solver
-    TF = numtype(body)
-    fgs = FastMultipole.FastGaussSeidel((body,); expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=has_semiinfinite_wake(body))
+    TF = promote_type(numtype.(bodies)...)
+    println("building FastMultipole.fgs:")
+    @time fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
+    println("done.")
 
-    # restore CPoffset
-    body.CPoffset = CPoffset_old
+    # restore CPoffsets
+    for (body, CPoffset_old) in zip(bodies, CPoffset_olds)
+        body.CPoffset = CPoffset_old
+    end
 
-    Uext = zeros(TF, 3, body.ncells)
-    phi_ext = zeros(TF, body.ncells)
+    Uext = [zeros(TF, 3, body.ncells) for body in bodies]
+    phi_ext = [zeros(TF, body.ncells) for body in bodies]
     return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext)
 end
 
 #--- test solve! ---#
 
-function solve2!(self::AbstractBody{<:Any,1,<:Any}, solver::FGSSolver{<:Any,TF}; optargs...) where {TF}
-    
-    # construct right-hand side
-    # TF2 = promote_type(eltype(Uinfs), TF)
-    # RHS = zeros(TF2, self.ncells)
-    # normals = _calc_normals(self)
-    # calc_bc_noflowthrough!(RHS, Uinfs, normals)
+function solve2!(self::AbstractBody{<:Any,1,<:Any}, solver::FGSSolver; optargs...)
 
     # solve system
-    FastMultipole.solve!(self, solver.fgs; max_iterations=solver.max_iterations, inner_iterations=solver.inner_iterations, tolerance=solver.tolerance, rlx=solver.rlx, verbose=solver.verbose)
+    FastMultipole.solve!((self,), solver.fgs; max_iterations=solver.max_iterations, inner_iterations=solver.inner_iterations, tolerance=solver.tolerance, rlx=solver.rlx, verbose=solver.verbose)
 
     # store solution
     set_solution(self, self.strength, self.strength, Tuple{Int,Float64}[], Uinfs)

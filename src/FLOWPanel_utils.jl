@@ -20,6 +20,12 @@ function cross(A::AbstractVector{T1}, B::AbstractVector{T2}) where {T1, T2}
     out = zeros(promote_type(T1, T2), 3)
     return cross!(out, A, B)
 end
+function cross(A::SVector{3,T1}, B::SVector{3,T2}) where {T1, T2}
+    T = promote_type(T1, T2)
+    return SVector{3,T}(A[2]*B[3] - A[3]*B[2],
+                         A[3]*B[1] - A[1]*B[3],
+                         A[1]*B[2] - A[2]*B[1])
+end
 mean(xs) = sum(xs)/length(xs)
 
 """

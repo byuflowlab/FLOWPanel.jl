@@ -433,73 +433,81 @@ function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vo
     self.potential .= solver.phi_ext
 end
 
-to_tuple(val::Tuple) = val
-to_tuple(val) = (val,)
+# Single-body convenience: wrap and delegate to tuple method
+function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::FGSSolver; kwargs...) where TF
+    solve2!((self,), solver; kwargs...)
+end
 
-function solve2!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::FGSSolver; backend = FastMultipoleBackend(
+function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
-    ), optargs...) where TF
+    ), optargs...)
 
-    # save external velocity and potential
-    solver.Uext .= self.velocity
-    solver.phi_ext .= self.potential
+    # save external velocity and potential per body
+    for (i, body) in enumerate(bodies)
+        solver.Uext[i] .= body.velocity
+        solver.phi_ext[i] .= body.potential
+    end
 
     # ensure CPoffset is negative (we'll solve this in the interior)
-    CPoffset_old = self.CPoffset
-    self.CPoffset = -abs(CPoffset_old)
-
-    # get normals and control points
-    normals = calc_normals!(self)
-    calc_controlpoints!(self, normals)
-
-    # get source strengths
-    self.strength[:, 1] .= 0.0
-    for d in (1,2,3)
-        self.strength[:, 2] .= view(self.velocity, d, :)
-        self.strength[:, 2] .*= view(self.normals, d, :)
-        self.strength[:, 1] .-= self.strength[:, 2]
+    CPoffset_olds = Tuple(body.CPoffset for body in bodies)
+    for body in bodies
+        body.CPoffset = -abs(body.CPoffset)
     end
-    sigma = self.strength[:,1]
-    self.strength[:, 2] .= 0.0
 
-    # add source-induced potential
-    self.potential .= 0
-    influence!(self, self, backend; scalar_potential=true, optargs...)
+    # get normals and control points per body
+    for body in bodies
+        normals = calc_normals!(body)
+        calc_controlpoints!(body, normals)
+    end
 
-    # # rebuild FGS solver with current body state (Das may have changed since construction)
-    # NOTE: we now assume Das has NOT changed
-    # fgs_new = FastMultipole.FastGaussSeidel((self,), (self,);
-    #     expansion_order=solver.expansion_order,
-    #     multipole_acceptance=solver.multipole_acceptance,
-    #     leaf_size=solver.leaf_size,
-    #     shrink=true, recenter=false,
-    #     extra_farfield=has_semiinfinite_wake(self)
-    # )
+    # get source strengths per body
+    sigmas = Tuple(begin
+        body.strength[:, 1] .= 0.0
+        for d in (1,2,3)
+            body.strength[:, 2] .= view(body.velocity, d, :)
+            body.strength[:, 2] .*= view(body.normals, d, :)
+            body.strength[:, 1] .-= body.strength[:, 2]
+        end
+        sigma = copy(body.strength[:,1])
+        body.strength[:, 2] .= 0.0
+        sigma
+    end for body in bodies)
+
+    # add source-induced potential per body
+    for body in bodies
+        body.potential .= 0
+    end
+    for source in bodies
+        for target in bodies
+            influence!(target, source, backend; scalar_potential=true, optargs...)
+        end
+    end
+
+    # flatten all bodies for DerivativesSwitch
+    all_unpacked = Tuple(unpacked for body in bodies for unpacked in to_tuple(_unpack_fmm(body)))
 
     # run fgs solver
-    FastMultipole.solve!(self, solver.fgs;
+    FastMultipole.solve!(bodies, solver.fgs;
         max_iterations=solver.max_iterations,
         inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance,
         rlx=solver.rlx,
-        derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, to_tuple(_unpack_fmm(self))),
+        derivatives_switches=FastMultipole.DerivativesSwitch(true, false, false, all_unpacked),
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false
     )
 
-    # restore source strengths (FGS zeros them during solve)
-    self.strength[:, 1] .= sigma
-
-    # restore CPoffset, external velocity and potential
-    self.CPoffset = CPoffset_old
-    self.velocity .= solver.Uext
-    self.potential .= solver.phi_ext
-
-    # Save solution
-    _solvedflag(self, true)
+    # restore source strengths, CPoffset, external velocity and potential per body
+    for (i, body) in enumerate(bodies)
+        body.strength[:, 1] .= sigmas[i]
+        body.CPoffset = CPoffset_olds[i]
+        body.velocity .= solver.Uext[i]
+        body.potential .= solver.phi_ext[i]
+        _solvedflag(body, true)
+    end
 
 end
 
@@ -1015,17 +1023,17 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3}
     return G, RHS
 end
 
-function influence!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
-                     target_body::AbstractBody, backend::DirectBackend;
-                     scalar_potential=false, velocity=false,
-                     velocity_gradient=false, optargs...)
-    # scalar_potential is a no-op for this body type
-    if velocity
-        _Uvortexring!(self, target_body.controlpoints, target_body.velocity, backend; stri=1, optargs...)
-        _Uconstantvortexsheet!(self, target_body.controlpoints, target_body.velocity; strti=2, stroi=3, optargs...)
-    end
-    return nothing
-end
+# function influence!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
+#                      target_body::AbstractBody, backend::DirectBackend;
+#                      scalar_potential=false, velocity=false,
+#                      velocity_gradient=false, optargs...)
+#     # scalar_potential is a no-op for this body type
+#     if velocity
+#         _Uvortexring!(self, target_body.controlpoints, target_body.velocity, backend; stri=1, optargs...)
+#         _Uconstantvortexsheet!(self, target_body.controlpoints, target_body.velocity; strti=2, stroi=3, optargs...)
+#     end
+#     return nothing
+# end
 
 
 function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
@@ -1328,11 +1336,19 @@ end
 
 
 function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
-    phi, vx, vy, vz = target_buffer[4, i_buffer], target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
-    target_system.potential[i_target] += phi
-    target_system.velocity[1, i_target] += vx
-    target_system.velocity[2, i_target] += vy
-    target_system.velocity[3, i_target] += vz
+    if PS
+        phi = target_buffer[4, i_buffer]
+        target_system.potential[i_target] += phi
+    end
+
+    if VS
+        vx = target_buffer[5, i_buffer]
+        vy = target_buffer[6, i_buffer]
+        vz = target_buffer[7, i_buffer]
+        target_system.velocity[1, i_target] += vx
+        target_system.velocity[2, i_target] += vy
+        target_system.velocity[3, i_target] += vz
+    end
 end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
