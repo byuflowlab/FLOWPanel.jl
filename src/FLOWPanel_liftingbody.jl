@@ -511,6 +511,79 @@ function solve2!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBacken
 
 end
 
+# Multi-body solve with per-body solvers via outer fixed-point iteration
+function solve2!(bodies::Tuple, solvers::Tuple;
+    backend::AbstractBackend = fill(DirectBackend(), length(bodies)),
+    max_outer_iterations::Int = 50,
+    outer_tolerance::Real = 1e-8,
+    verbose::Bool = false,
+    scalar_potential::Bool = fill(false, length(bodies)),
+    velocity::Bool = fill(true, length(bodies)),
+    optargs...)
+
+    N = length(bodies)
+    @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
+
+    # Save initial velocities (freestream + any external)
+    Uinit = [copy(body.velocity) for body in bodies]
+
+    # Initialize previous strengths for convergence check
+    prev_strengths = [copy(body.strength) for body in bodies]
+
+    converged = false
+    for iter in 1:max_outer_iterations
+
+        for (i, (body, solver)) in enumerate(zip(bodies, solvers))
+            # Reset velocity to initial (freestream)
+            body.velocity .= Uinit[i]
+
+            # Accumulate cross-body induced velocity from all OTHER bodies
+            for (j, source) in enumerate(bodies)
+                j == i && continue
+                influence!(body, source, backend=backend[j]; 
+                    scalar_potential=scalar_potential[i], 
+                    velocity=velocity[i], 
+                    optargs...)
+            end
+
+            # Solve this body with its own solver
+            solve2!(body, solver; backend=backend[i], optargs...)
+        end
+
+        # Check convergence
+        max_delta = 0.0
+        for (i, body) in enumerate(bodies)
+            prev_strengths[i] .-= body.strength
+            prev_strengths[i] .= abs.(prev_strengths[i])
+            max_delta = max(max_delta, maximum(prev_strengths[i]))
+            prev_strengths[i] .= body.strength
+        end
+
+        if verbose
+            println("  Outer iteration $iter: max strength change = $max_delta")
+        end
+
+        if max_delta < outer_tolerance
+            converged = true
+            if verbose
+                println("  Converged after $iter outer iterations")
+            end
+            break
+        end
+    end
+
+    if !converged && verbose
+        println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
+    end
+
+    # Restore initial velocities
+    for (i, body) in enumerate(bodies)
+        body.velocity .= Uinit[i]
+    end
+
+    return nothing
+end
+
 function solve(self::RigidWakeBody{VortexRing, 2},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2};
