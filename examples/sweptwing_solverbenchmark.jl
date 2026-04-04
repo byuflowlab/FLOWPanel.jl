@@ -70,7 +70,12 @@ end
 
 
 # ----- Linear solver test: backslash \ operator
-t = @elapsed pnl.solve(body, Uinfs, Das; solver=pnl.solve_backslash!)
+body.velocity .= Uinfs
+body.Das .= Das
+t = @elapsed begin
+    solver = pnl.Backslash(body)
+    pnl.solve!(body, solver)
+end
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="Backslash")
 
@@ -84,7 +89,12 @@ println(str)
 
 
 # ----- Linear solver test: LU decomposition + div
-t = @elapsed pnl.solve(body, Uinfs, Das; solver=pnl.solve_ludiv!)
+body.velocity .= Uinfs
+body.Das .= Das
+t = @elapsed begin
+    solver = pnl.Backslash(body)
+    pnl.solve!(body, solver)
+end
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="LUdiv")
 
@@ -98,15 +108,15 @@ println(str)
 
 
 # ----- Linear solver test: GMRES tol=1e-8
-stats = []                      # Stats of GMRES get stored here
-
-t = @elapsed pnl.solve(body, Uinfs, Das;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-8, rtol=1e-8, out=stats))
+body.velocity .= Uinfs
+body.Das .= Das
+t = @elapsed begin
+    solver = pnl.KrylovSolver(body; method=:gmres, atol=1e-8, rtol=1e-8)
+    pnl.solve!(body, solver)
+end
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-8")
 
-str *= replace("\n$(stats[1])", "\n"=>"\n\t")
 str *= @sprintf "\n\tRun time:\t%4.2f seconds\n" t
 
 open(joinpath(outdata_path, run_name*"-gmres8.md"), "w") do f
@@ -117,15 +127,15 @@ println(str)
 
 
 # ----- Linear solver test: GMRES tol=1e-2
-stats = []                      # Stats of GMRES get stored here
-
-t = @elapsed pnl.solve(body, Uinfs, Das;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-2, rtol=1e-2, out=stats))
+body.velocity .= Uinfs
+body.Das .= Das
+t = @elapsed begin
+    solver = pnl.KrylovSolver(body; method=:gmres, atol=1e-2, rtol=1e-2)
+    pnl.solve!(body, solver)
+end
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-2")
 
-str *= replace("\n$(stats[1])", "\n"=>"\n\t")
 str *= @sprintf "\n\tRun time:\t%4.2f seconds\n" t
 
 open(joinpath(outdata_path, run_name*"-gmres2.md"), "w") do f
@@ -137,15 +147,15 @@ println(str)
 
 
 # ----- Linear solver test: GMRES tol=1e-1
-stats = []                      # Stats of GMRES get stored here
-
-t = @elapsed pnl.solve(body, Uinfs, Das;
-                        solver = pnl.solve_gmres!,
-                        solver_optargs = (atol=1e-1, rtol=1e-1, out=stats))
+body.velocity .= Uinfs
+body.Das .= Das
+t = @elapsed begin
+    solver = pnl.KrylovSolver(body; method=:gmres, atol=1e-1, rtol=1e-1)
+    pnl.solve!(body, solver)
+end
 
 CL, CD, str = calc_lift_drag(body, b, ar, Vinf, magVinf, rho; lbl="GMRES tol=1e-1")
 
-str *= replace("\n$(stats[1])", "\n"=>"\n\t")
 str *= @sprintf "\n\tRun time:\t%4.2f seconds\n" t
 
 open(joinpath(outdata_path, run_name*"-gmres1.md"), "w") do f

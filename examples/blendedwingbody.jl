@@ -122,10 +122,13 @@ Das = repeat(Vinf/magVinf, 1, body.nsheddings+1)
 
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 # `Das` as trailing edge rigid wake direction
-@time pnl.solve(body, Uinfs, Das)
+body.velocity .= Uinfs
+body.Das .= Das
+solver = pnl.Backslash(body)
+@time pnl.solve!(body, solver)
 
 # Uncomment this to use GPU instead (if available)
-# @time pnl.solve(body, Uinfs, Das; GPUArray=CUDA.CuArray{Float32})
+# @time pnl.solve!(body, solver)
 
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")

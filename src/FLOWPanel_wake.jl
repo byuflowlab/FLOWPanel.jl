@@ -49,7 +49,7 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     kinematic_velocity!(body, frames; skip_top_level=false)
 
     # solve body (shouldn't modify body velocity, but will update body strength)
-    solve2!(body, body.velocity, body_solver; backend)
+    solve!(body, body_solver; backend)
 
     # body-on-all influence
     evaluate_influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))

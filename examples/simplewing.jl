@@ -149,9 +149,12 @@ println("Solving body...")
 # #                         leaf_size=10
 # #                     )
 # #         )
-# pnl.solve2!(wing, Uinfs, solver; elprescribe=Tuple{Int,Float64}[])
+# wing.velocity .= Uinfs
+# pnl.solve!(wing, solver; elprescribe=Tuple{Int,Float64}[])
 
-G, rhs = pnl.solve(wing, Uinfs)
+wing.velocity .= Uinfs
+solver = pnl.Backslash(wing; least_squares=false)
+pnl.solve!(wing, solver)
 
 
 # ----------------- POST PROCESSING --------------------------------------------

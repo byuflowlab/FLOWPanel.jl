@@ -194,10 +194,10 @@ AOA = AOAs[i]
         # profile
         # using Profile, PProf
     pnl.apply_freestream!(body, Uinfs[:,1])
-    @time pnl.solve2!(body, solver; backend)
-        # @profile pnl.solve2!(body, solver; backend)
+    @time pnl.solve!(body, solver; backend)
+        # @profile pnl.solve!(body, solver; backend)
         # Profile.clear()
-        # @profile pnl.solve2!(body, solver; backend)
+        # @profile pnl.solve!(body, solver; backend)
         # pprof()
 
     # end
@@ -212,7 +212,7 @@ AOA = AOAs[i]
     println("\nPost processing...")
 
     # Calculate surface velocity U on the body
-    @time Us = pnl.calcfield_U!(body, body; backend)
+    @time Us = pnl.calcfield_U!(body; backend)
     pnl.apply_freestream!(body, Uinfs[:,1])
 
     # Calculate pressure coefficient (based on body.velocity)

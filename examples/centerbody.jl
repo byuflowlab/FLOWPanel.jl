@@ -76,6 +76,7 @@ trigrid = pnl.gt.GridTriangleSurface(grid, split_dim)
 # Generate body to be solved
 body = bodytype(trigrid)
 # body2 = bodytype2(trigrid)
+pnl.apply_freestream!(body, Vinf) # apply freestream to body (for non-lifting bodies, this is just for post-processing purposes)
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -83,47 +84,27 @@ println("Number of panels:\t$(body.ncells)")
 # ----------------- CALL SOLVER ------------------------------------------------
 println("Solving body...")
 
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
-
-#--- debugging ---#
-
-G = zeros(body.ncells, body.ncells)
-normals = pnl._calc_normals(body)
-CPs = pnl._calc_controlpoints(body, normals; off=1e-14)
-backend = pnl.FastMultipoleBackend(leaf_size=1000000)
-pnl._G_phi!(body, kerneltype, G, CPs, backend; kerneloffset=1.0e-8)
-
-body.strength .= 1.0
-test_rhs = zeros(body.ncells)
-pnl._phi!(body, CPs, test_rhs, backend; kerneloffset=1.0e-8)
-debug_rhs = G * body.strength[:,1]
-@show maximum(abs.(test_rhs .- debug_rhs))
-
-
-
-# Solve body (panel strengths) giving `Uinfs` as boundary conditions
-# @time pnl.solve(body, Uinfs)
-# strengths1 = deepcopy(body.strength)
 @time begin
-    # solver = pnl.Backslash(body; least_squares=false)
-    # solver = pnl.KrylovSolver(body;
-    #     method=:gmres,
-    #     itmax=20,
-    #     atol=1e-4,
-    #     rtol=1e-4,
-        backend=pnl.FastMultipoleBackend(
-                                    expansion_order=7,
-                                    multipole_acceptance=0.4,
-                                    leaf_size=10
-                                )
-    # )
+    solver = pnl.FGSSolver(body;
+        leaf_size=10000,
+        expansion_order=10,
+        multipole_acceptance=0.4,
+        max_iterations=500,
+        inner_iterations=20,
+        tolerance=1e-6,
+        rlx=1.0,
+        shrink=true,
+        reverse_pass=false,
+        verbose=false
+    )
+    # solver = pnl.Backslash(body)
+    backend = pnl.FastMultipoleBackend(
+        expansion_order=7,
+        multipole_acceptance=0.4,
+        leaf_size=10,
+    )
 
-    # G, rhs = pnl.solve(body, Uinfs)
-    # G2, rhs2 = pnl.solve(body2, Uinfs)
-
-    solver = pnl.Backslash(body; least_squares=false)
-    pnl.solve2!(body, Uinfs, solver; backend)
+    pnl.solve!(body, solver; backend)
 end
 strengths2 = deepcopy(body.strength)
 
@@ -137,7 +118,8 @@ println("Post processing...")
 #                                     leaf_size=10
 #                                 )
 println("Running FMM:")
-@time Us = pnl.calcfield_U(body, body; backend)
+@time pnl.calcfield_U!(body; backend)
+Us = copy(body.velocity) # save for comparison/verification
 Us_fmm = deepcopy(Us) # save for comparison/verification
 # str = pnl.save(body, "debug_fmm"; path="./", debug=true, backend)
 
@@ -149,62 +131,51 @@ Us_fmm = deepcopy(Us) # save for comparison/verification
 # @profile Us = pnl.calcfield_U(body, body; backend)
 # pprof()
 
-Us .= zero(eltype(Us))
 backend = pnl.DirectBackend()
 println("Running Direct:")
-@time Us = pnl.calcfield_U(body, body; backend)
-Us_direct = deepcopy(Us)
-# str = pnl.save(body, "debug_direct"; path="./", debug=true, backend)
+body.velocity .= 0.0
+@time pnl.calcfield_U!(body; backend)
+Us_direct = deepcopy(body.velocity) # save for comparison/verification
+eachcol(Us) .+= Ref(Vinf)
+Us_tot = Us
 
 # calculate error
 max_err = maximum(abs.(Us_direct - Us_fmm))
 println("Max velocity error between Direct and FMM normalized by Vinf: $(max_err/magVinf)")
 
-if kerneltype == pnl.ConstantDoublet || kerneltype == pnl.VortexRing || kerneltype == Union{pnl.ConstantSource, pnl.ConstantDoublet}
-    # Calculate velocity induced by doublet strength gradient
-    if kerneltype == Union{pnl.ConstantSource, pnl.ConstantDoublet}
-        Gammai = 2
-    else
-        Gammai = 1
-    end
-    @time UDeltaGamma = pnl.calcfield_Ugradmu(body; sharpTE=true, force_cellTE=false, Gammai)
-
-    # Add both velocities together
-    pnl.addfields(body, "Ugradmu", "U")
-end
-
-Us_tot = pnl.get_field(body, "U")["field_data"] # save for comparison/verification
-Us_tot = [Us_tot[j][i] for i=1:3, j=1:size(Us_tot,1)]
-
 # check normal flow condition
-normals = pnl._calc_normals(body)
+normals = body.normals
 Udotn = sum(Us_tot .* normals, dims=1)
 resid = maximum(abs.(Udotn))
 println("Max flow tangency residual: $resid")
 
 # Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+eachcol(body.velocity) .+= Ref(Vinf)
+@time pnl.calcfield_Cp!(body, magVinf)
+Cps = copy(body.Cp)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body, magVinf, rho)
+@time pnl.calcfield_F!(body, magVinf, rho)
+Fs = copy(body.F)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------
 if paraview
-    str = save_path*"/"
+    # str = save_path*"/"
 
     # Save body as a VTK
-    str *= pnl.save(body, run_name; path=save_path, debug=true)
+    # str *= pnl.save(body, run_name; path=save_path, debug=true)
+    pnl.write_vtk(joinpath(save_path, "centerbody"), body, 0, 0)
 
-    # Call Paraview
-    run(`paraview --data=$(str)`)
+    # # Call Paraview
+    # run(`paraview --data=$(str)`)
 end
 
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 include(joinpath(pnl.examples_path, "centerbody_postprocessing.jl"))
 
-save_outputs = !true                        # Whether to save outputs or not
+save_outputs = !true                      # Whether to save outputs or not
 
 # Where to save figures (default to re-generating the figures that are used
 # in the docs)

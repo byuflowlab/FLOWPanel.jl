@@ -45,7 +45,7 @@
   end
   ```
 """
-abstract type AbstractLiftingBody{E, N, TF} <: AbstractBody{E, N, TF} end
+abstract type AbstractLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC} end
 
 """
     `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`

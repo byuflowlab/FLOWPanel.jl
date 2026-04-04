@@ -101,7 +101,7 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
         evaluate_influence!(targets, wake_sources, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         # solve system (shouldn't modify system velocity, but will update system strength)
-        solve2!(system, body_solver; backend)
+        solve!(system, body_solver; backend)
 
         # update control points (normals should not have changed)
         calc_controlpoints!(system; off=abs(system.CPoffset))

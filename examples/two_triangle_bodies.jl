@@ -124,6 +124,7 @@ alpha = 25.0 * pi/180
 Uinfs[1, :] .= cos(alpha)
 Uinfs[3, :] .= sin(alpha)
 body.Das .= repeat(Uinfs[:, 1] ./ norm(Uinfs[:, 1]), 1, body.nsheddings+1)
+body.velocity .= Uinfs
 
 # get solver
 solver = pnl.BackslashDirichlet(body)
@@ -134,7 +135,7 @@ backend = pnl.FastMultipoleBackend(
                                     multipole_acceptance=0.4,
                                     leaf_size=200000
                                 )
-pnl.solve2!(body, Uinfs, solver; backend)
+pnl.solve!(body, solver; backend)
 
 # induced velocity at control points
 Us = pnl.calcfield_U(body, body; backend)

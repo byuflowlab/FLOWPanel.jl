@@ -15,11 +15,12 @@
 ################################################################################
 struct LiftingLine{ R<:Number, 
                     S<:StripwiseElement, N,
+                    DBC,
                     VectorType<:AbstractVector{R}, 
                     MatrixType<:AbstractMatrix{R}, 
                     TensorType<:AbstractArray{R, 3},
                     TensorType2<:AbstractArray{R, 4},
-                    LI<:LinearIndices} <: AbstractBody{S, N, R}
+                    LI<:LinearIndices} <: AbstractBody{S, N, R, DBC}
 
     # Internal properties
     grid::gt.Grid                               # Flat-geometry grid
@@ -92,6 +93,7 @@ struct LiftingLine{ R<:Number,
     function LiftingLine{R}(
                             airfoil_distribution, 
                             args...;
+                            DBC::Bool=false,
                             element_optargs=(), 
                             aerodynamic_centers=1/4,
                             strip_positions=0.5,
@@ -236,7 +238,7 @@ struct LiftingLine{ R<:Number,
                     offset=kerneloffset, cutoff=kernelcutoff)
 
         new{R,
-            S, _count(S),
+            S, _count(S), DBC,
             VectorType, MatrixType, TensorType, TensorType2,
             typeof(linearindices)}(
                                 grid, linearindices, String[],

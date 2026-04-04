@@ -143,7 +143,8 @@ backend = pnl.FastMultipoleBackend(
     # )
     solver = pnl.BackslashDirichlet(body)
     # solver = pnl.Backslash(body; least_squares=false)
-    pnl.solve2!(body, Uinfs, solver; backend)
+    body.velocity .= Uinfs
+    pnl.solve!(body, solver; backend)
 end
 
 # ----------------- POST PROCESSING ----------------------------------------

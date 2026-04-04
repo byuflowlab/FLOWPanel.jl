@@ -29,7 +29,7 @@ Non-lifting body that is solved using a combination of N panel elements.
   * `O::Vector`                         : Origin of body w.r.t. global
 
 """
-mutable struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
+mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
 
     # User inputs
     nodes::Matrix{TF}                         # 3xnnodes matrix where nodes[:, i] is the position of the i-th node
@@ -62,14 +62,14 @@ mutable struct NonLiftingBody{E, N, TF} <: AbstractBody{E, N, TF}
     inside_offset::Float64               # Offset to compute inside control points
 end
 
-function NonLiftingBody{E, N, TF}(
+function NonLiftingBody{E, N, TF, DBC}(
                 nodes::Matrix{TF}, cells::Matrix{Int};
                 vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
                 neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                Cp=zeros(TF, 0),
-                F=zeros(TF, 0, 0),
+                Cp=zeros(TF, size(cells, 2)),
+                F=zeros(TF, 3, size(cells, 2)),
                 solved=false,
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
@@ -82,9 +82,9 @@ function NonLiftingBody{E, N, TF}(
                 characteristiclength=characteristiclength_unitary,
                 watertight=false,
                 inside_offset=1e-6
-              ) where {E, N, TF}
+              ) where {E, N, TF, DBC}
 
-    return NonLiftingBody{E, N, TF}(
+    return NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
@@ -104,9 +104,17 @@ function NonLiftingBody{E, N, TF}(
 end
 
 function NonLiftingBody{E, N, TF}(
-                grid::gt.GridTriangleSurface;
+                nodes::Matrix{TF}, cells::Matrix{Int};
+                DBC::Bool=false,
                 optargs...
               ) where {E, N, TF}
+    return NonLiftingBody{E, N, TF, DBC}(nodes, cells; optargs...)
+end
+
+function NonLiftingBody{E, N, TF, DBC}(
+                grid::gt.GridTriangleSurface;
+                optargs...
+              ) where {E, N, TF, DBC}
     
     nodes = grid._nodes
     cells = grid2cells(grid)
@@ -136,10 +144,18 @@ function NonLiftingBody{E, N, TF}(
         watertight_guess = gt.isclosed(mesh)
     end
     
-    return NonLiftingBody{E, N, TF}(
+    return NonLiftingBody{E, N, TF, DBC}(
                 nodes, cells;
                 vtk_cells=vtk_cells, neighbor=neighbor, watertight=watertight_guess, optargs...
               )
+end
+
+function NonLiftingBody{E, N, TF}(
+                grid::gt.GridTriangleSurface;
+                DBC::Bool=false,
+                optargs...
+              ) where {E, N, TF}
+    return NonLiftingBody{E, N, TF, DBC}(grid; optargs...)
 end
 
 _count(::Type{ConstantSource}) = 1
@@ -149,21 +165,25 @@ _count(::Type{Union{ConstantSource, ConstantDoublet}}) = 2
 _count(::Type{Union{ConstantSource, VortexRing}}) = 2
 _count(::Type{<:Any}) = error("Unsupported kernel type for NonLiftingBody.")
 
-function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
-    return NonLiftingBody{E, _count(E), eltype(grid._nodes)}(grid; optargs...)
+function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E}
+    return NonLiftingBody{E, _count(E), eltype(grid._nodes), DBC}(grid; optargs...)
 end
 
-function (NonLiftingBody{E})(nodes::Matrix{TF}, cells::Matrix{Int}; optargs...) where {E, TF}
-    return NonLiftingBody{E, _count(E), TF}(nodes, cells; optargs...)
+function (NonLiftingBody{E, N})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E, N}
+    return NonLiftingBody{E, N, eltype(grid._nodes), DBC}(grid; optargs...)
+end
+
+function (NonLiftingBody{E})(nodes::Matrix{TF}, cells::Matrix{Int}; DBC::Bool=false, optargs...) where {E, TF}
+    return NonLiftingBody{E, _count(E), TF, DBC}(nodes, cells; optargs...)
+end
+
+function (NonLiftingBody{E, N})(nodes::Matrix{TF}, cells::Matrix{Int}; DBC::Bool=false, optargs...) where {E, N, TF}
+    return NonLiftingBody{E, N, TF, DBC}(nodes, cells; optargs...)
 end
 
 function save(body::NonLiftingBody, args...; optargs...)
     return save_base(body, args...; optargs...)
 end
-
-calc_elprescribe(::NonLiftingBody{ConstantSource, 1}) = Tuple{Int,Float64}[]
-calc_elprescribe(body::NonLiftingBody{VortexRing, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
-calc_elprescribe(body::NonLiftingBody{ConstantDoublet, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
 
 solved_field_name(::NonLiftingBody{ConstantSource, 1}) = "sigma"
 solved_field_name(::NonLiftingBody{ConstantDoublet, 1}) = "mu"
@@ -298,43 +318,11 @@ FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,Const
 FastMultipole.body_to_multipole!(system::AbstractBody{Union{ConstantSource,VortexRing}, 2, <:Any}, args...) =
     FastMultipole.body_to_multipole!(FastMultipole.Panel{FastMultipole.SourceDipole}, system, args...; scale_strength=FastMultipole.StaticArrays.SVector(1.0, 1.0))
 
-##### END OF FASTMULTIPOLE BACKEND SUPPORT #####################################
-
-################################################################################
-# ABSTRACT SOLVER INTERFACE
-################################################################################
-
-function solve2!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, <:Any, false};
-        backend=DirectBackend(), strength_index=1,
-        update_G::Bool=false,   # Whether to update the influence matrix G
-        optargs...              # Additional optional arguments to _G_U!
-    ) where {TK, NK, TF}
-
-    # Compute normals and control points
-    normals = calc_normals!(body)
-    calc_controlpoints!(body)
-
-    # update influence matrix (if requested)
-    Glu = solver.Glu
-    if update_G
-        solver.G .= zero(eltype(solver.G))
-        _G_U!(body, TK, solver.G, body.controlpoints, normals; optargs...)
-        Glu = lu!(solver.G)
-    end
-
-    # generate RHS
-    rhs = solver.rhs
-    rhs .= zero(eltype(rhs))
-    calc_bc_noflowthrough!(rhs, body.velocity, normals)
-
-    # solver for strengths
-    ldiv!(view(body.strength, :, strength_index), Glu, rhs)
-
-    # set solved flag
-    _solvedflag(body, true)
-
-    return nothing
+function FastMultipole.strength_to_value(strength, source_system::NonLiftingBody{<:Any, 1, <:Any})
+    return strength[1]
 end
+
+##### END OF FASTMULTIPOLE BACKEND SUPPORT #####################################
 
 function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_body, value, rlx)
     prev_value = source_buffer[5, i_body]
@@ -345,23 +333,12 @@ function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_bod
     source_buffer[5, i_body] = value
 end
 
-function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, derivatives_switch, target_system::NonLiftingBody, i_target)
-    vx, vy, vz = target_system.velocity[1, i_target], target_system.velocity[2, i_target], target_system.velocity[3, i_target]
-    target_buffer[5, i_buffer] = vx
-    target_buffer[6, i_buffer] = vy
-    target_buffer[7, i_buffer] = vz
-end
-
 function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
     vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
     target_system.velocity[1, i_target] = vx
     target_system.velocity[2, i_target] = vy
     target_system.velocity[3, i_target] = vz
 end
-
-##### END OF ABSTRACT SOLVER INTERFACE ##########################################
-
-
 ################################################################################
 # COMMON FUNCTIONS
 ################################################################################

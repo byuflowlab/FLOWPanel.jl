@@ -1,7 +1,7 @@
 #=##############################################################################
 # DESCRIPTION
     Two fan ducts in close proximity, solved with the multi-body iterative
-    solve2!. Uses the same geometry as duct.jl (Hill 1978 / Lewis 1991).
+    solve!. Uses the same geometry as duct.jl (Hill 1978 / Lewis 1991).
 
     Tests:
     1) BackslashDirichlet solver per body with outer fixed-point iteration
@@ -68,11 +68,11 @@ end
 
 # ----------------- GENERATE TWO DUCTS ----------------------------------------
 body1 = make_duct()
-body2 = make_duct()
-# body2 = make_duct(;
-#             kernel = pnl.ConstantSource,
-#             bodytype = pnl.NonLiftingBody
-#         )
+# body2 = make_duct()
+body2 = make_duct(;
+            kernel = pnl.ConstantSource,
+            bodytype = pnl.NonLiftingBody
+        )
 
 # Offset second duct in z by 1.5 diameters
 pnl.rotate!(body2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
@@ -112,6 +112,8 @@ function report_tangency(bodies, label)
     end
 end
 
+backend_direct = pnl.DirectBackend()
+
 # ============================================================================
 # TEST 1: BackslashDirichlet
 # ============================================================================
@@ -121,22 +123,20 @@ println("="^60)
 
 setup_bodies!(body1, Vinf, magVinf)
 setup_bodies!(body2, Vinf, magVinf)
+body1.strength .= 0.0
+body2.strength .= 0.0
 
-solver1 = pnl.BackslashDirichlet(body1)
-solver2 = pnl.BackslashDirichlet(body2)
-# solver2 = pnl.BackslashNeumann(body2)
-
-backend_direct = pnl.DirectBackend()
+solver1 = pnl.Backslash(body1)
+solver2 = pnl.Backslash(body2)
 
 println("\nSolving...")
-@time pnl.solve2!((body1, body2), (solver1, solver2);
+@time pnl.solve!((body1, body2), (solver1, solver2);
     backend=fill(backend_direct, 2),
     max_outer_iterations=50,
     outer_tolerance=1e-8,
     verbose=true)
 
 println("\nPost-processing...")
-@show typeof(Vinf), typeof(magVinf), typeof(rho), typeof(backend_direct)
 postprocess!((body1, body2), Vinf, magVinf, rho, backend_direct)
 report_tangency((body1, body2), "BackslashDirichlet")
 
@@ -189,7 +189,19 @@ backend_fmm = pnl.FastMultipoleBackend(
 )
 
 println("\nSolving...")
-@time pnl.solve2!((body1, body2), (fgs1, fgs2);
+@time pnl.solve!(body2, fgs2;
+    backend=backend_direct)
+
+pnl.reset!(body2)
+pnl.apply_freestream!(body2, Vinf)
+pnl.calcfield_U!(body2; backend=backend_direct)
+udotn = sum(body2.velocity .* body2.normals, dims=1)
+rms = sqrt(sum(udotn .^ 2) / body2.ncells)
+maxr = maximum(abs.(udotn))
+println("  Body 2 (FGS only): RMS flow tangency = $rms, max = $maxr")
+
+   
+@time pnl.solve!((body1, body2), (fgs1, fgs2);
     backend=fill(backend_direct, 2),
     max_outer_iterations=50,
     outer_tolerance=1e-8,
@@ -209,38 +221,38 @@ backend_fmm = pnl.FastMultipoleBackend(
     leaf_size=10000
 )
 
-# ============================================================================
-# TEST 3: Single coupled FGSSolver (both bodies in one solver)
-# ============================================================================
-println("\n" * "="^60)
-println("TEST 3: Single coupled FGSSolver (leaf_size=10000)")
-println("="^60)
+# # ============================================================================
+# # TEST 3: Single coupled FGSSolver (both bodies in one solver)
+# # ============================================================================
+# println("\n" * "="^60)
+# println("TEST 3: Single coupled FGSSolver (leaf_size=10000)")
+# println("="^60)
 
-setup_bodies!(body1, Vinf, magVinf)
-setup_bodies!(body2, Vinf, magVinf)
-body1.strength .= 0.0
-body2.strength .= 0.0
+# setup_bodies!(body1, Vinf, magVinf)
+# setup_bodies!(body2, Vinf, magVinf)
+# body1.strength .= 0.0
+# body2.strength .= 0.0
 
-println("\nInitializing coupled FGSSolver...")
-@time fgs_coupled = pnl.FGSSolver((body1, body2);
-    leaf_size=10000,
-    expansion_order=10,
-    multipole_acceptance=0.4,
-    max_iterations=500,
-    inner_iterations=20,
-    tolerance=1e-8,
-    rlx=1.0,
-    shrink=true,
-    reverse_pass=false,
-    verbose=false
-)
+# println("\nInitializing coupled FGSSolver...")
+# @time fgs_coupled = pnl.FGSSolver((body1, body2);
+#     leaf_size=10000,
+#     expansion_order=10,
+#     multipole_acceptance=0.4,
+#     max_iterations=500,
+#     inner_iterations=20,
+#     tolerance=1e-8,
+#     rlx=1.0,
+#     shrink=true,
+#     reverse_pass=false,
+#     verbose=false
+# )
 
-println("\nSolving...")
-@time pnl.solve2!((body1, body2), fgs_coupled; backend=backend_fmm)
+# println("\nSolving...")
+# @time pnl.solve!((body1, body2), fgs_coupled; backend=backend_fmm)
 
-println("\nPost-processing...")
-postprocess!((body1, body2), Vinf, magVinf, rho, backend_fmm)
-report_tangency((body1, body2), "FGSSolver (coupled)")
+# println("\nPost-processing...")
+# postprocess!((body1, body2), Vinf, magVinf, rho, backend_fmm)
+# report_tangency((body1, body2), "FGSSolver (coupled)")
 
 # ============================================================================
 # COMPARISON
@@ -251,6 +263,6 @@ println("="^60)
 println("BackslashDirichlet vs FGSSolver (per-body):")
 println("  Max strength diff (body1): ", maximum(abs.(fgs_strengths1 .- bd_strengths1)))
 println("  Max strength diff (body2): ", maximum(abs.(fgs_strengths2 .- bd_strengths2)))
-println("BackslashDirichlet vs FGSSolver (coupled):")
-println("  Max strength diff (body1): ", maximum(abs.(body1.strength .- bd_strengths1)))
-println("  Max strength diff (body2): ", maximum(abs.(body2.strength .- bd_strengths2)))
+# println("BackslashDirichlet vs FGSSolver (coupled):")
+# println("  Max strength diff (body1): ", maximum(abs.(body1.strength .- bd_strengths1)))
+# println("  Max strength diff (body2): ", maximum(abs.(body2.strength .- bd_strengths2)))

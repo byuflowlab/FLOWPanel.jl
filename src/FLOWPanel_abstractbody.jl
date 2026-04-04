@@ -87,7 +87,7 @@ and the following functions
     end
 ```
 """
-abstract type AbstractBody{E<:AbstractElement, N, TF} end
+abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
@@ -97,6 +97,8 @@ function reset!(body::AbstractBody)
     extra_reset!(body)
     return nothing
 end
+
+has_dirichlet_bc(::AbstractBody{<:Any, <:Any, <:Any, DBC}) where DBC = DBC
 
 extra_reset!(body::AbstractBody) = nothing
 
@@ -803,6 +805,19 @@ FastMultipole.get_n_bodies(system::AbstractBody) = system.ncells
 
 function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
+end
+
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_system::AbstractBody, i_target) where {PS,VS,GS}
+    if PS
+        target_buffer[4, i_buffer] = target_system.potential[i_target]
+    end
+
+    if VS
+        vx, vy, vz = target_system.velocity[1, i_target], target_system.velocity[2, i_target], target_system.velocity[3, i_target]
+        target_buffer[5, i_buffer] = vx
+        target_buffer[6, i_buffer] = vy
+        target_buffer[7, i_buffer] = vz
+    end
 end
 
 function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}

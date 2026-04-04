@@ -178,8 +178,8 @@ solver_fgs = pnl.FGSSolver(body_fgs;
 solver_bsd = pnl.BackslashDirichlet(body_bsd)
 
 println("solving...")
-pnl.solve2!(body_bsd, solver_bsd; backend)
-pnl.solve2!(body_fgs, solver_fgs; backend)
+pnl.solve!(body_bsd, solver_bsd; backend)
+pnl.solve!(body_fgs, solver_fgs; backend)
 
 err = norm(body_bsd.strength - body_fgs.strength) / norm(body_bsd.strength)
 println("Relative error: ", err)

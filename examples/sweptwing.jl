@@ -151,7 +151,8 @@ solver = pnl.Backslash(body; least_squares=false)
 #                         leaf_size=10
 #                     )
 #         )
-pnl.solve2!(body, Uinfs, solver; elprescribe)
+body.velocity .= Uinfs
+pnl.solve!(body, solver; elprescribe)
 
 
 # ----------------- POST PROCESSING --------------------------------------------

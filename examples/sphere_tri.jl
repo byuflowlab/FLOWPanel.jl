@@ -51,7 +51,9 @@ body = pnl.NonLiftingBody{kernel}(grid)
 Vinfs = repeat(Vinf, 1, body.ncells)
 
 # Solve body
-@time pnl.solve(body, Vinfs; solve_type=3)
+body.velocity .= Vinfs
+solver = pnl.Backslash(body)
+@time pnl.solve!(body, solver)
 
 # -------- Postprocess -------------------------------------------------------------
 # induced velocity

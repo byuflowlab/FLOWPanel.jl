@@ -62,7 +62,9 @@ body = pnl.NonLiftingBody{ElementTypes}(triang_grid)
 Vinfs = repeat(Vinf, 1, body.ncells)
 
 # Solve body
-@time pnl.solve(body, Vinfs)
+body.velocity .= Vinfs
+solver = pnl.Backslash(body)
+@time pnl.solve!(body, solver)
 
 
 # -------- Visualization ----------------------------------------------------------

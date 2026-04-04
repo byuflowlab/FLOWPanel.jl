@@ -35,7 +35,10 @@ for AOA in AOAs
     Das = repeat(Vinf/magVinf, 1, body.nsheddings+1)
 
     # Solve body
-    @time pnl.solve(body, Uinfs, Das)
+    body.velocity .= Uinfs
+    body.Das .= Das
+    solver = pnl.Backslash(body)
+    @time pnl.solve!(body, solver)
 
     # ----------------- POST PROCESSING ----------------------------------------
     # Calculate velocity away from the body
