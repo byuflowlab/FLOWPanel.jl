@@ -61,7 +61,6 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     # Fields
     Cp::Vector{TF}
     F::Matrix{TF}
-    solved::Bool
 
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
@@ -90,7 +89,6 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
                                 Cp=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
-                                solved=false,
                                 Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in shedding],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
@@ -159,7 +157,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                     nsheddings,
                     Das,
                     Oaxis, O,
-                    Cp, F, solved,
+                    Cp, F,
                     strength,
                     potential,
                     dphidt,
@@ -269,6 +267,22 @@ function RigidWakeBody{E, N, TF}(
     return RigidWakeBody{E, N, TF, DBC}(grid, shedding; optargs...)
 end
 
+function RigidWakeBody{E, N, TF, DBC}(
+                                mesh::VSPGeom.TriMesh, shedding;
+                                optargs...
+                            ) where {E, N, TF, DBC}
+    nodes, cells = trimesh2cells(mesh)
+    return RigidWakeBody{E, N, TF, DBC}(TF.(nodes), cells, shedding; optargs...)
+end
+
+function RigidWakeBody{E, N, TF}(
+                                mesh::VSPGeom.TriMesh, shedding;
+                                DBC::Bool=true,
+                                optargs...
+                            ) where {E, N, TF}
+    return RigidWakeBody{E, N, TF, DBC}(mesh, shedding; optargs...)
+end
+
 function (RigidWakeBody{E})(grid::gt.GridTriangleSurface, shedding; DBC::Bool=true, optargs...) where {E}
     return RigidWakeBody{E, kernel_dim(E), eltype(grid._nodes), DBC}(grid, shedding; optargs...)
 end
@@ -277,12 +291,30 @@ function (RigidWakeBody{E, N})(grid::gt.GridTriangleSurface, shedding; DBC::Bool
     return RigidWakeBody{E, N, eltype(grid._nodes), DBC}(grid, shedding; optargs...)
 end
 
+function (RigidWakeBody{E})(mesh::VSPGeom.TriMesh, shedding; DBC::Bool=true, optargs...) where {E}
+    nodes, _ = trimesh2cells(mesh)
+    return RigidWakeBody{E, kernel_dim(E), eltype(nodes), DBC}(mesh, shedding; optargs...)
+end
+
+function (RigidWakeBody{E, N})(mesh::VSPGeom.TriMesh, shedding; DBC::Bool=true, optargs...) where {E, N}
+    nodes, _ = trimesh2cells(mesh)
+    return RigidWakeBody{E, N, eltype(nodes), DBC}(mesh, shedding; optargs...)
+end
+
 function (RigidWakeBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
     return RigidWakeBody{E}(grid, Vector{Array{Int, 2}}(); optargs...)
 end
 
 function (RigidWakeBody{E, N})(grid::gt.GridTriangleSurface; optargs...) where {E, N}
     return RigidWakeBody{E, N}(grid, Vector{Array{Int, 2}}(); optargs...)
+end
+
+function (RigidWakeBody{E})(mesh::VSPGeom.TriMesh; optargs...) where {E}
+    return RigidWakeBody{E}(mesh, Vector{Array{Int, 2}}(); optargs...)
+end
+
+function (RigidWakeBody{E, N})(mesh::VSPGeom.TriMesh; optargs...) where {E, N}
+    return RigidWakeBody{E, N}(mesh, Vector{Array{Int, 2}}(); optargs...)
 end
 
 function (RigidWakeBody{E})(nodes::Matrix{TF}, cells::Matrix{Int}, shedding; DBC::Bool=true, optargs...) where {E, TF}
@@ -354,7 +386,6 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     # Save solution
     self.strength[:, 1] .= Gamma
 
-    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
@@ -578,7 +609,6 @@ function solve(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3},
     self.strength[:, 3] .= gamma*weight_gammao
     self.strength[1:2:end, 3] .*= -1
 
-    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(Das)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")

@@ -34,13 +34,6 @@ function calcfield_U!(bodies::Tuple;
         doublet_gradient=true
     )
 
-    # ERROR CASES
-    for body in bodies
-        @assert check_solved(body) == true ""*
-            "Body hasn't been solved yet."*
-            " Please call `solve(...)` function first on this body."
-    end
-
     # reset velocity
     if reset
         for body in bodies

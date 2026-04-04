@@ -46,7 +46,6 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     # Fields
     Cp::Vector{TF}
     F::Matrix{TF}
-    solved::Bool
 
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
@@ -70,7 +69,6 @@ function NonLiftingBody{E, N, TF, DBC}(
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
                 Cp=zeros(TF, size(cells, 2)),
                 F=zeros(TF, 3, size(cells, 2)),
-                solved=false,
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
@@ -88,7 +86,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
-                Cp, F, solved,
+                Cp, F,
                 strength,
                 potential,
                 velocity,
@@ -158,6 +156,22 @@ function NonLiftingBody{E, N, TF}(
     return NonLiftingBody{E, N, TF, DBC}(grid; optargs...)
 end
 
+function NonLiftingBody{E, N, TF, DBC}(
+                mesh::VSPGeom.TriMesh;
+                optargs...
+              ) where {E, N, TF, DBC}
+    nodes, cells = trimesh2cells(mesh)
+    return NonLiftingBody{E, N, TF, DBC}(TF.(nodes), cells; optargs...)
+end
+
+function NonLiftingBody{E, N, TF}(
+                mesh::VSPGeom.TriMesh;
+                DBC::Bool=false,
+                optargs...
+              ) where {E, N, TF}
+    return NonLiftingBody{E, N, TF, DBC}(mesh; optargs...)
+end
+
 _count(::Type{ConstantSource}) = 1
 _count(::Type{ConstantDoublet}) = 1
 _count(::Type{VortexRing}) = 1
@@ -171,6 +185,16 @@ end
 
 function (NonLiftingBody{E, N})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E, N}
     return NonLiftingBody{E, N, eltype(grid._nodes), DBC}(grid; optargs...)
+end
+
+function (NonLiftingBody{E})(mesh::VSPGeom.TriMesh; DBC::Bool=false, optargs...) where {E}
+    nodes, _ = trimesh2cells(mesh)
+    return NonLiftingBody{E, _count(E), eltype(nodes), DBC}(mesh; optargs...)
+end
+
+function (NonLiftingBody{E, N})(mesh::VSPGeom.TriMesh; DBC::Bool=false, optargs...) where {E, N}
+    nodes, _ = trimesh2cells(mesh)
+    return NonLiftingBody{E, N, eltype(nodes), DBC}(mesh; optargs...)
 end
 
 function (NonLiftingBody{E})(nodes::Matrix{TF}, cells::Matrix{Int}; DBC::Bool=false, optargs...) where {E, TF}
@@ -334,10 +358,17 @@ function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_bod
 end
 
 function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
-    vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
-    target_system.velocity[1, i_target] = vx
-    target_system.velocity[2, i_target] = vy
-    target_system.velocity[3, i_target] = vz
+    if PS
+        phi = target_buffer[4, i_buffer]
+        target_system.potential[i_target] += phi
+    end
+
+    if VS
+        vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+        target_system.velocity[1, i_target] += vx
+        target_system.velocity[2, i_target] += vy
+        target_system.velocity[3, i_target] += vz
+    end
 end
 ################################################################################
 # COMMON FUNCTIONS

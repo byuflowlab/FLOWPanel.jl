@@ -125,6 +125,22 @@ function grid2cells(grid::gt.GridTriangleSurface)
     return cells
 end
 
+"""
+    trimesh2cells(mesh::VSPGeom.TriMesh)
+
+Converts a `VSPGeom.TriMesh` to the `nodes` and `cells` matrices expected by
+FLOWPanel body constructors.
+"""
+function trimesh2cells(mesh::VSPGeom.TriMesh)
+    mesh_local = deepcopy(mesh)
+    VSPGeom.setZeroBased!(mesh_local; value=false)
+
+    nodes = reduce(hcat, mesh_local.points)
+    cells = Int.(reduce(hcat, mesh_local.cells))
+
+    return nodes, cells
+end
+
 ##### COMMON FUNCTIONS  ########################################################
 
 
@@ -343,23 +359,6 @@ function set_coordinatesystem(body::AbstractBody,
 
     return nothing
 end
-
-"""
-    check_solved(self::AbstractBody)
-
-Returns `true` if the body has been solved. Returns false otherwise.
-"""
-check_solved(self::AbstractBody) = self.solved
-
-"""
-    _solvedflag(self::AbstractBody, val::Bool)
-
-Sets the `solved` flag of the body.
-"""
-_solvedflag(self::AbstractBody, val::Bool) = self.solved = val
-
-
-
 
 ##### COMMON INTERNAL FUNCTIONS  ###############################################
 """

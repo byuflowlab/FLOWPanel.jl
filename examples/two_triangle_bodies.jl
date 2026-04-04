@@ -78,9 +78,6 @@ dz = range(0.0, stop=10.0, length=npoints)
 points = hcat([ [0.33; 0.33; z] for z in dz ]...)  # points above centroid of triangle
 # points = hcat([[0.33; 0.33; 0.0] .+ [z; z; z] for z in dz ]...)  # points in y from the centroid
 
-# set "solved" flag
-FLOWPanel._solvedflag(body, true)
-
 # direct backend
 backend = pnl.DirectBackend()
 out_direct = zeros(3, npoints)

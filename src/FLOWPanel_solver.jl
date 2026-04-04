@@ -358,8 +358,6 @@ function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, 
 
     ldiv!(view(body.strength, :, strength_index), Glu, rhs)
 
-    _solvedflag(body, true)
-
     return nothing
 end
 
@@ -388,7 +386,6 @@ function solve!(self::RigidWakeBody{TK, 1, TF},
 
     self.strength[:, 1] .= Gamma
 
-    _solvedflag(self, true)
 end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), update_G=false, optargs...) where TF
@@ -426,8 +423,6 @@ function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vor
     end
 
     ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
-
-    _solvedflag(self, true)
 
     self.CPoffset = CPoffset_old
     self.velocity .= solver.Uext
@@ -513,7 +508,6 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         body.CPoffset = CPoffset_olds[i]
         body.velocity .= solver.Uext[i]
         body.potential .= solver.phi_ext[i]
-        _solvedflag(body, true)
     end
 end
 
@@ -759,7 +753,6 @@ function solve!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3, TF
     self.strength[:, 3] .= gamma*weight_gammao
     self.strength[1:2:end, 3] .*= -1
 
-    _solvedflag(self, true)
     add_field(self, "Uinf", "vector", collect(eachcol(self.velocity)), "cell")
     add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")

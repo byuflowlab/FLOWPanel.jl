@@ -27,7 +27,7 @@ struct ForwardRightDown end
 struct BackRightUp end
 
 function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:ReferenceFrame}, dt::Real)
-    
+
     # translation vector from parent to global frame
     dx_parent_to_global = FastMultipole.SVector{3}(0.0, 0.0, 0.0)
 
@@ -60,11 +60,11 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
     end
-    
+
     # Update the frame
     x_new = frame.x + dx
     R_new = Rω * frame.R
-    frames[i_frame] = ReferenceFrame(x_new, frame.v, frame.ω_axis, frame.ω, R_new, R_parent_to_global, frame.name, frame.parent_index, frame.child_index, frame.dependent_index)    
+    frames[i_frame] = ReferenceFrame(x_new, frame.v, frame.ω_axis, frame.ω, R_new, R_parent_to_global, frame.name, frame.parent_index, frame.child_index, frame.dependent_index)
 
     # new dx_parent_to_global
     dx_parent_to_global = origin_global + dx_global
@@ -75,6 +75,60 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
     # Recursively propagate to child frames
     for i in frame.child_index
         propagate_kinematics!(system, i, frames, dx_parent_to_global, R_parent_to_global, dt)
+    end
+end
+
+#--- tuple overloads ---#
+
+function propagate_kinematics!(systems::Tuple, frames::Vector{<:ReferenceFrame}, dt::Real)
+
+    # translation vector from parent to global frame
+    dx_parent_to_global = FastMultipole.SVector{3}(0.0, 0.0, 0.0)
+
+    # global rotation matrix from parent to global frame
+    R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
+
+    # begin recursion
+    propagate_kinematics!(systems, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
+end
+
+function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+    # get frame
+    frame = frames[i_frame]
+
+    # origin in global frame
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global # global origin vector
+
+    # differential translation
+    dx = frame.v * dt  # translation in parent frame
+    dx_global = R_parent_to_global * dx  # global translation vector
+
+    # differential rotation
+    dω = frame.ω * dt  # angular displacement in parent frame
+    Rω = Rodrigues(frame.ω_axis, dω) # rotation matrix in parent frame
+    Rω_global = Rodrigues(R_parent_to_global * frame.ω_axis, dω) # global frame
+
+    # rotate and translate dependent surfaces
+    for i in frame.dependent_index
+        body = systems[i]
+        rotate_translate!(body, origin_global, Rω_global, dx_global)
+        rotate_Das!(body, Rω_global)
+    end
+
+    # Update the frame
+    x_new = frame.x + dx
+    R_new = Rω * frame.R
+    frames[i_frame] = ReferenceFrame(x_new, frame.v, frame.ω_axis, frame.ω, R_new, R_parent_to_global, frame.name, frame.parent_index, frame.child_index, frame.dependent_index)
+
+    # new dx_parent_to_global
+    dx_parent_to_global = origin_global + dx_global
+
+    # new R_parent_to_global
+    R_parent_to_global = R_parent_to_global * R_new
+
+    # Recursively propagate to child frames
+    for i in frame.child_index
+        propagate_kinematics!(systems, i, frames, dx_parent_to_global, R_parent_to_global, dt)
     end
 end
 
@@ -172,6 +226,41 @@ function update_dependent_indices!(frames::Vector{ReferenceFrame{TF}}, parent_in
     end
 end
 
+#------- kinematic velocity helpers -------#
+
+function _kinematic_velocity_te!(body::AbstractLiftingBody, v_global, ω_global, origin_global)
+    for ishedding in eachindex(body.Das)
+        Vte = body.velocity_te[ishedding]
+        shedding = body.shedding[ishedding]
+
+        # nib nodes (columns 1..nshed)
+        for j in axes(shedding, 2)
+            i_panel = shedding[1, j]
+            idx_nib = shedding[3, j]
+            node_idx = body.cells[idx_nib, i_panel]
+            te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+            dv = v_global + cross(ω_global, (te - origin_global))
+            Vte[1, j] -= dv[1]
+            Vte[2, j] -= dv[2]
+            Vte[3, j] -= dv[3]
+        end
+
+        # final nia node (column nshed+1)
+        if size(shedding, 2) > 0
+            i_panel = shedding[1, end]
+            idx_nia = shedding[2, end]
+            node_idx = body.cells[idx_nia, i_panel]
+            te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+            dv = v_global + cross(ω_global, (te - origin_global))
+            Vte[1, end] -= dv[1]
+            Vte[2, end] -= dv[2]
+            Vte[3, end] -= dv[3]
+        end
+    end
+end
+
+_kinematic_velocity_te!(::AbstractBody, v_global, ω_global, origin_global) = nothing
+
 #------- kinematic velocity -------#
 
 function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}) where TF
@@ -211,35 +300,8 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
             Vcp[:, i] .-= dv
         end
 
-        # trailing edges
-        for ishedding in eachindex(body.Das)
-            Vte = body.velocity_te[ishedding]
-            shedding = body.shedding[ishedding]
-
-            # nib nodes (columns 1..nshed)
-            for j in axes(shedding, 2)
-                i_panel = shedding[1, j]
-                idx_nib = shedding[3, j]
-                node_idx = body.cells[idx_nib, i_panel]
-                te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
-                dv = v_global + cross(ω_global, (te - origin_global))
-                Vte[1, j] -= dv[1]
-                Vte[2, j] -= dv[2]
-                Vte[3, j] -= dv[3]
-            end
-
-            # final nia node (column nshed+1)
-            if size(shedding, 2) > 0
-                i_panel = shedding[1, end]
-                idx_nia = shedding[2, end]
-                node_idx = body.cells[idx_nia, i_panel]
-                te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
-                dv = v_global + cross(ω_global, (te - origin_global))
-                Vte[1, end] -= dv[1]
-                Vte[2, end] -= dv[2]
-                Vte[3, end] -= dv[3]
-            end
-        end
+        # trailing edges (only for lifting bodies)
+        _kinematic_velocity_te!(body, v_global, ω_global, origin_global)
     end
 
     # new dx_parent_to_global

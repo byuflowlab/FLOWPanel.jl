@@ -64,9 +64,6 @@ points = hcat([ cps[:,1] .+ [0.0,0.0,z] for z in dz ]...)  # points above centro
 # points = hcat([ cps[:,1] .+ z .* normals[:,1] for z in dz ]...)  # points above centroid of triangle
 # points = hcat([[0.33; 0.33; 0.0] .+ [z; z; z] for z in dz ]...)  # points in y from the centroid
 
-# set "solved" flag
-FLOWPanel._solvedflag(body, true)
-
 # direct backend
 backend = pnl.FastMultipoleBackend(
                                     expansion_order=20,

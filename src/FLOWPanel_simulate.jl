@@ -11,10 +11,10 @@ function ForcesMonitor(nt::Int, TF=Float64; frame=Body())
     return ForcesMonitor{TF,typeof(frame)}(CF, CM, frame)
 end
 
-function (monitor::ForcesMonitor)(system::AbstractBody, wake, i_step::Int)
-    CF, CM = body_forces(system.surfaces, system.properties,
-                            system.reference[], system.freestream[], 
-                            system.symmetric, monitor.frame)
+function (monitor::ForcesMonitor)(systems::Tuple, wakes::Tuple, i_step::Int)
+    CF, CM = body_forces(systems[1].surfaces, systems[1].properties,
+                            systems[1].reference[], systems[1].freestream[],
+                            systems[1].symmetric, monitor.frame)
     monitor.CF[i_step + 1] = CF
     monitor.CM[i_step + 1] = CM
 end
@@ -25,117 +25,177 @@ struct FrameForcesMonitor{TF,F}
     frame::F
 end
 
-function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames#=::AbstractVector{<:ReferenceFrame}=#, maneuver!::Function, Uinf::Function, t_range; # Ωinf=(t)->SVector{3}(0.0, 0.0, 0.0);
+#--- dphidt dispatch helpers ---#
+
+_store_neg_potential!(sys::AbstractLiftingBody) = (sys.dphidt .= .-sys.potential)
+_store_neg_potential!(::AbstractBody) = nothing
+
+_compute_dphidt!(sys::AbstractLiftingBody, dt) = (sys.dphidt .= (sys.dphidt .+ sys.potential) ./ dt)
+_compute_dphidt!(::AbstractBody, dt) = nothing
+
+_get_dphidt(sys::AbstractLiftingBody) = sys.dphidt
+_get_dphidt(::AbstractBody) = nothing
+
+#--- wake tuple helpers ---#
+
+function _collect_wake_probes(wakes::Tuple)
+    result = ()
+    for w in wakes
+        if !isnothing(w)
+            result = (result..., get_probes(w)...)
+        end
+    end
+    return result
+end
+
+function _collect_wake_sources(wakes::Tuple)
+    result = ()
+    for w in wakes
+        if !isnothing(w)
+            result = (result..., get_sources(w)...)
+        end
+    end
+    return result
+end
+
+#--- single-body backward-compat wrapper ---#
+
+function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames, maneuver!::Function, Uinf::Function, t_range;
+        body_solver=BackslashDirichlet(system), optargs...
+    ) where {TK, NK, TF}
+    # wrap maneuver to match tuple signature
+    _maneuver!(frames, systems, wakes, t) = maneuver!(frames, systems[1], wakes[1], t)
+    simulate!((system,), (wake,), frames, _maneuver!, Uinf, t_range;
+        body_solvers=(body_solver,), optargs...)
+end
+
+#--- primary tuple-based simulate! ---#
+
+function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Uinf::Function, t_range;
         name="default_sim", path="./default_simulation",
-        # vtk_args=(trailing_vortices=false, write_wakes=false), vtk_postshed=false,
-        # fmm_wake_args=(), fmm_vehicle_args=(),
-        # derivatives=false, nonlinear_analysis=false, nonlinear_args=(),
-        # particle_trailing_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
-        # particle_unsteady_methods=fill(OverlapPPS(1.3, 2), length(system.surfaces)),
-        body_solver=BackslashDirichlet(system), 
+        body_solvers::Tuple,
         backend=FastMultipoleBackend(;
                 expansion_order=10,
                 multipole_acceptance=0.4,
                 leaf_size=100,
             ),
-        # trailing_vortices=fill(false, length(system.surfaces)),
-        # shedding_surfaces=fill(true, length(system.surfaces)),
         rho=1.225,
         monitors=(),
         cp_correct_kuttacondition=true,
         cp_clip=nothing,
         verbose=false
-    ) where {TK, NK, TF}
+    )
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
         mkpath(path)
     end
 
     # update control points and normals
-    calc_normals!(system)
-    calc_controlpoints!(system; off=abs(system.CPoffset))
+    for sys in systems
+        calc_normals!(sys)
+        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+    end
 
     # begin simulation
     i_step = 0
     for t in t_range
         verbose && println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
 
-        # particle field
-        # FLOWVPM._reset_particles(wake)
-        # FLOWVPM._reset_particles_sfs(wake)
-
         #------- controls -------#
 
         # update frames based on maneuver
         # (RPMs, tilting systems, prescribed trajectory, etc.)
-        dynamics_toggle = maneuver!(frames, system, wake, t)
-        
+        dynamics_toggle = maneuver!(frames, systems, wakes, t)
+
         #------- aerodynamics -------#
-        
+
         # store -φ_old for dφ/dt computation (before reset wipes potential)
-        system.dphidt .= .-system.potential
+        for sys in systems
+            _store_neg_potential!(sys)
+        end
 
         # reset potential/velocity
-        reset!(wake)
-        reset!(system)
+        for w in wakes
+            !isnothing(w) && reset!(w)
+        end
+        for sys in systems
+            reset!(sys)
+        end
 
         # get probes
-        targets = (system, get_probes(wake)...)
-        wake_sources = Tuple(w for w in get_sources(wake))
+        wake_probes = _collect_wake_probes(wakes)
+        targets = (systems..., wake_probes...)
+        wake_sources = _collect_wake_sources(wakes)
 
         # freestream
         uinf = Uinf(t)
-        apply_freestream!(system, uinf)
-        apply_freestream!(wake, uinf)
+        apply_freestream!(systems, uinf)
+        for w in wakes
+            !isnothing(w) && apply_freestream!(w, uinf)
+        end
 
         # kinematics
-        kinematic_velocity!((system,), frames)
+        kinematic_velocity!(systems, frames)
 
         # dt for this step
         dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
 
         # snap first row of wake nodes to the trailing edge
-        update_TE!(wake, system)
+        for (sys, w) in zip(systems, wakes)
+            !isnothing(w) && update_TE!(w, sys)
+        end
 
         # apply wake potential to body surface
-        evaluate_influence!(targets, wake_sources, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        if length(wake_sources) > 0
+            evaluate_influence!(targets, wake_sources, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        end
 
-        # solve system (shouldn't modify system velocity, but will update system strength)
-        solve!(system, body_solver; backend)
+        # solve systems with cross-body coupling
+        solve!(systems, body_solvers; backend=fill(backend, length(systems)))
 
         # update control points (normals should not have changed)
-        calc_controlpoints!(system; off=abs(system.CPoffset))
+        for sys in systems
+            calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        end
 
         # system-on-all influence
-        evaluate_influence!(targets, (system,), backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        evaluate_influence!(targets, systems, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
         # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt
-        system.dphidt .= (system.dphidt .+ system.potential) ./ dt
+        for sys in systems
+            _compute_dphidt!(sys, dt)
+        end
 
-        calcfield_Cp!(system, norm(uinf); dphidt=system.dphidt, correct_kuttacondition=cp_correct_kuttacondition, clip=cp_clip)
-        calcfield_F!(system, norm(uinf), rho)
-        
+        calcfield_Cp!(systems, norm(uinf); dphidt=Tuple(_get_dphidt(s) for s in systems), correct_kuttacondition=fill(cp_correct_kuttacondition, length(systems)), clip=cp_clip)
+        calcfield_F!(systems, norm(uinf), rho)
+
         #------- other solvers -------#
-        
+
         # e.g. structures, acoustics, dynamics, etc.
-        
+
         #------- update state -------#
-        
+
 
         #------- save state -------#
 
         if !isnothing(path)
-            # panel body
-            write_vtk(joinpath(path, name), system, i_step, t; overwrite=i_step==0)
+            for (i, sys) in enumerate(systems)
+                body_name = length(systems) == 1 ? name : name * "_body$(i)"
+                write_vtk(joinpath(path, body_name), sys, i_step, t; overwrite=i_step==0)
+            end
 
-            # wake
-            write_vtk(joinpath(path, name*"_wake"), wake, i_step, t; overwrite=i_step==0)
+            for (i, w) in enumerate(wakes)
+                if !isnothing(w)
+                    wake_name = length(systems) == 1 ? name * "_wake" : name * "_wake$(i)"
+                    write_vtk(joinpath(path, wake_name), w, i_step, t; overwrite=i_step==0)
+                end
+            end
         end
 
         for monitor in monitors
-            monitor(system, wake, i_step)
+            monitor(systems, wakes, i_step)
         end
 
         #------- propagate system -------#
@@ -143,60 +203,32 @@ function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frame
         if i_step < length(t_range) - 1
 
             #--- state evolution ---#
-            
-            # propagate wake (and save )
-            propagate!(wake, dt)
 
-            # dynamics function
-            # if dynamics_toggle
-            #     apply_dynamics!(system, frames)
-            # end
+            # propagate wake
+            for w in wakes
+                !isnothing(w) && propagate!(w, dt)
+            end
 
-            # # calculate next step's wake trailing edge
-            # this_V = nothing # ignore wake- and vehicle-induced velocity for wake shedding location update
-            # update_vpm_shedding_TE!(wakes, ref, fs, dt, additional_velocity, this_V) # uses current step's freestream
-
-            # # store trailing edge location for next step's wsl
-            # store_trailing_edge!(wake_shedding_locations, current_surfaces)
-            
             # propagate rigid-body kinematics
-            propagate_kinematics!(system, frames, dt)
+            propagate_kinematics!(systems, frames, dt)
 
             # update control points and normals
-            calc_normals!(system)
-            calc_controlpoints!(system; off=abs(system.CPoffset))
-
-            # # next step's freestream
-            # idx = i_step == length(t_range) - 1 ? i_step + 1 : i_step + 2
-            # uinf = Uinf(t_range[idx])
-            # # Ω = Ωinf(t_range[idx])
-            # # fs = Freestream(frames[1], ref, vinf)
-            # # fs = velocity_to_freestream(vinf, Ω)
-            # # system.freestream[] = fs
-
-            # # next step's freestream
-            # uinf = Uinf(t_range[i_step + 2])
-
-            # # next step's dt
-            # dt = t_range[i_step + 2] - t_range[i_step + 1]
+            for sys in systems
+                calc_normals!(sys)
+                calc_controlpoints!(sys; off=abs(sys.CPoffset))
+            end
 
             #--- shed new wake ---#
 
-            shed_wake!(wake, system)
-
-            # shed_wake!(wake, system,  dt, Γ_wake, dΓdt,
-            #     particle_trailing_methods, particle_unsteady_methods)
-
-            # update wake shedding locations based on wake and vehicle
-            # accounts for vehicle-induced, wake-induced, freestream,
-            # and kinematic velocities
-            # update_vpm_shedding_LE!(wakes, ref, fs, dt, additional_velocity, V)
+            for (sys, w) in zip(systems, wakes)
+                !isnothing(w) && shed_wake!(w, sys)
+            end
 
         end
 
         # increment step
         i_step += 1
-    end    
+    end
 end
 
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1
@@ -244,7 +276,7 @@ function shed_wake!(wake::PanelWake, system::AbstractBody)
 
     # check storage dimensions
     @assert length(system.Das) == length(system.shedding) == length(wake.nodes) "Length of system.Das ($(length(system.Das))) must match number of surfaces in wake ($(length(wake.nodes)))"
-    
+
     # shift panels back a row
     n_rows = size(wake.nodes[1], 2)
     for i_surf in eachindex(wake.nodes)
@@ -292,4 +324,3 @@ function shed_wake!(wake::PanelParticleWake, system::AbstractBody)
     # Shift panel rows (existing PanelWake method)
     shed_wake!(pw, system)
 end
-

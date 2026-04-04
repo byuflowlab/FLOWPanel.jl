@@ -67,7 +67,11 @@ function make_duct(;
 end
 
 # ----------------- GENERATE TWO DUCTS ----------------------------------------
-body1 = make_duct()
+# body1 = make_duct()
+body1 = make_duct(;
+            kernel = pnl.ConstantSource,
+            bodytype = pnl.NonLiftingBody
+        )
 # body2 = make_duct()
 body2 = make_duct(;
             kernel = pnl.ConstantSource,
@@ -200,7 +204,12 @@ rms = sqrt(sum(udotn .^ 2) / body2.ncells)
 maxr = maximum(abs.(udotn))
 println("  Body 2 (FGS only): RMS flow tangency = $rms, max = $maxr")
 
-   
+# Re-setup bodies before multi-body solve (single-body solve above polluted body2 state)
+setup_bodies!(body1, Vinf, magVinf)
+setup_bodies!(body2, Vinf, magVinf)
+body1.strength .= 0.0
+body2.strength .= 0.0
+
 @time pnl.solve!((body1, body2), (fgs1, fgs2);
     backend=fill(backend_direct, 2),
     max_outer_iterations=50,
