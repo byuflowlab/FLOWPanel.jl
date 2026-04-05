@@ -1,11 +1,8 @@
 """
-  Three-dimensional panel method for high-Reynolds aerodynamics.
+    FLOWPanel
 
-  # AUTHORSHIP
-    * Created by    : Eduardo J. Alvarez
-    * Email         : Edo.AlvarezR@gmail.com
-    * Date          : Jun 2018 originally as MyPanel.jl
-    * License       : MIT License
+Three-dimensional panel-method toolkit for non-lifting and lifting aerodynamic
+surface models, wake models, solver backends, and post-processing utilities.
 """
 module FLOWPanel
 
@@ -78,6 +75,12 @@ end
 const DEBUG = Array{Bool,0}(undef)
 DEBUG[] = false
 
+"""
+    __init__()
+
+Load optional runtime integrations, including plotting monitors when `PyPlot`
+is available.
+"""
 function __init__()
 
     # Conditionally load monitors if PyPlot is available

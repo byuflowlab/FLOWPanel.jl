@@ -1,7 +1,11 @@
 #=##############################################################################
 # DESCRIPTION
-
-    Nonlinear lifting line method. This method is formulated based on the 
+#
+#    Nonlinear lifting-line support is provided by the included files under
+#    `src/liftingline/`. This top-level file serves as the package entrypoint for
+#    that subsystem and does not define additional public functions directly.
+#
+#    This method is formulated based on the
     following references:
 
     * Martinez-Tossas, L. A., Allaerts, D., Branlard, E., and Churchfield, M. J. 

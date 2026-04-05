@@ -29,33 +29,10 @@ end
 mean(xs) = sum(xs)/length(xs)
 
 """
-`simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
-bodytype=RigidWakeBody,
-span_NDIVS="automatic", rfl_NDIVS="automatic",
-airfoil_root="naca6412.dat", airfoil_tip="naca6412.dat",
-airfoil_path=def_rfl_path)`
+    simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma; bodytype=RigidWakeBody{Union{ConstantSource,ConstantDoublet}}, span_NDIVS=nothing, rfl_NDIVS=nothing, airfoil_root="naca6412.dat", airfoil_tip="naca6412.dat", airfoil_path=def_rfl_path, opt_args...)
 
-Generates a symmetric single-section wing.
-
-**ARGUMENTS**
-  * `b::Real`         : Span.
-  * `ar::Real`        : Aspect ratio defined as b/c_tip.
-  * `tr::Real`        : Taper ratio defined as c_tip/c_root.
-  * `twist_root::Real`: (deg) twist of the root.
-  * `twist_tip::Real` : (deg) twist of the tip.
-  * `lambda::Real`    : (deg) sweep.
-  * `gamma::Real`     : (deg) dihedral.
-
-**OPTIONAL ARGUMENTS**
-  * `bodytype::Type{LBodyTypes}`: Type of lifting body to generate.
-  * `span_NDIVS::ndivstype`     : Spanwise divisions.
-  * `rfl_NDIVS::ndivstype`    : Chordwise divisions.
-  * `airfoil_root::String`      : File to root airfoil contour.
-  * `airfoil_tip::String`       : File to tip airfoil contour.
-  * `airfoil_path::String`      : Path to airfoil files.
-
-NOTE: See gt.multidscretize for a description of arguments of type `ndivstype`.
-NOTE2: In the current implementation, sweep and dihedral are done about the LE.
+Generate a symmetric single-section wing and return it as the requested body
+type.
 """
 function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                       twist_tip::Number, lambda::Number, gamma::Number;
@@ -207,7 +184,10 @@ end
 
 
 """
-Filtering criterion for splitting up edges of control surfaces in mesh
+    filter_splitsurfaces(connectivity, vertices, controlsurfaces; offset=zeros(3), invrotation=one(Meshes.QuatRotation), scaling=1.0)
+
+Predicate used during mesh preprocessing to decide whether an element should be
+split along a control-surface boundary.
 """
 function filter_splitsurfaces(connectivity, vertices, controlsurfaces;
                                         offset=zeros(3),

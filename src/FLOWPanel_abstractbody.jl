@@ -98,24 +98,31 @@ function reset!(body::AbstractBody)
     return nothing
 end
 
+"""
+    reset!(body::AbstractBody)
+
+Clear per-step solution fields stored on `body` and delegate subtype-specific
+reset work through `extra_reset!`.
+"""
 has_dirichlet_bc(::AbstractBody{<:Any, <:Any, <:Any, DBC}) where DBC = DBC
 
 extra_reset!(body::AbstractBody) = nothing
 
 """
-    `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
+    solve(body::AbstractBody, Uinfs)
 
-Impose boundary conditions to solve for element strengths. `Uinds[:, i]` is the
-velocity at the i-th control point used in the boundary condition.
+Solve a body boundary-value problem using the prescribed control-point
+velocities `Uinfs`.
 """
 function solve(self::AbstractBody, Uinfs::AbstractArray{<:Number, 2})
     error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
 end
 
 """
-    `grid2cells(grid::GeometricTools.GridTriangleSurface)`
+    grid2cells(grid)
 
-Converts the cells in a `GeometricTools` continuous grid to a `Matrix{Int}` of size `3 x ncells`.
+Convert a `GeometricTools.GridTriangleSurface` into the `3 x ncells`
+connectivity matrix used by FLOWPanel body constructors.
 """
 function grid2cells(grid::gt.GridTriangleSurface)
     cells = zeros(Int, 3, grid.ncells)

@@ -1,24 +1,26 @@
+"""
+    AbstractFreeWake
+
+Abstract supertype for wake models that exchange influence with
+[`AbstractBody`](@ref) systems during time stepping.
+"""
 abstract type AbstractFreeWake end
 
+"""
+    ProbeWrapper(system)
+
+Wrapper that exposes wake probe points to the influence backends without
+changing the underlying wake storage layout.
+"""
 struct ProbeWrapper{P}
     system::P
 end
 
 """
-    solve!(body::AbstractBody{TB}, wake::AbstractFreeWake{TW}, Uinf::Function, t=0.0; solver::AbstractSolver, backend=FastMultipoleBackend)
+    solve!(body, wake, uinf, t=0.0; body_solver=BackslashDirichlet(body), backend=FastMultipoleBackend(...))
 
-Solve for the body panel strengths and wake velocities at time `t` given a freestream velocity function `Uinf(t)`. The `solver` keyword argument specifies the linear solver to use for solving the body panel strengths, and the `backend` keyword argument specifies the N-body backend to use for evaluating influence of body and wake on each other.
-
-**Modified Arguments**
-- `body`: the body panel strength and velocity fields are modified in-place
-- `wake`: the wake velocity field is modified in-place
-
-**Additional Arguments**
-- `Uinf::Function`: a function that accepts time `t` and returns the freestream velocity vector at that time
-- `t::Real`: the time at which to evaluate the freestream velocity and solve for the body and wake
-- `solver::AbstractSolver`: the linear solver to use for solving the body panel strengths (default: `BackslashDirichlet(body)`)
-- `backend::AbstractBackend`: the N-body backend to use for evaluating influence of body and wake on each other (default: `FastMultipoleBackend` with expansion order 10, multipole acceptance 0.4, and leaf size 100)
-
+Perform one coupled body-wake solve using the supplied freestream velocity
+vector `uinf`.
 """
 function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
         body_solver::AbstractSolver=BackslashDirichlet(body), 
@@ -63,6 +65,13 @@ requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
 #--- Panel Wake ---#
 
+"""
+    PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100)
+    PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100)
+
+Wake model that stores a panelized wake sheet behind one or more shedding-edge
+chains.
+"""
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
     nodes::Vector{Array{TF, 3}}
@@ -72,10 +81,20 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     overflowed::Array{Bool, 0}
 end
 
+"""
+    get_probes(wake::PanelWake)
+
+Return the wake probe systems that should receive wake-induced influence.
+"""
 function get_probes(wake::PanelWake)
     return (ProbeWrapper(wake),)
 end
 
+"""
+    get_sources(wake::PanelWake)
+
+Return the wake source systems used by the active influence backend.
+"""
 function get_sources(wake::PanelWake)
     return (wake, FilamentWrapper(wake))
 end
@@ -508,15 +527,24 @@ end
 
 #--- Wake Shedding Methods ---#
 
+"""
+    WakeSheddingMethod
+
+Abstract supertype for particle-shedding strategies used by
+[`PanelParticleWake`](@ref).
+"""
 abstract type WakeSheddingMethod end
 
+"""No particle shedding."""
 struct NoShed <: WakeSheddingMethod end
 
+"""Gaussian particle shedding with prescribed smoothing width `sigma`."""
 struct SigmaPPS{TF} <: WakeSheddingMethod
     sigma::TF
     p_per_step::Int
 end
 
+"""Overlap-based particle shedding with target overlap ratio."""
 struct OverlapPPS{TF} <: WakeSheddingMethod
     overlap::TF
     p_per_step::Int
@@ -547,6 +575,12 @@ end
 
 #------- Vortex Particle Wake -------#
 
+"""
+    PanelParticleWake(body; optargs...)
+
+Hybrid wake model that combines a near-body panel wake with vortex particles
+shed downstream from the trailing edge.
+"""
 struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
     pfield::TPF                           # FLOWVPM.ParticleField object

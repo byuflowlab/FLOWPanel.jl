@@ -1,9 +1,20 @@
+"""
+    ForcesMonitor(nt, TF=Float64; frame=Body())
+
+Simple storage monitor for integrated force and moment histories over `nt`
+simulation steps.
+"""
 struct ForcesMonitor{TF,F}
     CF::Vector{FastMultipole.SVector{3,TF}}
     CM::Vector{FastMultipole.SVector{3,TF}}
     frame::F
 end
 
+"""
+    ForcesMonitor(nt, TF=Float64; frame=Body())
+
+Construct a force/moment history monitor with `nt` output slots.
+"""
 function ForcesMonitor(nt::Int, TF=Float64; frame=Body())
     CF = zeros(FastMultipole.SVector{3,TF}, nt)
     CM = zeros(FastMultipole.SVector{3,TF}, nt)
@@ -19,6 +30,11 @@ function (monitor::ForcesMonitor)(systems::Tuple, wakes::Tuple, i_step::Int)
     monitor.CM[i_step + 1] = CM
 end
 
+"""
+    FrameForcesMonitor
+
+Storage type for frame-resolved force and moment histories.
+"""
 struct FrameForcesMonitor{TF,F}
     CF::Vector{FastMultipole.SVector{3,TF}}
     CM::Vector{FastMultipole.SVector{3,TF}}
@@ -60,6 +76,14 @@ end
 
 #--- single-body backward-compat wrapper ---#
 
+"""
+    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=BackslashDirichlet(system), optargs...)
+    simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), rho=1.225, monitors=(), ...)
+
+Advance one or more coupled body-wake systems through `t_range`, solving the
+aerodynamics, updating wakes, optionally writing VTK output, and calling any
+registered monitors.
+"""
 function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames, maneuver!::Function, Uinf::Function, t_range;
         body_solver=BackslashDirichlet(system), optargs...
     ) where {TK, NK, TF}

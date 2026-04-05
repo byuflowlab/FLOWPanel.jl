@@ -11,6 +11,13 @@
 
 #-------- panel kernels -------#
 
+"""
+    rotate_to_panel(source_system, source_buffer, i_source)
+    rotate_to_panel(source_system, i_source)
+    rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
+
+Return the panel-local rotation matrix and vertices for source panel `i_source`.
+"""
 function rotate_to_panel(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
 
     #--- rotate into panel frame ---#
@@ -76,6 +83,12 @@ function rotate_to_panel(source_system::AbstractBody, i_source::Int)
     return rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z)
 end
 
+"""
+    get_vertices(source_system, source_buffer, i_source)
+    get_vertices(source_system, i_source)
+
+Return the three panel vertices for source panel `i_source`.
+"""
 function get_vertices(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
     # get vertices
     v1x = source_buffer[5+NK, i_source]
@@ -110,7 +123,13 @@ function get_vertices(source_system::AbstractBody, i_source::Int)
     return v1, v2, v3
 end
 
-"Rotated kernels"
+"""
+    induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
+    induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
+
+Evaluate the panel-induced potential, velocity, and optional gradient at
+`target` for source panel `i_source`.
+"""
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix

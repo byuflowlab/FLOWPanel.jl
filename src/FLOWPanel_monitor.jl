@@ -10,43 +10,11 @@
 =###############################################################################
 
 """
-    monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
-                        controlpoints, fieldname, sliceposs;
-                        slicenormal=[0, 1, 0],
-                        row=false,
-                        filter=(x, i)->true,
-                        proc_xfun=(points, vals)->getindex.(eachcol(points), 1),
-                        proc_yfun=(points, vals)->vals,
-                        # ------------- PLOT OUTPUTS ---------------------------
-                        disp_plot=true,
-                        _fig=nothing, _axs=nothing,
-                        ttl=nothing, xscaling=1,
-                        stl="-", xlims=nothing, ylims=nothing,
-                        plot_optargs=[],
-                        figext=".png",
-                        figname="",
-                        fignum=nothing,
-                        # ------------- OTHER OUTPUTS --------------------------
-                        save_path=nothing,
-                        filepref="slice",
-                        num=nothing,
-                        out=[],
-                        output_csv=true,
-                        output_vtk=true
-                        )
+    monitor_slice(body, controlpoints, fieldname, sliceposs; slicenormal=[0, 1, 0], row=false, filter=(x, i)->true, proc_xfun=(points, vals)->getindex.(eachcol(points), 1), proc_yfun=(points, vals)->vals, disp_plot=true, save_path=nothing, ...)
+    monitor_slice(body, fieldname, sliceposs; optargs...)
 
-Plots and outputs a slice of field `fieldname`.
-
-# ARGUMENTS
-* `sliceposs::Tuple`            :   Position of each slice.
-* `slicenormal::Vector`         :   Unit vector normal to the slicing plane.
-* `row::Bool`                   :   Slice along first grid dimension if true;
-                                    second if false.
-* `filter::Function`            :   Filter points along the slice according to
-                                    this logic.
-* `proc_xfun::Function`         :   Process slice and output x-values for plots
-* `proc_yfun::Function`         :   Process slice and output y-values for plots
-
+Extract one or more slices of a field, optionally plot them with `PyPlot`, and
+optionally write CSV/VTK outputs.
 """
 function monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
                         controlpoints, fieldname, sliceposs;
@@ -174,9 +142,12 @@ function monitor_slice(body::AbstractBody, fieldname, sliceposs; optargs...)
                                                         sliceposs; optargs...)
 end
 
+"""
+    monitor_loading(body, Lhat, Dhat, b; spandirection=[0, 1, 0], dimspan=2, dimchord=1, ...)
 
-
-
+Plot and optionally export sectional loading distributions resolved into lift,
+drag, and side-force directions.
+"""
 function monitor_loading(body::Union{NonLiftingBody, AbstractLiftingBody}, Lhat, Dhat, b;
                         spandirection=[0, 1, 0], dimspan=2, dimchord=1,
                         to_plot=[1, 2, 3], yscalings=[1.0, 1.0, 1.0],

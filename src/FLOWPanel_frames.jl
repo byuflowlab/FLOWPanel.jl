@@ -9,6 +9,11 @@
   * License     : MIT License
 =###############################################################################
 
+"""
+    ReferenceFrame
+
+Rigid-body kinematic frame used to propagate body motion through a frame tree.
+"""
 struct ReferenceFrame{TF}
 	x::FastMultipole.SVector{3,TF}             # origin in parent frame
 	v::FastMultipole.SVector{3,TF}             # velocity in parent frame
@@ -22,10 +27,26 @@ struct ReferenceFrame{TF}
 	dependent_index::Vector{Int} # VortexLattice surfaces
 end
 
+"""
+    ForwardRightDown
+
+Marker type for a forward-right-down coordinate convention.
+"""
 struct ForwardRightDown end
 
+"""
+    BackRightUp
+
+Marker type for a back-right-up coordinate convention.
+"""
 struct BackRightUp end
 
+"""
+    propagate_kinematics!(systems, frames, dt)
+
+Advance all dependent bodies by one timestep `dt` according to the frame tree.
+Accepts either a single body or a tuple of bodies.
+"""
 function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:ReferenceFrame}, dt::Real)
 
     # translation vector from parent to global frame
@@ -163,6 +184,11 @@ function rotate_Das!(body::AbstractLiftingBody, Rω)
 end
 rotate_Das!(body::AbstractBody, Rω) = nothing
 
+"""
+    Rodrigues(axis, angle)
+
+Return the rotation matrix associated with rotating by `angle` about `axis`.
+"""
 function Rodrigues(axis, angle::TF) where TF
     s, c = sincos(-angle)
     t = 1 - c
@@ -175,6 +201,11 @@ function Rodrigues(axis, angle::TF) where TF
     )
 end
 
+"""
+    inverse_Rodrigues(R)
+
+Return the axis-angle rotation vector associated with the rotation matrix `R`.
+"""
 function inverse_Rodrigues(R::FastMultipole.SMatrix{3,3,TF,9}) where TF
     # inverse Rodrigues rotation matrix
     θ = acos((trace(R) - 1) / 2)
@@ -188,6 +219,11 @@ function inverse_Rodrigues(R::FastMultipole.SMatrix{3,3,TF,9}) where TF
     return FastMultipole.SVector{3,TF}(x, y, z) * θ
 end
 
+"""
+    ReferenceFrame(system; origin=system.O, v=..., ω_axis=..., ω=..., R=..., Rp2g=..., name="vehicle", child_index=Int[], dependent_index=[1])
+
+Construct the root frame list for a body or body collection.
+"""
 function ReferenceFrame(system::AbstractBody; 
         # vvv all in global frame vvv
         origin = system.O,
@@ -319,6 +355,13 @@ end
 
 #------- constructors -------#
 
+"""
+    add_frame!(frames, name, parent_index, origin, surface_indices; optargs...)
+    add_frame!(frames, name, parent_name, origin, surface_indices; optargs...)
+
+Add a child frame to an existing frame tree and register the affected body
+indices as dependents of that frame and its ancestors.
+"""
 function add_frame!(frames::Vector{ReferenceFrame{TF}}, name::String, parent_index::Int, origin, surface_indices::Vector{Int};
     v = zero(FastMultipole.SVector{3,TF}),  # velocity in parent frame
     ω_axis = FastMultipole.SVector{3,TF}(0.0, 1.0, 0.0),  # axis of rotation in parent frame

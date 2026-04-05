@@ -13,19 +13,41 @@
 # ABSTRACT N-BODY BACKEND
 ################################################################################
 
+"""
+    AbstractBackend
+
+Abstract supertype for influence-evaluation backends used by [`influence!`](@ref).
+"""
 abstract type AbstractBackend end
 
+"""
+    DirectBackend()
+
+Backend that evaluates source-target interactions directly.
+"""
 struct DirectBackend <: AbstractBackend end
 
+"""
+    FastMultipoleBackend
+    FastMultipoleBackend(; expansion_order=10, multipole_acceptance=0.4, leaf_size=20)
+
+Backend configuration for accelerated influence evaluation via `FastMultipole`.
+"""
 struct FastMultipoleBackend <: AbstractBackend
     expansion_order::Int
     multipole_acceptance::Float64
     leaf_size::Int
 end
 
-FastMultipoleBackend(; expansion_order=10, multipole_acceptance=0.4, leaf_size=20) = 
+FastMultipoleBackend(; expansion_order=10, multipole_acceptance=0.4, leaf_size=20) =
     FastMultipoleBackend(expansion_order, multipole_acceptance, leaf_size)
 
+"""
+    influence!(targets, sources, backend; scalar_potential=false, velocity=false, velocity_gradient=false, precalc=false, optargs...)
+
+Accumulate influence from `sources` onto `targets` using the requested backend.
+Targets and sources may be individual systems or tuples of systems.
+"""
 function influence!(targets::Tuple, sources::Tuple, backend::AbstractBackend; optargs...)
     error("influence! not implemented for targets $(typeof(targets)), sources $(typeof(sources)), and backend $(typeof(backend))")
 end
@@ -94,6 +116,12 @@ function influence!(target, source, backend; optargs...)
     influence!(to_tuple(target), to_tuple(source), backend; optargs...)
 end
 
+"""
+    pre_evaluate_influence!(system)
+
+Hook for systems that need preprocessing before influence evaluation. The
+default implementation does nothing.
+"""
 function pre_evaluate_influence!(system)
     # default behavior
     return nothing

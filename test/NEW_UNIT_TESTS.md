@@ -6,7 +6,7 @@ Lifting-line functionality is excluded.
 
 ---
 
-## Common Test Fixtures
+## 1. Common Test Fixtures
 
 These minimal meshes are reused across many test sections.
 
@@ -38,50 +38,6 @@ const CELLS_OCT = Int[1 1 2 2 1 1 2 2;
                        3 5 3 5 4 6 4 6;
                        5 3 6 6 3 5 3 3]  # 3×8  (verify consistent winding)
 ```
-
----
-
-## 1. Linear Solvers  (P0)
-
-**Source:** `src/FLOWPanel_linearsolver.jl`
-
-### 1.1 `solve_backslash!` correctness
-
-| Property | Test |
-|----------|------|
-| Exact solution | Create 5×5 `A`, set `y_exact`, compute `b = A * y_exact`. Call `solve_backslash!(y, A, b)`. Assert `norm(y - y_exact) < 1e-12`. |
-| In-place mutation | Assert the returned array `===` the pre-allocated `y`. |
-
-### 1.2 `solve_ludiv!` correctness and LU reuse
-
-| Property | Test |
-|----------|------|
-| Without Alu | `solve_ludiv!(y, A, b)` → `norm(y - y_exact) < 1e-12` |
-| With pre-computed Alu | `Alu = pnl.calc_Alu(A); solve_ludiv!(y, A, b; Alu=Alu)` → same result |
-| `calc_Alu` non-mutating | Copy `A` before call; assert `A == A_copy` after `calc_Alu(A)` |
-| `calc_Alu!` mutating | Assert `A` differs from original after `calc_Alu!(A)` |
-
-### 1.3 `solve_gmres!` correctness
-
-| Property | Test |
-|----------|------|
-| Small system | 5×5 system with `atol=1e-10, rtol=1e-10` → `norm(y - y_exact) < 1e-8` |
-| Larger system | 100×100 random SPD system → converges within tolerance |
-| Loose tolerance | `atol=1e-2` → solution less accurate but `norm(y - y_exact) < 1e-1` |
-
-### 1.4 Cross-solver consistency
-
-| Property | Test |
-|----------|------|
-| Agreement | All three solvers on a 20×20 system produce solutions within `1e-6` of each other. |
-
-### 1.5 `calc_bc_noflowthrough!`
-
-| Property | Test |
-|----------|------|
-| Parallel flow | `Us[:, i] = [1,0,0]`, `normals[:, i] = [1,0,0]` → `RHS[i] == -1.0` |
-| Orthogonal flow | `Us[:, i] = [1,0,0]`, `normals[:, i] = [0,1,0]` → `RHS[i] == 0.0` |
-| Allocating version | `calc_bc_noflowthrough(Us, normals)` returns a new vector with correct values and promoted element type. |
 
 ---
 

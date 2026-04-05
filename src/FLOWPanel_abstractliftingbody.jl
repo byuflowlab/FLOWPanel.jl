@@ -12,51 +12,18 @@
 # ABSTRACT LIFTING BODY BODY TYPE
 ################################################################################
 """
-  Implementations of AbstractLiftingBody are expected to have the following
-  fields:
-  * `U::Array{Int64,1}`                 : Indices of all panels along the upper
-                                          side of the trailing edge.
-  * `L::Array{Int64,1}`                 : Indices of all panels along the lower
-                                          side of the trailing edge.
-  * `ncellsTE::Int64`                   : Number of cells along trailing edge
-  * `nnodesTE::Int64`                   : Number of nodes along trailing edge
+    AbstractLiftingBody
 
-  NOTE: U and L are assumed to have the same number of points.
-
-  in addition to the same properties and functions expected from an AbstractBody
-  implementation. The following functions also need to be implemented.
-
-  ```julia
-
-  # Impose boundary conditions to solve for element strengths
-  function solve(self::AbstractLiftingBody, Uinfs::Array{<:Real, 2},
-                                            D::Array{<:Real, 2}, args...)
-    .
-    .
-    .
-  end
-
-  # Outputs a vtk file with the wake
-  function _savewake(self::AbstractLiftingBody, filename::String;
-                                  len::Real=1.0, upper::Bool=true, optargs...)
-    .
-    .
-    .
-  end
-  ```
+Abstract supertype for lifting-surface body models with shedding-edge and
+wake-direction data in addition to the fields required by [`AbstractBody`](@ref).
 """
 abstract type AbstractLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC} end
 
 """
-    `solve(body::AbstractBody, Uinfs::Array{<:Real, 2})`
+    solve(body::AbstractLiftingBody, Uinfs, Das)
 
-Impose boundary conditions to solve for element strengths. `Uinds[:, i]` is the
-velocity at the i-th control point used in the boundary condition.
-
-`Das[:, i]` is the wake direction at the i-th vertex along the shedding edge
-chain. For edge `ei`: `Das[:, ei]` is the nib (first) vertex direction and
-`Das[:, ei+1]` is the nia (second) vertex direction.
-NOTE: These directions are expected to point from the node out to infinite.
+Solve a lifting-body boundary-value problem using control-point velocities
+`Uinfs` and wake-direction data `Das`.
 """
 function solve(self::AbstractLiftingBody, Uinfs::AbstractMatrix,
                Das::AbstractMatrix)
@@ -65,10 +32,10 @@ end
 
 ##### COMMON FUNCTIONS  ########################################################
 """
-  `generate_loft_liftbody(bodytype::Type{<:AbstractLiftingBody}, args...; optargs...)`
-Generates a lofted lifting body of type `bodytype`. See documentation of
-`GeometricTools.generate_loft` for a description of the arguments of this
-function.
+    generate_loft_liftbody(bodytype, args...; bodyoptargs=(), dimsplit=2, overwrite_shedding=nothing, optargs...)
+
+Generate a lofted lifting body, triangulate it, and build the shedding-edge map
+expected by lifting-body constructors.
 """
 function generate_loft_liftbody(bodytype::Type{B}, args...;
                                 bodyoptargs=(), dimsplit::Int=2,
@@ -115,18 +82,11 @@ function generate_loft_liftbody(bodytype::Type{B}, args...;
 end
 
 """
-  `generate_revolution_liftbody(bodytype::Type{<:AbstractLiftingBody}, args...; optargs...)`
-Generates a lifting body type `bodytype` of a body of revolution. See
-documentation of `GeometricTools.surface_revolution` for a description of the
-arguments of this function.
+    generate_revolution_liftbody(bodytype, args...; bodyoptargs=(), optargs...)
 
-> **NOTE:** For a complete revolution generating a water-tight grid, the system
-of equations solved in the body type `RigidWakeBody{VortexRing}` becomes
-singular (this is because in the absence of an open edge, the solution
-depends only in the difference between adjacent panels rather than the strengths
-themselves), leading to vortex ring strengths that are astronomically large. To
-avoid this situation, use `RigidWakeBody{VortexRing, 1}`, which indicates the
-solver to center the solution around 0.
+Generate a lifting body of revolution, optionally process the intermediate
+surface grid, and construct the shedding-edge connectivity required by
+rigid-wake solvers.
 """
 function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   bodyoptargs=(),

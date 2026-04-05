@@ -16,18 +16,14 @@
 ################################################################################
 
 """
-  `NonLiftingBody{E::AbstractElement, N}(grid::gt.GridTriangleSurface)`
+    NonLiftingBody{E, N}
+    NonLiftingBody{E}(grid; DBC=false, optargs...)
+    NonLiftingBody{E}(mesh; DBC=false, optargs...)
+    NonLiftingBody{E}(nodes, cells; DBC=false, optargs...)
 
-Non-lifting body that is solved using a combination of N panel elements.
-`grid` is the grid surface (paneled geometry).
-
-  **Properties**
-  * `nnodes::Int`                       : Number of nodes
-  * `ncells::Int`                       : Number of cells
-  * `fields::Vector{String}`            : Available fields (solutions)
-  * `Oaxis::Matrix`                     : Coordinate system of body w.r.t. global
-  * `O::Vector`                         : Origin of body w.r.t. global
-
+Concrete body type for non-lifting surfaces discretized with source, doublet,
+or vortex-ring panels. Constructors accept a triangulated grid, a `VSPGeom`
+mesh, or raw node/cell arrays.
 """
 mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
 
@@ -205,6 +201,12 @@ function (NonLiftingBody{E, N})(nodes::Matrix{TF}, cells::Matrix{Int}; DBC::Bool
     return NonLiftingBody{E, N, TF, DBC}(nodes, cells; optargs...)
 end
 
+"""
+    save(body::NonLiftingBody, args...; optargs...)
+
+Write a non-lifting body and its stored solution fields using FLOWPanel's VTK
+export path.
+"""
 function save(body::NonLiftingBody, args...; optargs...)
     return save_base(body, args...; optargs...)
 end
@@ -374,12 +376,9 @@ end
 # COMMON FUNCTIONS
 ################################################################################
 """
-  `generate_loft(bodytype::Type{B}, args...; bodyoptargs=(), optargs...)  where
-{B<:NonLiftingBody}`
+    generate_loft(bodytype, args...; bodyoptargs=(), dimsplit=2, optargs...)
 
-Generates a lofted non-lifting body. See documentation of
-`GeometricTools.generate_loft` for a description of the arguments of this
-function.
+Generate a lofted non-lifting body from `GeometricTools.generate_loft`.
 """
 function generate_loft(bodytype::Type{B}, args...; bodyoptargs=(),
                         dimsplit::Int64=2, optargs...) where {B<:NonLiftingBody}
@@ -394,12 +393,9 @@ function generate_loft(bodytype::Type{B}, args...; bodyoptargs=(),
 end
 
 """
-  `generate_revolution_(bodytype::Type{B}, args...; bodyoptargs=(), optargs...)
-where {B<:NonLiftingBody}`
+    generate_revolution(bodytype, args...; bodyoptargs=(), dimsplit=2, loop_dim=2, optargs...)
 
-Generates a non-lifting body of a body of revolution. See documentation of
-`GeometricTools.surface_revolution` for a description of the arguments of this
-function.
+Generate a non-lifting body of revolution from `GeometricTools.surface_revolution`.
 """
 function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
                              dimsplit::Int64=2, loop_dim::Int64=2,
@@ -416,7 +412,12 @@ end
 
 ##### END OF COMMON FUNTIONS ###################################################
 
+"""
+    generate_revolution_liftbody(bodytype, args...; bodyoptargs=(), optargs...)
 
+Backward-compatible wrapper that constructs a revolved geometry and returns the
+requested non-lifting body type.
+"""
 function generate_revolution_liftbody(bodytype::Type{B}, args...; bodyoptargs=(),
                                                   gridprocessing=nothing,
                                                   dimsplit::Int=1,

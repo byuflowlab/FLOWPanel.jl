@@ -9,12 +9,56 @@
   * License     : MIT License
 =###############################################################################
 
+"""
+    AbstractElement
+
+Abstract supertype for panel singularity kernels used by FLOWPanel body and
+wake discretizations.
+"""
 abstract type AbstractElement end
+
+"""
+    ConstantSource
+
+Marker type for a constant-strength source panel kernel.
+"""
 struct ConstantSource <: AbstractElement end
+
+"""
+    ConstantDoublet
+
+Marker type for a constant-strength doublet panel kernel.
+"""
 struct ConstantDoublet <: AbstractElement end
+
+"""
+    VortexRing
+
+Marker type for a constant-strength vortex-ring panel kernel.
+"""
 struct VortexRing <: AbstractElement end
+
+"""
+    ConstantVortexSheet
+
+Marker type for a constant-strength vortex-sheet wake kernel.
+"""
 struct ConstantVortexSheet <: AbstractElement end
+
+"""
+    UniformVortexSheet
+
+Marker type for a linearly varying vortex-sheet kernel used in wake-related
+discretizations.
+"""
 struct UniformVortexSheet <: AbstractElement end
+
+"""
+    kernel_dim(kernel)
+
+Return the number of strength components stored per panel for the given kernel
+type or kernel union.
+"""
 
 kernel_dim(::Type{<:Union{ConstantSource, ConstantDoublet, VortexRing}}) = 1
 kernel_dim(::Type{<:Union{ConstantVortexSheet, UniformVortexSheet}}) = 2

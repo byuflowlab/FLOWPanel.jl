@@ -14,26 +14,33 @@
 ################################################################################
 
 """
-Abstract type `AbstractSolver{MF<:Bool}` where `MF` indicates whether the solver 
-explicitly forms a matrix (false) or uses a matrix-free approach (true).
+    AbstractSolver
 
-Implementations of `<:AbstractSolver` are expected to provide methods for `solve!()`
-where the solver is passed as the third argument:
-```julia
-    function solve!(self::AbstractBody, solver::AbstractSolver; optargs...)
-        .
-        .
-        .
-    end
-```
+Abstract supertype for linear solvers used by FLOWPanel body solves.
 """
 abstract type AbstractSolver end
 
+"""
+    AbstractMatrixFreeSolver
+
+Abstract supertype for solvers that apply the system operator without storing
+the full coefficient matrix.
+"""
 abstract type AbstractMatrixFreeSolver <: AbstractSolver end
 
-"LS indicates whether the solver uses least-squares solution."
+"""
+    AbstractMatrixfulSolver{LS}
+
+Abstract supertype for solvers that explicitly assemble a system matrix. `LS`
+indicates whether the solve uses a least-squares formulation.
+"""
 abstract type AbstractMatrixfulSolver{LS} <: AbstractSolver end
 
+"""
+    solve!(body, solver; optargs...)
+
+Dispatch point for solving a body with a specific solver backend.
+"""
 function solve!(self, solver; optargs...)
     throw(ErrorException("solve! not implemented for body of type $(typeof(self)) and solver of type $(typeof(solver))"))
 end
@@ -45,6 +52,12 @@ end
 # BOUNDARY CONDITIONS
 ################################################################################
 
+"""
+    calc_bc_noflowthrough!(rhs, Us, normals)
+    calc_bc_noflowthrough(Us, normals)
+
+Form the impermeability right-hand side `-U ⋅ n` at each control point.
+"""
 function calc_bc_noflowthrough!(RHS::AbstractVector,
                                 Us::AbstractMatrix, normals::AbstractMatrix)
 
@@ -76,6 +89,11 @@ end
 # Backslash Operator
 ################################################################################
 
+"""
+    BackslashNeumann(body)
+
+Direct Neumann-formulation solver for single-strength non-lifting problems.
+"""
 struct BackslashNeumann{TF,TGLU,LS} <: AbstractMatrixfulSolver{LS}
     G::Matrix{TF}    # Coefficient matrix
     Glu::TGLU
@@ -99,6 +117,12 @@ function BackslashNeumann(body::AbstractBody{TK,1,TF}) where {TK,TF}
     return BackslashNeumann{TF,typeof(Glu),false}(G, Glu, zeros(TF, body.ncells))
 end
 
+"""
+    Backslash(body)
+
+Construct the default direct solver for `body`, choosing the Neumann or
+Dirichlet formulation based on body type.
+"""
 function Backslash(body::NonLiftingBody)
     return BackslashNeumann(body)
 end
@@ -122,6 +146,12 @@ get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
 
 #--- Dirichlet formulation ---#
 
+"""
+    BackslashDirichlet(body)
+
+Direct Dirichlet-formulation solver for lifting-body problems and related
+potential-based solves.
+"""
 struct BackslashDirichlet{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
     Glu::TGLU
@@ -153,6 +183,12 @@ end
 # GMRES Solver
 ################################################################################
 
+"""
+    KrylovSolver(body; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend(), elprescribe="automatic")
+
+Matrix-free iterative solver that evaluates self-influence through the selected
+backend.
+"""
 struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
     body::TB
     backend::B
@@ -287,6 +323,12 @@ end
 # FGS Solver
 ################################################################################
 
+"""
+    FGSSolver(body; kwargs...)
+    FGSSolver(bodies; kwargs...)
+
+Block fixed-point / Gauss-Seidel-style solver for one or more coupled bodies.
+"""
 struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     fgs::TFGS
     expansion_order::Int
@@ -620,194 +662,221 @@ function solve!(bodies::Tuple, solvers::Tuple;
     return nothing
 end
 
-function solve!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1, TF},
-                solver::AbstractMatrixfulSolver{true};
-                    solver_optargs=(),
-                    elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
-                    GPUArray=Array{TF},
-                    update_G::Bool=true,
-                    optargs...
-                ) where TF<:Real
-    if size(self.velocity) != (3, self.ncells)
-        error("Invalid body velocity;"*
-              " expected size (3, $(self.ncells)), got $(size(self.velocity))")
-    end
 
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
+################################################################################
+# FLAT GROUND SOLVER
+################################################################################
 
-    G, RHS = _G_U_RHS(self, self.velocity, CPs, normals, elprescribe;
-                                                GPUArray=GPUArray,
-                                                optargs...)
+"""
+    FlatGroundSolver(body::NonLiftingBody{ConstantSource, 1, TF})
 
-    Gamma = GPUArray(undef, self.ncells-length(elprescribe))
-    solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
+Direct solver for flat ground problems, for which the influence matrix is diagonal.
+    Then, panels can be solved for independently, without forming or factorizing a full matrix.
 
-    if !(GPUArray <: Array)
-        Gamma = Array{TF}(Gamma)
-    end
+## Fields
 
-    set_solution(self, nothing, Gamma, elprescribe, self.velocity)
+- `rhs::Vector{TF}`: Right-hand side vector for the solve, preallocated for efficiency.
+
+"""
+struct FlatGroundSolver{TF} <: AbstractSolver
+    rhs::Vector{TF}
 end
 
-function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
-    return _G_U_RHS_leastsquares(self, args...; optargs...)
+function FlatGroundSolver(body::NonLiftingBody{ConstantSource, 1, TF}) where TF
+    rhs = zeros(TF, body.ncells)
+    return FlatGroundSolver(rhs)
 end
 
-function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
-    @warn "_G_U_RHS called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
-    this is deprecated and may be removed in the future."
-    return _G_U_RHS_leastsquares(self, args...; optargs...)
-end
+################################################################################
 
-function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
-    return _G_U_RHS_leastsquares!(self, args...; optargs...)
-end
+# function solve!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1, TF},
+#                 solver::AbstractMatrixfulSolver{true};
+#                     solver_optargs=(),
+#                     elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
+#                     GPUArray=Array{TF},
+#                     update_G::Bool=true,
+#                     optargs...
+#                 ) where TF<:Real
+#     if size(self.velocity) != (3, self.ncells)
+#         error("Invalid body velocity;"*
+#               " expected size (3, $(self.ncells)), got $(size(self.velocity))")
+#     end
 
-function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
-    @warn "_G_U_RHS! called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
-    this is deprecated and may be removed in the future."
-    return _G_U_RHS_leastsquares!(self, args...; optargs...)
-end
+#     normals = _calc_normals(self)
+#     CPs = _calc_controlpoints(self, normals)
 
-function _G_U_RHS_leastsquares(self::AbstractBody,
-                                Uinfs::AbstractMatrix{T1}, CPs, normals,
-                                elprescribe::AbstractArray{Tuple{Int, T2}},
-                                args...;
-                                GPUArray=Array{promote_type(T1, T2)},
-                                optargs...
-                                ) where {T1, T2}
+#     G, RHS = _G_U_RHS(self, self.velocity, CPs, normals, elprescribe;
+#                                                 GPUArray=GPUArray,
+#                                                 optargs...)
 
-    T = promote_type(T1, T2)
+#     Gamma = GPUArray(undef, self.ncells-length(elprescribe))
+#     solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
 
-    n = self.ncells
-    npres = length(elprescribe)
+#     if !(GPUArray <: Array)
+#         Gamma = Array{TF}(Gamma)
+#     end
 
-    G = zeros(T, n, n)
-    Gred = zeros(T, n, n-npres)
-    tGred = zeros(T, n-npres, n)
-    gpuGred = GPUArray(undef, size(Gred))
-    Gls = GPUArray(undef, n-npres, n-npres)
-    RHS = zeros(T, n)
-    RHSls = GPUArray(undef, n-npres)
+#     set_solution(self, nothing, Gamma, elprescribe, self.velocity)
+# end
 
-    _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-                Uinfs, CPs, normals,
-                elprescribe,
-                args...; optargs...)
+# function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
+#     return _G_U_RHS_leastsquares(self, args...; optargs...)
+# end
 
-    return Gls, RHSls
-end
+# function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
+#     @warn "_G_U_RHS called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
+#     this is deprecated and may be removed in the future."
+#     return _G_U_RHS_leastsquares(self, args...; optargs...)
+# end
 
-function _G_U_RHS_leastsquares!(self::AbstractBody,
-                                G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-                                Uinfs, CPs, normals,
-                                elprescribe::AbstractArray{Tuple{Int, T}};
-                                onlycomputeG=false,
-                                optargs...
-                                ) where {T<:Number}
+# function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
+#     return _G_U_RHS_leastsquares!(self, args...; optargs...)
+# end
 
-    n = self.ncells
-    npres = length(elprescribe)
+# function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
+#     @warn "_G_U_RHS! called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
+#     this is deprecated and may be removed in the future."
+#     return _G_U_RHS_leastsquares!(self, args...; optargs...)
+# end
 
-    @assert size(G, 1)==n && size(G, 2)==n ""*
-        "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
-    @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
-        "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
-    @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
-        "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
-    @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
-        "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n)x$(n-npres)"
+# function _G_U_RHS_leastsquares(self::AbstractBody,
+#                                 Uinfs::AbstractMatrix{T1}, CPs, normals,
+#                                 elprescribe::AbstractArray{Tuple{Int, T2}},
+#                                 args...;
+#                                 GPUArray=Array{promote_type(T1, T2)},
+#                                 optargs...
+#                                 ) where {T1, T2}
 
-    @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
-    @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-pres)"
+#     T = promote_type(T1, T2)
 
-    sort!(elprescribe, by = x -> x[1])
+#     n = self.ncells
+#     npres = length(elprescribe)
 
-    calc_bc_noflowthrough!(RHS, Uinfs, normals)
+#     G = zeros(T, n, n)
+#     Gred = zeros(T, n, n-npres)
+#     tGred = zeros(T, n-npres, n)
+#     gpuGred = GPUArray(undef, size(Gred))
+#     Gls = GPUArray(undef, n-npres, n-npres)
+#     RHS = zeros(T, n)
+#     RHSls = GPUArray(undef, n-npres)
 
-    _G_U!(self, G, CPs, normals; optargs...)
+#     _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
+#                 Uinfs, CPs, normals,
+#                 elprescribe,
+#                 args...; optargs...)
 
-    if onlycomputeG
-        return Gls, RHSls
-    end
+#     return Gls, RHSls
+# end
 
-    for (eli, elval) in elprescribe
-        for i in 1:length(RHS)
-            RHS[i] -= elval*G[i, eli]
-        end
-    end
+# function _G_U_RHS_leastsquares!(self::AbstractBody,
+#                                 G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
+#                                 Uinfs, CPs, normals,
+#                                 elprescribe::AbstractArray{Tuple{Int, T}};
+#                                 onlycomputeG=false,
+#                                 optargs...
+#                                 ) where {T<:Number}
 
-    prev_eli = 0
-    for (i, (eli, elval)) in enumerate(elprescribe)
+#     n = self.ncells
+#     npres = length(elprescribe)
 
-        Gred[:, (prev_eli+2-i):(eli-i)] .= view(G, :, (prev_eli+1):(eli-1))
+#     @assert size(G, 1)==n && size(G, 2)==n ""*
+#         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
+#     @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
+#         "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
+#     @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
+#         "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
+#     @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
+#         "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n)x$(n-npres)"
 
-        if i==length(elprescribe) && eli!=size(G, 2)
-            Gred[:, (eli-i+1):end] .= view(G, :, eli+1:size(G, 2))
-        end
+#     @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
+#     @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-pres)"
 
-        prev_eli = eli
-    end
+#     sort!(elprescribe, by = x -> x[1])
 
-    if typeof(gpuGred) <: Array
-        permutedims!(tGred, Gred, [2, 1])
-        LA.mul!(RHSls, tGred, RHS)
-        LA.mul!(Gls, tGred, Gred)
+#     calc_bc_noflowthrough!(RHS, Uinfs, normals)
 
-    else
-        copyto!(gpuGred, Gred)
-        tGred = transpose(gpuGred)
-        LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
-        LA.mul!(Gls, tGred, gpuGred)
+#     _G_U!(self, G, CPs, normals; optargs...)
 
-    end
+#     if onlycomputeG
+#         return Gls, RHSls
+#     end
 
-    return Gls, RHSls
-end
+#     for (eli, elval) in elprescribe
+#         for i in 1:length(RHS)
+#             RHS[i] -= elval*G[i, eli]
+#         end
+#     end
 
-function solve!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3, TF},
-                solver::AbstractMatrixfulSolver{true};
-                    solver_optargs=(),
-                    elprescribe_index::Int=1, elprescribe_value=0,
-                    weight_gammat=0, weight_gammao=1
-                ) where TF
+#     prev_eli = 0
+#     for (i, (eli, elval)) in enumerate(elprescribe)
 
-    if size(self.velocity) != (3, self.ncells)
-        error("Invalid body velocity;"*
-              " expected size (3, $(self.ncells)), got $(size(self.velocity))")
-    end
+#         Gred[:, (prev_eli+2-i):(eli-i)] .= view(G, :, (prev_eli+1):(eli-1))
 
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
+#         if i==length(elprescribe) && eli!=size(G, 2)
+#             Gred[:, (eli-i+1):end] .= view(G, :, eli+1:size(G, 2))
+#         end
 
-    G = zeros(TF, self.ncells, self.ncells)
-    RHS = zeros(TF, self.ncells)
+#         prev_eli = eli
+#     end
 
-    _G_U_RHS!(self, G, RHS, self.velocity, CPs, normals,
-                elprescribe_index, elprescribe_value,
-                weight_gammat, weight_gammao)
+#     if typeof(gpuGred) <: Array
+#         permutedims!(tGred, Gred, [2, 1])
+#         LA.mul!(RHSls, tGred, RHS)
+#         LA.mul!(Gls, tGred, Gred)
 
-    Gamma = zeros(TF, self.ncells)
-    solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
+#     else
+#         copyto!(gpuGred, Gred)
+#         tGred = transpose(gpuGred)
+#         LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
+#         LA.mul!(Gls, tGred, gpuGred)
 
-    self.strength[:, 1] .= Gamma
-    self.strength[elprescribe_index, 1] = elprescribe_value
+#     end
 
-    gamma = Gamma[elprescribe_index]
-    self.strength[:, 2] .= gamma*weight_gammat
-    self.strength[1:2:end, 2] .*= -1
-    self.strength[:, 3] .= gamma*weight_gammao
-    self.strength[1:2:end, 3] .*= -1
+#     return Gls, RHSls
+# end
 
-    add_field(self, "Uinf", "vector", collect(eachcol(self.velocity)), "cell")
-    add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
-    add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
+# function solve!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3, TF},
+#                 solver::AbstractMatrixfulSolver{true};
+#                     solver_optargs=(),
+#                     elprescribe_index::Int=1, elprescribe_value=0,
+#                     weight_gammat=0, weight_gammao=1
+#                 ) where TF
 
-    tangents = _calc_tangents(self)
-    obliques = _calc_obliques(self)
-    aux = zip(eachcol(tangents), eachcol(obliques),
-                view(self.strength, :, 2), view(self.strength, :, 3))
-    gammas = [gammat*t + gammao*o for (t, o, gammat, gammao) in aux]
-    add_field(self, "gamma", "vector", gammas, "cell")
-end
+#     if size(self.velocity) != (3, self.ncells)
+#         error("Invalid body velocity;"*
+#               " expected size (3, $(self.ncells)), got $(size(self.velocity))")
+#     end
+
+#     normals = _calc_normals(self)
+#     CPs = _calc_controlpoints(self, normals)
+
+#     G = zeros(TF, self.ncells, self.ncells)
+#     RHS = zeros(TF, self.ncells)
+
+#     _G_U_RHS!(self, G, RHS, self.velocity, CPs, normals,
+#                 elprescribe_index, elprescribe_value,
+#                 weight_gammat, weight_gammao)
+
+#     Gamma = zeros(TF, self.ncells)
+#     solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
+
+#     self.strength[:, 1] .= Gamma
+#     self.strength[elprescribe_index, 1] = elprescribe_value
+
+#     gamma = Gamma[elprescribe_index]
+#     self.strength[:, 2] .= gamma*weight_gammat
+#     self.strength[1:2:end, 2] .*= -1
+#     self.strength[:, 3] .= gamma*weight_gammao
+#     self.strength[1:2:end, 3] .*= -1
+
+#     add_field(self, "Uinf", "vector", collect(eachcol(self.velocity)), "cell")
+#     add_field(self, "Da", "vector", collect(eachcol(self.Das)), "system")
+#     add_field(self, "Gamma", "scalar", view(self.strength, :, 1), "cell")
+
+#     tangents = _calc_tangents(self)
+#     obliques = _calc_obliques(self)
+#     aux = zip(eachcol(tangents), eachcol(obliques),
+#                 view(self.strength, :, 2), view(self.strength, :, 3))
+#     gammas = [gammat*t + gammao*o for (t, o, gammat, gammao) in aux]
+#     add_field(self, "gamma", "vector", gammas, "cell")
+# end
