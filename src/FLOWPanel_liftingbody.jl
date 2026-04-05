@@ -15,30 +15,22 @@
 # RIGID-WAKE BODY TYPE
 ################################################################################
 """
-  `RigidWakeBody{E::AbstractElement, N}(grid::gt.GridTriangleSurface,
-shedding::Matrix{Int})`
+    RigidWakeBody{E, N}
+    RigidWakeBody{E}(grid, shedding; DBC=true, optargs...)
+    RigidWakeBody{E}(mesh, shedding; DBC=true, optargs...)
+    RigidWakeBody{E}(nodes, cells, shedding; DBC=true, optargs...)
 
-Lifting body that is solver using a combination of N panel elements and a steady
-rigid wake. `grid` is the grid surface (paneled geometry).
+Lifting-surface body with a rigid wake shed from one or more prescribed
+trailing-edge chains.
 
-`shedding[:, i]` contains the information of the i-th edge along which to shed
-the wake, where `shedding[1, i]` is the linear index of the panel shedding the
- wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that
- make the edge. Since the wake is typically shed at the edge between two panels,
-`shedding[3, i]` is the index of the partner panel (use -1 if none) and
-`shedding[4:5, i]` are the node indices in that panel that make the edge.
-The user must ensure that both edges are coincident, and the strength of the
-wake is equal to the difference between the strengths of both panels.
-
-  **Properties**
-  * `nnodes::Int`                       : Number of nodes
-  * `ncells::Int`                       : Number of cells
-  * `fields::Vector{String}`            : Available fields (solutions)
-  * `Oaxis::Matrix`                     : Coordinate system of body w.r.t. global
-  * `O::Vector`                         : Origin of body w.r.t. global
-  * `ncellsTE::Int`                     : Number of cells along trailing edge
-  * `nnodesTE::Int`                     : Number of nodes along trailing edge
-
+`shedding[:, i]` contains the information of the i-th edge along which to shed 
+the wake, where `shedding[1, i]` is the linear index of the panel shedding the 
+wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that make 
+the edge. Since the wake is typically shed at the edge between two panels, 
+`shedding[3, i]` is the index of the partner panel (use -1 if none) and 
+`shedding[4:5, i]` are the node indices in that panel that make the edge. The user 
+must ensure that both edges are coincident, and the strength of the wake is equal 
+to the difference between the strengths of both panels.
 """
 mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC}
 
@@ -80,23 +72,27 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     semiinfinite_wake::Bool
 end
 
+_normalize_shedding(shedding::AbstractMatrix{Int}) = Matrix{Int}[Matrix{Int}(shedding)]
+_normalize_shedding(shedding::Vector{<:AbstractMatrix{Int}}) = Matrix{Int}[Matrix{Int}(s) for s in shedding]
+_normalize_shedding(shedding::Vector{Array{Int, 2}}) = shedding
+
 function RigidWakeBody{E, N, TF, DBC}(
                                 nodes::Matrix{TF}, cells::Matrix{Int}, shedding;
                                 vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
                                 neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
                                 nnodes=size(nodes, 2), ncells=size(cells, 2),
-                                nsheddings=size(shedding,2),
+                                nsheddings=sum(size(s, 2) for s in _normalize_shedding(shedding)),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
                                 Cp=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
-                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in shedding],
+                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
                                 dphidt=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
-                                velocity_te=[zeros(TF, 3, size(s,2)+1) for s in shedding],
+                                velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
                                 CPoffset=1e-14,
                                 kerneloffset=1e-8,
                                 kernelcutoff=1e-14,
@@ -104,6 +100,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 check_mesh=true, watertight=true,
                                 semiinfinite_wake=true
                             ) where {E, N, TF, DBC}
+    shedding = _normalize_shedding(shedding)
 
     # for i_surf in eachindex(shedding)
     #     @assert _checkTE(nodes, cells, shedding[i_surf]) "Got invalid trailing edge"
@@ -255,7 +252,7 @@ function RigidWakeBody{E, N, TF, DBC}(
 
     return RigidWakeBody{E, N, TF, DBC}(
                     nodes, cells, shedding;
-                    vtk_cells=vtk_cells, neighbor=neighbor, watertight=watertight, CPoffset=CPoffset, characteristiclength=characteristiclength, optargs...
+                    vtk_cells, neighbor, watertight, CPoffset, characteristiclength, optargs...
                 )
 end
 
@@ -348,6 +345,11 @@ wake_name(::RigidWakeBody{Union{ConstantSource, VortexRing}, <:Any}) = "gamma"
 ################################################################################
 # VORTEX RING SOLVER
 ################################################################################
+"""
+    solve(body::RigidWakeBody, Uinfs, Das; optargs...)
+
+Solve a rigid-wake lifting-body problem for the stored panel strengths.
+"""
 function solve(self::RigidWakeBody{VortexRing, 1},
                 Uinfs::AbstractMatrix{T1},
                 Das::AbstractMatrix{T2};
@@ -911,7 +913,6 @@ beginning with row `ilast+1`:
 **Returns**
 
 - `ilast+nrows` where `nrows` is the number of updated rows
-
 """
 function additional_source_system_to_buffer!(buffer, i_buffer, system::RigidWakeBody, i_body, ilast)
     # index of first node of shedding edge (TE1)
@@ -1080,8 +1081,8 @@ end
 # COMMON FUNCTIONS
 ################################################################################
 """
-    `calc_shedding(grid::GridTriangleSurface{gt.Meshes.SimpleMesh},
-trailingedge::Matrix; tolerance=1e2*eps())`
+    calc_shedding(nodes, cells, trailingedge; periodic=false, tolerance=1e2*eps(), debug=false)
+    calc_shedding(grid, trailingedge; periodic=false, tolerance=1e2*eps(), debug=false)
 
 Given an unstructured `grid` and a collection of points (line) `trailingedge`,
 it finds the points in `grid` that are closer than `tolerance` to the line,
@@ -1093,6 +1094,7 @@ Note: It is important that the points in `trailingedge` have been previously
     might have panels that are not contiguous to each other, fail to recognize
     panels that are at the trailing edge, or unphysically large trailing
     vortices.
+
 """
 function calc_shedding(nodes, cells, trailingedge::Union{Matrix, Function};
                             periodic::Bool=false,
@@ -1113,15 +1115,14 @@ function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Union{Matr
     TEindices = gt.identifyedge(grid._nodes, trailingedge; tolerance=tolerance)
     TEindices = [nodei for (nodei, pointi) in TEindices]
 
-    return calc_shedding(grid._nodes, grid2cells(grid), TEindices, trailingedge; periodic, tolerance, debug)
+    return calc_shedding(grid._nodes, grid2cells(grid), TEindices, trailingedge, grid._halfedgetopology; periodic, tolerance, debug)
 end
 
-function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedge::Union{Matrix, Function};
+function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedge::Union{Matrix, Function}, topology;
                             periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             )
 
-    topology = gt.getHalfEdgeTopology(nodes, cells)
     connec = cells
 
     # Return if no TE nodes were identified
