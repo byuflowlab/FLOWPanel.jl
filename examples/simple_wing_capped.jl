@@ -1,7 +1,7 @@
 import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
 
-import Meshes
+import FLOWPanel.GeometricTools.Meshes
 import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
@@ -23,8 +23,8 @@ b = AR * c                            # (m) span length
 
 
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-meshfile        = joinpath(read_path, "wing_ar4_naca0016_refined.msh")    # Gmsh file to read
-# meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")    # Gmsh file to read
+# meshfile        = joinpath(read_path, "wing_ar4_naca0016_refined.msh")    # Gmsh file to read
+meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")    # Gmsh file to read
 # trailingedgefile= joinpath(read_path, "zeroebwb-TE.msh") # Gmsh file with trailing edge
 
 # offset          = [0, 0, 0]                 # Offset to center the mesh
@@ -83,18 +83,17 @@ shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*b)
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
-
 # Generate paneled body
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
     body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
     body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
-    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
+    body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
 else
     error("Unsupported body type")
 end
+
+Uinfs = repeat(Vinf, 1, body.ncells)
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -129,7 +128,6 @@ backend = pnl.FastMultipoleBackend(
     #             )
     # )
     solver = pnl.BackslashDirichlet(body)
-    # solver = pnl.Backslash(body; least_squares=false)
     body.velocity .= Uinfs
     pnl.solve!(body, solver; backend)
 end
@@ -138,21 +136,13 @@ end
 println("Post processing...")
 
 # Calculate surface velocity U on the body
-@time Us = pnl.calcfield_U(body, body; backend)
-
-# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-Gammai = kernel == pnl.VortexRing ? 1 : kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? 2 : 0
-# UDeltaGamma = pnl.calcfield_Ugradmu(body; Gammai)
-UDeltaGamma = pnl.calcfield_Ugradmu(body; Gammai=2)
-
-# Add both velocities together
-pnl.addfields(body, "Ugradmu", "U")
+@time pnl.calcfield_U!((body,), Vinf; backend=backend)
 
 # Calculate pressure coefficient (based on U + U_∇μ)
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+@time pnl.calcfield_Cp!(body, magVinf)
 
 # Calculate the force of each panel (based on Cp)
-@time Fs = pnl.calcfield_F(body, magVinf, rho)
+@time pnl.calcfield_F!(body, magVinf, rho)
 
 # --------- Integrated forces: lift and induced drag
 
@@ -177,11 +167,8 @@ CD = sign(dot(D, Dhat)) * norm(D) / nondim
 
 # ----------------- VISUALIZATION ----------------------------------------------
 # if paraview
-    str = save_path*"/"
-
-    # Save wing as a VTK
-    str *= pnl.save(body, run_name; path=save_path)
-    # str *= pnl.save(body, run_name; path=save_path, out_wake=false)
+    mkpath(save_path)
+    str = pnl.write_vtk(joinpath(save_path, run_name), body, 0, 0.0; overwrite=true)
 
     # Call Paraview
     # run(`paraview --data=$(str)`)

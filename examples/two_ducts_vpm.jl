@@ -108,14 +108,13 @@ ref_solver1 = pnl.BackslashDirichlet(ref1)
 ref_solver2 = pnl.BackslashDirichlet(ref2)
 
 @time pnl.solve!((ref1, ref2), (ref_solver1, ref_solver2);
-    backend=fill(pnl.DirectBackend(), 2),
+    backend=fill(pnl.FastMultipoleBackend(), 2),
     max_outer_iterations=50,
     outer_tolerance=1e-8,
     verbose=true)
 
 # Post-process reference solution
-pnl.calcfield_U!((ref1, ref2); backend=pnl.DirectBackend())
-pnl.apply_freestream!((ref1, ref2), Vinf)
+pnl.calcfield_U!((ref1, ref2), Vinf; backend=pnl.FastMultipoleBackend())
 pnl.calcfield_Cp!((ref1, ref2), magVinf)
 pnl.calcfield_F!((ref1, ref2), magVinf, rho)
 
@@ -126,14 +125,18 @@ println("Steady-state Body 2 force: ", F2_ref)
 
 # Flow tangency diagnostic (must use tuple form to include cross-body influence)
 println("\n--- Flow Tangency ---")
-pnl.calcfield_U!((ref1, ref2); backend=pnl.DirectBackend())
-pnl.apply_freestream!((ref1, ref2), Vinf)
+pnl.calcfield_U!((ref1, ref2), Vinf; backend=pnl.FastMultipoleBackend())
 for (i, body) in enumerate((ref1, ref2))
     Udotn = sum(body.velocity .* body.normals, dims=1)
     rms = sqrt(sum(Udotn .^ 2) / body.ncells)
     maxr = maximum(abs.(Udotn))
     println("  Body $i: RMS(U·n) = $(round(rms; digits=4)),  max|U·n| = $(round(maxr; digits=4)),  RMS/Vinf = $(round(rms/magVinf*100; digits=2))%")
 end
+
+# write VTK for reference solution
+pnl.write_vtk("two_ducts_vpm/reference_solution_1", ref1, 0, 0.0)
+pnl.write_vtk("two_ducts_vpm/reference_solution_2", ref2, 0, 0.0)
+
 println()
 
 # ----------------- SIMULATION SETUP -------------------------------------------
@@ -202,8 +205,7 @@ println("Body 2 max |Cp|: ", maximum(abs.(body2.Cp)))
 
 # Flow tangency diagnostic (must use tuple form to include cross-body influence)
 println("\n--- Flow Tangency ---")
-pnl.calcfield_U!(systems; backend=pnl.DirectBackend())
-pnl.apply_freestream!(systems, Vinf)
+pnl.calcfield_U!(systems, Vinf, wakes; backend=pnl.FastMultipoleBackend())
 for (i, body) in enumerate(systems)
     Udotn = sum(body.velocity .* body.normals, dims=1)
     rms = sqrt(sum(Udotn .^ 2) / body.ncells)
