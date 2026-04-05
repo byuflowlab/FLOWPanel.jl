@@ -15,19 +15,12 @@
 ################################################################################
 
 """
-    calcfield_U!(out::Matrix,
-                    sourcebody::AbstractBody, targetbody::AbstractBody;
-                    offset=nothing, characteristiclength=nothing, optargs...)
+    calcfield_U!(bodies; backend=DirectBackend(), reset=true, convolve_panels=true, doublet_gradient=true)
+    calcfield_U!(body; optargs...)
 
-Calculate the velocity induced by `sourcebody` on control points computed
-using `offset` and `characteristiclength`, and save it as a field in
-`targetbody`. The field includes the freestream velocity stored as field
-`\"Uinf\"` in `targetbody`.
-
-The field is calculated in-place and added to `out` (hence, make sure that `out`
-starts with all zeroes).
+Compute and store the control-point velocity field for one or more bodies.
 """
-function calcfield_U!(bodies::Tuple;
+function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wakes=Tuple(nothing for _ in bodies);
         backend::AbstractBackend=DirectBackend(),
         reset=true,
         convolve_panels=true,
@@ -46,6 +39,15 @@ function calcfield_U!(bodies::Tuple;
         calc_normals!(body)
         calc_controlpoints!(body; off=abs(body.CPoffset))
     end
+
+    # apply freestream at control points
+    for body in bodies
+        apply_freestream!(body, uinf)
+    end
+
+    # add wake-induced velocity at control points
+    wakes = Tuple(w for w in wakes if !isnothing(w))
+    length(wakes) > 0 && influence!(bodies, wakes, backend; scalar_potential=false, velocity=true)
 
     # Add induced velocity at each control point
     convolve_panels && influence!(bodies, bodies, backend; scalar_potential=false, velocity=true)
@@ -83,23 +85,10 @@ calcfield_U!(targetbody; optargs...) = calcfield_U!((targetbody,); optargs...)
 ################################################################################
 
 """
-    compute_mu_gradient!(nodes, cells, neighbors, mu, te_info)
+    compute_mu_gradient!(grad_mu, controlpoints, normals, cells, neighbors, mu, te_info; scale=0.5)
 
-Computes the surface gradient of the doublet strength `mu` for a 3D panel method.
-Uses a robust least-squares approach, and applies an upstream one-sided stencil
-for panels at the trailing edge.
-
-Inputs:
-- `nodes`: 3 x N matrix of vertex coordinates.
-- `cells`: 3 x M matrix of panel cellsectivities (1-based node indices).
-- `neighbors`: 3 x M matrix of neighbor panel indices (<=0 if no neighbor).
-- `mu`: Vector of length M representing doublet strength.
-- `te_info`: 2 x M matrix. te_info[1:2, i] ∈ [1,2,3] indicating local vertex 
-             indices of the trailing edge. Assumed 0 if not a TE panel.
-
-Returns:
-- `grad_mu`: 3 x M matrix of (dμ/dx, dμ/dy, dμ/dz) for each panel.
-
+Compute the surface gradient of doublet or vortex-ring strength using a local
+least-squares stencil, with one-sided handling at trailing-edge panels.
 """
 function compute_mu_gradient!(grad_mu,
                             controlpoints::AbstractMatrix{Float64},
@@ -224,16 +213,11 @@ end
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_Cp!(out::Vector, body::AbstractBody, Us, Uref;
-                            U_fieldname="U", fieldname="Cp")
+    calcfield_Cp!(out, body, Us, Uref; dphidt=nothing, correct_kuttacondition=true, clip=nothing)
+    calcfield_Cp!(body, Uref; dphidt=nothing, optargs...)
+    calcfield_Cp!(bodies, Uref; dphidt=..., correct_kuttacondition=..., optargs...)
 
-Calculate the pressure coefficient
-``C_p = 1 - \\left(\\frac{u}{U_\\mathrm{ref}}\\right)^2}``, where is the
-velocity `Us` of each control point. The ``C_p`` is saved as a field named
-`fieldname`.
-
-The field is calculated in-place and added to `out` (hence, make sure that `out`
-starts with all zeroes).
+Compute and store the surface pressure coefficient field.
 """
 function calcfield_Cp!(out::Arr1,
                         body::Union{NonLiftingBody, AbstractLiftingBody},
@@ -265,15 +249,9 @@ function calcfield_Cp!(out::Arr1,
         for shedding in body.shedding
             for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
                 if pj != -1
-                    ave = (out[pi] + out[pi+1] + out[pj] + out[pj-1]) / 4
+                    ave = (out[pi] + out[pj]) / 2
                     out[pi] = ave
-                    out[pi+1] = ave
                     out[pj] = ave
-                    out[pj-1] = ave
-                else
-                    ave = (out[pi] + out[pi+1] ) / 2
-                    out[pi] = ave
-                    out[pi+1] = ave
                 end
             end
         end
@@ -314,19 +292,11 @@ end
 # FORCE FIELDS
 ################################################################################
 """
-    calcfield_F!(out::Vector, body::AbstractBody,
-                         areas::Vector, normals::Matrix, Cps::Vector,
-                         Uinf::Number, rho::Number;
-                         fieldname="F")
+    calcfield_F!(out, body, areas, normals, Cps, Uinf, rho; correct_kuttacondition=true)
+    calcfield_F!(body, Uinf, rho; correct_kuttacondition=true)
+    calcfield_F!(bodies, Uinf, rho; correct_kuttacondition=...)
 
-Calculate the force of each element
-``F = - C_p \\frac{\\rho U_\\infty}{2} A \\hat{\\mathbf{n}}``, where ``C_p``is
-calculated from the velocity `Cps` at each control point, ``A`` is the area of
-each element given in `areas`, and ``\\hat{\\mathbf{n}}`` is the normal of each
-element given in `normals`. ``F`` is saved as a field named `fieldname`.
-
-The field is calculated in-place and added to `out` (hence, make sure that `out`
-starts with all zeroes).
+Compute and store distributed surface forces from the current pressure field.
 """
 function calcfield_F!(out::Arr0, body::AbstractBody,
                          areas::Arr1, normals::Arr2, Cps::Arr3,
@@ -413,20 +383,12 @@ function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; correct_kuttacon
 end
 
 """
-    calcfield_sectionalforce!(outf::Matrix, outpos::Vector,
-                                        body::Union{NonLiftingBody, AbstractLiftingBody},
-                                        controlpoints::Matrix, Fs::Matrix;
-                                        dimspan=2, dimchord=1,
-                                        spandirection=[0, 1, 0],
-                                        fieldname="sectionalforce"
-                                        )
+    calcfield_sectionalforce!(outf, outpos, body, controlpoints, Fs; dimspan=2, dimchord=1, spandirection=[0, 1, 0], ...)
+    calcfield_sectionalforce!(outf, outpos, body; F_fieldname="F", optargs...)
+    calcfield_sectionalforce(body; optargs...)
 
-Calculate the sectional force (a vectorial force per unit span) along the span.
-This is calculated from the force `Fs` and the control points `controlpoints`
-and saved as a field named `fieldname`.
-
-The field is calculated in-place on `outf` while the spanwise position of each
-section is stored under `outpos`.
+Integrate distributed panel forces into sectional loads along a chosen spanwise
+direction.
 """
 function calcfield_sectionalforce!(outf::Arr0, outpos::Arr1,
                                     body::Union{NonLiftingBody, AbstractLiftingBody},
@@ -562,14 +524,11 @@ function calcfield_sectionalforce(body::Union{NonLiftingBody, AbstractLiftingBod
 end
 
 """
-    calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
-                            Fs::AbstractMatrix; fieldname="Ftot")
+    calcfield_Ftot!(out, body, Fs; fieldname="Ftot")
+    calcfield_Ftot!(out, body; F_fieldname="F", optargs...)
+    calcfield_Ftot(body, args...; optargs...)
 
-Calculate the integrated force of this body, which is a three-dimensional vector.
-This is calculated from the force of each element given in `Fs` and saved as a
-field named `fieldname`.
-
-The field is calculated in-place and added to `out`.
+Integrate the stored distributed force field into a total force vector.
 """
 function calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
                             Fs::AbstractMatrix; fieldname="Ftot", addfield=true)
@@ -620,17 +579,12 @@ not needed).
 calcfield_Ftot(body, args...; optargs...) = calcfield_Ftot!(zeros(3), body, args...; optargs...)
 
 """
-    calcfield_LDS!(out::Matrix, body::AbstractBody, Fs::Matrix,
-                    Lhat::Vector, Dhat::Vector, Shat::Vector)
+    calcfield_LDS!(out, body, Fs, Lhat, Dhat, Shat; addfield=true)
+    calcfield_LDS!(out, body, Lhat, Dhat, Shat; F_fieldname="F", optargs...)
+    calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
+    calcfield_LDS(body, args...; optargs...)
 
-Calculate the integrated force decomposed as lift, drag, and sideslip according
-to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
-This is calculated from the force of each element given in `Fs`.
-`out[:, 1]` is the lift vector and is saved as the field "L".
-`out[:, 2]` is the drag vector and is saved as the field "D".
-`out[:, 3]` is the sideslip vector and is saved as the field "S".
-
-The field is calculated in-place on `out`.
+Resolve the total force into lift, drag, and side-force components.
 """
 function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
                         Fs::AbstractMatrix,
@@ -680,12 +634,8 @@ to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
 This is calculated from the force field `F_fieldname`.
 """
 function calcfield_LDS!(out, body, Lhat, Dhat, Shat; F_fieldname="F", optargs...)
-    # Error case
-    @assert check_field(body, F_fieldname) ""*
-        "Field $(F_fieldname) not found;"*
-        " Please run `calcfield_F(args...; fieldname=$(F_fieldname), optargs...)`"
 
-    Fs = hcat(get_field(body, F_fieldname)["field_data"]...)
+    Fs = body.F
 
     return calcfield_LDS!(out, body, Fs, Lhat, Dhat, Shat; optargs...)
 end
@@ -720,17 +670,12 @@ calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, arg
 # MOMENT FIELDS
 ################################################################################
 """
-    calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
-                                Xac::AbstractVector, controlpoints::AbstractMatrix,
-                                Fs::AbstractMatrix;
-                                fieldname="Ftot", addfield=true)
+    calcfield_Mtot!(out, body, Xac, controlpoints, Fs; fieldname="Mtot", addfield=true)
+    calcfield_Mtot!(out, body, Xac; F_fieldname="F", optargs...)
+    calcfield_Mtot(body, args...; optargs...)
 
-Calculate the integrated moment of this body (which is a three-dimensional
-vector) with respect to the aerodynamic center `Xac`.
-This is calculated from the force and position of each element given in `Fs`
-and `controlpoints`, respectively, and saved as a field named `fieldname`.
-
-The field is calculated in-place and added to `out`.
+Integrate the stored distributed force field into a total moment about a
+reference point.
 """
 function calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
                             Xac::AbstractVector, controlpoints::AbstractMatrix,
@@ -806,20 +751,12 @@ calcfield_Mtot(body, args...; optargs...) = calcfield_Mtot!(zeros(3), body, args
 
 
 """
-    calcfield_lmn!(out::Matrix, body::AbstractBody,
-                    Xac::AbstractVector, controlpoints::AbstractMatrix,
-                    Fs::Matrix, lhat::Vector, mhat::Vector, nhat::Vector)
+    calcfield_lmn!(out, body, Xac, controlpoints, Fs, lhat, mhat, nhat; addfield=true)
+    calcfield_lmn!(out, body, Xac, lhat, mhat, nhat; F_fieldname="F", optargs...)
+    calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
+    calcfield_lmn(body, args...; optargs...)
 
-Calculate the integrated moment of this body with respect to the aerodynamic
-center `Xac` and decompose it as rolling, pitching, and yawing moments according
-to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
-This is calculated from the force and position of each element given in `Fs`
-and `controlpoints`, respectively.
-`out[:, 1]` is the rolling moment vector and is saved as the field "Mroll".
-`out[:, 2]` is the pitching moment vector and is saved as the field "Mpitch".
-`out[:, 3]` is the yawing moment vector and is saved as the field "Myaw".
-
-The field is calculated in-place on `out`.
+Resolve the total moment into user-supplied rolling, pitching, and yaw axes.
 """
 function calcfield_lmn!(out::AbstractMatrix, body::AbstractBody,
                         Xac::AbstractVector, controlpoints::AbstractMatrix,
