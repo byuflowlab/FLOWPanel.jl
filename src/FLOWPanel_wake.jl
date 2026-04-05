@@ -39,7 +39,7 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     wake_probes = get_probes(wake)
 
     # wake-on-all velocity
-    evaluate_influence!((body, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
 
     # freestream
     apply_freestream!(body, uinf)
@@ -52,7 +52,7 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     solve!(body, body_solver; backend)
 
     # body-on-all influence
-    evaluate_influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
 
     return nothing
 end

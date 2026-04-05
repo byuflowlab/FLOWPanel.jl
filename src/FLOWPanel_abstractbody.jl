@@ -480,6 +480,22 @@ function calc_controlpoints!(self::AbstractBody, normals=self.normals;
                                 off, characteristiclength)
 end
 
+function calc_controlpoints(nodes::AbstractMatrix, cells::AbstractMatrix, normals;
+        off::Real=0.005,
+        characteristiclength::Function=characteristiclength_sqrtarea)
+    controlpoints = zeros(promote_type(eltype(nodes), eltype(normals)), 3, size(cells, 2))
+    calc_controlpoints!(nodes, cells, controlpoints, normals; off, characteristiclength)
+    return controlpoints
+end
+
+function calc_controlpoints(self::AbstractBody, normals=self.normals;
+        off=self.CPoffset,
+        characteristiclength=self.characteristiclength)
+    return calc_controlpoints(self.nodes, self.cells, normals; off, characteristiclength)
+end
+
+const _calc_controlpoints = calc_controlpoints
+
 """
     find_panels(body::AbstractBody, dim::Int, coord::Real; tol=1e-6)
 
@@ -546,6 +562,16 @@ function calc_normals!(self::AbstractBody, normals=self.normals; flipbyCPoffset=
 
     return normals
 end
+
+function calc_normals(nodes::AbstractMatrix, cells::AbstractMatrix)
+    normals = zeros(eltype(nodes), 3, size(cells, 2))
+    calc_normals!(nodes, cells, normals)
+    return normals
+end
+
+calc_normals(self::AbstractBody) = calc_normals(self.nodes, self.cells)
+
+const _calc_normals = calc_normals
 
 function _calc_tangents!(nodes::AbstractMatrix, cells::AbstractMatrix, tangents)
     for pi in axes(cells, 2)

@@ -42,6 +42,37 @@ end
 
 
 ################################################################################
+# BOUNDARY CONDITIONS
+################################################################################
+
+function calc_bc_noflowthrough!(RHS::AbstractVector,
+                                Us::AbstractMatrix, normals::AbstractMatrix)
+
+    @assert size(Us)==size(normals) ""*
+        "Invalid matrices `Us` and `normals`;"*
+        " expected to have the same size, got $(size(Us)) and $(size(normals))."
+    @assert length(RHS)==size(Us, 2) ""*
+        "Invalid vector `RHS`;"*
+        " expected length $(size(Us, 2)), got $(length(RHS))."
+
+    for (i, (U, normal)) in enumerate(zip(eachcol(Us), eachcol(normals)))
+        RHS[i] = -dot(U, normal)
+    end
+
+    return RHS
+end
+
+function calc_bc_noflowthrough(Us::AbstractMatrix{T1},
+                               normals::AbstractMatrix{T2}) where {T1, T2}
+    RHS = zeros(promote_type(T1, T2), size(Us, 2))
+    calc_bc_noflowthrough!(RHS, Us, normals)
+    return RHS
+end
+
+################################################################################
+
+
+################################################################################
 # Backslash Operator
 ################################################################################
 
@@ -78,8 +109,7 @@ end
 
 function numtype(self::AbstractBody)
     return promote_type(eltype(self.nodes),
-                        eltype(self.strength),
-                        Float64)
+                        eltype(self.strength))
 end
 
 function get_strength_name(self::AbstractBody)
@@ -361,32 +391,73 @@ function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, 
     return nothing
 end
 
-function solve!(self::RigidWakeBody{TK, 1, TF},
-                    solver::AbstractMatrixfulSolver{false};
-                    backend=FastMultipoleBackend(),
-                    solver_optargs=(),
-                    update_G::Bool=true,
-                    optargs...
-                ) where {TK<:Union{VortexRing, ConstantDoublet}, TF}
-    if size(self.velocity) != (3, self.ncells)
-        error("Invalid body velocity;"*
-              " expected size (3, $(self.ncells)), got $(size(self.velocity))")
+function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2, TF},
+                solver::BackslashDirichlet; backend=DirectBackend(),
+                update_G::Bool=false, optargs...) where TF
+
+    solver.Uext .= self.velocity
+    solver.phi_ext .= self.potential
+
+    CPoffset_old = self.CPoffset
+    self.CPoffset = -abs(CPoffset_old)
+
+    calc_normals!(self)
+    calc_controlpoints!(self)
+
+    self.strength[:, 1] .= 0.0
+    for d in 1:3
+        self.strength[:, 2] .= view(self.velocity, d, :)
+        self.strength[:, 2] .*= view(self.normals, d, :)
+        self.strength[:, 1] .-= self.strength[:, 2]
+    end
+    self.strength[:, 2] .= 0.0
+
+    self.potential .= 0
+    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
+    solver.rhs .= -self.potential
+
+    Glu = solver.Glu
+    if update_G
+        solver.G .= 0.0
+        _G_phi!(self, ConstantDoublet, solver.G, self.controlpoints; kerneloffset=self.kerneloffset)
+        Glu = lu!(solver.G)
     end
 
-    normals = _calc_normals(self)
-    CPs = _calc_controlpoints(self, normals)
+    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
 
-    G = zeros(TF, self.ncells, self.ncells)
-    _G_U!(self, TK, G, CPs, normals, backend; optargs...)
+    self.CPoffset = CPoffset_old
+    self.velocity .= solver.Uext
+    self.potential .= solver.phi_ext
 
-    RHS = calc_bc_noflowthrough(self.velocity, normals)
-
-    Gamma = zeros(TF, self.ncells)
-    solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
-
-    self.strength[:, 1] .= Gamma
-
+    return nothing
 end
+
+# function solve!(self::RigidWakeBody{TK, 1, TF},
+#                     solver::AbstractMatrixfulSolver{false};
+#                     backend=FastMultipoleBackend(),
+#                     solver_optargs=(),
+#                     update_G::Bool=true,
+#                     optargs...
+#                 ) where {TK<:Union{VortexRing, ConstantDoublet}, TF}
+#     if size(self.velocity) != (3, self.ncells)
+#         error("Invalid body velocity;"*
+#               " expected size (3, $(self.ncells)), got $(size(self.velocity))")
+#     end
+
+#     normals = _calc_normals(self)
+#     CPs = _calc_controlpoints(self, normals)
+
+#     G = zeros(TF, self.ncells, self.ncells)
+#     _G_U!(self, TK, G, CPs, normals, backend; optargs...)
+
+#     RHS = calc_bc_noflowthrough(self.velocity, normals)
+
+#     Gamma = zeros(TF, self.ncells)
+#     solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
+
+#     self.strength[:, 1] .= Gamma
+
+# end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), update_G=false, optargs...) where TF
 
@@ -408,14 +479,13 @@ function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vor
     self.strength[:, 2] .= 0.0
 
     self.potential .= 0
-    influence!(self, self, backend; scalar_potential=true, optargs...)
+    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
     solver.rhs .= self.potential
     solver.rhs .*= -1.0
 
     if update_G
         G = solver.G
         G .= 0.0
-
         _G_phi!(self, ConstantDoublet, G, self.controlpoints; kerneloffset=self.kerneloffset)
         Glu = lu!(G)
     else
@@ -446,64 +516,39 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
     end
 
+    # update control points
     for body in bodies
         normals = calc_normals!(body)
         calc_controlpoints!(body, normals)
     end
 
-    # Prepare initial strengths per BC type
-    sigmas = Tuple(begin
-        if has_dirichlet_bc(body)
-            # Dirichlet: compute sigma = -U·n, zero doublet
-            body.strength[:, 1] .= 0.0
-            for d in (1,2,3)
-                body.strength[:, 2] .= view(body.velocity, d, :)
-                body.strength[:, 2] .*= view(body.normals, d, :)
-                body.strength[:, 1] .-= body.strength[:, 2]
-            end
-            sigma = copy(body.strength[:,1])
-            body.strength[:, 2] .= 0.0
-            sigma
-        else
-            # Neumann: zero all strengths
-            body.strength .= 0.0
-            nothing
-        end
-    end for body in bodies)
+    # store source strengths per body
+    prior_sigmas = [copy(body.strength[:, 1]) for body in bodies]
 
-    # Evaluate initial influence from the initial strength distribution
-    for body in bodies
-        body.potential .= 0
-        body.velocity .= 0
-    end
-    influence!(bodies, bodies, backend; scalar_potential=true, velocity=true, optargs...)
+    # induced potential due to source strengths for dirichlet bodies (interior solve)
+    influence!(bodies, bodies, backend; 
+        scalar_potential=[has_dirichlet_bc(b) for b in bodies], 
+        velocity=[false for b in bodies], 
+        optargs...)
 
-    # For Neumann bodies, the RHS is the freestream velocity at exterior CPs
-    for (i, body) in enumerate(bodies)
-        if !has_dirichlet_bc(body)
-            body.velocity .+= solver.Uext[i]
-        end
-    end
-
-    any_neumann = any(!has_dirichlet_bc(b) for b in bodies)
-    any_dirichlet = any(has_dirichlet_bc(b) for b in bodies)
-
+    # run solver
     FastMultipole.solve!(bodies, solver.fgs;
         max_iterations=solver.max_iterations,
         inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance,
         rlx=solver.rlx,
-        scalar_potential=any_dirichlet,
-        gradient=any_neumann,
+        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
+        gradient=[!has_dirichlet_bc(b) for b in bodies],
         hessian=false,
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false
     )
 
+    # restore properties
     for (i, body) in enumerate(bodies)
         if has_dirichlet_bc(body)
-            body.strength[:, 1] .= sigmas[i]
+            body.strength[:, 1] .= prior_sigmas[i]
         end
         body.CPoffset = CPoffset_olds[i]
         body.velocity .= solver.Uext[i]
@@ -521,20 +566,22 @@ function solve!(bodies::Tuple, solvers::Tuple;
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
 
-    Uinit = [copy(body.velocity) for body in bodies]
+    prev_velocity = [copy(body.velocity) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
+    scalar_potential_flags = [has_dirichlet_bc(body) for body in bodies]
+    velocity_flags = [!has_dirichlet_bc(body) for body in bodies]
 
     converged = false
     for iter in 1:max_outer_iterations
 
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
-            body.velocity .= Uinit[i]
+            body.velocity .= prev_velocity[i]
 
             for (j, source) in enumerate(bodies)
                 j == i && continue
                 influence!(body, source, backend[j];
-                    scalar_potential=false,
-                    velocity=true,
+                    scalar_potential=scalar_potential_flags[i],
+                    velocity=velocity_flags[i],
                     optargs...)
             end
 
@@ -567,7 +614,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
     end
 
     for (i, body) in enumerate(bodies)
-        body.velocity .= Uinit[i]
+        body.velocity .= prev_velocity[i]
     end
 
     return nothing

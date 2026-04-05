@@ -358,9 +358,9 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings+1)
+    elseif size(Das) != (3, size(self.Das[1], 2))
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
+              " expected size (3, $(size(self.Das[1], 2))), got $(size(Das))")
     end
 
     T = promote_type(T1, T2)
@@ -370,11 +370,12 @@ function solve(self::RigidWakeBody{VortexRing, 1},
     CPs = _calc_controlpoints(self, normals)
 
     # update Das
-    self.Das .= Das
+    @assert length(self.Das) == 1 "Matrix-valued Das input is only supported for a single shedding surface."
+    self.Das[1] .= Das
 
     # Compute geometric matrix (left-hand-side influence matrix)
     G = zeros(T, self.ncells, self.ncells)
-    _G_U!(self, G, CPs, normals; optargs...)
+    _G_Uvortexring!(self, G, CPs, normals; optargs...)
 
     # Calculate boundary conditions (right-hand side of system of equations)
     RHS = calc_bc_noflowthrough(Uinfs, normals)
@@ -405,9 +406,9 @@ function solve(self::RigidWakeBody{VortexRing, 2},
     if size(Uinfs) != (3, self.ncells)
         error("Invalid Uinfs;"*
               " expected size (3, $(self.ncells)), got $(size(Uinfs))")
-    elseif size(Das) != (3, self.nsheddings+1)
+    elseif size(Das) != (3, size(self.Das[1], 2))
         error("Invalid Das;"*
-              " expected size (3, $(self.nsheddings+1)), got $(size(Das))")
+              " expected size (3, $(size(self.Das[1], 2))), got $(size(Das))")
     end
 
     T = promote_type(T1, T2)

@@ -145,9 +145,9 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
             !isnothing(w) && update_TE!(w, sys)
         end
 
-        # apply wake potential to body surface
+        # apply wake velocity to body surface
         if length(wake_sources) > 0
-            evaluate_influence!(targets, wake_sources, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
         end
 
         # solve systems with cross-body coupling
@@ -159,7 +159,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         # system-on-all influence
-        evaluate_influence!(targets, systems, backend; scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        influence!(targets, systems, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 

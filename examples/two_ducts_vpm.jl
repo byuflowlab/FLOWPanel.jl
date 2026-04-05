@@ -38,7 +38,7 @@ NDIVS_rfl = [(0.25, n_rfl, 10.0, false),
              (0.25, n_rfl,  0.1, false)]
 
 # ----------------- HELPER: GENERATE DUCTS ------------------------------------
-function make_lifting_duct()
+function make_lifting_duct(; semiinfinite_wake=false)
     kernel   = Union{pnl.ConstantSource, pnl.VortexRing}
     bodytype = pnl.RigidWakeBody{kernel}
 
@@ -51,10 +51,10 @@ function make_lifting_duct()
     points = hcat(xs, ys)
 
     return pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-12, kerneloffset=1e-2,
+                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
-                             semiinfinite_wake=false))
+                             semiinfinite_wake))
 end
 
 function make_nonlifting_duct()
@@ -70,14 +70,15 @@ function make_nonlifting_duct()
     points = hcat(xs, ys)
 
     return pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-12, kerneloffset=1e-2,
+                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio))
 end
 
 # ----------------- GENERATE TWO DUCTS ----------------------------------------
 body1 = make_lifting_duct()
-body2 = make_nonlifting_duct()
+# body2 = make_nonlifting_duct()
+body2 = make_lifting_duct()
 
 # Offset second duct in z by 1.5 diameters (matching two_ducts.jl)
 pnl.rotate!(body2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
@@ -85,19 +86,73 @@ pnl.rotate!(body2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
 println("Body 1 panels: $(body1.ncells)")
 println("Body 2 panels: $(body2.ncells)")
 
+# ----------------- STEADY-STATE REFERENCE SOLVE ------------------------------
+# Solve the same two-duct geometry with semi-infinite wake steady-state method
+# to provide a reference for the unsteady simulation comparison.
+println("\nSolving steady-state reference...")
+
+ref1 = make_lifting_duct(; semiinfinite_wake=true)
+ref2 = make_lifting_duct(; semiinfinite_wake=true)
+pnl.rotate!(ref2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
+
+# Set wake directions
+ref1.Das[1] .= repeat(Vinf / magVinf, 1, size(ref1.Das[1], 2))
+ref2.Das[1] .= repeat(Vinf / magVinf, 1, size(ref2.Das[1], 2))
+
+# Apply freestream
+pnl.apply_freestream!(ref1, Vinf)
+pnl.apply_freestream!(ref2, Vinf)
+
+# Solve with BackslashDirichlet (multi-body outer iteration)
+ref_solver1 = pnl.BackslashDirichlet(ref1)
+ref_solver2 = pnl.BackslashDirichlet(ref2)
+
+@time pnl.solve!((ref1, ref2), (ref_solver1, ref_solver2);
+    backend=fill(pnl.DirectBackend(), 2),
+    max_outer_iterations=50,
+    outer_tolerance=1e-8,
+    verbose=true)
+
+# Post-process reference solution
+pnl.calcfield_U!((ref1, ref2); backend=pnl.DirectBackend())
+pnl.apply_freestream!((ref1, ref2), Vinf)
+pnl.calcfield_Cp!((ref1, ref2), magVinf)
+pnl.calcfield_F!((ref1, ref2), magVinf, rho)
+
+F1_ref = sum(ref1.F, dims=2)
+F2_ref = sum(ref2.F, dims=2)
+println("Steady-state Body 1 force: ", F1_ref)
+println("Steady-state Body 2 force: ", F2_ref)
+
+# Flow tangency diagnostic (must use tuple form to include cross-body influence)
+println("\n--- Flow Tangency ---")
+pnl.calcfield_U!((ref1, ref2); backend=pnl.DirectBackend())
+pnl.apply_freestream!((ref1, ref2), Vinf)
+for (i, body) in enumerate((ref1, ref2))
+    Udotn = sum(body.velocity .* body.normals, dims=1)
+    rms = sqrt(sum(Udotn .^ 2) / body.ncells)
+    maxr = maximum(abs.(Udotn))
+    println("  Body $i: RMS(U·n) = $(round(rms; digits=4)),  max|U·n| = $(round(maxr; digits=4)),  RMS/Vinf = $(round(rms/magVinf*100; digits=2))%")
+end
+println()
+
 # ----------------- SIMULATION SETUP -------------------------------------------
 Uinf(t) = Vinf
 
 l       = d * aspectratio
 dt_val  = l / magVinf / 5                  # ~0.2 chord per step
-n_steps = 31
+n_steps = 21
 t_range = range(0.0, step=dt_val, length=n_steps)
 
 # Set wake directions for lifting body (unit direction, scaled by Das offset)
-body1.Das[1] .= repeat(Vinf / magVinf * 0.005, 1, size(body1.Das[1], 2))
+body1.Das[1] .= repeat(Vinf / magVinf * 0.05, 1, size(body1.Das[1], 2))
+if typeof(body2) <: pnl.AbstractLiftingBody
+    body2.Das[1] .= repeat(Vinf / magVinf * 0.05, 1, size(body2.Das[1], 2))
+end
 
 # Create wake for lifting body only; non-lifting body has no wake
 wake1 = pnl.PanelWake(body1; nwakerows=100)
+wake2 = typeof(body2) <: pnl.NonLiftingBody ? nothing : pnl.PanelWake(body2; nwakerows=100)
 
 # Backend
 backend = pnl.FastMultipoleBackend(;
@@ -107,7 +162,7 @@ backend = pnl.FastMultipoleBackend(;
 )
 
 # Solvers (one per body)
-solver1 = pnl.BackslashDirichlet(body1)
+solver1 = pnl.Backslash(body1)
 solver2 = pnl.Backslash(body2)
 
 # Reference frames (static)
@@ -127,7 +182,7 @@ maneuver!(frames, systems, wakes, t) = nothing
 
 # ----------------- RUN SIMULATION ---------------------------------------------
 systems = (body1, body2)
-wakes   = (wake1, nothing)
+wakes   = (wake1, wake2)
 body_solvers = (solver1, solver2)
 
 println("\nBegin two-duct simulation ($(n_steps) steps)...")
@@ -145,12 +200,21 @@ println("Body 2 total force: ", F2)
 println("Body 1 max |Cp|: ", maximum(abs.(body1.Cp)))
 println("Body 2 max |Cp|: ", maximum(abs.(body2.Cp)))
 
-# Reference values from two_ducts.jl (BackslashDirichlet steady-state)
-F1_ref = [1.5305, -109.619, 263.507]
-F2_ref = [-1.3068, 1.3759, 9.7267]
+# Flow tangency diagnostic (must use tuple form to include cross-body influence)
+println("\n--- Flow Tangency ---")
+pnl.calcfield_U!(systems; backend=pnl.DirectBackend())
+pnl.apply_freestream!(systems, Vinf)
+for (i, body) in enumerate(systems)
+    Udotn = sum(body.velocity .* body.normals, dims=1)
+    rms = sqrt(sum(Udotn .^ 2) / body.ncells)
+    maxr = maximum(abs.(Udotn))
+    println("  Body $i: RMS(U·n) = $(round(rms; digits=4)),  max|U·n| = $(round(maxr; digits=4)),  RMS/Vinf = $(round(rms/magVinf*100; digits=2))%")
+end
+
 println("\n--- Comparison to steady-state ---")
 for (i, (f, fref)) in enumerate(zip([F1, F2], [F1_ref, F2_ref]))
     fvec = [f[1], f[2], f[3]]
-    err = norm(fvec - fref) / norm(fref)
+    frefvec = [fref[1], fref[2], fref[3]]
+    err = norm(fvec - frefvec) / norm(frefvec)
     println("  Body $i relative force error: $(round(err*100; digits=2))%")
 end

@@ -1,15 +1,12 @@
-import Test
+using Test
+import FLOWPanel as pnl
+import GeometricTools as gt
+using WriteVTK
 
-verbose = true
+include("test_helpers.jl")
 
-include("runtests_elements.jl")
-include("runtests_semiinfiniteelements.jl")
-include("runtests_grid.jl")
-include("runtests_solvers.jl")
-include("runtests_solvers2.jl")
-include("runtests_liftingline.jl")
-
-if VERSION >= v"1.9" && !("remote" in Test.ARGS)
-    include("runtests_meshes.jl")
-    include("runtests_meshes2.jl")
-end
+include("runtests_unit_fmm.jl")
+include("runtests_unit_body.jl")
+include("runtests_unit_solver.jl")
+include("runtests_unit_liftingbody.jl")
+include("runtests_analytical.jl")

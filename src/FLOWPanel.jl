@@ -20,13 +20,12 @@ export  solve, save, influence!,
         calc_areas!, calc_areas
 
 # ------------ GENERIC MODULES -------------------------------------------------
-import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I, lu!, ldiv!
 import Krylov
 import LinearOperators
-import SimpleNonlinearSolve
 import Requires: @require
+# import SimpleNonlinearSolve
 import FastMultipole
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
 using WriteVTK
@@ -57,9 +56,6 @@ const ONE_OVER_4PI = 1.0 / (4.0 * pi)
 # Discretization parameter type
 const ndivstype = Union{Float64, gt.multidisctype, Nothing}
 
-# Identity matrix
-const Im = Array(1.0I, 3, 3)
-
 # Shedding matrix for a RigidWakeBody without shedding
 const noshedding = zeros(Int, 6, 0)
 
@@ -67,7 +63,7 @@ const SEMIINFINITE_LENGTH = Array{Float64,0}(undef)
 SEMIINFINITE_LENGTH[] = 10.0
 
 # ------------ HEADERS ---------------------------------------------------------
-for header_name in ["elements", "linearsolver", "fmm",
+for header_name in ["elements", "fmm",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
                     "solver",

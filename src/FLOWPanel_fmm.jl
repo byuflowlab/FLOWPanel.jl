@@ -15,35 +15,7 @@
 
 abstract type AbstractBackend end
 
-function evaluate_influence!(targets, sources, backend::AbstractBackend)
-    error("evaluate_influence! not implemented for backend $(typeof(backend))")
-end
-
-################################################################################
-# DIRECT BACKEND
-################################################################################
-
-struct DirectBackend <: AbstractBackend
-end
-
-function evaluate_influence!(targets::Tuple, sources::Tuple, ::DirectBackend; 
-        scalar_potential=true, gradient=true, hessian=false, precalc=false
-    )
-    
-    # apply pre-calculations per system
-    if precalc
-        for target in targets
-            pre_evaluate_influence!(target)
-        end
-    end
-
-    # n-body solve
-    FastMultipole.direct!(targets, sources; scalar_potential, gradient, hessian)
-end
-
-################################################################################
-# FASTMULTIPOLE BACKEND
-################################################################################
+struct DirectBackend <: AbstractBackend end
 
 struct FastMultipoleBackend <: AbstractBackend
     expansion_order::Int
@@ -51,17 +23,21 @@ struct FastMultipoleBackend <: AbstractBackend
     leaf_size::Int
 end
 
-function FastMultipoleBackend(; expansion_order::Int=5,
-                                    multipole_acceptance::Float64=0.5,
-                                    leaf_size::Int=10)
-    return FastMultipoleBackend(expansion_order,
-                                multipole_acceptance,
-                                leaf_size)
+FastMultipoleBackend(; expansion_order=10, multipole_acceptance=0.4, leaf_size=20) = 
+    FastMultipoleBackend(expansion_order, multipole_acceptance, leaf_size)
+
+function influence!(targets::Tuple, sources::Tuple, backend::AbstractBackend; optargs...)
+    error("influence! not implemented for targets $(typeof(targets)), sources $(typeof(sources)), and backend $(typeof(backend))")
 end
 
-function evaluate_influence!(targets::Tuple, sources::Tuple, backend::FastMultipoleBackend; 
-        scalar_potential=true, gradient=true, hessian=false, precalc=false
-    )
+
+#-------- high-level interface -------#
+
+has_semiinfinite_wake(self) = false
+
+function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
+                     scalar_potential=false, velocity=false,
+                     velocity_gradient=false, precalc=false, optargs...)
 
     # apply pre-calculations per system
     if precalc
@@ -70,23 +46,55 @@ function evaluate_influence!(targets::Tuple, sources::Tuple, backend::FastMultip
         end
     end
 
-    # unpack backend
-    expansion_order = backend.expansion_order
-    multipole_acceptance = backend.multipole_acceptance
-    leaf_size = backend.leaf_size
+    # determine if extra_farfield is needed based
+    extra_farfield = false
+    for body in source_bodies
+        if has_semiinfinite_wake(body)
+            extra_farfield = true
+            break
+        end
+    end
 
-    # call FMM
-    FastMultipole.fmm!(targets, sources; 
-        expansion_order, multipole_acceptance, leaf_size_source=leaf_size,
-        scalar_potential, gradient, hessian
-    )
+    FastMultipole.fmm!(target_bodies, source_bodies;
+        expansion_order=backend.expansion_order,
+        multipole_acceptance=backend.multipole_acceptance,
+        leaf_size_source=backend.leaf_size,
+        scalar_potential, gradient=velocity,
+        hessian=velocity_gradient,
+        extra_farfield,
+        shrink=true,
+        optargs...)
+
+    return nothing
+end
+
+function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
+                     scalar_potential=false, velocity=false,
+                     velocity_gradient=false, precalc=false, optargs...)
+
+    # apply pre-calculations per system
+    if precalc
+        for target in targets
+            pre_evaluate_influence!(target)
+        end
+    end
+
+    FastMultipole.direct!(target_bodies, source_bodies;
+        scalar_potential=scalar_potential,
+        gradient=velocity,
+        hessian=velocity_gradient, 
+        optargs...)
+
+    return nothing
+end
+
+to_tuple(val::Tuple) = val
+to_tuple(val) = (val,)
+function influence!(target, source, backend; optargs...)
+    influence!(to_tuple(target), to_tuple(source), backend; optargs...)
 end
 
 function pre_evaluate_influence!(system)
     # default behavior
     return nothing
 end
-
-#--- overload FastMultipole functions ---#
-
-################################################################################

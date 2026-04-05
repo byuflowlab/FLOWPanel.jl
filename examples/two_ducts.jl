@@ -67,16 +67,8 @@ function make_duct(;
 end
 
 # ----------------- GENERATE TWO DUCTS ----------------------------------------
-# body1 = make_duct()
-body1 = make_duct(;
-            kernel = pnl.ConstantSource,
-            bodytype = pnl.NonLiftingBody
-        )
-# body2 = make_duct()
-body2 = make_duct(;
-            kernel = pnl.ConstantSource,
-            bodytype = pnl.NonLiftingBody
-        )
+body1 = make_duct()
+body2 = make_duct()
 
 # Offset second duct in z by 1.5 diameters
 pnl.rotate!(body2, 0, 0, 0; translation=[0.0, 0.0, 1.5*d])
@@ -130,8 +122,8 @@ setup_bodies!(body2, Vinf, magVinf)
 body1.strength .= 0.0
 body2.strength .= 0.0
 
-solver1 = pnl.Backslash(body1)
-solver2 = pnl.Backslash(body2)
+solver1 = pnl.BackslashDirichlet(body1)
+solver2 = pnl.BackslashDirichlet(body2)
 
 println("\nSolving...")
 @time pnl.solve!((body1, body2), (solver1, solver2);

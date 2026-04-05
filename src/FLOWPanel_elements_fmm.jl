@@ -9,55 +9,6 @@
   * License     : GNU Public License
 =###############################################################################
 
-#-------- high-level interface -------#
-
-has_semiinfinite_wake(self::AbstractBody) = false
-
-function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
-                     scalar_potential=false, velocity=false,
-                     velocity_gradient=false, optargs...)
-
-    # determine if extra_farfield is needed based
-    extra_farfield = false
-    for body in source_bodies
-        if has_semiinfinite_wake(body)
-            extra_farfield = true
-            break
-        end
-    end
-
-    FastMultipole.fmm!(target_bodies, source_bodies;
-        expansion_order=backend.expansion_order,
-        multipole_acceptance=backend.multipole_acceptance,
-        leaf_size_source=backend.leaf_size,
-        scalar_potential, gradient=velocity,
-        hessian=velocity_gradient,
-        extra_farfield,
-        shrink=true,
-        optargs...)
-
-    return nothing
-end
-
-function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
-                     scalar_potential=false, velocity=false,
-                     velocity_gradient=false, optargs...)
-
-    FastMultipole.direct!(target_bodies, source_bodies;
-        scalar_potential=scalar_potential,
-        gradient=velocity,
-        hessian=velocity_gradient, 
-        optargs...)
-
-    return nothing
-end
-
-to_tuple(val::Tuple) = val
-to_tuple(val) = (val,)
-function influence!(target, source, backend; optargs...)
-    influence!(to_tuple(target), to_tuple(source), backend; optargs...)
-end
-
 #-------- panel kernels -------#
 
 function rotate_to_panel(source_system::AbstractBody{<:Any,NK,<:Any}, source_buffer::Matrix{TF}, i_source::Int) where {TF,NK}
@@ -1067,6 +1018,10 @@ function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, ker
     else
         return _induced(target, vertices, strength, kernel, kerneloffset, derivatives_switch)
     end
+end
+
+function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args...; kerneloffset)
+    return induced_semiinfinite(target, ConstantDoublet, args...; kerneloffset)
 end
 
 function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS}; kerneloffset) where {TF,PS,VS,GS}
