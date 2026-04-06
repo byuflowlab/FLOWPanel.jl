@@ -87,7 +87,7 @@ trailingedge[3, :] .= 0.5*diameter * sin.(thetas)
 # Generate TE shedding matrix
 # TE_indices = [161, 129, 97, 65, 3, 1, 268, 300, 332, 364, 396]
 # shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
-shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.01*diameter)
+shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.01*diameter)
 # @show shedding[:,[22,24]]
 # shedding = shedding[:, 22:22]
 # shedding = hcat(shedding[:,1:21], shedding[:,22:22], shedding[:, 23:23]) # Only keep the first shedding points for debugging

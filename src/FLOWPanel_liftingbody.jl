@@ -190,21 +190,8 @@ function RigidWakeBody{E, N, TF, DBC}(
     nodes = grid._nodes
     cells = grid2cells(grid)
     
-    # Extract neighbor info from grid
-    neighbor = zeros(Int, 3, grid.ncells)
-    
-    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells))
-    linc = LinearIndices(ndivscellsc)
-    
-    for ci in 1:grid.ncells
-        for ni in 1:3                   # Iterate over neighbors
-            ncoor = gt.neighbor(grid, ni, ci; preserveEdge=true)
-            if ncoor[1] != 0
-                nlin = linc[ncoor...]
-                neighbor[ni, ci] = nlin
-            end
-        end
-    end
+    # Extract neighbor info from cells connectivity
+    neighbor = calc_neighbors(cells)
 
     vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:grid.ncells]
 
@@ -1082,12 +1069,11 @@ end
 ################################################################################
 """
     calc_shedding(nodes, cells, trailingedge; periodic=false, tolerance=1e2*eps(), debug=false)
-    calc_shedding(grid, trailingedge; periodic=false, tolerance=1e2*eps(), debug=false)
 
-Given an unstructured `grid` and a collection of points (line) `trailingedge`,
-it finds the points in `grid` that are closer than `tolerance` to the line,
-and automatically builds a `shedding` matrix that can be used to shed the wake
-from this trailing edge.
+Given a mesh defined by `nodes` (3 × nnodes) and `cells` (3 × ncells) and a
+collection of points (line) `trailingedge`, it finds the points in the mesh
+that are closer than `tolerance` to the line, and automatically builds a
+`shedding` matrix that can be used to shed the wake from this trailing edge.
 
 Note: It is important that the points in `trailingedge` have been previously
     sorted to be contiguous to each other, otherwise the resulting `shedding`
@@ -1101,29 +1087,17 @@ function calc_shedding(nodes, cells, trailingedge::Union{Matrix, Function};
                             tolerance=1e2*eps(), debug=false
                             )
     # Identify the nodes that are on the TE line
-    TEindices = gt.identifyedge(nodes, trailingedge; tolerance=tolerance)
-    TEindices = [nodei for (nodei, pointi) in TEindices]
+    TEindices = identifyedge(nodes, trailingedge; tolerance=tolerance)
+    TEindices = [nodei for (nodei, _) in TEindices]
 
     return calc_shedding(nodes, cells, TEindices, trailingedge; periodic, tolerance, debug)
 end
 
-function calc_shedding(grid::gt.GridTriangleSurface{G}, trailingedge::Union{Matrix, Function};
-                            periodic::Bool=false,
-                            tolerance=1e2*eps(), debug=false
-                            ) where {G<:gt.Meshes.SimpleMesh}
-    # Identify the nodes that are on the TE line
-    TEindices = gt.identifyedge(grid._nodes, trailingedge; tolerance=tolerance)
-    TEindices = [nodei for (nodei, pointi) in TEindices]
-
-    return calc_shedding(grid._nodes, grid2cells(grid), TEindices, trailingedge, grid._halfedgetopology; periodic, tolerance, debug)
-end
-
-function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedge::Union{Matrix, Function}, topology;
+function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices,
+                            trailingedge::Union{Matrix, Function};
                             periodic::Bool=false,
                             tolerance=1e2*eps(), debug=false
                             )
-
-    connec = cells
 
     # Return if no TE nodes were identified
     if length(TEindices)==0
@@ -1135,67 +1109,51 @@ function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedg
         push!(TEindices, TEindices[1])
     end
 
+    # Build edge-to-cells lookup
+    edge_to_cells = _calc_edge_to_cells(cells)
+
     # All node pairs that could form an edge at the TE
     paircandidates = zip(view(TEindices, 1:length(TEindices)-1), view(TEindices, 2:length(TEindices)))
 
     # All node pairs that actually form an edge at the TE
-    pairs = [pair for pair in paircandidates if haskey(topology.edge4pair, pair)]
-
-    # Fetch all the first halfedge of each edges (node pairs) along the TE
-    halfedges = [gt.Meshes.half4pair(topology, pair) for pair in pairs]
+    pairs = Tuple{Int,Int}[]
+    for pair in paircandidates
+        key = pair[1] < pair[2] ? (pair[1], pair[2]) : (pair[2], pair[1])
+        if haskey(edge_to_cells, key)
+            push!(pairs, pair)
+        end
+    end
 
     # Build shedding matrix
-    shedding = zeros(Int, 6, length(halfedges))
+    shedding = zeros(Int, 6, length(pairs))
 
-    for (ei, halfedge) in enumerate(halfedges)
+    for (ei, pair) in enumerate(pairs)
 
-        pair = pairs[ei]
+        key = pair[1] < pair[2] ? (pair[1], pair[2]) : (pair[2], pair[1])
+        adj = edge_to_cells[key]
 
-        # pi is the panel associated with this half edge
-        # pj is the panel associated with the other half
+        # pi is the panel on the "top" side of the TE edge
+        # pj is the panel on the "bottom" side (-1 if single-sided)
 
         # Case: Single-sided edge
-        if isnothing(halfedge.elem) || isnothing(halfedge.half.elem)
+        if length(adj) == 1
 
-            if isnothing(halfedge.half.elem)
-                pi = halfedge.elem
-            else
-                pi = halfedge.half.elem
-            end
-
-            # Declare the other half as inexistent
+            pi = adj[1][1]
             pj = -1
 
         # Case: Two-sided edge
         else
 
-            # Identify which panel is "on top" and which "bottom" by matching
-            # the order of the node pair
-            inds1 = view(connec, :, halfedge.elem)
-            inds2 = view(connec, :, halfedge.half.elem)
+            c1, c2 = adj[1][1], adj[2][1]
+            inds1 = view(cells, :, c1)
+            inds2 = view(cells, :, c2)
 
-            if (
-                    (inds1[1]==pair[1] && inds1[2]==pair[2])
-                    ||
-                    (inds1[2]==pair[1] && inds1[3]==pair[2])
-                    ||
-                    (inds1[3]==pair[1] && inds1[1]==pair[2])
-                )
-
-                pi = halfedge.elem
-                pj = halfedge.half.elem
-
-            elseif (
-                    (inds2[1]==pair[1] && inds2[2]==pair[2])
-                    ||
-                    (inds2[2]==pair[1] && inds2[3]==pair[2])
-                    ||
-                    (inds2[3]==pair[1] && inds2[1]==pair[2])
-                )
-
-                pi = halfedge.half.elem
-                pj = halfedge.elem
-
+            if _has_directed_edge(inds1, pair)
+                pi = c1
+                pj = c2
+            elseif _has_directed_edge(inds2, pair)
+                pi = c2
+                pj = c1
             else
                 error("Logic error: Could not match panel to node pair")
             end
@@ -1203,13 +1161,13 @@ function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedg
         end
 
         # Nodes of first half
-        nia = findfirst(globindex -> globindex==pair[2], view(connec, :, pi))  # Local-index of the first node
-        nib = findfirst(globindex -> globindex==pair[1], view(connec, :, pi))  # Local-index of the second node
+        nia = findfirst(globindex -> globindex==pair[2], view(cells, :, pi))  # Local-index of the first node
+        nib = findfirst(globindex -> globindex==pair[1], view(cells, :, pi))  # Local-index of the second node
 
         # Nodes of other half
         if pj != -1
-            nja = findfirst(globindex -> globindex==pair[1], view(connec, :, pj))  # Local-index of the second node
-            njb = findfirst(globindex -> globindex==pair[2], view(connec, :, pj))  # Local-index of the first node
+            nja = findfirst(globindex -> globindex==pair[1], view(cells, :, pj))  # Local-index of the second node
+            njb = findfirst(globindex -> globindex==pair[2], view(cells, :, pj))  # Local-index of the first node
         else
             nja = njb = -1
         end
@@ -1225,22 +1183,68 @@ function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices, trailingedg
         display(collect(paircandidates))
         display("pairs")
         display(pairs)
-        display("halfedges")
-        display(halfedges)
         display("shedding")
         display(shedding)
-
-        points = [nodes[:, i] for i in TEindices]
-        gt.generateVTK("TEindices", points; keep_points=true)
-
-        lines = [[i-1, j-1] for (i, j) in paircandidates]
-        gt.generateVTK("paircandidates", eachcol(nodes); lines=lines)
-
-        lines = [[i-1, j-1] for (i, j) in pairs]
-        gt.generateVTK("pairs", eachcol(nodes); lines=lines)
     end
 
     return shedding
+end
+
+"""
+Check whether triangle `inds` = (n1, n2, n3) contains the directed edge
+`pair` = (a, b) in its winding order.
+"""
+function _has_directed_edge(inds, pair)
+    return (inds[1]==pair[1] && inds[2]==pair[2]) ||
+           (inds[2]==pair[1] && inds[3]==pair[2]) ||
+           (inds[3]==pair[1] && inds[1]==pair[2])
+end
+
+"""
+    identifyedge(nodes, line::AbstractMatrix; tolerance=1e2*eps())
+
+For each node (column of `nodes`), find the closest point (column of `line`).
+Return a sorted list of `(node_index, point_index)` tuples for all nodes
+within `tolerance` of their nearest line point, sorted by `point_index`.
+"""
+function identifyedge(nodes::AbstractMatrix, line::AbstractMatrix;
+                      tolerance::Number=1e2*eps())
+
+    points = eachcol(line)
+    indices = Tuple{Int, Int}[]
+
+    for (nodei, node) in enumerate(eachcol(nodes))
+        distance, pointi = findmin(X -> LA.norm(node - X), points)
+        if distance <= tolerance
+            push!(indices, (nodei, pointi))
+        end
+    end
+
+    sort!(indices, by = x -> x[2])
+    return indices
+end
+
+"""
+    identifyedge(nodes, criterion::Function; tolerance=1e2*eps())
+
+For each node (column of `nodes`), call `criterion(node)` which must return
+`(distance, sortval)`.  Return a sorted list of `(node_index, sortval)` tuples
+for all nodes within `tolerance`, sorted by `sortval`.
+"""
+function identifyedge(nodes::AbstractMatrix, criterion::Function;
+                      tolerance::Number=1e2*eps())
+
+    indices = Tuple{Int, Float64}[]
+
+    for (nodei, node) in enumerate(eachcol(nodes))
+        distance, sortval = criterion(node)
+        if distance <= tolerance
+            push!(indices, (nodei, sortval))
+        end
+    end
+
+    sort!(indices, by = x -> x[2])
+    return indices
 end
 
 

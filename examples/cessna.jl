@@ -120,7 +120,7 @@ for (trailingedgefile, spandir) in trailingedges
     trailingedge = trailingedge[:, tokeep]
 
     # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*bref)
+    shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*bref)
 
     push!(sheddings, shedding)
 

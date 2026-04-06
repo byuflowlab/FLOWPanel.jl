@@ -148,6 +148,66 @@ function trimesh2cells(mesh::VSPGeom.TriMesh)
     return nodes, cells
 end
 
+"""
+    _calc_edge_to_cells(cells::Matrix{Int})
+
+Build a dictionary mapping each edge (as a sorted node-index pair) to the list
+of `(cell_index, local_edge_index)` entries that share that edge.
+
+Edge convention for a triangle with vertices `(n1, n2, n3) = cells[:, ci]`:
+- Edge 1: `(n1, n2)`
+- Edge 2: `(n2, n3)`
+- Edge 3: `(n3, n1)`
+"""
+function _calc_edge_to_cells(cells::Matrix{Int})
+
+    edge_to_cells = Dict{Tuple{Int,Int}, Vector{Tuple{Int,Int}}}()
+
+    ncells = size(cells, 2)
+    for ci in 1:ncells
+        n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+        for (ei, (a, b)) in enumerate(((n1, n2), (n2, n3), (n3, n1)))
+            key = a < b ? (a, b) : (b, a)
+            list = get!(Vector{Tuple{Int,Int}}, edge_to_cells, key)
+            push!(list, (ci, ei))
+        end
+    end
+
+    return edge_to_cells
+end
+
+"""
+    calc_neighbors(cells::Matrix{Int})
+
+Compute the `3 × ncells` neighbor matrix from triangle connectivity alone
+(no GeometricTools grid required).
+
+`neighbor[i, j]` is the linear index of the cell sharing edge `i` of cell `j`,
+or `0` if that edge is on the boundary.  The edge convention matches
+[`_calc_edge_to_cells`](@ref).
+"""
+function calc_neighbors(cells::Matrix{Int})
+
+    ncells = size(cells, 2)
+    neighbor = zeros(Int, 3, ncells)
+    edge_to_cells = _calc_edge_to_cells(cells)
+
+    for ci in 1:ncells
+        n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+        for (ei, (a, b)) in enumerate(((n1, n2), (n2, n3), (n3, n1)))
+            key = a < b ? (a, b) : (b, a)
+            for (other_ci, _) in edge_to_cells[key]
+                if other_ci != ci
+                    neighbor[ei, ci] = other_ci
+                    break
+                end
+            end
+        end
+    end
+
+    return neighbor
+end
+
 ##### COMMON FUNCTIONS  ########################################################
 
 

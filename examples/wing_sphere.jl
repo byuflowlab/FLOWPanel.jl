@@ -44,7 +44,7 @@ trailingedge[1, :] .= chord
 trailingedge[2, :] .= range(-b/2, stop=b/2, length=nte)
 trailingedge[3, :] .= 0.0
 
-shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001 * b)
+shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001 * b)
 
 # --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}

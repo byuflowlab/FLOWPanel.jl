@@ -78,7 +78,7 @@ trailingedge[3, :] .= 0.0
 # Generate TE shedding matrix
 # TE_indices = [161, 129, 97, 65, 3, 1, 268, 300, 332, 364, 396]
 # shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
-shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*b)
+shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*b)
 
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]

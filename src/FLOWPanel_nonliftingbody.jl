@@ -113,21 +113,8 @@ function NonLiftingBody{E, N, TF, DBC}(
     nodes = grid._nodes
     cells = grid2cells(grid)
     
-    # Extract neighbor info from grid
-    neighbor = zeros(Int, 3, grid.ncells)
-    
-    ndivscellsc = Tuple(collect( 1:(d != 0 ? d : 1) for d in grid._ndivscells))
-    linc = LinearIndices(ndivscellsc)
-    
-    for ci in 1:grid.ncells
-        for ni in 1:3                   # Iterate over neighbors
-            ncoor = gt.neighbor(grid, ni, ci; preserveEdge=true)
-            if ncoor[1] != 0
-                nlin = linc[ncoor...]
-                neighbor[ni, ci] = nlin
-            end
-        end
-    end
+    # Extract neighbor info from cells connectivity
+    neighbor = calc_neighbors(cells)
 
     vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:grid.ncells]
 

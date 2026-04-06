@@ -99,7 +99,7 @@ spantips = extrema(X -> pnl.dot(X, spandir), eachcol(trailingedge))
 span = spantips[2] - spantips[1]
 
 # Generate TE shedding matrix
-shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
+shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*span)
 
 # Generate paneled body
 body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
