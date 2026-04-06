@@ -434,3 +434,108 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...; bodyoptargs=()
     # construct body
     return bodytype(triang_grid; bodyoptargs...)
 end
+
+"""
+    FlatGround(center, normal, radius; panel_length=radius/5, bodyoptargs...)
+
+Generate a flat circular ground plane tessellated with equilateral triangles of
+uniform size `panel_length`. Returns a `NonLiftingBody{ConstantSource}` suitable
+for use with `FlatGroundSolver`.
+
+# Arguments
+- `center`: 3-element vector, center position of the ground plane.
+- `normal`: 3-element vector, outward normal direction of the ground plane.
+- `radius`: scalar, radius of the circular ground plane.
+
+# Keyword Arguments
+- `panel_length`: side length of each equilateral triangle (default `radius/5`).
+- `bodyoptargs...`: forwarded to the `NonLiftingBody{ConstantSource}` constructor.
+"""
+function FlatGround(center, normal, radius; panel_length=radius/5, bodyoptargs...)
+
+    TF = promote_type(eltype(center), eltype(normal), typeof(float(radius)), typeof(float(panel_length)))
+
+    # --- Step 1: Generate nodes on an equilateral lattice in the XY plane ---
+    h = TF(panel_length)
+    e1 = TF[h, 0]
+    e2 = TF[h/2, h * sqrt(TF(3))/2]
+
+    N = ceil(Int, radius / h) + 1
+
+    # Map from (i,j) grid index to node index
+    node_map = Dict{Tuple{Int,Int}, Int}()
+    node_list = Vector{TF}[]
+
+    for j in -N:N, i in -N:N
+        x = i * e1[1] + j * e2[1]
+        y = i * e1[2] + j * e2[2]
+        if x^2 + y^2 <= radius^2
+            push!(node_list, TF[x, y, 0])
+            node_map[(i, j)] = length(node_list)
+        end
+    end
+
+    nnodes = length(node_list)
+
+    # --- Step 2: Build equilateral triangles ---
+    cell_list = Vector{Int}[]
+
+    for j in -N:N-1, i in -N:N-1
+        # Lower triangle: (i,j), (i+1,j), (i,j+1)
+        if haskey(node_map, (i,j)) && haskey(node_map, (i+1,j)) && haskey(node_map, (i,j+1))
+            push!(cell_list, [node_map[(i,j)], node_map[(i+1,j)], node_map[(i,j+1)]])
+        end
+        # Upper triangle: (i+1,j), (i+1,j+1), (i,j+1)
+        if haskey(node_map, (i+1,j)) && haskey(node_map, (i+1,j+1)) && haskey(node_map, (i,j+1))
+            push!(cell_list, [node_map[(i+1,j)], node_map[(i+1,j+1)], node_map[(i,j+1)]])
+        end
+    end
+
+    ncells = length(cell_list)
+
+    # Assemble into matrices
+    nodes_2d = zeros(TF, 3, nnodes)
+    for k in 1:nnodes
+        nodes_2d[:, k] .= node_list[k]
+    end
+
+    cells = zeros(Int, 3, ncells)
+    for k in 1:ncells
+        cells[:, k] .= cell_list[k]
+    end
+
+    # --- Step 3: Rotate and translate to match desired center and normal ---
+    n_hat = TF.(normal) / sqrt(sum(TF.(normal).^2))
+    from = TF[0, 0, 1]
+
+    axis = cross(from, n_hat)
+    sin_angle = sqrt(sum(axis.^2))
+    cos_angle = dot(from, n_hat)
+
+    if sin_angle < 1e-12
+        # Parallel or anti-parallel
+        R = cos_angle > 0 ? Matrix{TF}(1.0I, 3, 3) : TF[-1 0 0; 0 -1 0; 0 0 1]
+    else
+        axis = axis / sin_angle
+        # Rodrigues' rotation formula
+        K = TF[0 -axis[3] axis[2]; axis[3] 0 -axis[1]; -axis[2] axis[1] 0]
+        R = Matrix{TF}(1.0I, 3, 3) + sin_angle * K + (1 - cos_angle) * (K * K)
+    end
+
+    c = TF.(center)
+    nodes = R * nodes_2d .+ c
+
+    # --- Step 4: Ensure consistent winding (normals align with desired normal) ---
+    v1 = nodes[:, cells[1, 1]]
+    v2 = nodes[:, cells[2, 1]]
+    v3 = nodes[:, cells[3, 1]]
+    computed_normal = cross(v2 - v1, v3 - v1)
+
+    if dot(computed_normal, n_hat) < 0
+        # Swap vertex order to flip normals
+        cells[[1, 2], :] .= cells[[2, 1], :]
+    end
+
+    # --- Step 5: Construct and return body ---
+    return NonLiftingBody{ConstantSource}(nodes, cells; bodyoptargs...)
+end

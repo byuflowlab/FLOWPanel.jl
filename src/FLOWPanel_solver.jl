@@ -687,6 +687,21 @@ function FlatGroundSolver(body::NonLiftingBody{ConstantSource, 1, TF}) where TF
     return FlatGroundSolver(rhs)
 end
 
+function solve!(body::NonLiftingBody{ConstantSource, 1, TF}, solver::FlatGroundSolver{TF}; optargs...) where TF
+    normals = calc_normals!(body)
+    calc_controlpoints!(body)
+
+    calc_bc_noflowthrough!(solver.rhs, body.velocity, normals)
+
+    for i in 1:body.ncells
+        # For a flat ground problem with constant source panels, the influence of each panel on itself is -0.5 
+        # (for a panel with its control point on the surface), and there is no influence from other panels.
+        body.strength[i, 1] = -solver.rhs[i] / (-0.5)
+    end
+
+    return nothing
+end
+
 ################################################################################
 
 # function solve!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1, TF},

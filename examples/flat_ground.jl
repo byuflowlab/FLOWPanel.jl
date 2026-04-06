@@ -1,8 +1,8 @@
 #=##############################################################################
 # DESCRIPTION
-    Multi-body unsteady simulation: a low-AR capped wing (RigidWakeBody) with
-    PanelParticleWake interacting with a downstream sphere (NonLiftingBody).
-    Verifies flow tangency for both bodies after simulation.
+    Multi-body unsteady simulation: a capped wing (RigidWakeBody) flying in
+    ground effect over a flat ground plane (NonLiftingBody with FlatGroundSolver).
+    Verifies no-flow-through on the ground at every time step via a monitor.
 
 # AUTHORSHIP
   * Author    : Ryan Anderson and Claude (AI assistant)
@@ -25,9 +25,8 @@ rho             = 1.225                         # (kg/m^3) air density
 Vinf            = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
 # =============================================================================
-# WING GEOMETRY — import the capped wing mesh used by simple_wing_capped.jl
+# WING GEOMETRY — import capped wing mesh (same as simple_wing_capped.jl)
 # =============================================================================
-
 chord           = 2.0                           # (m) root chord length
 AR              = 4.0                           # aspect ratio b/c
 b               = AR * chord                    # (m) span
@@ -58,35 +57,21 @@ wing = pnl.RigidWakeBody{kernel}(grid, shedding;
 println("Wing: $(wing.nnodes) nodes, $(wing.ncells) panels, $(wing.nsheddings) shedding edges")
 
 # =============================================================================
-# SPHERE GEOMETRY — NonLiftingBody downstream of the wing
+# GROUND GEOMETRY — flat ground plane below the wing
 # =============================================================================
-R_sphere        = 0.5                           # (m) sphere radius
-x_sphere        = chord + 3 * R_sphere          # (m) sphere center x-position
+ground_z        = -3.0                          # (m) ground plane z-position
+ground_center   = [chord/2, 0.0, ground_z]     # center below wing mid-chord
+ground_normal   = [0.0, 0.0, 1.0]              # pointing up toward wing
+ground_radius   = 20.0                          # (m) radius of ground disc
+ground_panel_length = 1.0                       # (m) side length of equilateral triangles
 
-# Parametric grid in (theta, phi)
-theta_pad = 0.15                                # avoid polar singularity
-P_min = [theta_pad, 0.0, 0.0]
-P_max = [π - theta_pad, 2π, 0.0]
-NDIVS_sphere = [20, 40, 0]
+ground = pnl.FlatGround(ground_center, ground_normal, ground_radius;
+                         panel_length=ground_panel_length)
 
-sphere_grid = pnl.gt.Grid(P_min, P_max, NDIVS_sphere; loop_dim=2)
-
-# Transform to Cartesian spherical coordinates
-pnl.gt.transform!(sphere_grid, X -> pnl.gt.spherical3D(vcat(R_sphere, X[1:2])))
-
-# Translate downstream
-Oaxis_sphere = Matrix{Float64}(I, 3, 3)
-O_sphere = [x_sphere, 0.0, 0.0]
-pnl.gt.lintransform!(sphere_grid, Oaxis_sphere, O_sphere)
-
-# Triangulate and create body
-triang_sphere = pnl.gt.GridTriangleSurface(sphere_grid, 1)
-sphere = pnl.NonLiftingBody{pnl.ConstantSource}(triang_sphere)
-
-println("Sphere: $(sphere.nnodes) nodes, $(sphere.ncells) panels, center at $O_sphere")
+println("Ground: $(ground.nnodes) nodes, $(ground.ncells) panels")
 
 # =============================================================================
-# WAKE SETUP — PanelParticleWake for wing, nothing for sphere
+# WAKE SETUP — PanelParticleWake for wing, nothing for ground
 # =============================================================================
 dt_val = chord / magVinf / 5                    # timestep (~0.2 chord per step)
 das_offset = 0.05                               # Das scale (fraction of unit Vinf direction)
@@ -99,7 +84,7 @@ wake_wing = pnl.PanelParticleWake(wing;
                 method_trailing=pnl.OverlapPPS(1.3, 2),
                 method_unsteady=pnl.OverlapPPS(1.3, 2))
 
-wake_sphere = nothing
+wake_ground = nothing
 
 # =============================================================================
 # SIMULATION SETUP
@@ -111,7 +96,7 @@ t_range = range(0.0, step=dt_val, length=n_steps)
 
 # Solvers
 solver_wing   = pnl.BackslashDirichlet(wing)
-solver_sphere = pnl.Backslash(sphere)
+solver_ground = pnl.FlatGroundSolver(ground)
 
 # Backend
 backend = pnl.FastMultipoleBackend()
@@ -132,39 +117,53 @@ frames = pnl.ReferenceFrame(wing;
 maneuver!(frames, systems, wakes, t) = nothing
 
 # =============================================================================
+# FLOW TANGENCY MONITOR — check U·n on ground at every step
+# =============================================================================
+function tangency_monitor(systems, wakes, i_step)
+    ground = systems[2]
+    normals = pnl.calc_normals(ground)
+    Udotn = sum(ground.velocity .* normals, dims=1)
+    rms = sqrt(sum(Udotn .^ 2) / ground.ncells)
+    maxerr = maximum(abs.(Udotn))
+    println("    Ground tangency step $i_step: RMS(U·n) = $(round(rms; sigdigits=4)),  " *
+            "max|U·n| = $(round(maxerr; sigdigits=4)),  " *
+            "RMS/Vinf = $(round(rms/magVinf*100; sigdigits=4))%")
+end
+
+# =============================================================================
 # RUN SIMULATION
 # =============================================================================
-systems = (wing, sphere)
-wakes   = (wake_wing, wake_sphere)
-body_solvers = (solver_wing, solver_sphere)
+systems = (wing, ground)
+wakes   = (wake_wing, wake_ground)
+body_solvers = (solver_wing, solver_ground)
 
-println("\nBegin wing+sphere simulation ($(n_steps) steps)...")
+println("\nBegin wing + ground simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     body_solvers, backend, rho, verbose=true,
-    path="wing_sphere", name="wing_sphere"
+    monitors=(tangency_monitor,),
+    path="flat_ground", name="flat_ground"
 )
 
 # =============================================================================
-# RESULTS AND FLOW TANGENCY VERIFICATION
+# RESULTS AND FINAL FLOW TANGENCY VERIFICATION
 # =============================================================================
 println("\n=== RESULTS ===")
 
 # Forces
 F_wing = sum(wing.F, dims=2)
-F_sphere = sum(sphere.F, dims=2)
+F_ground = sum(ground.F, dims=2)
 println("Wing total force:   ", F_wing)
-println("Sphere total force: ", F_sphere)
+println("Ground total force: ", F_ground)
 
-# Flow tangency — check velocity field left by the last simulation step.
-# simulate! leaves body.velocity = freestream + kinematic + wake + body influence,
-# which should satisfy U·n ≈ 0 if the solve converged.
+# Final flow tangency check for both bodies
 println("\n--- Flow Tangency (from last simulation step) ---")
 
-for (i, (body, label)) in enumerate(zip(systems, ("Wing", "Sphere")))
-    Udotn = sum(body.velocity .* body.normals, dims=1)
+for (i, (body, label)) in enumerate(zip(systems, ("Wing", "Ground")))
+    normals = pnl.calc_normals(body)
+    Udotn = sum(body.velocity .* normals, dims=1)
     rms = sqrt(sum(Udotn .^ 2) / body.ncells)
     maxr = maximum(abs.(Udotn))
-    println("  $label: RMS(U·n) = $(round(rms; digits=6)),  " *
-            "max|U·n| = $(round(maxr; digits=6)),  " *
-            "RMS/Vinf = $(round(rms/magVinf*100; digits=4))%")
+    println("  $label: RMS(U·n) = $(round(rms; sigdigits=4)),  " *
+            "max|U·n| = $(round(maxr; sigdigits=4)),  " *
+            "RMS/Vinf = $(round(rms/magVinf*100; sigdigits=4))%")
 end
