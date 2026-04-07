@@ -289,7 +289,6 @@ end
 _get_Gdims(self::NonLiftingBody{ConstantSource, 1}) = (self.ncells, self.ncells)
 
 
-
 ################################################################################
 # CONSTANT-DOUBLET SOLVER
 ################################################################################
@@ -303,8 +302,6 @@ _get_Gdims(self::NonLiftingBody{ConstantDoublet, 1}) = (self.ncells, self.ncells
 ################################################################################
 
 _get_Gdims(self::NonLiftingBody{Union{ConstantSource, ConstantDoublet}, 2}) = (self.ncells, self.ncells)
-
-
 
 
 ################################################################################
