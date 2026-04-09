@@ -241,7 +241,7 @@ code.
 - `t`         : Simulation time (used as the PVD collection key)
 - `overwrite` : Start a fresh PVD file when `true`; append when `false` (default)
 """
-function write_vtk(name::String, body::AbstractBody, idx::Int, t::Real;
+function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
                    overwrite::Bool=false)
 
     # Route block files to a subdirectory named after the PVD

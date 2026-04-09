@@ -79,7 +79,7 @@ _normalize_shedding(shedding::Vector{Array{Int, 2}}) = shedding
 function RigidWakeBody{E, N, TF, DBC}(
                                 nodes::Matrix{TF}, cells::Matrix{Int}, shedding;
                                 vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
-                                neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
+                                neighbor::Matrix{Int}=calc_neighbors(cells),
                                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                                 nsheddings=sum(size(s, 2) for s in _normalize_shedding(shedding)),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
@@ -189,11 +189,6 @@ function RigidWakeBody{E, N, TF, DBC}(
     
     nodes = grid._nodes
     cells = grid2cells(grid)
-    
-    # Extract neighbor info from cells connectivity
-    neighbor = calc_neighbors(cells)
-
-    vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:grid.ncells]
 
     # Automated sanity checks for Meshes.jl mesh
     if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
@@ -1240,8 +1235,8 @@ function trace_trailing_edge(nodes::AbstractMatrix, cells::AbstractMatrix{Int},
     normals = zeros(eltype(nodes), 3, size(cells, 2))
     calc_normals!(nodes, cells, normals)
 
-    seed = _edge_state(nodes, cells, normals, edge_to_cells, Int(first_node), Int(second_node),
-                       normal_jump_tol; bbox)
+    seed = _seed_edge_state(nodes, cells, normals, edge_to_cells, Int(first_node), Int(second_node);
+                            bbox=bbox)
     isnothing(seed) && error("Seed edge ($(first_node), $(second_node)) is not a valid two-sided trailing-edge candidate")
 
     visited = Set{Tuple{Int, Int}}()
@@ -1345,9 +1340,19 @@ function _calc_node_to_edges(edge_to_cells, nnodes::Integer)
     return node_to_edges
 end
 
+function _bbox_bounds(bbox::Union{Tuple{<:AbstractVector,<:AbstractVector},
+                                  AbstractVector{<:AbstractVector}})
+    length(bbox) == 2 || error("bbox must contain exactly two 3-vectors: lower and upper")
+    lower, upper = bbox
+    length(lower) == 3 || error("bbox lower bound must have length 3")
+    length(upper) == 3 || error("bbox upper bound must have length 3")
+    return lower, upper
+end
+
 function _bbox_contains_point(bbox, point)
     bbox === nothing && return true
-    return all(bbox.lower[i] <= point[i] <= bbox.upper[i] for i in eachindex(point))
+    lower, upper = _bbox_bounds(bbox)
+    return all(lower[i] <= point[i] <= upper[i] for i in eachindex(point))
 end
 
 function _turn_angle(v1, v2)
@@ -1365,8 +1370,8 @@ function _local_index_for_node(cells, cell, node)
     return idx
 end
 
-function _edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int,
-                     normal_jump_tol; bbox=nothing)
+function _edge_state_common(nodes, cells, normals, edge_to_cells, tail::Int, head::Int;
+                            bbox=nothing)
     key = _canonical_edge(tail, head)
     haskey(edge_to_cells, key) || return nothing
 
@@ -1379,7 +1384,6 @@ function _edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int,
     n1 = view(normals, :, c1)
     n2 = view(normals, :, c2)
     normal_jump = 1 - dot(n1, n2)
-    normal_jump >= normal_jump_tol || return nothing
 
     if _has_directed_edge(view(cells, :, c1), (tail, head))
         pi, pj = c1, c2
@@ -1395,6 +1399,19 @@ function _edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int,
     njb = _local_index_for_node(cells, pj, head)
 
     return (; key, tail, head, pi, nia, nib, pj, nja, njb, normal_jump)
+end
+
+function _seed_edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int;
+                          bbox=nothing)
+    return _edge_state_common(nodes, cells, normals, edge_to_cells, tail, head; bbox=bbox)
+end
+
+function _edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int,
+                     normal_jump_tol; bbox=nothing)
+    state = _edge_state_common(nodes, cells, normals, edge_to_cells, tail, head; bbox=bbox)
+    isnothing(state) && return nothing
+    state.normal_jump >= normal_jump_tol || return nothing
+    return state
 end
 
 """
@@ -1493,60 +1510,69 @@ end
 
 function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
 
-    # set wake length for visualization (if semi-infinite wake is enabled)
-    if body.semiinfinite_wake
-        for Das in body.Das
-            for i in axes(Das, 2)
-                Das[:, i] .*= SEMIINFINITE_LENGTH[]
+    # check if there is a wake
+    nwakes = 0
+    for i_surf in eachindex(body.shedding)
+        nwakes += size(body.shedding[i_surf], 2)
+    end
+    if nwakes > 0
+        @show body.shedding
+
+        # set wake length for visualization (if semi-infinite wake is enabled)
+        if body.semiinfinite_wake
+            for Das in body.Das
+                for i in axes(Das, 2)
+                    Das[:, i] .*= SEMIINFINITE_LENGTH[]
+                end
             end
         end
-    end
 
-    # save wake as doublet panels
-    strength_label = wake_name(body)
-    for i_surf in eachindex(body.shedding)
-        shedding = body.shedding[i_surf]
-        Das = body.Das[i_surf]
+        # save wake as doublet panels
+        strength_label = wake_name(body)
+        for i_surf in eachindex(body.shedding)
+            shedding = body.shedding[i_surf]
+            Das = body.Das[i_surf]
 
-        n_wakes = size(shedding, 2)
-        points = zeros(typeof(body.nodes[1]), 3, 4 * n_wakes)
-        cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, FastMultipole.SVector{4,Int64}}}(undef, n_wakes)
-        strengths = zeros(typeof(body.strength[1]), n_wakes)
+            n_wakes = size(shedding, 2)
+            points = zeros(typeof(body.nodes[1]), 3, 4 * n_wakes)
+            cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, FastMultipole.SVector{4,Int64}}}(undef, n_wakes)
+            strengths = zeros(typeof(body.strength[1]), n_wakes)
 
-        for i in 1:n_wakes
-            pi = shedding[1, i]
-            nia, nib = shedding[2, i], shedding[3, i]
+            for i in 1:n_wakes
+                pi = shedding[1, i]
+                nia, nib = shedding[2, i], shedding[3, i]
 
-            idx1 = body.cells[nia, pi]
-            idx2 = body.cells[nib, pi]
+                idx1 = body.cells[nia, pi]
+                idx2 = body.cells[nib, pi]
 
-            p1 = body.nodes[:, idx1]
-            p2 = body.nodes[:, idx2]
+                p1 = body.nodes[:, idx1]
+                p2 = body.nodes[:, idx2]
 
-            p3 = p2 + Das[:, i]
-            p4 = p1 + Das[:, i+1]
+                p3 = p2 + Das[:, i]
+                p4 = p1 + Das[:, i+1]
 
-            points[:, 1 + 4*(i-1)] = p1
-            points[:, 2 + 4*(i-1)] = p2
-            points[:, 3 + 4*(i-1)] = p3
-            points[:, 4 + 4*(i-1)] = p4
+                points[:, 1 + 4*(i-1)] = p1
+                points[:, 2 + 4*(i-1)] = p2
+                points[:, 3 + 4*(i-1)] = p3
+                points[:, 4 + 4*(i-1)] = p4
 
-            cells[i] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD, FastMultipole.SVector{4,Int64}(1+4*(i-1), 2+4*(i-1), 3+4*(i-1), 4+4*(i-1)))
+                cells[i] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_QUAD, FastMultipole.SVector{4,Int64}(1+4*(i-1), 2+4*(i-1), 3+4*(i-1), 4+4*(i-1)))
 
-            mu_upper, mu_lower = _get_wakestrength_mu(body, i, i_surf)
-            strengths[i] = mu_upper - mu_lower
+                mu_upper, mu_lower = _get_wakestrength_mu(body, i, i_surf)
+                strengths[i] = mu_upper - mu_lower
+            end
+
+            WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells) do vtk
+                vtk[strength_label] = strengths
+            end
         end
 
-        WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells) do vtk
-            vtk[strength_label] = strengths
-        end
-    end
-
-    # restore original values of Da if they were modified for visualization
-    if body.semiinfinite_wake
-        for Das in body.Das
-            for i in axes(Das, 2)
-                Das[:, i] ./= SEMIINFINITE_LENGTH[]
+        # restore original values of Da if they were modified for visualization
+        if body.semiinfinite_wake
+            for Das in body.Das
+                for i in axes(Das, 2)
+                    Das[:, i] ./= SEMIINFINITE_LENGTH[]
+                end
             end
         end
     end
