@@ -1191,6 +1191,136 @@ function calc_shedding(nodes::Matrix, cells::Matrix{Int}, TEindices,
 end
 
 """
+    calc_shedding_from_seed(nodes, cells, first_node, second_node; bbox=nothing,
+                            end_node=nothing, normal_jump_tol=0.2,
+                            max_turn_angle=pi/3, debug=false)
+
+Trace a contiguous trailing-edge chain starting from the directed seed edge
+`(first_node, second_node)` and return the `6 x N` shedding matrix required by
+[`RigidWakeBody`](@ref).
+"""
+function calc_shedding_from_seed(nodes::AbstractMatrix, cells::AbstractMatrix{Int},
+                                 first_node::Integer, second_node::Integer;
+                                 bbox=nothing, end_node=nothing,
+                                 normal_jump_tol::Real=0.2,
+                                 max_turn_angle::Real=pi/3,
+                                 debug::Bool=false)
+    trace = trace_trailing_edge(nodes, cells, first_node, second_node;
+                                bbox=bbox,
+                                end_node=end_node,
+                                normal_jump_tol=normal_jump_tol,
+                                max_turn_angle=max_turn_angle,
+                                debug=debug)
+    return build_shedding_from_trace(nodes, cells, trace)
+end
+
+"""
+    trace_trailing_edge(nodes, cells, first_node, second_node; bbox=nothing,
+                        end_node=nothing, normal_jump_tol=0.2,
+                        max_turn_angle=pi/3, debug=false)
+
+Return a named tuple describing the directed trailing-edge walk seeded by
+`(first_node, second_node)`.
+"""
+function trace_trailing_edge(nodes::AbstractMatrix, cells::AbstractMatrix{Int},
+                             first_node::Integer, second_node::Integer;
+                             bbox=nothing, end_node=nothing,
+                             normal_jump_tol::Real=0.2,
+                             max_turn_angle::Real=pi/3,
+                             debug::Bool=false)
+    nnodes = size(nodes, 2)
+    1 <= first_node <= nnodes || error("first_node=$first_node is out of range 1:$nnodes")
+    1 <= second_node <= nnodes || error("second_node=$second_node is out of range 1:$nnodes")
+    first_node != second_node || error("first_node and second_node must be different")
+    isnothing(end_node) || (1 <= end_node <= nnodes || error("end_node=$end_node is out of range 1:$nnodes"))
+    max_turn_angle >= 0 || error("max_turn_angle must be nonnegative")
+
+    edge_to_cells = _calc_edge_to_cells(Matrix{Int}(cells))
+    node_to_edges = _calc_node_to_edges(edge_to_cells, nnodes)
+    normals = zeros(eltype(nodes), 3, size(cells, 2))
+    calc_normals!(nodes, cells, normals)
+
+    seed = _edge_state(nodes, cells, normals, edge_to_cells, Int(first_node), Int(second_node),
+                       normal_jump_tol; bbox)
+    isnothing(seed) && error("Seed edge ($(first_node), $(second_node)) is not a valid two-sided trailing-edge candidate")
+
+    visited = Set{Tuple{Int, Int}}()
+    push!(visited, seed.key)
+    ordered_nodes = Int[Int(first_node), Int(second_node)]
+    edge_states = [seed]
+    current = seed
+
+    while true
+        if !isnothing(end_node) && ordered_nodes[end] == end_node
+            break
+        end
+
+        candidates = NamedTuple[]
+        prev_vec = view(nodes, :, current.head) .- view(nodes, :, current.tail)
+
+        for key in get(node_to_edges, current.head, Tuple{Int, Int}[])
+            key == current.key && continue
+            c = key[1] == current.head ? key[2] : key[1]
+            c == current.tail && continue
+            key in visited && continue
+
+            state = _edge_state(nodes, cells, normals, edge_to_cells, current.head, c,
+                                normal_jump_tol; bbox)
+            isnothing(state) && continue
+
+            next_vec = view(nodes, :, c) .- view(nodes, :, current.head)
+            angle = _turn_angle(prev_vec, next_vec)
+            angle <= max_turn_angle || continue
+
+            side_score = dot(view(normals, :, state.pi), view(normals, :, current.pi)) +
+                         dot(view(normals, :, state.pj), view(normals, :, current.pj))
+            push!(candidates, (; state, angle, side_score, normal_jump=state.normal_jump))
+        end
+
+        isempty(candidates) && break
+
+        sort!(candidates, by = x -> (-x.side_score, x.angle, -x.normal_jump))
+        if length(candidates) > 1
+            best = candidates[1]
+            alt = candidates[2]
+            if isapprox(best.side_score, alt.side_score; atol=1e-8, rtol=1e-8) &&
+               isapprox(best.angle, alt.angle; atol=1e-8, rtol=1e-8) &&
+               isapprox(best.normal_jump, alt.normal_jump; atol=1e-8, rtol=1e-8)
+                error("Ambiguous trailing-edge continuation from node $(current.head)")
+            end
+        end
+
+        current = candidates[1].state
+        push!(edge_states, current)
+        push!(ordered_nodes, current.head)
+        push!(visited, current.key)
+    end
+
+    if !isnothing(end_node) && ordered_nodes[end] != end_node
+        error("Trailing-edge walk stopped at node $(ordered_nodes[end]) before reaching end_node=$end_node")
+    end
+
+    if length(unique(ordered_nodes[2:end-1])) != max(length(ordered_nodes) - 2, 0)
+        error("Trailing-edge walk revisited an interior node")
+    end
+
+    if debug
+        @info "trace_trailing_edge" ordered_nodes edge_keys=[s.key for s in edge_states]
+    end
+
+    return (; nodes=ordered_nodes, edges=edge_states)
+end
+
+function build_shedding_from_trace(nodes::AbstractMatrix, cells::AbstractMatrix{Int}, trace)
+    isempty(trace.edges) && return noshedding
+    shedding = zeros(Int, 6, length(trace.edges))
+    for (i, edge) in enumerate(trace.edges)
+        shedding[:, i] .= (edge.pi, edge.nia, edge.nib, edge.pj, edge.nja, edge.njb)
+    end
+    return shedding
+end
+
+"""
 Check whether triangle `inds` = (n1, n2, n3) contains the directed edge
 `pair` = (a, b) in its winding order.
 """
@@ -1198,6 +1328,73 @@ function _has_directed_edge(inds, pair)
     return (inds[1]==pair[1] && inds[2]==pair[2]) ||
            (inds[2]==pair[1] && inds[3]==pair[2]) ||
            (inds[3]==pair[1] && inds[1]==pair[2])
+end
+
+_canonical_edge(a::Integer, b::Integer) = a < b ? (Int(a), Int(b)) : (Int(b), Int(a))
+
+function _calc_node_to_edges(edge_to_cells, nnodes::Integer)
+    node_to_edges = Dict{Int, Vector{Tuple{Int, Int}}}()
+    for key in keys(edge_to_cells)
+        a, b = key
+        push!(get!(node_to_edges, a, Tuple{Int, Int}[]), key)
+        push!(get!(node_to_edges, b, Tuple{Int, Int}[]), key)
+    end
+    for node in 1:nnodes
+        get!(node_to_edges, node, Tuple{Int, Int}[])
+    end
+    return node_to_edges
+end
+
+function _bbox_contains_point(bbox, point)
+    bbox === nothing && return true
+    return all(bbox.lower[i] <= point[i] <= bbox.upper[i] for i in eachindex(point))
+end
+
+function _turn_angle(v1, v2)
+    n1 = LA.norm(v1)
+    n2 = LA.norm(v2)
+    n1 > 0 || return typemax(Float64)
+    n2 > 0 || return typemax(Float64)
+    c = clamp(dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+    return acos(c)
+end
+
+function _local_index_for_node(cells, cell, node)
+    idx = findfirst(==(node), view(cells, :, cell))
+    isnothing(idx) && error("Node $node not found in cell $cell")
+    return idx
+end
+
+function _edge_state(nodes, cells, normals, edge_to_cells, tail::Int, head::Int,
+                     normal_jump_tol; bbox=nothing)
+    key = _canonical_edge(tail, head)
+    haskey(edge_to_cells, key) || return nothing
+
+    midpoint = (view(nodes, :, tail) .+ view(nodes, :, head)) ./ 2
+    _bbox_contains_point(bbox, midpoint) || return nothing
+
+    adj = edge_to_cells[key]
+    length(adj) == 2 || return nothing
+    c1, c2 = adj[1][1], adj[2][1]
+    n1 = view(normals, :, c1)
+    n2 = view(normals, :, c2)
+    normal_jump = 1 - dot(n1, n2)
+    normal_jump >= normal_jump_tol || return nothing
+
+    if _has_directed_edge(view(cells, :, c1), (tail, head))
+        pi, pj = c1, c2
+    elseif _has_directed_edge(view(cells, :, c2), (tail, head))
+        pi, pj = c2, c1
+    else
+        return nothing
+    end
+
+    nia = _local_index_for_node(cells, pi, head)
+    nib = _local_index_for_node(cells, pi, tail)
+    nja = _local_index_for_node(cells, pj, tail)
+    njb = _local_index_for_node(cells, pj, head)
+
+    return (; key, tail, head, pi, nia, nib, pj, nja, njb, normal_jump)
 end
 
 """

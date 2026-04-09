@@ -14,7 +14,8 @@ export  solve, save, influence!,
         calc_tangents!, calc_tangents,
         calc_obliques!, calc_obliques,
         calc_controlpoints!, calc_controlpoints,
-        calc_areas!, calc_areas
+        calc_areas!, calc_areas,
+        calc_shedding, calc_shedding_from_seed, trace_trailing_edge
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA

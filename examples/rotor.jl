@@ -14,18 +14,14 @@ paraview        = true                      # Whether to visualize with Paraview
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
-AOA             = 15.0                      # (deg) freestream angle of attack
 magVinf         = 1.0                      # (m/s) freestream velocity
 rho             = 1.225                     # (kg/m^3) air density
-AR = 4.0                               # Aspect ratio of the wing (b/c)
-c = 2.0                               # (m) root chord length
-b = AR * c                            # (m) span length
 
 
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-# meshfile        = joinpath(read_path, "wing_ar4_naca0016_refined.msh")    # Gmsh file to read
-meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")    # Gmsh file to read
-# trailingedgefile= joinpath(read_path, "zeroebwb-TE.msh") # Gmsh file with trailing edge
+this_dir = @__DIR__
+meshfile        = joinpath(this_dir, "data", "phantom_3_mod2.msh")    # Gmsh file to read
+meshfile_te     = joinpath(this_dir, "data", "phantom_3_mod2_te.msh")    # Gmsh file to read
 
 # offset          = [0, 0, 0]                 # Offset to center the mesh
 # rotation        = RotZ(-90*pi/180)*RotX(90*pi/180) # Rotation to align mesh
@@ -33,12 +29,10 @@ scaling         = 1.0                      # Factor to scale original mesh to
                                             # the approximate dimensions of the
                                             # ZEROEe BWB subscale model
 
-spandir         = [0, 1, 0]                 # Span direction used to orient the trailing edge
+spandir         = [1, 0, 0]                 # Span direction used to orient the trailing edge
 flip            = false                     # Whether to flip control points against the direction of normals
                                             # NOTE: use `flip=true` if the normals
                                             #       point inside the body
-
-Sref            = c * b                       # (m^2) reference area
 
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
@@ -80,8 +74,6 @@ trailingedge[3, :] .= 0.0
 # shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
 shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*b)
 
-shedding2 = pnl.calc_shedding_from_seed(grid._nodes, pnl.grid2cells(grid), 396, 364; bbox=nothing, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
@@ -94,84 +86,3 @@ elseif bodytype <: pnl.RigidWakeBody
 else
     error("Unsupported body type")
 end
-
-Uinfs = repeat(Vinf, 1, body.ncells)
-
-println("Number of panels:\t$(body.ncells)")
-
-#------------------- SOLVE BODY ----------------------------------------------
-println("Solving body...")
-
-# Unitary direction of semi-infinite vortex at points `a` and `b` of each
-# trailing edge panel
-# body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
-
-# select backend for n-body calculation
-backend = pnl.FastMultipoleBackend(
-        expansion_order=7,
-        multipole_acceptance=0.4,
-        leaf_size=20
-    )
-# backend = pnl.DirectBackend()
-    
-# Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-@time begin
-    # global solver = pnl.Backslash(body; least_squares=true)
-    # solver = pnl.KrylovSolver(body;
-    #     method=:gmres,
-    #     itmax=20,
-    #     atol=1e-4,
-    #     rtol=1e-4,
-    #     # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
-    #     backend=pnl.FastMultipoleBackend(
-    #                 expansion_order=7,
-    #                 multipole_acceptance=0.4,
-    #                 leaf_size=10
-    #             )
-    # )
-    solver = pnl.BackslashDirichlet(body)
-    body.velocity .= Uinfs
-    pnl.solve!(body, solver; backend)
-end
-
-# ----------------- POST PROCESSING ----------------------------------------
-println("Post processing...")
-
-# Calculate surface velocity U on the body
-@time pnl.calcfield_U!((body,), Vinf; backend=backend)
-
-# Calculate pressure coefficient (based on U + U_∇μ)
-@time pnl.calcfield_Cp!(body, magVinf)
-
-# Calculate the force of each panel (based on Cp)
-@time pnl.calcfield_F!(body, magVinf, rho)
-
-# --------- Integrated forces: lift and induced drag
-
-# Calculate total force of the vehicle decomposed as lift, drag, and sideslip
-Dhat = Vinf/norm(Vinf)        # Drag direction
-Shat = [0, 1, 0]              # Span direction
-Lhat = cross(Dhat, Shat)      # Lift direction
-
-LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
-
-L = LDS[:, 1]
-D = LDS[:, 2]
-
-# Force coefficients
-nondim = 0.5*rho*magVinf^2*b^2/AR   # Normalization factor
-CL = sign(dot(L, Lhat)) * norm(L) / nondim
-CD = sign(dot(D, Dhat)) * norm(D) / nondim
-
-@show CL
-@show CD
-
-
-# ----------------- VISUALIZATION ----------------------------------------------
-# if paraview
-    mkpath(save_path)
-    str = pnl.write_vtk(joinpath(save_path, run_name), body, 0, 0.0; overwrite=true)
-
-    # Call Paraview
-    # run(`paraview --data=$(str)`)
-# end
