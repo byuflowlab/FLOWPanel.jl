@@ -82,6 +82,15 @@ function calc_bc_noflowthrough(Us::AbstractMatrix{T1},
     return RHS
 end
 
+function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, <:Any, <:Any, true}, backend=DirectBackend(); optargs...)
+    # Set source strength for dirichlet bodies
+    set_strengths!(self)
+
+    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
+    RHS .= self.potential
+    RHS .*= -1.0
+end
+
 ################################################################################
 
 
