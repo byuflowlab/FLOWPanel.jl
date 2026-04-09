@@ -179,6 +179,42 @@ function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     return BackslashDirichlet{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
 end
 
+
+################################################################################
+# Coupled Solver
+################################################################################
+struct BackslashCoupled{TF}
+    G::Matrix{TF}
+    Glu::LU{TF, Matrix{TF}}
+    rhs::Vector{TF}
+    Uext::Array{TF, 3}
+    phi_ext::Vector{TF}
+    boundary::Symbol
+end
+
+function BackslashCoupled(bodies::Tuple{<:AbstractBody{<:Any,<:Any,TF}}) where TF
+    ncs = sum(b -> b.ncells, bodies)
+
+    G       = zeros(TF, ncs, ncs)
+    rhs     = zeros(TF, ncs)
+    Uext    = zeros(TF, 3, ncs)
+    phi_ext = zeros(TF, ncs)
+
+    # infer boundary
+    if bodies[1] isa AbstractLiftingBody
+        boundary = :dirichlet
+    else
+        boundary = :neumann
+    end
+
+    Glu = lu!(G)  # dummy init; will be overwritten on first update_G=true
+
+    BackslashCoupled{TF}(G, Glu, rhs, Uext, phi_ext, boundary)
+end
+
+Backslash(bodies::Tuple) = BackslashCoupled(bodies)
+
+
 ################################################################################
 # GMRES Solver
 ################################################################################
@@ -660,6 +696,217 @@ function solve!(bodies::Tuple, solvers::Tuple;
     end
 
     return nothing
+end
+
+###############################
+#  BackslashCoupled Solver    #
+###############################
+### Build influence matrix G based on boundary type, then solve with cached LU factorization for BackslashCoupled solver
+function _G!(bodies::Tuple, solver, G, CPs, normals, backend; kerneloffset=bodies[1].kerneloffset)
+    if solver.boundary === :dirichlet
+        # Dirichlet → potential influence of doublets
+        _G_phi!(bodies, ConstantDoublet, G, CPs, backend;
+                kerneloffset=kerneloffset)
+
+    elseif solver.boundary === :neumann
+        # Neumann → normal-velocity influence of sources
+        _G_neumann!(bodies, ConstantSource, G, CPs, normals, backend;
+                    kerneloffset=kerneloffset)
+
+    else
+        error("Unknown boundary type $(solver.boundary). Expected :dirichlet or :neumann.")
+    end
+end
+
+### Normal velocity influence of sources for Neumann BCs (exterior solve)
+function _G_sigma!(bodies::Tuple{<:AbstractBody{<:Any,NK,TF}},
+                    kernel, G, CPs, normals,
+                    backend::AbstractBackend=DirectBackend();
+                    strength_index=1,  # sources usually in column 1
+                    kerneloffset=bodies[1].kerneloffset,
+                    optargs...) where {NK,TF}
+
+    N = sum(body -> body.ncells, bodies)
+    M = size(CPs, 2)
+
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions; got $(size(G)), expected ($M, $N).")
+    end
+
+    # only velocity
+    derivatives_switch = FastMultipole.DerivativesSwitch(false,true,false)
+
+    # store old strengths and set to unit sources
+    old_strengths = map(body -> body.strength, bodies)
+
+    for body in bodies
+        body.strength .= zero(eltype(body.strength))
+        body.strength[:, strength_index] .= 1.0
+    end
+
+    Threads.@threads for i_target in 1:M
+        # target position
+        tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+        target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+        # target normal
+        nx, ny, nz = normals[1, i_target], normals[2, i_target], normals[3, i_target]
+
+        col_offset = 0
+        for body in bodies
+            for i_source in 1:body.ncells
+                _, u, _ = induced(target, body, i_source, derivatives_switch; kerneloffset=kerneloffset)
+
+                # normal velocity = u ⋅ n
+                un = u[1]*nx + u[2]*ny + u[3]*nz
+
+                G[i_target, col_offset + i_source] = un
+            end
+            col_offset += body.ncells
+        end
+    end
+
+    # restore strengths
+    for (body, old_strength) in zip(bodies, old_strengths)
+        body.strength .= old_strength
+    end
+end
+
+### Potential influence of doublets for Dirichlet BCs (interior solve)
+function _G_phi!(bodies::Tuple{<:AbstractBody{<:Any,NK,TF}}, kernel, G, CPs, backend::AbstractBackend=DirectBackend(); strength_index=kernel==ConstantDoublet || kernel==VortexRing && NK>1 ? 2 : 1, kerneloffset=bodies[1].kerneloffset, optargs...) where {NK,TF}
+    N = sum(body -> body.ncells, bodies)
+    M = size(CPs, 2)
+
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
+    end
+
+    # Build geometric matrix
+    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false) # only potential
+    
+    # store old strength and set to unit
+    old_strengths = map(body -> body.strength, bodies)
+    
+    for body in bodies
+        body.strength .= zero(eltype(body.strength))
+        if strength_index > 0
+            body.strength[:, strength_index] .= 1.0
+        else
+            for i in 1:NK
+                body.strength[:, i] .= 1.0
+            end
+        end
+    end
+
+    Threads.@threads for i_target in 1:M   ## Control points index
+        # get target
+        tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+        target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+        col_offset = 0
+        for body in bodies
+            for i_source in 1:body.ncells
+                # compute influence
+                phi, _, _ = induced(target, body, i_source, derivatives_switch; kerneloffset=kerneloffset)
+
+                # update G
+                G[i_target, col_offset + i_source] = phi
+            end
+            col_offset += body.ncells
+        end
+    end
+
+    # restore strengths
+    for (body, old_strength) in zip(bodies, old_strengths)
+        body.strength .= old_strength
+    end
+end
+
+function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
+
+    # Sizes
+    npanels = map(b -> b.ncells, bodies)
+    offsets = cumsum(vcat(0, npanels))
+
+    # save external fields
+    for (bi, body) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        @views solver.Uext[:, r] .= body.velocity
+        @views solver.phi_ext[r]  .= body.potential
+    end
+
+    # flip CP offset
+    CPoffset_old = map(b -> b.CPoffset, bodies)
+    for b in bodies
+        b.CPoffset = -abs(b.CPoffset)
+    end
+
+    calc_normals!(bodies)
+    calc_controlpoints!(bodies)
+
+    # build RHS depending on boundary type
+    if solver.boundary === :dirichlet
+        for b in bodies
+            b.strength[:,1] .= 0
+            for d in 1:3
+                @views b.strength[:,1] .-= b.velocity[d,:] .* b.normals[d,:]
+            end
+            b.strength[:,2] .= 0
+            b.potential .= 0
+        end
+
+        influence!(bodies, bodies, backend; scalar_potential=true)
+        for (bi, b) in enumerate(bodies)
+            r = offsets[bi]+1 : offsets[bi+1]
+            @views solver.rhs[r] .= -b.potential
+        end
+
+    elseif solver.boundary === :neumann
+        for (bi, b) in enumerate(bodies)
+            r = offsets[bi]+1 : offsets[bi+1]
+            rhs_local = zeros(eltype(solver.rhs), length(r))
+            for d in 1:3
+                @views rhs_local .+= solver.Uext[d,r] .* b.normals[d,:]
+            end
+            @views solver.rhs[r] .= -rhs_local
+        end
+
+        # zero strengths
+        for b in bodies
+            b.strength .= 0
+        end
+    end
+
+    if update_G
+        CPs_all     = hcat(map(b -> b.controlpoints, bodies)...)
+        normals_all = hcat(map(b -> b.normals, bodies)...)
+
+        fill!(solver.G, 0)
+        _G!(bodies, solver, solver.G, CPs_all, normals_all, backend;
+            kerneloffset=bodies[1].kerneloffset)
+
+        solver.Glu = lu!(solver.G)
+    end
+
+    # solve with cached LU
+    sol = similar(solver.rhs)
+    ldiv!(sol, solver.Glu, solver.rhs)
+    
+    # write solution back
+    for (bi, b) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        if solver.boundary === :dirichlet
+            @views b.strength[:,2] .= sol[r]
+        else
+            @views b.strength[:,1] .= sol[r]
+        end
+
+        b.CPoffset = CPoffset_old[bi]
+        @views b.velocity  .= solver.Uext[:, r]
+        @views b.potential .= solver.phi_ext[r]
+        _solvedflag(b, true)
+    end
 end
 
 
