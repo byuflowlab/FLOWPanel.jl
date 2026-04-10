@@ -27,7 +27,7 @@ t_range = range(0.0, step=dt, length=n_steps)
 # ROTOR GEOMETRY
 # ==========================================================
 read_path   = joinpath(pnl.examples_path, "data")
-stl_file   = joinpath(read_path, "phantom_3_mod3_rev2.stl")
+stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
 
 R       = 0.12      # Rotor radius
 RPM     = 6000      # Rotation speed (rpm)
@@ -42,32 +42,33 @@ shedding = pnl.noshedding
 
 # --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
-wing = pnl.RigidWakeBody{kernel}(mesh, shedding;
+rotor = pnl.RigidWakeBody{kernel}(mesh, shedding;
             CPoffset=1e-14,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
 
-pnl.write_vtk("rotor_hover", wing)
+pnl.write_vtk("rotor_hover", rotor)
 
 # update shedding
 bbox = (pnl.SVector{3}(-radius*1.2, -1.0, -1.0), pnl.SVector{3}(-radius*0.1, 1.0, 1.0))
-shedding1 = pnl.calc_shedding_from_seed(wing.nodes, wing.cells, 1420, 1693; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 1991, 1989; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 bbox = (pnl.SVector{3}(radius*0.1, -1.0, -1.0), pnl.SVector{3}(radius*1.2, 1.0, 1.0))
-shedding2 = pnl.calc_shedding_from_seed(wing.nodes, wing.cells, 644, 584; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 778, 776; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
-wing = pnl.RigidWakeBody{kernel}(mesh, [shedding1, shedding2],
+rotor = pnl.RigidWakeBody{kernel}(mesh, [shedding1, shedding2],
             CPoffset=1e-14,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
-pnl.write_vtk("rotor_hover", wing)
+pnl.write_vtk("rotor_hover", rotor)
 das_offset = 0.002 * 0.5                               # Das scale (fraction of unit Vinf direction)
 rotor.Das[1] .= repeat(Vinf / magVinf * das_offset, 1, size(rotor.Das[1], 2))
+rotor.Das[2] .= repeat(Vinf / magVinf * das_offset, 1, size(rotor.Das[2], 2))
 
-println("Rotor: $(wing.nnodes) nodes, $(wing.ncells) panels, $(wing.nsheddings) shedding edges")
+println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
 ## =========================================================
 # WAKE SETUP
@@ -87,19 +88,20 @@ wake_rotor = pnl.PanelParticleWake(rotor;
 # ==========================================================
 Uinf(t) = Vinf
 
-solver_rotor = pnl.FGSSolver(rotor;
-            max_iterations=500,
-            tolerance=1.0e-6,
-            rlx=1.0,
-            expansion_order=14,
-            multipole_acceptance,
-            leaf_size=150,
-            shrink=true,
-            recenter=false,
-            inner_iterations=20,
-            reverse_pass=false,
-            verbose=false
-        )
+# solver_rotor = pnl.FGSSolver(rotor;
+#             max_iterations=500,
+#             tolerance=1.0e-6,
+#             rlx=1.0,
+#             expansion_order=14,
+#             multipole_acceptance=0.4,
+#             leaf_size=150,
+#             shrink=true,
+#             recenter=false,
+#             inner_iterations=20,
+#             reverse_pass=false,
+#             verbose=false
+#         )
+solver_rotor = pnl.BackslashDirichlet(rotor)
 
 backend = pnl.FastMultipoleBackend()
 

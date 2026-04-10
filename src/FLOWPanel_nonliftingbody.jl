@@ -277,6 +277,8 @@ function _G_phi!(self::AbstractBody{<:Any,NK,TF}, kernel, G, CPs; strength_index
             # compute influence
             phi, _, _ = induced(target, self, i_source, derivatives_switch; kerneloffset=kerneloffset)
 
+            isnan(phi) && error("NaN encountered in G matrix computation: \ni_source = $i_source, i_target = $i_target, target = $target, source_strength = $(self.strength[i_source, strength_index]), kernel = $kernel, kerneloffset = $kerneloffset")
+
             # update G
             G[i_target, i_source] = phi
         end

@@ -1516,7 +1516,6 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
         nwakes += size(body.shedding[i_surf], 2)
     end
     if nwakes > 0
-        @show body.shedding
 
         # set wake length for visualization (if semi-infinite wake is enabled)
         if body.semiinfinite_wake
