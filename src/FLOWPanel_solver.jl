@@ -184,22 +184,23 @@ end
 ################################################################################
 
 """
-    KrylovSolver(body; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend(), elprescribe="automatic")
+    KrylovSolver(body; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend())
 
 Matrix-free iterative solver that evaluates self-influence through the selected
 backend.
 """
-struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
+struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP} <: AbstractMatrixFreeSolver
     body::TB
     backend::B
     Uext::Array{TF, 2}    # storage for external velocity (saved/restored around solve)
     normals::Array{TF, 2} # Normals
-    unabbreviated_strengths::Array{TF, 1} # Storage for unabbreviated strengths
-    elprescribe::Vector{Tuple{Int,Float64}} # Prescribed element indices and values
+    source_strengths::Array{TF, 1} # Fixed source strengths for Dirichlet solves
+    unabbreviated_strengths::Array{TF, 1} # Storage for solution strengths
     method::Symbol         # Krylov method to use
     itmax::Int           # Maximum number of iterations
     atol::Float64          # absolute tolerance
     rtol::Float64          # relative tolerance
+    preconditioner::TP     # nothing or JacobiPreconditioner
 end
 
 function KrylovSolver(body::AbstractBody;
@@ -208,58 +209,50 @@ function KrylovSolver(body::AbstractBody;
         atol::Real=1e-6,            # Convergence tolerance
         rtol::Real=1e-6,            # Relative convergence tolerance
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
-        elprescribe="automatic"      # Prescribed element indices and values
+        preconditioner_cell_size::Real=0.0,  # cell size for block Jacobi preconditioner; ≤0 disables
     )
     TF = numtype(body)
     Uext = zeros(TF, 3, body.ncells)
+    source_strengths = zeros(TF, body.ncells)
     unabbreviated_strengths = zeros(TF, body.ncells)
     normals = _calc_normals(body)
-    elprescribe = elprescribe == "automatic" ? calc_elprescribe(body) : elprescribe
-    return KrylovSolver{typeof(body), typeof(backend), TF}(body, backend, Uext, normals, unabbreviated_strengths, elprescribe, method, itmax, Float64(atol), Float64(rtol))
-end
 
-function _set_strength(body::AbstractBody, strengths, C, elprescribe=Tuple{Int,Float64}[])
-    # check vector lengths
-    @assert length(strengths) == body.ncells "Length of strengths vector does not match number of panels in body."
-    @assert length(C) + length(elprescribe) == body.ncells "Length of abbreviated strengths vector plus number of prescribed strengths does not match number of panels in body."
-
-    # populate unabbreviated strengths
-    Ui = 1
-    Ci = 1
-    for (i, val) in elprescribe
-        strengths[i] = val
-        rng = Ui:i-1
-        Crng = Ci:Ci+length(rng)-1
-        if length(rng) > 0
-            strengths[rng] .= view(C, Crng)
-        end
-        Ui = i + 1
-        Ci += length(rng)
+    # build block Jacobi preconditioner if requested
+    if preconditioner_cell_size > 0
+        preconditioner = FastMultipole.JacobiPreconditioner((body,); cell_size=preconditioner_cell_size)
+    else
+        preconditioner = nothing
     end
 
-    # fill in remaining strengths after last prescribed element
-    if Ui <= body.ncells
-        rng = Ui:body.ncells
-        Crng = Ci:Ci+length(rng)-1
-        strengths[rng] .= view(C, Crng)
-        @assert Ci + length(rng) - 1 == length(C) "Length of abbreviated strengths vector does not match number of non-prescribed panels in body."
-    end
-
-    # set strengths in body
-    _set_strength(body, strengths)
+    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, normals, source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
     body.strength[:, 1] .= strengths
 end
 
-function (solver::KrylovSolver)(C, B, α, β)
+function _set_strength(body::AbstractBody{<:Any, 2, <:Any}, strengths)
+    body.strength[:, 2] .= strengths
+end
 
-    # set strengths in body
-    # NOTE: C is an abbreviated vector if prescribed strengths are used,
-    #       effectively skipping the prescribed strengths;
-    #       in that case, we need to set the strengths accordingly
-    _set_strength(solver.body, solver.unabbreviated_strengths, B, solver.elprescribe)
+function _set_source_strength_from_velocity!(body::AbstractBody{<:Any, 2, <:Any},
+                                             velocity::AbstractMatrix,
+                                             normals::AbstractMatrix)
+    body.strength[:, 1] .= 0.0
+    for d in 1:3
+        body.strength[:, 2] .= view(velocity, d, :)
+        body.strength[:, 2] .*= view(normals, d, :)
+        body.strength[:, 1] .-= body.strength[:, 2]
+    end
+    body.strength[:, 2] .= 0.0
+    return nothing
+end
+
+function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
+
+    @assert length(B) == solver.body.ncells "Length of strengths vector does not match number of panels in body."
+    solver.unabbreviated_strengths .= B
+    _set_strength(solver.body, solver.unabbreviated_strengths)
 
     # get induced velocity at control points
     solver.body.velocity .= 0
@@ -275,7 +268,21 @@ function (solver::KrylovSolver)(C, B, α, β)
     C .+= α .* view(solver.body.velocity, 1, :)
 end
 
-function solve!(self::AbstractBody, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B, α, β)
+
+    @assert length(B) == solver.body.ncells "Length of strengths vector does not match number of panels in body."
+    solver.body.strength[:, 1] .= 0
+    solver.unabbreviated_strengths .= B
+    _set_strength(solver.body, solver.unabbreviated_strengths)
+
+    solver.body.potential .= 0
+    influence!(solver.body, solver.body, solver.backend; scalar_potential=true, velocity=false)
+
+    C .*= β
+    C .+= α .* solver.body.potential
+end
+
+function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
 
     # save external velocity and update solver fields
     solver.Uext .= self.velocity
@@ -285,7 +292,7 @@ function solve!(self::AbstractBody, solver::KrylovSolver{<:Any,B,TF}, Das=nothin
     # construct matrix-free linear operator
     TF2 = TF
     nrows = self.ncells
-    ncols = self.ncells - length(solver.elprescribe)
+    ncols = self.ncells
     symmetric, hermitian = false, false
     # LinearOperators expects a callable (function) whose methods can be inspected.
     # Wrap the solver instance in a small closure so `methods` sees a function.
@@ -298,25 +305,73 @@ function solve!(self::AbstractBody, solver::KrylovSolver{<:Any,B,TF}, Das=nothin
             prod!
         )
 
-    # verify solver compatibility
-    if solver.method == :gmres
-        @assert nrows == ncols "GMRES solver requires a square matrix; got $(nrows)x$(ncols)."
-    end
-
     # construct right-hand side
     RHS = zeros(TF2, nrows)
     calc_bc_noflowthrough!(RHS, self.velocity, solver.normals)
 
     # allocate and launch krylov solver
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
-    Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    if solver.preconditioner !== nothing
+        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    else
+        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    end
     @show workspace.stats
-    
+
     # store solution
-    set_solution(self, solver.unabbreviated_strengths, workspace.x, solver.elprescribe, self.velocity)
+    solver.unabbreviated_strengths .= workspace.x
+    _set_strength(self, solver.unabbreviated_strengths)
 
     # restore external velocity
     self.velocity .= solver.Uext
+end
+
+function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+
+    solver.Uext .= self.velocity
+
+    CPoffset_old = self.CPoffset
+    self.CPoffset = -abs(CPoffset_old)
+
+    solver.normals .= calc_normals!(self)
+    calc_controlpoints!(self)
+
+    _set_source_strength_from_velocity!(self, solver.Uext, solver.normals)
+    solver.source_strengths .= view(self.strength, :, 1)
+
+    TF2 = TF
+    nrows = self.ncells
+    ncols = self.ncells
+    symmetric, hermitian = false, false
+    prod! = (y, x, α, β) -> solver(y, x, α, β)
+    A = LinearOperators.LinearOperator(
+            TF2,
+            nrows,
+            ncols,
+            symmetric, hermitian,
+            prod!
+        )
+
+    RHS = zeros(TF2, nrows)
+    self.potential .= 0
+    influence!(self, self, solver.backend; scalar_potential=true, velocity=false)
+    RHS .= -self.potential
+
+    workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
+    if solver.preconditioner !== nothing
+        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    else
+        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    end
+    @show workspace.stats
+
+    solver.unabbreviated_strengths .= workspace.x
+    self.strength[:, 1] .= solver.source_strengths
+    _set_strength(self, solver.unabbreviated_strengths)
+
+    self.CPoffset = CPoffset_old
+    self.velocity .= solver.Uext
+    self.potential .= 0
 end
 
 ###############################################################################
@@ -399,14 +454,6 @@ function solve!(self::AbstractBody, solver::FGSSolver; kwargs...)
 end
 
 ################################################################################
-
-calc_elprescribe(::NonLiftingBody{ConstantSource, 1}) = Tuple{Int,Float64}[]
-calc_elprescribe(body::NonLiftingBody{VortexRing, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
-calc_elprescribe(body::NonLiftingBody{ConstantDoublet, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
-
-calc_elprescribe(::RigidWakeBody{ConstantSource, 1}) = Tuple{Int,Float64}[]
-calc_elprescribe(body::RigidWakeBody{VortexRing, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
-calc_elprescribe(body::RigidWakeBody{ConstantDoublet, 1}) = body.watertight ? [(1, 0.0)] : Tuple{Int,Float64}[]
 
 function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, <:Any, false};
         backend=DirectBackend(), strength_index=1,

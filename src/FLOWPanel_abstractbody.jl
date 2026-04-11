@@ -89,6 +89,86 @@ and the following functions
 """
 abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 
+"""
+    _surface_revolution_compat(profile, thetaNDIVS; loop_dim=0, axis_angle=0, low_a=0, up_a=360, save_path=nothing, paraview=true, file_name="myrev")
+
+Compatibility wrapper around `GeometricTools.surface_revolution` for newer
+`GeometricTools.Grid` constructors that require `loop_dim` as a keyword
+argument instead of a positional one.
+"""
+function _surface_revolution_compat(profile::AbstractMatrix{T}, thetaNDIVS::TN;
+                                    loop_dim::Integer=0,
+                                    axis_angle::Number=0,
+                                    low_a::Number=0,
+                                    up_a::Number=360,
+                                    save_path=nothing,
+                                    paraview::Bool=true,
+                                    file_name::AbstractString="myrev",
+                                    ) where {T<:Real, TN}
+    try
+        return gt.surface_revolution(profile, thetaNDIVS;
+                                     loop_dim=loop_dim,
+                                     axis_angle=axis_angle,
+                                     low_a=low_a,
+                                     up_a=up_a,
+                                     save_path=save_path,
+                                     paraview=paraview,
+                                     file_name=file_name)
+    catch e
+        if !(e isa MethodError && e.f === gt.Grid)
+            rethrow()
+        end
+    end
+
+    if size(profile, 2) != 2
+        error("Invalid point dimensions in `profile`. Expected 2 dimensions, got $(size(profile,2))")
+    elseif profile[1, :] == profile[end, :] && loop_dim == 0
+        @warn("Received a closed contour but parametric grid wasn't declared to" *
+              " loop, resulting in overlaping start/end points. Give it" *
+              " `loop_dim=1` to fix that.")
+    end
+
+    NDIVS = if TN <: Number
+        [size(profile, 1) - 1, thetaNDIVS, 0]
+    else
+        [[(1.0, size(profile, 1) - 1, 1.0, false)],
+         thetaNDIVS,
+         [(1.0, 0, 1.0, false)]]
+    end
+
+    P_min = [0, low_a, 0]
+    P_max = [1, up_a, 0]
+    grid = gt.Grid(P_min, P_max, NDIVS; loop_dim=loop_dim)
+
+    if axis_angle != 0
+        M = gt.rotation_matrix(0, 0, -axis_angle)
+        M2D = M[2:3, 2:3]
+        M3D = collect(M)'
+        points = collect(hcat([M2D * profile[i, :] for i in 1:size(profile, 1)]...))'
+    else
+        M3D = I
+        points = profile
+    end
+
+    function my_space_transform(X, ind)
+        p_ind = ind[1]
+        angle = X[2]
+        point = [0, points[p_ind, 1], points[p_ind, 2]]
+        return M3D * gt.axis_rotation(Float64[0, 0, 1], Float64(angle)) * point
+    end
+
+    gt.transform3!(grid, my_space_transform)
+
+    if save_path != nothing
+        gt.save(grid, file_name; path=save_path)
+        if paraview
+            run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)
+        end
+    end
+
+    return grid
+end
+
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
     body.potential .= 0.0

@@ -94,7 +94,7 @@ function make_sphere_source_body(; radius=1.0, ntheta=24, nphi=48, theta_pad=0.1
     p_min = [theta_pad, 0.0, 0.0]
     p_max = [pi - theta_pad, 2pi, 0.0]
     ndivs = [ntheta, nphi, 0]
-    grid = gt.Grid(p_min, p_max, ndivs, 2)
+    grid = gt.Grid(p_min, p_max, ndivs; loop_dim=2)
     gt.transform!(grid, X -> gt.spherical3D(vcat(radius, X[1:2])))
     tri = gt.GridTriangleSurface(grid, 1)
     return pnl.NonLiftingBody{pnl.ConstantSource}(tri)

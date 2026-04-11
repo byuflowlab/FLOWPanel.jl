@@ -221,7 +221,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
         # apply wake velocity to body surface
         if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
         end
 
         # solve systems with cross-body coupling
@@ -233,7 +233,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         # system-on-all influence
-        influence!(targets, systems, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        influence!(targets, systems, backend; precalc=false, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
@@ -280,7 +280,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
             # propagate wake
             for w in wakes
-                !isnothing(w) && propagate!(w, dt)
+                !isnothing(w) && propagate!(w, dt; step=i_step)
             end
 
             # propagate rigid-body kinematics

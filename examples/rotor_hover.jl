@@ -77,7 +77,13 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 nwakerows=1,
                 max_particles=20000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
-                method_unsteady=pnl.OverlapPPS(overlap, p_per_step))
+                method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
+                merge_every=1, # merge every step
+                merge_r=radius * 0.02, # r_merge for merging particles
+                merge_sigma_relative=false, # use relative sigma for merging
+                merge_max_sigma_ratio=2.0, # prevents particles of very different strengths from merging
+                merge_skip_static=true, # skip merging static particles
+                merge_verbose=true)
 
 ## =========================================================
 # SIMULATION SETUP
@@ -124,9 +130,10 @@ wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
+name = Threads.nthreads() > 1 ? "rotor_hover_mt" : "rotor_hover"
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=0.1,
     # set_Das_eta_freestream=0.1,
     body_solvers, backend, rho, verbose=true,
-    path="rotor_hover", name="rotor_hover"
+    path="rotor_hover", name
 )

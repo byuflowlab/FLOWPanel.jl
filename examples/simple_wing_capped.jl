@@ -117,19 +117,19 @@ backend = pnl.FastMultipoleBackend(
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 @time begin
     # global solver = pnl.Backslash(body; least_squares=true)
-    # solver = pnl.KrylovSolver(body;
-    #     method=:gmres,
-    #     itmax=20,
-    #     atol=1e-4,
-    #     rtol=1e-4,
-    #     # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
-    #     backend=pnl.FastMultipoleBackend(
-    #                 expansion_order=7,
-    #                 multipole_acceptance=0.4,
-    #                 leaf_size=10
-    #             )
-    # )
-    solver = pnl.BackslashDirichlet(body)
+    solver = pnl.KrylovSolver(body;
+        method=:gmres,
+        itmax=40,
+        atol=1e-4,
+        rtol=1e-4,
+        # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
+        backend=pnl.FastMultipoleBackend(
+                    expansion_order=7,
+                    multipole_acceptance=0.4,
+                    leaf_size=10
+                )
+    )
+    # solver = pnl.BackslashDirichlet(body)
     body.velocity .= Uinfs
     pnl.solve!(body, solver; backend)
 end
