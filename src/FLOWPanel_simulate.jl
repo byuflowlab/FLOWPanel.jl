@@ -52,6 +52,22 @@ _compute_dphidt!(::AbstractBody, dt) = nothing
 _get_dphidt(sys::AbstractLiftingBody) = sys.dphidt
 _get_dphidt(::AbstractBody) = nothing
 
+#--- Das initialization helpers ---#
+
+function _accumulate_Das!(sys::AbstractLiftingBody, eta)
+    for ishedding in eachindex(sys.Das)
+        Das = sys.Das[ishedding]
+        Vte = sys.velocity_te[ishedding]
+        for j in axes(Das, 2)
+            Das[1, j] += Vte[1, j] * eta
+            Das[2, j] += Vte[2, j] * eta
+            Das[3, j] += Vte[3, j] * eta
+        end
+    end
+end
+
+_accumulate_Das!(::AbstractBody, eta) = nothing
+
 #--- wake tuple helpers ---#
 
 function _collect_wake_probes(wakes::Tuple)
@@ -107,6 +123,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         monitors=(),
         cp_correct_kuttacondition=true,
         cp_clip=nothing,
+        set_Das_eta_kinematic=NaN,
+        set_Das_eta_freestream=NaN,
         verbose=false
     )
     # create save path if it does not exist
@@ -120,10 +138,42 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         calc_controlpoints!(sys; off=abs(sys.CPoffset))
     end
 
+    # set Das from freestream and/or kinematic velocity at trailing edges
+    if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
+        dt0 = t_range[2] - t_range[1]
+
+        if !isnan(set_Das_eta_freestream)
+            uinf0 = Uinf(t_range[1])
+            for sys in systems
+                extra_reset!(sys)
+                extra_apply_freestream!(sys, uinf0)
+                _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
+            end
+        end
+
+        if !isnan(set_Das_eta_kinematic)
+            for sys in systems
+                extra_reset!(sys)
+            end
+            kinematic_velocity!(systems, frames)
+            for sys in systems
+                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+            end
+        end
+
+        # reset velocity fields modified during Das computation
+        for sys in systems
+            reset!(sys)
+        end
+    end
+
     # begin simulation
     i_step = 0
     for t in t_range
-        verbose && println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+        if verbose
+            print("\r\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+            flush(stdout)
+        end
 
         #------- controls -------#
 
@@ -253,6 +303,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         # increment step
         i_step += 1
     end
+
+    verbose && println()
 end
 
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1

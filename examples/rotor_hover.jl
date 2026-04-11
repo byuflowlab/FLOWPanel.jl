@@ -14,7 +14,7 @@ AOA     = 0.0       # Angle of attack (degrees)
 rho     = 1.225     # Air density (kg/m^3)
 RPM     = 5400      # Rotation speed (rpm)
 
-Vinf    = magVinf * [cosd(AOA), 0.0, sind(AOA)]
+Vinf    = magVinf * [0.0, -cosd(AOA), sind(AOA)]
 eta     = 0.3
 
 nrevs   = 10        # Number of revolutions
@@ -63,10 +63,6 @@ rotor = pnl.RigidWakeBody{kernel}(mesh, [shedding1, shedding2],
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
-pnl.write_vtk("rotor_hover", rotor)
-das_offset = 0.002 * 0.5                               # Das scale (fraction of unit Vinf direction)
-rotor.Das[1] .= repeat(Vinf / magVinf * das_offset, 1, size(rotor.Das[1], 2))
-rotor.Das[2] .= repeat(Vinf / magVinf * das_offset, 1, size(rotor.Das[2], 2))
 
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
@@ -78,7 +74,7 @@ p_per_step = 2
 overlap    = 2.0
 
 wake_rotor = pnl.PanelParticleWake(rotor;
-                nwakerows=3,
+                nwakerows=1,
                 max_particles=20000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
                 method_unsteady=pnl.OverlapPPS(overlap, p_per_step))
@@ -92,7 +88,7 @@ Uinf(t) = Vinf
 #             max_iterations=500,
 #             tolerance=1.0e-6,
 #             rlx=1.0,
-#             expansion_order=14,
+#             expansion_order=10,
 #             multipole_acceptance=0.4,
 #             leaf_size=150,
 #             shrink=true,
@@ -109,8 +105,8 @@ backend = pnl.FastMultipoleBackend()
 frames = pnl.ReferenceFrame(rotor;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
-    ω_axis = SVector{3}(0.0, 0.0, 1.0),
-    ω = 2*pi * RPM*60,
+    ω_axis = SVector{3}(0.0, 1.0, 0.0),
+    ω = 2*pi * RPM/60,
     R = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
     name = "vehicle",
     child_index = Int[],
@@ -129,6 +125,8 @@ body_solvers = (solver_rotor,)
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
+    set_Das_eta_kinematic=0.1,
+    # set_Das_eta_freestream=0.1,
     body_solvers, backend, rho, verbose=true,
     path="rotor_hover", name="rotor_hover"
 )
