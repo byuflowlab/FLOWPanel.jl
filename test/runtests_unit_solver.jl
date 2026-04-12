@@ -129,16 +129,32 @@ using LinearAlgebra: diag
     end
 
     @testset "KrylovSolver + JacobiPreconditioner" begin
-        body_no_pc = make_octa_source_body()
-        body_pc = make_octa_source_body()
+        make_dirichlet_body() = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[
+                0 1 1 0;
+                0 0 1 1;
+                0 0 0 0;
+            ],
+            Int[
+                1 1;
+                2 3;
+                3 4;
+            ];
+            check_mesh=false,
+            watertight=false,
+        )
+
+        body_no_pc = make_dirichlet_body()
+        body_pc = make_dirichlet_body()
 
         for body in (body_no_pc, body_pc)
             body.velocity .= 0
             body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
         end
 
-        solver_no_pc = pnl.KrylovSolver(body_no_pc; backend=pnl.DirectBackend(), atol=1e-8, rtol=1e-8, itmax=50)
-        solver_pc = pnl.KrylovSolver(body_pc; backend=pnl.DirectBackend(), atol=1e-8, rtol=1e-8, itmax=50, preconditioner_cell_size=0.5)
+        solver_no_pc = pnl.KrylovSolver(body_no_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        solver_pc = pnl.KrylovSolver(body_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50, preconditioner_cell_size=0.5)
 
         @test solver_pc.preconditioner !== nothing
         @test length(solver_pc.preconditioner.cell_body_indices) > 0
@@ -146,7 +162,8 @@ using LinearAlgebra: diag
         pnl.solve!(body_no_pc, solver_no_pc)
         pnl.solve!(body_pc, solver_pc)
 
-        @test any(abs.(body_pc.strength[:, 1]) .> 0)
+        @test isapprox(vec(body_pc.strength[:, 1]), vec(body_no_pc.strength[:, 1]); atol=1e-6)
+        @test isapprox(vec(body_pc.strength[:, 2]), vec(body_no_pc.strength[:, 2]); atol=1e-6)
     end
 
     @testset "FGSSolver construction" begin
