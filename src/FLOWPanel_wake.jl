@@ -586,6 +586,7 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
     method_unsteady::MU                             # particle shedding method
+    gamma_trim_threshold::TF              # remove particles with |Gamma| below this value
     # Particle merge settings
     merge_every::Int                      # merge every N steps (0 = disabled)
     merge_r::Float64                      # r_merge kwarg
@@ -599,6 +600,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
         nwakerows=3, max_particles=10000,
         method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
         method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
+        gamma_trim_threshold=1e-8,
         merge_every=0,
         merge_r=0.5,
         merge_sigma_relative=true,
@@ -617,8 +619,9 @@ function PanelParticleWake(body::AbstractLiftingBody;
     # Infer type params from the actual panel_wake
     WTK = typeof(panel_wake).parameters[1]
     WNK = typeof(panel_wake).parameters[2]
+    gamma_trim_threshold_TF = convert(TF, gamma_trim_threshold)
     return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
-        panel_wake, pfield, method_trailing, method_unsteady,
+        panel_wake, pfield, method_trailing, method_unsteady, gamma_trim_threshold_TF,
         merge_every, merge_r, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, merge_verbose
     )
 end
@@ -660,6 +663,21 @@ end
 
 update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
+function trim_weak_particles!(w::PanelParticleWake)
+    threshold = w.gamma_trim_threshold
+    threshold <= zero(threshold) && return nothing
+
+    for i in w.pfield.np:-1:1
+        gamma = FLOWVPM.get_Gamma(w.pfield, i)
+        gamma_mag = sqrt(sum(abs2, gamma))
+        if gamma_mag < threshold
+            FLOWVPM.remove_particle(w.pfield, i)
+        end
+    end
+
+    return nothing
+end
+
 function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
 
     # panel wake
@@ -677,6 +695,8 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
             skip_static=w.merge_skip_static,
         )
     end
+
+    trim_weak_particles!(w)
 end
 
 function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
