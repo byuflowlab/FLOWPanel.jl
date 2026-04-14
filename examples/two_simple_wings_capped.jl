@@ -83,18 +83,21 @@ shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; to
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
-
 # Generate paneled body
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
     body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
     body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
-    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
+    for i in eachindex(body.Das)
+        body.Das[i] .= repeat(Vinf / magVinf, 1, size(body.Das[i], 2))
+    end
 else
     error("Unsupported body type")
 end
+
+
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body.ncells)
 
 println("Number of panels:\t$(body.ncells)")
 

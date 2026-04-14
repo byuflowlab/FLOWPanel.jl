@@ -6,7 +6,7 @@ import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
 
-run_names = ["short_wing.msh", "surface_small.msh"]
+run_names = ["nasa_wing.msh", "nasa_surface.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
 out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
