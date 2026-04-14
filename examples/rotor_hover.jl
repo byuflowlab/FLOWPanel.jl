@@ -17,7 +17,7 @@ RPM     = 5400      # Rotation speed (rpm)
 Vinf    = magVinf * [0.0, -cosd(AOA), sind(AOA)]
 eta     = 0.3
 
-nrevs   = 10        # Number of revolutions
+nrevs   = 1        # Number of revolutions
 nt      = 36        # Number of time steps per revolution
 dt      = 60 / RPM / nt
 n_steps = nt * nrevs
@@ -128,12 +128,16 @@ maneuver!(frames, systems, wakes, t) = nothing
 systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
+monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
+                i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64),
+            )
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
 name = Threads.nthreads() > 1 ? "rotor_hover_mt" : "rotor_hover"
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=0.1,
     # set_Das_eta_freestream=0.1,
+    monitors,
     body_solvers, backend, rho, verbose=true,
     path="rotor_hover", name
 )

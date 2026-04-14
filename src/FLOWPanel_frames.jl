@@ -389,3 +389,45 @@ function add_frame!(frames::Vector{<:ReferenceFrame}, name::String, parent_name:
         end
     end
 end
+
+#------- frame queries -------#
+
+"""
+    frame_global_transform(frames, i_frame)
+
+Return `(origin_global, R_frame_to_global)` for the frame at index `i_frame`.
+
+`origin_global` is the frame origin expressed in global coordinates and
+`R_frame_to_global` is the rotation matrix that maps vectors in the frame's
+local coordinate system to the global coordinate system.
+"""
+function frame_global_transform(frames::AbstractVector{ReferenceFrame{TF}}, i_target::Int) where TF
+    dx = zero(FastMultipole.SVector{3,TF})
+    Rp2g = FastMultipole.SMatrix{3,3,TF,9}(1,0,0, 0,1,0, 0,0,1)
+    return _frame_global_transform(frames, 1, i_target, dx, Rp2g)
+end
+
+function _frame_global_transform(frames::AbstractVector{ReferenceFrame{TF}}, i_frame::Int, i_target::Int, dx_parent_to_global, R_parent_to_global) where TF
+    frame = frames[i_frame]
+
+    # origin of this frame in global coordinates
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global
+
+    # rotation from this frame's local axes to global
+    R_frame_to_global = R_parent_to_global * frame.R
+
+    # found the target
+    if i_frame == i_target
+        return (origin_global, R_frame_to_global)
+    end
+
+    # recurse into children
+    for i_child in frame.child_index
+        result = _frame_global_transform(frames, i_child, i_target, origin_global, R_frame_to_global)
+        if !isnothing(result)
+            return result
+        end
+    end
+
+    return nothing
+end

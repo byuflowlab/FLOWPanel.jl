@@ -1,44 +1,56 @@
 """
-    ForcesMonitor(nt, TF=Float64; frame=Body())
+    ForceMonitor(nt, i_system, i_frame, rho; Sref=1.0, Lref=1.0, TF=Float64)
 
-Simple storage monitor for integrated force and moment histories over `nt`
-simulation steps.
+Storage monitor for integrated force and moment coefficient histories over `nt`
+simulation steps.  Forces and moments on `systems[i_system]` are computed in
+the coordinate system of `frames[i_frame]`.
+
+`CF` is normalised by `0.5 ρ |U∞|² Sref` and `CM` by `0.5 ρ |U∞|² Sref Lref`,
+with moments taken about the origin of the specified frame.
 """
-struct ForcesMonitor{TF,F}
+struct ForceMonitor{TF}
     CF::Vector{FastMultipole.SVector{3,TF}}
     CM::Vector{FastMultipole.SVector{3,TF}}
-    frame::F
+    i_system::Int
+    i_frame::Int
+    Sref::TF
+    Lref::TF
+    rho::TF
 end
 
-"""
-    ForcesMonitor(nt, TF=Float64; frame=Body())
-
-Construct a force/moment history monitor with `nt` output slots.
-"""
-function ForcesMonitor(nt::Int, TF=Float64; frame=Body())
+function ForceMonitor(nt::Int, i_system::Int;
+                       i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64)
     CF = zeros(FastMultipole.SVector{3,TF}, nt)
     CM = zeros(FastMultipole.SVector{3,TF}, nt)
-
-    return ForcesMonitor{TF,typeof(frame)}(CF, CM, frame)
+    return ForceMonitor{TF}(CF, CM, i_system, i_frame, TF(Sref), TF(Lref), TF(rho))
 end
 
-function (monitor::ForcesMonitor)(systems::Tuple, wakes::Tuple, i_step::Int)
-    CF, CM = body_forces(systems[1].surfaces, systems[1].properties,
-                            systems[1].reference[], systems[1].freestream[],
-                            systems[1].symmetric, monitor.frame)
-    monitor.CF[i_step + 1] = CF
-    monitor.CM[i_step + 1] = CM
-end
+function (monitor::ForceMonitor)(systems::Tuple, wakes::Tuple,
+                                  frames::AbstractVector{<:ReferenceFrame},
+                                  uinf, i_step::Int)
+    body = systems[monitor.i_system]
 
-"""
-    FrameForcesMonitor
+    # total force in global frame (body.F already populated by calcfield_F!)
+    Ftot = calcfield_Ftot(body)
+    Fvec = FastMultipole.SVector{3}(Ftot[1], Ftot[2], Ftot[3])
 
-Storage type for frame-resolved force and moment histories.
-"""
-struct FrameForcesMonitor{TF,F}
-    CF::Vector{FastMultipole.SVector{3,TF}}
-    CM::Vector{FastMultipole.SVector{3,TF}}
-    frame::F
+    if monitor.i_frame < 0
+        # global frame: moment about the origin
+        Mtot = calcfield_Mtot(body, zeros(3))
+        Mvec = FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
+    else
+        # frame-local: moment about frame origin, rotated into frame axes
+        origin_global, R_f2g = frame_global_transform(frames, monitor.i_frame)
+        Mtot = calcfield_Mtot(body, collect(origin_global))
+        R_g2f = transpose(R_f2g)
+        Fvec = R_g2f * Fvec
+        Mvec = R_g2f * FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
+    end
+
+    # normalise to coefficients
+    qinf = monitor.rho / 2 * (uinf[1]^2 + uinf[2]^2 + uinf[3]^2)
+    monitor.CF[i_step + 1] = Fvec / (qinf * monitor.Sref)
+    monitor.CM[i_step + 1] = Mvec / (qinf * monitor.Sref * monitor.Lref)
 end
 
 #--- dphidt dispatch helpers ---#
@@ -269,7 +281,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         for monitor in monitors
-            monitor(systems, wakes, i_step)
+            monitor(systems, wakes, frames, uinf, i_step)
         end
 
         #------- propagate system -------#
