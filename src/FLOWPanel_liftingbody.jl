@@ -234,7 +234,7 @@ function RigidWakeBody{E, N, TF, DBC}(
 
     return RigidWakeBody{E, N, TF, DBC}(
                     nodes, cells, shedding;
-                    vtk_cells, neighbor, watertight, CPoffset, characteristiclength, optargs...
+                    watertight, CPoffset, characteristiclength, optargs...
                 )
 end
 
