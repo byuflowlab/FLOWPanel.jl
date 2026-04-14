@@ -726,7 +726,7 @@ Components:
 - `Uext`: Cached external velocity at control points for all bodies.
 - `phi_ext`: Cached external potential at control points for all bodies.
 """
-struct BackslashCoupled{TF}
+mutable struct BackslashCoupled{TF}
     G::Matrix{TF}
     Glu::LA.Factorization{TF}
     rhs::Vector{TF}
@@ -873,6 +873,60 @@ function _G_tuple!(bodies::Tuple, G::Matrix; optargs...)
     end
 end
 
+# Target is Dirichlet -> potential influence
+function _G_U!(target::AbstractBody{TK,NT,TF,true}, source::AbstractBody{SK,NK,TF,<:Any}, G; optargs...) where {TK, NT, SK, NK, TF}
+    M = target.ncells
+    N = source.ncells
+
+    if size(G, 1)!=M || size(G, 2)!=N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
+    end
+
+    # Build geometric matrix
+    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false) # only potential  (potential, velocity, gradient)
+    
+    # store old strength and set to unit
+    old_strength = copy(source.strength)
+    source.strength .= zero(eltype(source.strength))
+    source.strength[:, NK] .= 1.0  # set the constantdoublet strength to 1 for all panels, which is what the kernel expects for potential evaluation
+    # kernel = get_kernel(source)
+
+    Threads.@threads for i_source in 1:N
+        for i_target in 1:M
+            # get target CPs for the target body
+            tx, ty, tz = target.controlpoints[1, i_target], target.controlpoints[2, i_target], target.controlpoints[3, i_target]
+            # Get the target panel. We are evaluating the influence of source panel i_source on target panel i_target
+            xtarget = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+            # get vertices for the source panels of the source body
+            R, v1, v2, v3 = rotate_to_panel(source, i_source)
+    
+            # get control point and strength for source body
+            control_point = (v1 + v2 + v3) * 0.3333333333333333
+            # strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, 5:4+NK, i_source))
+            strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
+
+            # evaluate influence
+            phi, _, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, SK, source.kerneloffset, R, derivatives_switch)
+                # check for wake (if any)
+            p, v, vg = _induced_wake(xtarget, (v1, v2, v3), source, i_source, derivatives_switch)
+
+
+            # if i_target == 5 && i_source == 8
+            #     @show phi
+            #     @show strength
+            # end
+
+            # update G
+            G[i_target, i_source] = phi+p
+        end
+    end
+
+    # restore strength
+    source.strength .= old_strength
+end
+
 
 # Target is Neumann -> velocity influence
 function _G_U!(target::AbstractBody{<:Any,<:Any,TF,false}, source::AbstractBody{<:Any,NK,TF,<:Any}, G; optargs...) where {NK,TF}
@@ -905,57 +959,11 @@ function _G_U!(target::AbstractBody{<:Any,<:Any,TF,false}, source::AbstractBody{
             v1, v2, v3 = get_vertices(source, i_source)
     
             strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
-
+            @show strength
             _, u, _ = _induced(xtarget, (v1, v2, v3), strength, kernel, source.kerneloffset, derivatives_switch)
 
             # update G
             G[i_target, i_source] = u[1] * target.normals[1, i_target] + u[2] * target.normals[2, i_target] + u[3] * target.normals[3, i_target]
-        end
-    end
-
-    # restore strength
-    source.strength .= old_strength
-end
-
-# Target is Dirichlet -> potential influence
-function _G_U!(target::AbstractBody{<:Any,<:Any,TF,true}, source::AbstractBody{SK,NK,TF,<:Any}, G; optargs...) where {SK,NK,TF}
-    M = target.ncells
-    N = source.ncells
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Build geometric matrix
-    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false) # only potential  (potential, velocity, gradient)
-    
-    # store old strength and set to unit
-    old_strength = copy(source.strength)
-    source.strength .= zero(eltype(source.strength))
-    source.strength[:, NK] .= 1.0
-    kernel = get_kernel(source)
-
-    Threads.@threads for i_source in 1:N
-        for i_target in 1:M
-            # get target CPs for the target body
-            tx, ty, tz = target.controlpoints[1, i_target], target.controlpoints[2, i_target], target.controlpoints[3, i_target]
-            # Get the target panel. We are evaluating the influence of source panel i_source on target panel i_target
-            xtarget = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
-
-            # get vertices for the source panels of the source body
-            R, v1, v2, v3 = rotate_to_panel(source, i_source)
-    
-            # get control point and strength for source body
-            control_point = (v1 + v2 + v3) * 0.3333333333333333
-            # strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, 5:4+NK, i_source))
-            strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
-
-            # evaluate influence
-            phi, _, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, kernel, source.kerneloffset, R, derivatives_switch)
-
-            # update G
-            G[i_target, i_source] = phi
         end
     end
 
@@ -987,13 +995,13 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         calc_controlpoints!(body)
 
         ### Zero all strengths AND Set source strengths for Dirichlet bodies (function) set_strengths(body)
-        set_strengths(body)
+        set_strengths(body)  ## body.velocity is zero, which is not what we'd expect
     end
 
     ### BUILD INDUCED
     ### Second tuple is only dirichlet bodies since only they contribute to the potential BCs
     influence!(bodies, bodies; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
-
+    
     ### get the boundary_condition for each body to write the RHS
     boundary_condition!(bodies, solver, backend)
 
@@ -1002,10 +1010,11 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         fill!(solver.G, 0)
         
         # Build G matrix
-        ### G if source T-body -> source S-body SI = 1, source,doublet or source,vortex SI = 2
+        # G if source T-body -> source S-body SI = 1, source,doublet or source,vortex SI = 2
         t_build = @elapsed _G_tuple!(bodies, solver.G)
         
         # Factorize G matrix and cache it in solver
+        # @show solver.G
         solver.Glu = lu!(solver.G)
     end
 

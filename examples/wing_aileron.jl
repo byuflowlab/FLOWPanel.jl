@@ -96,6 +96,8 @@ function generate_body(
     # 6enerate the paneled body
     body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
 
+    pnl.apply_freestream!(body, Vinf)
+
     return body
 end
 
@@ -143,6 +145,8 @@ function generate_body(
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
     end
+
+    pnl.apply_freestream!(body, Vinf)
 
     return body
 end
