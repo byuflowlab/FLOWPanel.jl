@@ -1030,7 +1030,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         b.CPoffset = CPoffset_old[bi]
         @views b.velocity  .= solver.Uext[:, r]
         @views b.potential .= solver.phi_ext[r]
-        _solvedflag(b, true)
+        # _solvedflag(b, true) ## Not defined in FLOWPanel
     end
 
     return t_build, t_solve

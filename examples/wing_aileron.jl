@@ -9,7 +9,7 @@ import GeoIO
 run_names = ["nasa_wing.msh", "nasa_surface.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
-out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+out_file = joinpath(pnl.examples_path, "data", "wing_aileron", "coupled_timing_results.csv")
 
 files = [joinpath(pnl.examples_path, "data", "wing_aileron", name) for name in run_names]
 
@@ -46,7 +46,7 @@ function postprocess!(bodies, Vinf, magVinf, rho, backend)
     Shat = [0, 1, 0]
     Lhat = cross(Dhat, Shat)
 
-    pnl.calcfield_U!(bodies, bodies; backend)
+    pnl.calcfield_U!(bodies, Vinf; backend)
     pnl.apply_freestream!(bodies, Vinf)
     pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
     Fs = pnl.calcfield_F!(bodies, magVinf, rho)
@@ -158,7 +158,7 @@ function benchmarks(out, bodies, solver; backend=DirectBackend())
 
     nps = sum(b.ncells for b in bodies)
 
-    oopen(out, "a") do io 
+    open(out, "a") do io 
         write(io, 
         "$(nps),$(t_build),$(t_solve)\n"
         )
