@@ -86,6 +86,102 @@ end
 
 
 ################################################################################
+# INFLUENCE MATRIX ASSEMBLY
+################################################################################
+
+# Pick the kernel and the column of `strength` to unit-activate when populating
+# an influence matrix for a given source body. For single-element bodies (NK=1)
+# the only column is 1; for combined source+doublet / source+vortex-ring bodies
+# (NK=2) the source column is assumed to be prescribed by the caller, so we
+# solve on the doublet/vortex-ring column.
+_G_kernel_and_strength_index(::AbstractBody{ConstantSource, 1}) = (ConstantSource, 1)
+_G_kernel_and_strength_index(::AbstractBody{ConstantDoublet, 1}) = (ConstantDoublet, 1)
+_G_kernel_and_strength_index(::AbstractBody{VortexRing, 1}) = (VortexRing, 1)
+_G_kernel_and_strength_index(::AbstractBody{Union{ConstantSource, ConstantDoublet}, 2}) = (ConstantDoublet, 2)
+_G_kernel_and_strength_index(::AbstractBody{Union{ConstantSource, VortexRing}, 2}) = (VortexRing, 2)
+
+"""
+    _G!(G, target_system, source_system; kerneloffset=source_system.kerneloffset, update_geometry=false)
+
+Populate the influence matrix `G` such that `G[i, j]` is the influence of the
+j-th panel of `source_system` on the i-th control point of `target_system`.
+The kernel and the `strength` column unit-activated on `source_system` are
+chosen from the source body's type parameters via
+`_G_kernel_and_strength_index`. The quantity stored in `G` is chosen from the
+target body's boundary-condition flag (the 4th type parameter of
+`AbstractBody`):
+
+- Dirichlet (`DBC=true`): induced potential `phi`.
+- Neumann  (`DBC=false`): normal component of induced velocity,
+  `u ⋅ target_system.normals[:, i]`.
+
+`G` need not be square: its shape must be
+`(target_system.ncells, source_system.ncells)`.
+
+If `update_geometry=true`, the target body's normals and control points are
+recomputed before assembling `G`, with the sign of `target_system.CPoffset`
+forced to match the formulation (negative/interior for Dirichlet, positive/
+exterior for Neumann). The original `CPoffset` is restored on return.
+"""
+function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
+             source_system::AbstractBody{<:Any,NK,TF};
+             kerneloffset=source_system.kerneloffset,
+             update_geometry::Bool=false) where {DBC,NK,TF}
+    M = target_system.ncells
+    N = source_system.ncells
+
+    if size(G, 1) != M || size(G, 2) != N
+        error("Matrix G with invalid dimensions;"*
+              " got $(size(G)), expected ($M, $N).")
+    end
+
+    if update_geometry
+        CPoffset_old = target_system.CPoffset
+        target_system.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
+        calc_normals!(target_system)
+        calc_controlpoints!(target_system)
+        target_system.CPoffset = CPoffset_old
+    end
+
+    kernel, strength_index = _G_kernel_and_strength_index(source_system)
+
+    derivatives_switch = DBC ? FastMultipole.DerivativesSwitch(true, false, false) :
+                               FastMultipole.DerivativesSwitch(false, true, false)
+
+    # Save current strength and unit-activate the selected column
+    old_strength = copy(source_system.strength)
+    source_system.strength .= zero(eltype(source_system.strength))
+    source_system.strength[:, strength_index] .= 1.0
+
+    CPs = target_system.controlpoints
+    normals = target_system.normals
+
+    Threads.@threads for i_source in 1:N
+        for i_target in 1:M
+            tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
+            target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
+
+            phi, u, _ = induced(target, source_system, i_source, derivatives_switch; kerneloffset)
+
+            if DBC
+                isnan(phi) && error("NaN encountered in G matrix computation: \ni_source = $i_source, i_target = $i_target, target = $target, source_strength = $(source_system.strength[i_source, strength_index]), kernel = $kernel, kerneloffset = $kerneloffset")
+                G[i_target, i_source] = phi
+            else
+                G[i_target, i_source] = u[1] * normals[1, i_target] + u[2] * normals[2, i_target] + u[3] * normals[3, i_target]
+            end
+        end
+    end
+
+    # Restore strength
+    source_system.strength .= old_strength
+
+    return G
+end
+
+################################################################################
+
+
+################################################################################
 # Backslash Operator
 ################################################################################
 
@@ -108,7 +204,7 @@ function BackslashNeumann(body::AbstractBody{TK,1,TF}) where {TK,TF}
     
     # populate G
     G = zeros(TF, body.ncells, body.ncells)
-    _G_U!(body, TK, G, body.controlpoints, body.normals; kerneloffset=body.kerneloffset)
+    _G!(G, body, body; kerneloffset=body.kerneloffset)
 
     # factorization
     Glu = lu!(G)
@@ -171,7 +267,7 @@ function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
     calc_controlpoints!(body; off=-abs(body.CPoffset))
 
     # populate G
-    _G_phi!(body, ConstantDoublet, G, body.controlpoints; kerneloffset=body.kerneloffset)
+    _G!(G, body, body; kerneloffset=body.kerneloffset)
     
     # factorization
     Glu = lu!(G)
@@ -467,7 +563,7 @@ function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, 
     Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
-        _G_U!(body, TK, solver.G, body.controlpoints, normals; optargs...)
+        _G!(solver.G, body, body; optargs...)
         Glu = lu!(solver.G)
     end
 
@@ -508,7 +604,7 @@ function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2
     Glu = solver.Glu
     if update_G
         solver.G .= 0.0
-        _G_phi!(self, ConstantDoublet, solver.G, self.controlpoints; kerneloffset=self.kerneloffset)
+        _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
         Glu = lu!(solver.G)
     end
 
@@ -575,7 +671,7 @@ function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vor
     if update_G
         G = solver.G
         G .= 0.0
-        _G_phi!(self, ConstantDoublet, G, self.controlpoints; kerneloffset=self.kerneloffset)
+        _G!(G, self, self; kerneloffset=self.kerneloffset)
         Glu = lu!(G)
     else
         Glu = solver.Glu
