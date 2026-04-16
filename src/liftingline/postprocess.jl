@@ -78,8 +78,16 @@ function calc_forcesmoments(ll::LiftingLine,
     D = LDS[:, 2]
     S = LDS[:, 3]
 
-    # Loading distribution (force per unit span)
+    # Integrated moment
+    Mtot = calcfield_Mtot(ll, X0, rho)
+
+    # Moment decomposed into axes
+    lmn = calcfield_lmn(ll, lhat, mhat, nhat)
+    roll, pitch, yaw = collect(eachcol(lmn))
+
     if !isnothing(distributions)
+
+        # Loading distribution (force per unit span)
         fs = calcfield_f(ll)
 
         lds = decompose(fs, Lhat, Dhat)
@@ -89,16 +97,19 @@ function calc_forcesmoments(ll::LiftingLine,
         d = lds[2, :]
         s = lds[3, :]
 
+        # Pitching moment distribution (moment per unit span)
+        ms = calcfield_m(ll, rho)
+
+        moment = decompose(ms, lhat, mhat)
+        mx = moment[1, :]
+        my = moment[2, :]
+        mz = moment[3, :]
+
         push!(distributions, (; spanposition=ypos, lift_distribution=l, 
-                                        drag_distribution=d, side_distribution=s))
+                                        drag_distribution=d, side_distribution=s,
+                                        roll_distribution=mx, 
+                                        pitch_distribution=my, yaw_distribution=mz))
     end
-
-    # Integrated moment
-    Mtot = calcfield_Mtot(ll, X0, rho)
-
-    # Moment decomposed into axes
-    lmn = calcfield_lmn(ll, lhat, mhat, nhat)
-    roll, pitch, yaw = collect(eachcol(lmn))
 
     # Outputs
     return (;   lift=L, drag=D, side=S, roll, pitch, yaw, 
@@ -886,4 +897,85 @@ end
 
 function calcfield_lmn(ll::LiftingLine{R}, args...; optargs...) where R 
     return calcfield_lmn!(zeros(R, 3, 3), ll, args...; optargs...)
+end
+
+
+
+function calcfield_m!(out::AbstractMatrix, ll::LiftingLine,
+                            cmΛs::AbstractVector, chords::AbstractVector,
+                            rho::Number;
+                            fieldname="m", addfield=true)
+    # Error case
+    @assert size(out, 1)==3 && size(out, 2)==ll.nelements ""*
+        "Invalid `out` matrix."*
+        " Expected size $((3, ll.nelements)); got $(size(out))."
+    @assert length(cmΛs)==ll.nelements ""*
+        "Invalid `cmΛs` vector. Expected length $(ll.nelements); got $(length(cmΛs))."
+    @assert length(chords)==ll.nelements ""*
+        "Invalid `chords` vector. Expected length $(ll.nelements); got $(length(chords))."
+
+    # Calculate moment from stripwise pitching moment coefficient
+    for ei in 1:ll.nelements
+
+        sweep = calc_sweep(ll, ei)
+
+        # Velocity
+        U1 = ll.Us[1, ei]
+        U2 = ll.Us[2, ei]
+        U3 = ll.Us[3, ei]
+        magU = sqrt(U1^2 + U2^2 + U3^2)
+
+        # Lifting filament length
+        dl1 = ll.horseshoes[1, 3, ei] - ll.horseshoes[1, 2, ei]
+        dl2 = ll.horseshoes[2, 3, ei] - ll.horseshoes[2, 2, ei]
+        dl3 = ll.horseshoes[3, 3, ei] - ll.horseshoes[3, 2, ei]
+
+        # Span length of this element
+        ds = abs(dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei])
+
+        # Dynamic pressure
+        q = 0.5*rho*magU^2
+
+        # Integrated pitching moment over this span section
+        area = ll.chords[ei] * ds
+        M = cmΛs[ei] * q * ll.chords[ei]*cosd(sweep) * area
+
+        # Distributed back to unit span
+        m = M/ds
+
+        # Add pitching moment as aligned with the lifting line
+        out[1, ei] += m*ll.lines[1, ei]
+        out[2, ei] += m*ll.lines[2, ei]
+        out[3, ei] += m*ll.lines[3, ei]
+    end
+
+
+    # Save field in lifting line
+    if addfield
+        add_field(ll, fieldname, "vector", eachcol(out), "cell")
+    end
+
+    return out
+end
+
+function calcfield_m!(out, ll::LiftingLine, rho; cm_fieldname="cm", optargs...)
+    # Error case
+    @assert isnothing(cm_fieldname) || check_field(ll, cm_fieldname) ""*
+        "Field $(cm_fieldname) not found;"*
+        " Please run `calcfield_cm(args...; fieldname=$(cm_fieldname), optargs...)`"
+
+    if isnothing(cm_fieldname)
+        cmΛs = zeros(ll.nelements)
+    else
+        cmΛs = get_field(ll, cm_fieldname)["field_data"]
+    end
+
+    return calcfield_m!(out, ll, cmΛs, ll.chords, rho; optargs...)
+end
+
+function calcfield_m(ll::LiftingLine{R}, args...; optargs...) where {R}
+
+    out = zeros(R, 3, ll.nelements)
+
+    return calcfield_m!(out, ll, args...; optargs...)
 end
