@@ -22,7 +22,7 @@ rho             = 1.225                     # (kg/m^3) air density
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
 c_body1 = 10 * m
 b = 60 * m                            # (m) span length
-c_body2 = 12.01
+c_body2 = 2
 AR_body1 = b / c_body1                             # (m) span length
 AR_body2 = b / c_body2                             # (m) span length
 
@@ -33,10 +33,10 @@ scaling = 1.0
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
 # Body and wake model
-kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
-
+# kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+kernel = pnl.ConstantSource
 # body type
-bodytype = pnl.RigidWakeBody{kernel}    # Elements and wake model
+bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
 
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
@@ -50,7 +50,7 @@ function postprocess!(bodies, Vinf, magVinf, rho, backend)
     pnl.apply_freestream!(bodies, Vinf)
     pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
     Fs = pnl.calcfield_F!(bodies, magVinf, rho)
-    LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Fs, Lhat, Dhat, Shat)
+    LDS = pnl.calcfield_LDS!(zeros(3,3), Fs, Lhat, Dhat, Shat)
     return LDS
 end
 
@@ -83,18 +83,18 @@ function generate_body(
     trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
     trailingedge[3, :] .= 0.0
 
-    # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(
-            grid._nodes,
-            pnl.grid2cells(grid),
-            trailingedge;
-            tolerance = 0.001 * span
-        )    
-    # shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
-    shedding = [shedding]
+    # # Generate TE shedding matrix
+    # shedding = pnl.calc_shedding(
+    #         grid._nodes,
+    #         pnl.grid2cells(grid),
+    #         trailingedge;
+    #         tolerance = 0.001 * span
+    #     )    
+    # # shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
+    # shedding = [shedding]
 
     # 6enerate the paneled body
-    body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
+    body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
 
     pnl.apply_freestream!(body, Vinf)
 

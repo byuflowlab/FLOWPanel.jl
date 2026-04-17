@@ -728,7 +728,7 @@ Components:
 """
 mutable struct BackslashCoupled{TF}
     G::Matrix{TF}
-    Glu::LA.Factorization{TF}
+    Glu::LA.Factorization{TF}  # Was having singularity issues when trying to initialize the LU decomp from a G matrix of zeros
     rhs::Vector{TF}
     Uext::Matrix{TF}
     phi_ext::Vector{TF}
@@ -846,9 +846,9 @@ function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, false})
     body.strength[:, 1] .= 0.0
 end
 
-# Dirichlet
+# Dirichlet  -- There has to be a better way to get the kernel since it could be ConstantDoublet or VortexRing
 function get_kernel(body::AbstractBody{<:Any,<:Any,TF,true}) where TF
-    return kernel = VortexRing
+    return kernel = ConstantDoublet
 end
 
 # Neumann
@@ -864,11 +864,12 @@ function _G_tuple!(bodies::Tuple, G::Matrix; optargs...)
     nps = [b.ncells for b in bodies]
     offsets = cumsum(vcat(0, nps))
 
+    # Set up view of G
     for (i_source, source) in enumerate(bodies)
         col = offsets[i_source]+1 : offsets[i_source+1]
         for (i_target, target) in enumerate(bodies)
             row = offsets[i_target]+1 : offsets[i_target+1]
-            _G_U!(target, source, view(G, row, col); optargs...)
+            _G_U!(target, source, view(G, row, col); optargs...)   # dispatch to proper G assmebly
         end
     end
 end
@@ -890,7 +891,7 @@ function _G_U!(target::AbstractBody{TK,NT,TF,true}, source::AbstractBody{SK,NK,T
     old_strength = copy(source.strength)
     source.strength .= zero(eltype(source.strength))
     source.strength[:, NK] .= 1.0  # set the constantdoublet strength to 1 for all panels, which is what the kernel expects for potential evaluation
-    # kernel = get_kernel(source)
+    kernel = get_kernel(source)
 
     Threads.@threads for i_source in 1:N
         for i_target in 1:M
@@ -908,15 +909,10 @@ function _G_U!(target::AbstractBody{TK,NT,TF,true}, source::AbstractBody{SK,NK,T
             strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
 
             # evaluate influence
-            phi, _, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, SK, source.kerneloffset, R, derivatives_switch)
-                # check for wake (if any)
+            phi, _, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, kernel, source.kerneloffset, R, derivatives_switch)
+            
+            # check for wake (if any) -- see example for two_simple_wing_capped.jl
             p, v, vg = _induced_wake(xtarget, (v1, v2, v3), source, i_source, derivatives_switch)
-
-
-            # if i_target == 5 && i_source == 8
-            #     @show phi
-            #     @show strength
-            # end
 
             # update G
             G[i_target, i_source] = phi+p
@@ -955,12 +951,12 @@ function _G_U!(target::AbstractBody{<:Any,<:Any,TF,false}, source::AbstractBody{
             tx, ty, tz = target.controlpoints[1, i_target], target.controlpoints[2, i_target], target.controlpoints[3, i_target]
             xtarget = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
 
-            # get vertices
-            v1, v2, v3 = get_vertices(source, i_source)
+            # get vertices for the source panels of the source body
+            R, v1, v2, v3 = rotate_to_panel(source, i_source)
+            control_point = (v1 + v2 + v3) * 0.3333333333333333
     
             strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
-            @show strength
-            _, u, _ = _induced(xtarget, (v1, v2, v3), strength, kernel, source.kerneloffset, derivatives_switch)
+            _, u, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, kernel, source.kerneloffset, R, derivatives_switch)
 
             # update G
             G[i_target, i_source] = u[1] * target.normals[1, i_target] + u[2] * target.normals[2, i_target] + u[3] * target.normals[3, i_target]
@@ -995,7 +991,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         calc_controlpoints!(body)
 
         ### Zero all strengths AND Set source strengths for Dirichlet bodies (function) set_strengths(body)
-        set_strengths(body)  ## body.velocity is zero, which is not what we'd expect
+        set_strengths(body)
     end
 
     ### BUILD INDUCED

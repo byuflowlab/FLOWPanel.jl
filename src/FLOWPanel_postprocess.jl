@@ -625,6 +625,26 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
+function calcfield_LDS!(out::AbstractMatrix,
+                        bodies::Tuple,
+                        Fs::Vector{<:AbstractMatrix},
+                        Lhat::AbstractVector, Dhat::AbstractVector,
+                        Shat::AbstractVector;
+                        addfield=true)
+
+    fill!(out[:,3], 0.0)
+
+    for Fbody in Fs
+        out[:,3] .+= sum(Fbody, dims=2)[:]
+    end
+
+    out[:,1] = Lhat .* dot(out[:,3], Lhat)
+    out[:,2] = Dhat .* dot(out[:,3], Dhat)
+    out[:,3] = Shat .* dot(out[:,3], Shat)
+
+    return out
+end
+
 """
     calcfield_LDS!(out::Matrix, body::AbstractBody,
                     Lhat::Vector, Dhat::Vector, Shat::Vector; F_fieldname="F")

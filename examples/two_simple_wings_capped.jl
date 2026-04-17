@@ -69,7 +69,7 @@ msh = msh |> Meshes.Scale(scaling)
 grid = pnl.gt.GridTriangleSurface(msh)
 
 # get trailing edge line
-nte = 10000
+nte = 100
 trailingedge = zeros(3, nte)
 trailingedge[1, :] .= c 
 trailingedge[2, :] .= range(-b/2, stop=b/2, length=nte)
@@ -78,7 +78,7 @@ trailingedge[3, :] .= 0.0
 # Generate TE shedding matrix
 # TE_indices = [161, 129, 97, 65, 3, 1, 268, 300, 332, 364, 396]
 # shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
-shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*b)
+@show shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*b)
 
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
@@ -140,6 +140,7 @@ end
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")
 
+#=
 # Calculate surface velocity U on the body
 @time Us = pnl.calcfield_U(body, body; backend)
 
@@ -189,3 +190,4 @@ CD = sign(dot(D, Dhat)) * norm(D) / nondim
     # Call Paraview
     # run(`paraview --data=$(str)`)
 # end
+=#
