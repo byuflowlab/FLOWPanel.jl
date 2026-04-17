@@ -122,8 +122,8 @@ setup_bodies!(body2, Vinf, magVinf)
 body1.strength .= 0.0
 body2.strength .= 0.0
 
-solver1 = pnl.BackslashDirichlet(body1)
-solver2 = pnl.BackslashDirichlet(body2)
+solver1 = pnl.Backslash(body1)
+solver2 = pnl.Backslash(body2)
 
 println("\nSolving...")
 @time pnl.solve!((body1, body2), (solver1, solver2);

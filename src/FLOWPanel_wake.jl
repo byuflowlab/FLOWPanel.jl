@@ -17,13 +17,13 @@ struct ProbeWrapper{P}
 end
 
 """
-    solve!(body, wake, uinf, t=0.0; body_solver=BackslashDirichlet(body), backend=FastMultipoleBackend(...))
+    solve!(body, wake, uinf, t=0.0; body_solver=Backslash(body), backend=FastMultipoleBackend(...))
 
 Perform one coupled body-wake solve using the supplied freestream velocity
 vector `uinf`.
 """
 function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
-        body_solver::AbstractSolver=BackslashDirichlet(body), 
+        body_solver::AbstractSolver=Backslash(body),
         backend=FastMultipoleBackend(;
             expansion_order=10,
             multipole_acceptance=0.4,

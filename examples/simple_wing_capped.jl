@@ -129,7 +129,7 @@ backend = pnl.FastMultipoleBackend(
                     leaf_size=10
                 )
     )
-    # solver = pnl.BackslashDirichlet(body)
+    # solver = pnl.Backslash(body)
     body.velocity .= Uinfs
     pnl.solve!(body, solver; backend)
 end

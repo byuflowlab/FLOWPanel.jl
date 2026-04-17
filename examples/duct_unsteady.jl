@@ -179,7 +179,7 @@ AOA = AOAs[i]
         shrink=true,
         recenter=false,
     )
-    body_solver = pnl.BackslashDirichlet(body)
+    body_solver = pnl.Backslash(body)
 
     # initialize wake
     wake = pnl.PanelWake(body; nwakerows=100)

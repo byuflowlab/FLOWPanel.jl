@@ -103,7 +103,7 @@ Uinf(t) = Vinf
 #             reverse_pass=false,
 #             verbose=false
 #         )
-solver_rotor = pnl.BackslashDirichlet(rotor)
+solver_rotor = pnl.Backslash(rotor)
 
 backend = pnl.FastMultipoleBackend()
 

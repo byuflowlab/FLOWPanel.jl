@@ -104,8 +104,8 @@ pnl.apply_freestream!(ref1, Vinf)
 pnl.apply_freestream!(ref2, Vinf)
 
 # Solve with BackslashDirichlet (multi-body outer iteration)
-ref_solver1 = pnl.BackslashDirichlet(ref1)
-ref_solver2 = pnl.BackslashDirichlet(ref2)
+ref_solver1 = pnl.Backslash(ref1)
+ref_solver2 = pnl.Backslash(ref2)
 
 @time pnl.solve!((ref1, ref2), (ref_solver1, ref_solver2);
     backend=fill(pnl.FastMultipoleBackend(), 2),

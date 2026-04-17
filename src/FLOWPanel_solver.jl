@@ -1,7 +1,7 @@
 #=##############################################################################
 # DESCRIPTION
     Solver backend definitions.
-    
+
 # AUTHORSHIP
   * Created by  : Ryan Anderson
   * Email       : Ry.M.Anderson@gmail.com
@@ -186,45 +186,31 @@ end
 ################################################################################
 
 """
-    BackslashNeumann(body)
-
-Direct Neumann-formulation solver for single-strength non-lifting problems.
-"""
-struct BackslashNeumann{TF,TGLU,LS} <: AbstractMatrixfulSolver{LS}
-    G::Matrix{TF}    # Coefficient matrix
-    Glu::TGLU
-    rhs::Vector{TF}
-end
-
-function BackslashNeumann(body::AbstractBody{TK,1,TF}) where {TK,TF}
-    
-    # update control points (exterior)
-    calc_normals!(body)
-    calc_controlpoints!(body; off=abs(body.CPoffset))
-    
-    # populate G
-    G = zeros(TF, body.ncells, body.ncells)
-    _G!(G, body, body; kerneloffset=body.kerneloffset)
-
-    # factorization
-    Glu = lu!(G)
-
-    # construct solver
-    return BackslashNeumann{TF,typeof(Glu),false}(G, Glu, zeros(TF, body.ncells))
-end
-
-"""
     Backslash(body)
 
-Construct the default direct solver for `body`, choosing the Neumann or
-Dirichlet formulation based on body type.
+Direct solver that assembles and LU-factors the influence matrix for `body`.
+The formulation (Neumann or Dirichlet) is chosen automatically from the body's
+`DBC` type parameter: control points are placed exterior for Neumann,
+interior for Dirichlet.
 """
-function Backslash(body::NonLiftingBody)
-    return BackslashNeumann(body)
+struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
+    G::Matrix{TF}
+    Glu::TGLU
+    rhs::Vector{TF}
+    Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
+    phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
 end
 
-function Backslash(body::AbstractLiftingBody)
-    return BackslashDirichlet(body)
+function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
+    G = zeros(TF, body.ncells, body.ncells)
+    rhs = zeros(TF, body.ncells)
+    Uext = zeros(TF, 3, body.ncells)
+    phi_ext = zeros(TF, body.ncells)
+
+    _G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=true)
+    Glu = lu!(G)
+
+    return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
 end
 
 function numtype(self::AbstractBody)
@@ -239,41 +225,6 @@ end
 get_strength_name(::AbstractBody{ConstantSource, 1, <:Any}) = "sigma"
 get_strength_name(::AbstractBody{ConstantDoublet, 1, <:Any}) = "mu"
 get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
-
-#--- Dirichlet formulation ---#
-
-"""
-    BackslashDirichlet(body)
-
-Direct Dirichlet-formulation solver for lifting-body problems and related
-potential-based solves.
-"""
-struct BackslashDirichlet{TF,TGLU} <: AbstractMatrixfulSolver{false}
-    G::Matrix{TF}
-    Glu::TGLU
-    rhs::Vector{TF}
-    Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
-    phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
-end
-
-function BackslashDirichlet(body::AbstractBody{<:Any,<:Any,TF}) where TF
-    G = zeros(TF, body.ncells, body.ncells)
-    rhs = zeros(TF, body.ncells)
-    Uext = zeros(TF, 3, body.ncells)
-    phi_ext = zeros(TF, body.ncells)
-
-    # update control points (interior)
-    calc_normals!(body)
-    calc_controlpoints!(body; off=-abs(body.CPoffset))
-
-    # populate G
-    _G!(G, body, body; kerneloffset=body.kerneloffset)
-    
-    # factorization
-    Glu = lu!(G)
-
-    return BackslashDirichlet{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
-end
 
 ################################################################################
 # GMRES Solver
@@ -551,7 +502,7 @@ end
 
 ################################################################################
 
-function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, <:Any, false};
+function solve!(body::NonLiftingBody{TK,NK,TF,false}, solver::Backslash;
         backend=DirectBackend(), strength_index=1,
         update_G::Bool=false,
         optargs...
@@ -576,8 +527,8 @@ function solve!(body::NonLiftingBody{TK,NK,TF}, solver::BackslashNeumann{<:Any, 
     return nothing
 end
 
-function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2, TF},
-                solver::BackslashDirichlet; backend=DirectBackend(),
+function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2, TF, true},
+                solver::Backslash; backend=DirectBackend(),
                 update_G::Bool=false, optargs...) where TF
 
     solver.Uext .= self.velocity
@@ -644,7 +595,7 @@ end
 
 # end
 
-function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::BackslashDirichlet; backend=DirectBackend(), update_G=false, optargs...) where TF
+function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
 
     solver.Uext .= self.velocity
     solver.phi_ext .= self.potential
@@ -711,9 +662,9 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
     prior_sigmas = [copy(body.strength[:, 1]) for body in bodies]
 
     # induced potential due to source strengths for dirichlet bodies (interior solve)
-    influence!(bodies, bodies, backend; 
-        scalar_potential=[has_dirichlet_bc(b) for b in bodies], 
-        velocity=[false for b in bodies], 
+    influence!(bodies, bodies, backend;
+        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
+        velocity=[false for b in bodies],
         optargs...)
 
     # run solver
@@ -837,7 +788,7 @@ function solve!(body::NonLiftingBody{ConstantSource, 1, TF}, solver::FlatGroundS
     calc_bc_noflowthrough!(solver.rhs, body.velocity, normals)
 
     for i in 1:body.ncells
-        # For a flat ground problem with constant source panels, the influence of each panel on itself is -0.5 
+        # For a flat ground problem with constant source panels, the influence of each panel on itself is -0.5
         # (for a panel with its control point on the surface), and there is no influence from other panels.
         body.strength[i, 1] = -solver.rhs[i] / (-0.5)
     end

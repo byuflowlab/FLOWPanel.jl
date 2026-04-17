@@ -105,7 +105,7 @@ end
 #--- single-body backward-compat wrapper ---#
 
 """
-    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=BackslashDirichlet(system), optargs...)
+    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=Backslash(system), optargs...)
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), rho=1.225, monitors=(), ...)
 
 Advance one or more coupled body-wake systems through `t_range`, solving the
@@ -113,7 +113,7 @@ aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
 function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames, maneuver!::Function, Uinf::Function, t_range;
-        body_solver=BackslashDirichlet(system), optargs...
+        body_solver=Backslash(system), optargs...
     ) where {TK, NK, TF}
     # wrap maneuver to match tuple signature
     _maneuver!(frames, systems, wakes, t) = maneuver!(frames, systems[1], wakes[1], t)

@@ -187,7 +187,7 @@ AOA = AOAs[i]
         #     reverse_pass=false,
         #     verbose=false
         # )
-        solver = pnl.BackslashDirichlet(body)
+        solver = pnl.Backslash(body)
 
         println("\nSolving...")
 
@@ -245,7 +245,7 @@ AOA = AOAs[i]
 
     # Save body as VTK
     if paraview
-        name = typeof(solver) <: pnl.BackslashDirichlet ? "duct_dirichlet" : "duct"
+        name = typeof(solver) <: pnl.Backslash ? "duct_dirichlet" : "duct"
         name *= kernel == pnl.VortexRing ? "_vortexring" :
                 kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
                 ""
