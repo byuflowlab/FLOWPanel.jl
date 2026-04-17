@@ -5,7 +5,18 @@
     non-lifting duct offset in z by 1.5 diameters.
 
 # AUTHORSHIP
-  * Author    : Ryan Anderson
+  * Author    : Ryan Anderson(base) PS C:\Users\nlehn\anderson-2025-solver\deps\FLOWPanel.jl> git fetch origin
+remote: Enumerating objects: 41, done.
+remote: Counting objects: 100% (41/41), done.
+remote: Compressing objects: 100% (1/1), done.
+remote: Total 21 (delta 20), reused 21 (delta 20), pack-reused 0 (from 0)
+Unpacking objects: 100% (21/21), 1.88 KiB | 22.00 KiB/s, done.
+From https://github.com/byuflowlab/FLOWPanel.jl
+   bbfe391..938c1c4  fastmultipole -> origin/fastmultipole
+(base) PS C:\Users\nlehn\anderson-2025-solver\deps\FLOWPanel.jl> git remote -v
+origin  https://github.com/byuflowlab/FLOWPanel.jl.git (fetch)
+origin  https://github.com/byuflowlab/FLOWPanel.jl.git (push)
+(base) PS C:\Users\nlehn\anderson-2025-solver\deps\FLOWPanel.jl
   * Created   : Apr 2026
   * License   : MIT License
 =###############################################################################

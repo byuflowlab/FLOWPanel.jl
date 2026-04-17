@@ -6,12 +6,12 @@ import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
 
-run_names = ["nasa_wing.msh", "nasa_surface.msh"]
+run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
-out_file = joinpath(pnl.examples_path, "data", "wing_aileron", "coupled_timing_results.csv")
+out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
 
-files = [joinpath(pnl.examples_path, "data", "wing_aileron", name) for name in run_names]
+files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
 m              = 0.0254
@@ -33,10 +33,11 @@ scaling = 1.0
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
 # Body and wake model
-# kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
-kernel = pnl.ConstantSource
+kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+# kernel = pnl.ConstantSource
 # body type
-bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
+# bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
+bodytype = pnl.RigidWakeBody{kernel}
 
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
@@ -83,16 +84,6 @@ function generate_body(
     trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
     trailingedge[3, :] .= 0.0
 
-    # # Generate TE shedding matrix
-    # shedding = pnl.calc_shedding(
-    #         grid._nodes,
-    #         pnl.grid2cells(grid),
-    #         trailingedge;
-    #         tolerance = 0.001 * span
-    #     )    
-    # # shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
-    # shedding = [shedding]
-
     # 6enerate the paneled body
     body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
 
@@ -135,7 +126,6 @@ function generate_body(
         trailingedge;
         tolerance = 0.001 * span
     )
-    # shedding = pnl.calc_shedding(grid, trailingedge; tolerance=0.001*span)
     shedding = [shedding]
 
     # Generate the paneled body

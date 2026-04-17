@@ -940,127 +940,6 @@ function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, false})
     body.strength[:, 1] .= 0.0
 end
 
-# Dirichlet  -- There has to be a better way to get the kernel since it could be ConstantDoublet or VortexRing
-function get_kernel(body::AbstractBody{<:Any,<:Any,TF,true}) where TF
-    return kernel = ConstantDoublet
-end
-
-# Neumann
-function get_kernel(body::AbstractBody{<:Any,<:Any,TF,false}) where TF
-    return kernel = ConstantSource
-end
-
-## target_body, source_body, view(G)
-# kernel depends on source_body
-# target determines potential or velocity
-function _G_tuple!(bodies::Tuple, G::Matrix; optargs...)
-    # Build G matrix
-    nps = [b.ncells for b in bodies]
-    offsets = cumsum(vcat(0, nps))
-
-    # Set up view of G
-    for (i_source, source) in enumerate(bodies)
-        col = offsets[i_source]+1 : offsets[i_source+1]
-        for (i_target, target) in enumerate(bodies)
-            row = offsets[i_target]+1 : offsets[i_target+1]
-            _G_U!(target, source, view(G, row, col); optargs...)   # dispatch to proper G assmebly
-        end
-    end
-end
-
-# Target is Dirichlet -> potential influence
-function _G_U!(target::AbstractBody{TK,NT,TF,true}, source::AbstractBody{SK,NK,TF,<:Any}, G; optargs...) where {TK, NT, SK, NK, TF}
-    M = target.ncells
-    N = source.ncells
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Build geometric matrix
-    derivatives_switch = FastMultipole.DerivativesSwitch(true,false,false) # only potential  (potential, velocity, gradient)
-    
-    # store old strength and set to unit
-    old_strength = copy(source.strength)
-    source.strength .= zero(eltype(source.strength))
-    source.strength[:, NK] .= 1.0  # set the constantdoublet strength to 1 for all panels, which is what the kernel expects for potential evaluation
-    kernel = get_kernel(source)
-
-    Threads.@threads for i_source in 1:N
-        for i_target in 1:M
-            # get target CPs for the target body
-            tx, ty, tz = target.controlpoints[1, i_target], target.controlpoints[2, i_target], target.controlpoints[3, i_target]
-            # Get the target panel. We are evaluating the influence of source panel i_source on target panel i_target
-            xtarget = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
-
-            # get vertices for the source panels of the source body
-            R, v1, v2, v3 = rotate_to_panel(source, i_source)
-    
-            # get control point and strength for source body
-            control_point = (v1 + v2 + v3) * 0.3333333333333333
-            # strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, 5:4+NK, i_source))
-            strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
-
-            # evaluate influence
-            phi, _, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, kernel, source.kerneloffset, R, derivatives_switch)
-            
-            # check for wake (if any) -- see example for two_simple_wing_capped.jl
-            p, v, vg = _induced_wake(xtarget, (v1, v2, v3), source, i_source, derivatives_switch)
-
-            # update G
-            G[i_target, i_source] = phi+p
-        end
-    end
-
-    # restore strength
-    source.strength .= old_strength
-end
-
-
-# Target is Neumann -> velocity influence
-function _G_U!(target::AbstractBody{<:Any,<:Any,TF,false}, source::AbstractBody{<:Any,NK,TF,<:Any}, G; optargs...) where {NK,TF}
-    M = target.ncells
-    N = source.ncells
-
-    if size(G, 1)!=M || size(G, 2)!=N
-        error("Matrix G with invalid dimensions;"*
-              " got $(size(G)), expected ($M, $N).")
-    end
-
-    # Build geometric matrix
-    derivatives_switch = FastMultipole.DerivativesSwitch(false,true,false) # only velocity  (potential, velocity, gradient)
-    
-    # store old strength and set to unit
-    old_strength = copy(source.strength)
-    source.strength .= zero(eltype(source.strength))
-    source.strength[:, NK] .= 1.0
-
-    # get source kernel to evaluate the influence of the source body on the target body 
-    kernel = get_kernel(source)
-
-    Threads.@threads for i_source in 1:N
-        for i_target in 1:M
-            # get target
-            tx, ty, tz = target.controlpoints[1, i_target], target.controlpoints[2, i_target], target.controlpoints[3, i_target]
-            xtarget = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
-
-            # get vertices for the source panels of the source body
-            R, v1, v2, v3 = rotate_to_panel(source, i_source)
-            control_point = (v1 + v2 + v3) * 0.3333333333333333
-    
-            strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source.strength, i_source, 1:NK))
-            _, u, _ = _induced(xtarget, (v1, v2, v3), control_point, strength, kernel, source.kerneloffset, R, derivatives_switch)
-
-            # update G
-            G[i_target, i_source] = u[1] * target.normals[1, i_target] + u[2] * target.normals[2, i_target] + u[3] * target.normals[3, i_target]
-        end
-    end
-
-    # restore strength
-    source.strength .= old_strength
-end
-
 function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
 
     # Sizes
@@ -1101,7 +980,18 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         
         # Build G matrix
         # G if source T-body -> source S-body SI = 1, source,doublet or source,vortex SI = 2
-        t_build = @elapsed _G_tuple!(bodies, solver.G)
+        t_build = begin @time
+            for (bi, source) in enumerate(bodies)
+                c = offsets[bi]+1 : offsets[bi+1] # columns of sources
+                for (ti, target) in enumerate(bodies)
+                    r = offsets[ti]+1 : offsets[ti+1] # rows of targets
+                    _G!(view(solver.G, r, c), target,
+                        source;
+                        kerneloffset=source.kerneloffset,
+                        update_geometry=false)
+                end
+            end
+        end
         
         # Factorize G matrix and cache it in solver
         # @show solver.G
