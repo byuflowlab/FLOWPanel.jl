@@ -17,13 +17,13 @@ struct ProbeWrapper{P}
 end
 
 """
-    solve!(body, wake, uinf, t=0.0; body_solver=BackslashDirichlet(body), backend=FastMultipoleBackend(...))
+    solve!(body, wake, uinf, t=0.0; body_solver=Backslash(body), backend=FastMultipoleBackend(...))
 
 Perform one coupled body-wake solve using the supplied freestream velocity
 vector `uinf`.
 """
 function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray, t=0.0;
-        body_solver::AbstractSolver=BackslashDirichlet(body), 
+        body_solver::AbstractSolver=Backslash(body),
         backend=FastMultipoleBackend(;
             expansion_order=10,
             multipole_acceptance=0.4,
@@ -433,7 +433,7 @@ FastMultipole.body_to_multipole!(system::PanelWake{ConstantDoublet, 1, <:Any}, a
 FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole_quad!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-function propagate!(wake::PanelWake, dt)
+function propagate!(wake::PanelWake, dt; step=0)
     for i_surf in eachindex(wake.nodes)
         view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
         view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
@@ -586,12 +586,27 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
     method_unsteady::MU                             # particle shedding method
+    gamma_trim_threshold::TF              # remove particles with |Gamma| below this value
+    # Particle merge settings
+    merge_every::Int                      # merge every N steps (0 = disabled)
+    merge_r::Float64                      # r_merge kwarg
+    merge_sigma_relative::Bool            # sigma_relative kwarg
+    merge_max_sigma_ratio::Float64        # max_sigma_ratio kwarg
+    merge_skip_static::Bool               # skip_static kwarg
+    merge_verbose::Bool
 end
 
 function PanelParticleWake(body::AbstractLiftingBody;
         nwakerows=3, max_particles=10000,
         method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
         method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
+        gamma_trim_threshold=1e-8,
+        merge_every=0,
+        merge_r=0.5,
+        merge_sigma_relative=true,
+        merge_max_sigma_ratio=2.0,
+        merge_skip_static=true,
+        merge_verbose=false,
         kwargs...)
 
     panel_wake = PanelWake(body; nwakerows, kwargs...)
@@ -604,8 +619,10 @@ function PanelParticleWake(body::AbstractLiftingBody;
     # Infer type params from the actual panel_wake
     WTK = typeof(panel_wake).parameters[1]
     WNK = typeof(panel_wake).parameters[2]
+    gamma_trim_threshold_TF = convert(TF, gamma_trim_threshold)
     return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
-        panel_wake, pfield, method_trailing, method_unsteady
+        panel_wake, pfield, method_trailing, method_unsteady, gamma_trim_threshold_TF,
+        merge_every, merge_r, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, merge_verbose
     )
 end
 
@@ -646,13 +663,40 @@ end
 
 update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
-function propagate!(w::PanelParticleWake, dt; relax=true)
+function trim_weak_particles!(w::PanelParticleWake)
+    threshold = w.gamma_trim_threshold
+    threshold <= zero(threshold) && return nothing
+
+    for i in w.pfield.np:-1:1
+        gamma = FLOWVPM.get_Gamma(w.pfield, i)
+        gamma_mag = sqrt(sum(abs2, gamma))
+        if gamma_mag < threshold
+            FLOWVPM.remove_particle(w.pfield, i)
+        end
+    end
+
+    return nothing
+end
+
+function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
 
     # panel wake
     propagate!(w.panel_wake, dt)
 
     # convect particles
     FLOWVPM._euler(w.pfield, dt; relax)
+
+    # particle merging
+    if w.merge_every > 0 && step > 0 && step % w.merge_every == 0
+        FLOWVPM.merge_particles!(w.pfield;
+            r_merge=w.merge_r,
+            sigma_relative=w.merge_sigma_relative,
+            max_sigma_ratio=w.merge_max_sigma_ratio,
+            skip_static=w.merge_skip_static,
+        )
+    end
+
+    trim_weak_particles!(w)
 end
 
 function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)

@@ -81,7 +81,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
                                 neighbor::Matrix{Int}=calc_neighbors(cells),
                                 nnodes=size(nodes, 2), ncells=size(cells, 2),
-                                nsheddings=sum(size(s, 2) for s in _normalize_shedding(shedding)),
+                                nsheddings=sum((size(s, 2) for s in _normalize_shedding(shedding)); init=0),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
                                 Cp=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
@@ -1516,7 +1516,6 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
         nwakes += size(body.shedding[i_surf], 2)
     end
     if nwakes > 0
-        @show body.shedding
 
         # set wake length for visualization (if semi-infinite wake is enabled)
         if body.semiinfinite_wake

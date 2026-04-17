@@ -84,6 +84,88 @@ using LinearAlgebra: diag
         @test custom.backend === backend
     end
 
+    @testset "KrylovSolver solve" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+
+        solver = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), atol=1e-8, rtol=1e-8, itmax=50)
+        pnl.solve!(body, solver)
+
+        @test any(abs.(body.strength[:, 1]) .> 0)
+    end
+
+    @testset "KrylovSolver Dirichlet solve" begin
+        body_direct = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[
+                0 1 1 0;
+                0 0 1 1;
+                0 0 0 0;
+            ],
+            Int[
+                1 1;
+                2 3;
+                3 4;
+            ];
+            check_mesh=false,
+            watertight=false,
+        )
+        body_krylov = deepcopy(body_direct)
+
+        for body in (body_direct, body_krylov)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+        end
+
+        direct = pnl.BackslashDirichlet(body_direct)
+        pnl.solve!(body_direct, direct; backend=pnl.DirectBackend())
+
+        krylov = pnl.KrylovSolver(body_krylov; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=20)
+        pnl.solve!(body_krylov, krylov; backend=pnl.DirectBackend())
+
+        @test isapprox(vec(body_krylov.strength[:, 1]), vec(body_direct.strength[:, 1]); atol=1e-12)
+        @test isapprox(vec(body_krylov.strength[:, 2]), vec(body_direct.strength[:, 2]); atol=1e-12)
+    end
+
+    @testset "KrylovSolver + JacobiPreconditioner" begin
+        make_dirichlet_body() = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[
+                0 1 1 0;
+                0 0 1 1;
+                0 0 0 0;
+            ],
+            Int[
+                1 1;
+                2 3;
+                3 4;
+            ];
+            check_mesh=false,
+            watertight=false,
+        )
+
+        body_no_pc = make_dirichlet_body()
+        body_pc = make_dirichlet_body()
+
+        for body in (body_no_pc, body_pc)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+        end
+
+        solver_no_pc = pnl.KrylovSolver(body_no_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        solver_pc = pnl.KrylovSolver(body_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50, preconditioner_cell_size=0.5)
+
+        @test solver_pc.preconditioner !== nothing
+        @test length(solver_pc.preconditioner.cell_body_indices) > 0
+
+        pnl.solve!(body_no_pc, solver_no_pc)
+        pnl.solve!(body_pc, solver_pc)
+
+        @test isapprox(vec(body_pc.strength[:, 1]), vec(body_no_pc.strength[:, 1]); atol=1e-6)
+        @test isapprox(vec(body_pc.strength[:, 2]), vec(body_no_pc.strength[:, 2]); atol=1e-6)
+    end
+
     @testset "FGSSolver construction" begin
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
@@ -109,14 +191,8 @@ using LinearAlgebra: diag
         @test any(abs.(body2.strength[:, 1]) .> 0)
     end
 
-    @testset "calc_elprescribe and numtype" begin
+    @testset "numtype" begin
         body_source = make_nonlifting(pnl.ConstantSource)
-        body_vortex_closed = pnl.NonLiftingBody{pnl.VortexRing}(copy(NODES_2TRI), copy(CELLS_2TRI); watertight=true)
-        body_vortex_open = pnl.NonLiftingBody{pnl.VortexRing}(copy(NODES_2TRI), copy(CELLS_2TRI); watertight=false)
-        @test pnl.calc_elprescribe(body_source) == Tuple{Int, Float64}[]
-        @test pnl.calc_elprescribe(body_vortex_closed) == [(1, 0.0)]
-        @test pnl.calc_elprescribe(body_vortex_open) == Tuple{Int, Float64}[]
-
         @test pnl.numtype(body_source) == Float64
         body32 = pnl.NonLiftingBody{pnl.ConstantSource}(Float32.(NODES_2TRI), copy(CELLS_2TRI))
         @test pnl.numtype(body32) == Float32

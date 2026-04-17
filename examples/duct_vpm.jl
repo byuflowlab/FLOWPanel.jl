@@ -90,7 +90,7 @@ end
 # body_A.Das[1] .= repeat(Vinf * dt_val * eta, 1, size(body_A.Das[1], 2))
 # wake_A = pnl.PanelWake(body_A; nwakerows=100)
 # frames_A = make_frames(body_A)
-# solver_A = pnl.BackslashDirichlet(body_A)
+# solver_A = pnl.Backslash(body_A)
 
 # @time pnl.simulate!(body_A, wake_A, frames_A, maneuver, Uinf, t_range;
 #     eta, body_solver=solver_A, backend, verbose=true, path="panel_wake", name="test_stability")
@@ -108,7 +108,7 @@ wake_B = pnl.PanelParticleWake(body_B; max_particles=50000, nwakerows=1,
                             method_trailing=pnl.OverlapPPS(2.0, 1),
                             method_unsteady=pnl.OverlapPPS(2.0, 3))
 frames_B = make_frames(body_B)
-# solver_B = pnl.BackslashDirichlet(body_B)
+# solver_B = pnl.Backslash(body_B)
 solver_B = pnl.FGSSolver(body_B;
             max_iterations=500,
             tolerance=1.0e-6,
@@ -163,7 +163,7 @@ strength_B = copy(body_B.strength)
 #     wake_C = pnl.PanelWake(body_C; nwakerows=3)
 #     frames_C = make_frames(body_C)
 #     pnl.simulate!(body_C, wake_C, frames_C, maneuver, Uinf, t_range;
-#         eta, body_solver=pnl.BackslashDirichlet(body_C), backend, verbose=false, path=nothing)
+#         eta, body_solver=pnl.Backslash(body_C), backend, verbose=false, path=nothing)
 #     strength_C = body_C.strength
 #     rel_err_C = abs.(strength_A[significant] .- strength_C[significant]) ./ abs.(strength_A[significant])
 #     sorted_C = sort(rel_err_C)

@@ -175,7 +175,7 @@ solver_fgs = pnl.FGSSolver(body_fgs;
     reverse_pass=false,
     verbose=false
 )
-solver_bsd = pnl.BackslashDirichlet(body_bsd)
+solver_bsd = pnl.Backslash(body_bsd)
 
 println("solving...")
 pnl.solve!(body_bsd, solver_bsd; backend)

@@ -110,7 +110,7 @@ n_steps = 21
 t_range = range(0.0, step=dt_val, length=n_steps)
 
 # Solvers
-solver_wing   = pnl.BackslashDirichlet(wing)
+solver_wing   = pnl.Backslash(wing)
 solver_sphere = pnl.Backslash(sphere)
 
 # Backend

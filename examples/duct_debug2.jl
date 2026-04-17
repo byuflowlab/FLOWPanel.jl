@@ -90,7 +90,7 @@ wake_A = pnl.PanelParticleWake(body_A; max_particles=50000, nwakerows=1,
                             method_trailing=pnl.OverlapPPS(2.0, 1),
                             method_unsteady=pnl.OverlapPPS(2.0, 3))
 frames_A = make_frames(body_A)
-solver_A = pnl.BackslashDirichlet(body_A)
+solver_A = pnl.Backslash(body_A)
 
 pnl.simulate!(body_A, wake_A, frames_A, maneuver, Uinf, t_range;
     eta, body_solver=solver_A, backend, verbose=false, path="vpm", name="bsd")

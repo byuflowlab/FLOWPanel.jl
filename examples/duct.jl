@@ -174,20 +174,20 @@ AOA = AOAs[i]
     # function test_solver(inner_iterations, reverse_pass)
     #     println("Initializing solver with inner_iterations=$inner_iterations, reverse_pass=$reverse_pass...")
         println("Initializaing solver...")
-        @time solver = pnl.FGSSolver(body;
-            max_iterations=500,         # Maximum number of iterations
-            tolerance=1.0e-6,            # Convergence tolerance
-            rlx=1.0,                  # Relaxation factor
-            expansion_order,
-            multipole_acceptance,
-            leaf_size=10000,
-            shrink=true,
-            recenter=false,
-            inner_iterations=20,
-            reverse_pass=false,
-            verbose=false
-        )
-        # solver = pnl.BackslashDirichlet(body)
+        # @time solver = pnl.FGSSolver(body;
+        #     max_iterations=500,         # Maximum number of iterations
+        #     tolerance=1.0e-6,            # Convergence tolerance
+        #     rlx=1.0,                  # Relaxation factor
+        #     expansion_order,
+        #     multipole_acceptance,
+        #     leaf_size=10000,
+        #     shrink=true,
+        #     recenter=false,
+        #     inner_iterations=20,
+        #     reverse_pass=false,
+        #     verbose=false
+        # )
+        solver = pnl.Backslash(body)
 
         println("\nSolving...")
 
@@ -245,7 +245,7 @@ AOA = AOAs[i]
 
     # Save body as VTK
     if paraview
-        name = typeof(solver) <: pnl.BackslashDirichlet ? "duct_dirichlet" : "duct"
+        name = typeof(solver) <: pnl.Backslash ? "duct_dirichlet" : "duct"
         name *= kernel == pnl.VortexRing ? "_vortexring" :
                 kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
                 ""

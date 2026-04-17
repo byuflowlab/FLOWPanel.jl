@@ -151,7 +151,6 @@ drag, and side-force directions.
 function monitor_loading(body::Union{NonLiftingBody, AbstractLiftingBody}, Lhat, Dhat, b;
                         spandirection=[0, 1, 0], dimspan=2, dimchord=1,
                         to_plot=[1, 2, 3], yscalings=[1.0, 1.0, 1.0],
-                        F_fieldname="F",
                         # ------------- PLOT OUTPUTS ---------------------------
                         disp_plot=true,
                         _fig=nothing, _axs=nothing,
@@ -174,8 +173,7 @@ function monitor_loading(body::Union{NonLiftingBody, AbstractLiftingBody}, Lhat,
     # Calculate sectional force along the span
     fs, spanpos = calcfield_sectionalforce(body; spandirection=spandirection,
                                                     dimspan=dimspan,
-                                                    dimchord=dimchord,
-                                                    F_fieldname=F_fieldname)
+                                                    dimchord=dimchord)
 
     # Decompose the force into lift, drag, and sideslip
     lds = decompose(fs, Lhat, Dhat)

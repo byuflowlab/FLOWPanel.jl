@@ -63,7 +63,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
 
     # apply pre-calculations per system
     if precalc
-        for target in targets
+        for target in target_bodies
             pre_evaluate_influence!(target)
         end
     end

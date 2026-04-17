@@ -124,7 +124,7 @@ body.Das .= repeat(Uinfs[:, 1] ./ norm(Uinfs[:, 1]), 1, body.nsheddings+1)
 body.velocity .= Uinfs
 
 # get solver
-solver = pnl.BackslashDirichlet(body)
+solver = pnl.Backslash(body)
 
 # solve body
 backend = pnl.FastMultipoleBackend(

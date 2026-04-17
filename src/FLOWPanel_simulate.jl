@@ -1,44 +1,56 @@
 """
-    ForcesMonitor(nt, TF=Float64; frame=Body())
+    ForceMonitor(nt, i_system, i_frame, rho; Sref=1.0, Lref=1.0, TF=Float64)
 
-Simple storage monitor for integrated force and moment histories over `nt`
-simulation steps.
+Storage monitor for integrated force and moment coefficient histories over `nt`
+simulation steps.  Forces and moments on `systems[i_system]` are computed in
+the coordinate system of `frames[i_frame]`.
+
+`CF` is normalised by `0.5 ρ |U∞|² Sref` and `CM` by `0.5 ρ |U∞|² Sref Lref`,
+with moments taken about the origin of the specified frame.
 """
-struct ForcesMonitor{TF,F}
+struct ForceMonitor{TF}
     CF::Vector{FastMultipole.SVector{3,TF}}
     CM::Vector{FastMultipole.SVector{3,TF}}
-    frame::F
+    i_system::Int
+    i_frame::Int
+    Sref::TF
+    Lref::TF
+    rho::TF
 end
 
-"""
-    ForcesMonitor(nt, TF=Float64; frame=Body())
-
-Construct a force/moment history monitor with `nt` output slots.
-"""
-function ForcesMonitor(nt::Int, TF=Float64; frame=Body())
+function ForceMonitor(nt::Int, i_system::Int;
+                       i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64)
     CF = zeros(FastMultipole.SVector{3,TF}, nt)
     CM = zeros(FastMultipole.SVector{3,TF}, nt)
-
-    return ForcesMonitor{TF,typeof(frame)}(CF, CM, frame)
+    return ForceMonitor{TF}(CF, CM, i_system, i_frame, TF(Sref), TF(Lref), TF(rho))
 end
 
-function (monitor::ForcesMonitor)(systems::Tuple, wakes::Tuple, i_step::Int)
-    CF, CM = body_forces(systems[1].surfaces, systems[1].properties,
-                            systems[1].reference[], systems[1].freestream[],
-                            systems[1].symmetric, monitor.frame)
-    monitor.CF[i_step + 1] = CF
-    monitor.CM[i_step + 1] = CM
-end
+function (monitor::ForceMonitor)(systems::Tuple, wakes::Tuple,
+                                  frames::AbstractVector{<:ReferenceFrame},
+                                  uinf, i_step::Int)
+    body = systems[monitor.i_system]
 
-"""
-    FrameForcesMonitor
+    # total force in global frame (body.F already populated by calcfield_F!)
+    Ftot = calcfield_Ftot(body)
+    Fvec = FastMultipole.SVector{3}(Ftot[1], Ftot[2], Ftot[3])
 
-Storage type for frame-resolved force and moment histories.
-"""
-struct FrameForcesMonitor{TF,F}
-    CF::Vector{FastMultipole.SVector{3,TF}}
-    CM::Vector{FastMultipole.SVector{3,TF}}
-    frame::F
+    if monitor.i_frame < 0
+        # global frame: moment about the origin
+        Mtot = calcfield_Mtot(body, zeros(3))
+        Mvec = FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
+    else
+        # frame-local: moment about frame origin, rotated into frame axes
+        origin_global, R_f2g = frame_global_transform(frames, monitor.i_frame)
+        Mtot = calcfield_Mtot(body, collect(origin_global))
+        R_g2f = transpose(R_f2g)
+        Fvec = R_g2f * Fvec
+        Mvec = R_g2f * FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
+    end
+
+    # normalise to coefficients
+    qinf = monitor.rho / 2 * (uinf[1]^2 + uinf[2]^2 + uinf[3]^2)
+    monitor.CF[i_step + 1] = Fvec / (qinf * monitor.Sref)
+    monitor.CM[i_step + 1] = Mvec / (qinf * monitor.Sref * monitor.Lref)
 end
 
 #--- dphidt dispatch helpers ---#
@@ -51,6 +63,22 @@ _compute_dphidt!(::AbstractBody, dt) = nothing
 
 _get_dphidt(sys::AbstractLiftingBody) = sys.dphidt
 _get_dphidt(::AbstractBody) = nothing
+
+#--- Das initialization helpers ---#
+
+function _accumulate_Das!(sys::AbstractLiftingBody, eta)
+    for ishedding in eachindex(sys.Das)
+        Das = sys.Das[ishedding]
+        Vte = sys.velocity_te[ishedding]
+        for j in axes(Das, 2)
+            Das[1, j] += Vte[1, j] * eta
+            Das[2, j] += Vte[2, j] * eta
+            Das[3, j] += Vte[3, j] * eta
+        end
+    end
+end
+
+_accumulate_Das!(::AbstractBody, eta) = nothing
 
 #--- wake tuple helpers ---#
 
@@ -77,7 +105,7 @@ end
 #--- single-body backward-compat wrapper ---#
 
 """
-    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=BackslashDirichlet(system), optargs...)
+    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=Backslash(system), optargs...)
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), rho=1.225, monitors=(), ...)
 
 Advance one or more coupled body-wake systems through `t_range`, solving the
@@ -85,7 +113,7 @@ aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
 function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames, maneuver!::Function, Uinf::Function, t_range;
-        body_solver=BackslashDirichlet(system), optargs...
+        body_solver=Backslash(system), optargs...
     ) where {TK, NK, TF}
     # wrap maneuver to match tuple signature
     _maneuver!(frames, systems, wakes, t) = maneuver!(frames, systems[1], wakes[1], t)
@@ -107,6 +135,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         monitors=(),
         cp_correct_kuttacondition=true,
         cp_clip=nothing,
+        set_Das_eta_kinematic=NaN,
+        set_Das_eta_freestream=NaN,
         verbose=false
     )
     # create save path if it does not exist
@@ -120,10 +150,42 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         calc_controlpoints!(sys; off=abs(sys.CPoffset))
     end
 
+    # set Das from freestream and/or kinematic velocity at trailing edges
+    if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
+        dt0 = t_range[2] - t_range[1]
+
+        if !isnan(set_Das_eta_freestream)
+            uinf0 = Uinf(t_range[1])
+            for sys in systems
+                extra_reset!(sys)
+                extra_apply_freestream!(sys, uinf0)
+                _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
+            end
+        end
+
+        if !isnan(set_Das_eta_kinematic)
+            for sys in systems
+                extra_reset!(sys)
+            end
+            kinematic_velocity!(systems, frames)
+            for sys in systems
+                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+            end
+        end
+
+        # reset velocity fields modified during Das computation
+        for sys in systems
+            reset!(sys)
+        end
+    end
+
     # begin simulation
     i_step = 0
     for t in t_range
-        verbose && println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+        if verbose
+            print("\r\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+            flush(stdout)
+        end
 
         #------- controls -------#
 
@@ -171,7 +233,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
         # apply wake velocity to body surface
         if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
         end
 
         # solve systems with cross-body coupling
@@ -183,7 +245,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         # system-on-all influence
-        influence!(targets, systems, backend; scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        influence!(targets, systems, backend; precalc=false, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
@@ -219,7 +281,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         for monitor in monitors
-            monitor(systems, wakes, i_step)
+            monitor(systems, wakes, frames, uinf, i_step)
         end
 
         #------- propagate system -------#
@@ -230,7 +292,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
             # propagate wake
             for w in wakes
-                !isnothing(w) && propagate!(w, dt)
+                !isnothing(w) && propagate!(w, dt; step=i_step)
             end
 
             # propagate rigid-body kinematics
@@ -253,6 +315,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         # increment step
         i_step += 1
     end
+
+    verbose && println()
 end
 
 get_Gammai(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = NK==2 ? 2 : 1

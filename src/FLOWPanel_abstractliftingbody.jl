@@ -100,8 +100,8 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
                                                   optargs...
                                       ) where {B<:AbstractLiftingBody}
     # Revolves the geometry
-    grid = gt.surface_revolution(args...; loop_dim=loop_dim,
-                                            axis_angle=axis_angle, optargs...)
+    grid = _surface_revolution_compat(args...; loop_dim=loop_dim,
+                                              axis_angle=axis_angle, optargs...)
 
     # Intermediate processing of grid: rotate to align centerline with x-axis
     if gridprocessing==nothing

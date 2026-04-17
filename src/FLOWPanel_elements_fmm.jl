@@ -45,18 +45,18 @@ function rotate_to_panel(v1x::TF, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z) where 
     new_z_y = dz1 * dx2 - dx1 * dz2
     new_z_z = dx1 * dy2 - dy1 * dx2
     new_z_norm = sqrt(new_z_x*new_z_x + new_z_y*new_z_y + new_z_z*new_z_z)
-    new_z_x /= new_z_norm
-    new_z_y /= new_z_norm
-    new_z_z /= new_z_norm
+    new_z_x /= (new_z_norm + eps(new_z_norm))
+    new_z_y /= (new_z_norm + eps(new_z_norm))
+    new_z_z /= (new_z_norm + eps(new_z_norm))
 
     # new x axis: (v3 - v1) / norm(v3-v1)
     new_x_x = v3x - v1x
     new_x_y = v3y - v1y
     new_x_z = v3z - v1z
     new_x_norm = sqrt(new_x_x*new_x_x + new_x_y*new_x_y + new_x_z*new_x_z)
-    new_x_x /= new_x_norm
-    new_x_y /= new_x_norm
-    new_x_z /= new_x_norm
+    new_x_x /= (new_x_norm + eps(new_x_norm))
+    new_x_y /= (new_x_norm + eps(new_x_norm))
+    new_x_z /= (new_x_norm + eps(new_x_norm))
 
     # new y axis: (orthogonal to x and z)
     new_y_x = new_z_y*new_x_z - new_z_z*new_x_y
@@ -162,8 +162,12 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
+    isnan(potential) && println("Warning: NaN potential induced at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
+
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
+
+    isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
 
     # return potential, velocity, velocity_gradient
     return potential+p, velocity+v, velocity_gradient+vg
@@ -550,7 +554,6 @@ function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, s
     # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     TFT = eltype(target)
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
-
     # check if we're on the centroid
     to_centroid = target_Rx * target_Rx + target_Ry * target_Ry + target_Rz * target_Rz
     if to_centroid < eps(eltype(target))
