@@ -154,3 +154,8 @@ function make_basic_triangle_surface()
     mesh = gt.Meshes.SimpleMesh(vertices, triangles)
     return gt.GridTriangleSurface(mesh)
 end
+
+function translate_nodes!(nodes, vector=SVector(0.0, 0.0, 0.0))
+    nodes .+= vector
+    return nodes
+end

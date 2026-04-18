@@ -989,19 +989,19 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
             end
         end
 
-        println(size(solver.G))
-        println(LA.rank(solver.G))
-        println(LA.cond(solver.G))
+        # println(size(solver.G))
+        # println(LA.rank(solver.G))
+        # println(LA.cond(solver.G))
         
         # Factorize G matrix and cache it in solver
-        @show solver.G
+        # @show solver.G
         solver.Glu = lu!(solver.G)
     end
 
     # solve with cached LU
     sol = similar(solver.rhs)
     t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
-    println("Solve: ", sol[1:10])
+    # println("Solve: ", sol[1:2])
     
     # write solution back
     for (bi, b) in enumerate(bodies)

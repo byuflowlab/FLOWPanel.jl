@@ -144,10 +144,10 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
     # check for wake (if any)
-    p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
+    # p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
 
     # return potential, velocity, velocity_gradient
-    return potential+p, velocity+v, velocity_gradient+vg
+    return potential, velocity, velocity_gradient
 end
 
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
@@ -167,7 +167,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
 
-    isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
+    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
 
     # return potential, velocity, velocity_gradient
     return potential+p, velocity+v, velocity_gradient+vg
@@ -881,9 +881,9 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         v2x, v2y, v2z = v2[1], v2[2], v2[3]
 
         # get the wake shedding direction using correct Das columns
-        i_surf = source_system.shedding_full[3, i_source]
-        das_col_1 = source_system.shedding_full[5, i_source]  # Das column for TE1
-        das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
+        @show i_surf = source_system.shedding_full[3, i_source]
+        @show das_col_1 = source_system.shedding_full[5, i_source]  # Das column for TE1
+        @show das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
         Dax, Day, Daz = source_system.Das[i_surf][1, das_col_1], source_system.Das[i_surf][2, das_col_1], source_system.Das[i_surf][3, das_col_1]
 
         # get strength
