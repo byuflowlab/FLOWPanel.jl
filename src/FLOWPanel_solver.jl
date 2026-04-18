@@ -78,8 +78,7 @@ end
 function calc_bc_noflowthrough(Us::AbstractMatrix{T1},
                                normals::AbstractMatrix{T2}) where {T1, T2}
     RHS = zeros(promote_type(T1, T2), size(Us, 2))
-    calc_bc_noflowthrough!(RHS, Us, normals)
-    return RHS
+    return calc_bc_noflowthrough!(RHS, Us, normals)
 end
 
 function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, <:Any, <:Any, true}, backend=DirectBackend(); optargs...)
@@ -87,8 +86,8 @@ function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union
     set_strengths(self)
 
     influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
-    RHS .= self.potential
-    RHS .*= -1.0
+    RHS .-= self.potential
+    return RHS
 end
 
 ################################################################################
@@ -967,10 +966,8 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         set_strengths(body)
     end
 
-    ### BUILD INDUCED
-    ### Second tuple is only dirichlet bodies since only they contribute to the potential BCs
-    influence!(bodies, bodies; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
-    
+    influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+
     ### get the boundary_condition for each body to write the RHS
     boundary_condition!(bodies, solver, backend)
 
@@ -979,28 +976,32 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         fill!(solver.G, 0)
         
         # Build G matrix
-        # G if source T-body -> source S-body SI = 1, source,doublet or source,vortex SI = 2
-        t_build = begin @time
+        t_build = @elapsed begin
             for (bi, source) in enumerate(bodies)
                 c = offsets[bi]+1 : offsets[bi+1] # columns of sources
                 for (ti, target) in enumerate(bodies)
                     r = offsets[ti]+1 : offsets[ti+1] # rows of targets
                     _G!(view(solver.G, r, c), target,
                         source;
-                        kerneloffset=source.kerneloffset,
+                        source.kerneloffset,
                         update_geometry=false)
                 end
             end
         end
+
+        println(size(solver.G))
+        println(LA.rank(solver.G))
+        println(LA.cond(solver.G))
         
         # Factorize G matrix and cache it in solver
-        # @show solver.G
+        @show solver.G
         solver.Glu = lu!(solver.G)
     end
 
     # solve with cached LU
     sol = similar(solver.rhs)
     t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
+    println("Solve: ", sol[1:10])
     
     # write solution back
     for (bi, b) in enumerate(bodies)
@@ -1010,7 +1011,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         b.CPoffset = CPoffset_old[bi]
         @views b.velocity  .= solver.Uext[:, r]
         @views b.potential .= solver.phi_ext[r]
-        # _solvedflag(b, true) ## Not defined in FLOWPanel
     end
 
     return t_build, t_solve
