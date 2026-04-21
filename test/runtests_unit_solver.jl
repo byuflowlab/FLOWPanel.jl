@@ -393,11 +393,14 @@ include("test_helpers.jl")
         import GeoIO
 
         run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
+        # run_names = ["nasa_surface_spaced.msh"]
         file_path       = "examples"
         paraview        = true                      # Whether to visualize with Paraview
         out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
 
         files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
+        nodes1 = [42, 43]
+        nodes2 = [34, 35]
 
         # ----------------- SIMULATION PARAMETERS --------------------------------------
         m              = 0.0254
@@ -429,16 +432,17 @@ include("test_helpers.jl")
     
         Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
 
-        bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf)
-                        for (file, chord) in zip(files, chords)]...)
+        bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstnode, secondnode)
+                        for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
         #------------------- SOLVE BODY ----------------------------------------------
-        backend = pnl.DirectBackend()
-        solver = pnl.BackslashCoupled(bodies)
+        backend = (pnl.DirectBackend(), pnl.DirectBackend())
+        # solver = pnl.BackslashCoupled(bodies)
+        solver = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
         println("Solving body...")
 
         # benchmarks(out_file, bodies, solver; backend)
-        pnl.solve!(bodies, solver; backend, update_G=true)
+        pnl.solve!(bodies, solver; backend)
 
         for body in bodies
             body.velocity .= 0.0
@@ -449,8 +453,6 @@ include("test_helpers.jl")
         pot = flow_potential_residuals(bodies)
         println("Flow Tangency Residuals: ", res)
         println("Flow Potential Residuals: ",pot)
-
     end
 
 end
-

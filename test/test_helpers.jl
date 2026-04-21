@@ -168,7 +168,9 @@ function generate_body(
     bodytype::Type{<:pnl.RigidWakeBody},
     scaling::Float64 = 1.0,
     flip::Int64 = 1,
-    Vinf::AbstractVector{<:Real} = zeros(3)
+    Vinf::AbstractVector{<:Real} = zeros(3),
+    firstnode=-1,
+    secondnode=-1
 )
     magVinf = norm(Vinf)
 
@@ -185,13 +187,14 @@ function generate_body(
     @show shedding = pnl.calc_shedding_from_seed(
         grid._nodes,
         pnl.grid2cells(grid),
-        42, 34
+        firstnode, secondnode
     )
+    # shedding = zeros(Int, 6, 0)
 
     # Generate the paneled body
     body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
-    # pnl.write_vtk("wing_nasa", body)
-    # kangaroo    
+    # pnl.write_vtk("spaced_nasa", body)
+
     # initialize wake doublets
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
