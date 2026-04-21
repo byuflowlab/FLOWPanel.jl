@@ -258,7 +258,7 @@ include("test_helpers.jl")
         shedding2 = pnl.calc_shedding_from_seed(nodes2, cells, 1, 2; bbox=bbox2, end_node=3)
         bbox_svec2 = [SVector(0.8, -0.1, -0.1), SVector(5.1, 6.1, 4.1)]
 
-        body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=false)
+        body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=true)
         body2 = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes2, cells, shedding2; check_mesh=false, watertight=false)
         # body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells)
         # body2 = pnl.NonLiftingBody{pnl.ConstantSource}(nodes2, cells)
@@ -284,15 +284,26 @@ include("test_helpers.jl")
         @test size(solver.G) == (nps, nps)
         println("Solving body...")
 
+
         # benchmarks(out_file, bodies, solver; backend)
         pnl.solve!(bodies, solver; backend, update_G=true)
-        for (i, body) in enumerate(bodies) 
-            for j in 1:size(body.strength, 2)
-                println("Strength column $(j):")
-                println("  max = ", maximum(bodies[i].strength[:, j]))
-                println("  min = ", minimum(bodies[i].strength[:, j]))
-            end
+        # for (i, body) in enumerate(bodies) 
+        #     for j in 1:size(body.strength, 2)
+        #         println("Strength column $(j):")
+        #         println("  max = ", maximum(bodies[i].strength[:, j]))
+        #         println("  min = ", minimum(bodies[i].strength[:, j]))
+        #     end
+        # end
+        for body in bodies
+            body.velocity .= 0.0
         end
+        pnl.apply_freestream!(body, Vinf)
+        pnl.apply_freestream!(body2, Vinf)
+        res = flow_tangency_residuals(bodies)
+        pot = flow_potential_residuals(bodies)
+        
+        println("Flow Tangency Residuals: ", res)
+        println("Flow Potential Residuals: ",pot)
     end
 
     @testset "backslash" begin
@@ -330,9 +341,9 @@ include("test_helpers.jl")
         bbox_svec2 = [SVector(0.8, -0.1, -0.1), SVector(5.1, 6.1, 4.1)]
 
         body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=false)
-        body2 = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes2, cells, shedding2; check_mesh=false, watertight=false)
+        # body2 = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes2, cells, shedding2; check_mesh=false, watertight=false)
         # body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells)
-        # body2 = pnl.NonLiftingBody{pnl.ConstantSource}(nodes2, cells)
+        body2 = pnl.NonLiftingBody{pnl.ConstantSource}(nodes2, cells)
 
         magVinf = 10.0
         AOA = 0.0
@@ -345,9 +356,9 @@ include("test_helpers.jl")
             body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
         end
     
-        for i in eachindex(body2.Das)
-            body2.Das[i] .= repeat(Vinf/magVinf, 1, size(body2.Das[i],2))
-        end
+        # for i in eachindex(body2.Das)
+        #     body2.Das[i] .= repeat(Vinf/magVinf, 1, size(body2.Das[i],2))
+        # end
 
         # bodies = (body, body2)
         bodies = (body, body2)
@@ -358,76 +369,88 @@ include("test_helpers.jl")
 
         # benchmarks(out_file, bodies, solver; backend)
         pnl.solve!(bodies, solver)
-        for (i, body) in enumerate(bodies) 
-            for j in 1:size(body.strength, 2)
-                println("Strength column $(j):")
-                println("  max = ", maximum(bodies[i].strength[:, j]))
-                println("  min = ", minimum(bodies[i].strength[:, j]))
-            end
+        # for (i, body) in enumerate(bodies) 
+        #     for j in 1:size(body.strength, 2)
+        #         println("Strength column $(j):")
+        #         println("  max = ", maximum(bodies[i].strength[:, j]))
+        #         println("  min = ", minimum(bodies[i].strength[:, j]))
+        #     end
+        # end
+        for body in bodies
+            body.velocity .= 0.0
         end
+        pnl.apply_freestream!(body, Vinf)
+        pnl.apply_freestream!(body2, Vinf)
+        res = flow_tangency_residuals(bodies)
+        pot = flow_potential_residuals(bodies)
+        println("Flow Tangency Residuals: ", res)
+        println("Flow Potential Residuals: ",pot)
 
         # @show CL, CD = postprocess!(bodies, Vinf, rho, backend, chords, span)
     end
 
-    # @testset "backslash_meshes" begin
-    #     import GeoIO
+    @testset "backslash_meshes" begin
+        import GeoIO
 
-    #     run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
-    #     file_path       = "examples"
-    #     paraview        = true                      # Whether to visualize with Paraview
-    #     out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+        run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
+        file_path       = "examples"
+        paraview        = true                      # Whether to visualize with Paraview
+        out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
 
-    #     files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
+        files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
 
-    #     # ----------------- SIMULATION PARAMETERS --------------------------------------
-    #     m              = 0.0254
-    #     AOA             = 0.0                      # (deg) freestream angle of attack
-    #     magVinf         = 117.3 * m * 12                      # (m/s) freestream velocity
-    #     rho             = 1.225                     # (kg/m^3) air density
+        # ----------------- SIMULATION PARAMETERS --------------------------------------
+        m              = 0.0254
+        AOA             = 0.0                      # (deg) freestream angle of attack
+        magVinf         = 117.3 * m * 12                      # (m/s) freestream velocity
+        rho             = 1.225                     # (kg/m^3) air density
 
-    #     # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-    #     c_body1 = 10 * m
-    #     b = 60 * m                            # (m) span length
-    #     c_body2 = 2
-    #     AR_body1 = b / c_body1                             # (m) span length
-    #     AR_body2 = b / c_body2                             # (m) span length
+        # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+        c_body1 = 10 * m
+        b = 60 * m                            # (m) span length
+        c_body2 = 2
+        AR_body1 = b / c_body1                             # (m) span length
+        AR_body2 = b / c_body2                             # (m) span length
 
-    #     chords = [c_body1, c_body2]
-    #     ARs = [AR_body1, AR_body2] 
-    #     Sref = b * (c_body1 + c_body2)
+        chords = [c_body1, c_body2]
+        ARs = [AR_body1, AR_body2] 
+        Sref = b * (c_body1 + c_body2)
 
-    #     scaling = 1.0
-    #     # ----------------- SOLVER SETTINGS -------------------------------------------
+        scaling = 1.0
+        # ----------------- SOLVER SETTINGS -------------------------------------------
 
-    #     # Body and wake model
-    #     kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
-    #     # body type
-    #     bodytype = pnl.RigidWakeBody{kernel}
+        # Body and wake model
+        kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+        # body type
+        bodytype = pnl.RigidWakeBody{kernel}
 
-    #     # Processing
-    #     clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
+        # Processing
+        clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
     
-    #     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+        Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
 
-    #     bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf)
-    #                     for (file, chord) in zip(files, chords)]...)
+        bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf)
+                        for (file, chord) in zip(files, chords)]...)
 
-    #     #------------------- SOLVE BODY ----------------------------------------------
-    #     backend = pnl.DirectBackend()
-    #     solver = pnl.BackslashCoupled(bodies)
-    #     println("Solving body...")
+        #------------------- SOLVE BODY ----------------------------------------------
+        backend = pnl.DirectBackend()
+        solver = pnl.BackslashCoupled(bodies)
+        println("Solving body...")
 
-    #     # benchmarks(out_file, bodies, solver; backend)
-    #     pnl.solve!(bodies, solver; backend, update_G=true)
-    #     println("Strength column 1:")
-    #     println("  max = ", maximum(bodies[2].strength[:, 1]))
-    #     println("  min = ", minimum(bodies[2].strength[:, 1]))
+        # benchmarks(out_file, bodies, solver; backend)
+        pnl.solve!(bodies, solver; backend, update_G=true)
 
-    #     println("Strength column 2:")
-    #     println("  max = ", maximum(bodies[2].strength[:, 2]))
-    #     println("  min = ", minimum(bodies[2].strength[:, 2]))
+        for body in bodies
+            body.velocity .= 0.0
+        end
+        pnl.apply_freestream!(bodies[1], Vinf)
+        pnl.apply_freestream!(bodies[2], Vinf)
+        res = flow_tangency_residuals(bodies)
+        pot = flow_potential_residuals(bodies)
+        println("Flow Tangency Residuals: ", res)
+        println("Flow Potential Residuals: ",pot)
 
-    # end
+    end
 
 end
 

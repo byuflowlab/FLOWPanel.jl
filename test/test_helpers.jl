@@ -181,28 +181,17 @@ function generate_body(
     # Wrap into Grid object
     grid = pnl.gt.GridTriangleSurface(msh)
 
-    # Create trailing edge line
-    nte = 200
-    trailingedge = zeros(3, nte)
-    trailingedge[1, :] .= chord
-    trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
-    trailingedge[3, :] .= 0.0
-
     # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(
+    @show shedding = pnl.calc_shedding_from_seed(
         grid._nodes,
         pnl.grid2cells(grid),
-        trailingedge;
-        tolerance = 0.001 * span,
-        debug = true
+        42, 34
     )
-    # @show shedding = [shedding]
-    # @show grid._nodes
-    # @show pnl.grid2cells(grid)
 
     # Generate the paneled body
     body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
-
+    # pnl.write_vtk("wing_nasa", body)
+    # kangaroo    
     # initialize wake doublets
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
@@ -276,4 +265,51 @@ function get_chord_span(nodes::AbstractMatrix{<:Real})
     span  = maximum(y) - minimum(y)
 
     return chord, span
+end
+
+"""
+Assumes freestream has already been applied.
+"""
+function flow_tangency_residuals(bodies::Tuple)
+    for body in bodies
+        calc_normals!(body)
+        calc_controlpoints!(body; off=1e-10)
+    end
+
+    influence!(bodies, bodies; velocity=true)
+
+    res = zeros(length(bodies))
+    for (i, body) in enumerate(bodies)
+        r = 0.0
+        for (vel, normal) in zip(eachcol(body.velocity), eachcol(body.normals))
+            vx, vy, vz = vel
+            nx, ny, nz = normal
+            r1 = vx * nx + vy * ny + vz * nz
+            r += r1 * r1
+        end
+        res[i] = r / size(body.normals, 2)
+    end
+
+    return res
+end
+
+function flow_potential_residuals(bodies::Tuple)
+    # bodies = Tuple(body for body in bodies if typeof(body) <:pnl.RigidWakeBody)
+    for body in bodies
+        calc_normals!(body)
+        calc_controlpoints!(body; off=-1e-10)
+        body.potential .= 0.0
+    end
+
+    influence!(bodies, bodies; scalar_potential=true, velocity=false)
+    res = zeros(length(bodies))
+    for (i, body) in enumerate(bodies)
+        r = 0.0
+        for potential in body.potential
+            r += potential * potential
+        end
+        res[i] = r / length(body.potential)
+    end
+    
+    return res
 end

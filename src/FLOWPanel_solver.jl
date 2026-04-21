@@ -83,9 +83,6 @@ end
 
 function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, <:Any, <:Any, true}, backend=DirectBackend(); optargs...)
     # Set source strength for dirichlet bodies
-    set_strengths(self)
-
-    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
     RHS .-= self.potential
     return RHS
 end
@@ -605,6 +602,7 @@ end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
 
+    println("Backslash")
     solver.Uext .= self.velocity
     solver.phi_ext .= self.potential
 
@@ -648,6 +646,8 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...)
+
+    println("FGS")
 
     for (i, body) in enumerate(bodies)
         solver.Uext[i] .= body.velocity
@@ -706,6 +706,8 @@ function solve!(bodies::Tuple, solvers::Tuple;
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
     optargs...)
+
+    println("Tuple of bodies")
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
@@ -844,7 +846,7 @@ function BackslashCoupled(bodies::Tuple{Vararg{<:AbstractBody{<:Any,<:Any,TF,<:A
     BackslashCoupled{TF}(G, Glu, rhs, Uext, phi_ext)
 end
 
-Backslash(bodies::Tuple) = BackslashCoupled(bodies)
+# Backslash(bodies::Tuple) = BackslashCoupled(bodies)
 
 ### DIRICHLET
 """
@@ -941,6 +943,7 @@ end
 
 function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
 
+    println("BackslashCoupled")
     # Sizes
     npanels = [b.ncells for b in bodies]
     offsets = cumsum(vcat(0, npanels))
@@ -983,7 +986,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
                     r = offsets[ti]+1 : offsets[ti+1] # rows of targets
                     _G!(view(solver.G, r, c), target,
                         source;
-                        source.kerneloffset,
                         update_geometry=false)
                 end
             end
@@ -1013,7 +1015,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views b.potential .= solver.phi_ext[r]
     end
 
-    return t_build, t_solve
+    # return t_build, t_solve
 end
 
 
