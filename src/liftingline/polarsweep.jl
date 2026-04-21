@@ -30,7 +30,7 @@ function run_polarsweep(liftingline::LiftingLine,
                     use_Uind_for_force = false,                                         # Whether to use Uind as opposed to selfUind for force postprocessing
         
                     # ------- OUTPUTS ------------------------------------------
-                    output_distributions = nothing,                                     # Give it an array and it will output spanwise distributions here
+                    output_distributions = nothing,                                     # Give it an array and it will push spanwise distributions there
                     # File outputs
                     sweepname = "polarsweep",                                           # Name of this sweep
                     masterdatabase_file = "alldata.csv",                                # File where to append this sweep
@@ -54,8 +54,6 @@ function run_polarsweep(liftingline::LiftingLine,
                     verbose_sweep0=true, verbose_sweep=true
 
     )
-
-    nondim = 0.5*rho*magUinf^2*Aref      # Normalization factor
 
     ll = liftingline
 
@@ -96,6 +94,8 @@ function run_polarsweep(liftingline::LiftingLine,
     if verbose_sweep0
         println("\t"^(tab_lvl) * "Running AOA sweep...")
     end
+
+    ypos = nothing
         
     for AOAs in aoa_sweeps
     
@@ -149,78 +149,29 @@ function run_polarsweep(liftingline::LiftingLine,
             
             
             # ------------------ POSTPROCESSING -------------------------------
-            
-            Dhat            = Uinf/norm(Uinf)               # Drag direction
-            Shat            = [0, 1, 0]                     # Span direction
-            Lhat            = cross(Dhat, Shat)             # Lift direction
-            
-            lhat            = Dhat                          # Rolling direction
-            mhat            = Shat                          # Pitching direction
-            nhat            = Lhat                          # Yawing direction
-            
-            # NOTE: Coefficients must be evaluated on using the velocity from 
-            #       the effective horseshoes as shown below, which is automatically
-            #       computed by the solver already
-            # ll.Us .= Uinfs
-            # selfUind!(ll)
-            
-            # Calculate stripwise coefficients
-            calcfield_cl(liftingline)
-            calcfield_cd(liftingline)
-            calcfield_cm(liftingline)
-            
-            # Convert velocity to effective swept velocity
-            # NOTE: Forces must use the velocity from the original horseshoes for
-            #       best accuracy, as done here
-            if use_Uind_for_force
-                ll.Us .= Uinfs
-                Uind!(ll, ll.midpoints, ll.Us)
-            end
-            calc_UΛs!(ll, ll.Us)
-            
-            # Force per stripwise element integrating lift and drag coefficient
-            calcfield_F(liftingline, rho)
-            
-            # Integrated force
-            Ftot = calcfield_Ftot(liftingline)
-            
-            # Integrated force decomposed into lift and drag
-            LDS = calcfield_LDS(liftingline, Lhat, Dhat, Shat)
-            
-            L = LDS[:, 1]
-            D = LDS[:, 2]
-            S = LDS[:, 3]
-            
+            distributions = !isnothing(output_distributions) ? [] : nothing
+
+            # Calculate force and moment coefficients
+            calcs = calc_forcemoment_coefficients(ll, Uinfs, Uinf, 
+                                                    rho, cref, bref; 
+                                                    Aref, X0,
+                                                    use_Uind_for_force,
+                                                    distributions)
+
+            # Fetch calculations
+            (; CD, CY, CL) = calcs
+            (; Cl, Cm, Cn) = calcs
+            (; Dhat, Shat, Lhat) = calcs
+            (; lhat, mhat, nhat) = calcs
+            (; q, Aref, bref, cref) = calcs
+
             if !isnothing(output_distributions)
-                # Loading distribution (force per unit span)
-                fs = calcfield_f(liftingline)
-                
-                lds = decompose(fs, Lhat, Dhat)
-                
-                l = lds[1, :]
-                d = lds[2, :]
-                s = lds[3, :]
-            
-                cl = l / (nondim/bref)
-                cd = d / (nondim/bref)
-                cy = s / (nondim/bref)
+                (; spanposition, cd, cy, cl) = distributions[end]
+
+                if isnothing(ypos)
+                    ypos = spanposition
+                end
             end
-    
-            # Integrated moment
-            Mtot = calcfield_Mtot(ll, X0, rho)
-            
-            # Moment decomposed into axes
-            lmn = calcfield_lmn(ll, lhat, mhat, nhat)
-            roll, pitch, yaw = collect(eachcol(lmn))
-            
-            # Coefficients
-            CL = sign(dot(L, Lhat)) * norm(L) / nondim
-            CD = sign(dot(D, Dhat)) * norm(D) / nondim
-            CY = sign(dot(S, Shat)) * norm(S) / nondim
-            
-            Cl = sign(dot(roll, lhat)) * norm(roll) / (nondim*cref)
-            Cm = sign(dot(pitch, mhat)) * norm(pitch) / (nondim*cref)
-            Cn = sign(dot(yaw, nhat)) * norm(yaw) / (nondim*cref)
 
             if verbose_sweep
                 @show CL
@@ -288,8 +239,11 @@ function run_polarsweep(liftingline::LiftingLine,
     # Output spanwise distributions
     if !isnothing(output_distributions)
 
-        ypos = (ll.ypositions[2:end] .+ ll.ypositions[1:end-1]) / 2
-        spanwise_distributions = (; AOA=AOAs, yposition=ypos, cd=cds, cy=cys, cl=cls)
+        if isnothing(ypos)
+            ypos = (ll.ypositions[2:end] .+ ll.ypositions[1:end-1]) / 2
+        end
+
+        spanwise_distributions = (; AOA=AOAs, spanposition=ypos, cd=cds, cy=cys, cl=cls)
 
         push!(output_distributions, spanwise_distributions)
     end

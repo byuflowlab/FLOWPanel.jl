@@ -128,7 +128,7 @@ struct LiftingLine{ R<:Number,
         NDIVS = [length(ypositions)-1, 1, 0]   # Divisions of span, chord, and dummy collapsed dimension (flat surface)
 
         # Generate parametric grid
-        grid = gt.Grid(P_min, P_max, NDIVS)
+        grid = gt.Grid(P_min, P_max, NDIVS; numtype=R)
 
         # Linear indices of grid
         linearindices = LinearIndices(grid._ndivsnodes)
@@ -1097,7 +1097,7 @@ end
 
 
 function calc_sweptnormals!(self::LiftingLine)
-    calc_sweptnormals(self.sweptnormals, self.swepttangents, self.lines, self.nelements)
+    calc_sweptnormals!(self.sweptnormals, self.swepttangents, self.lines, self.nelements)
 end
 
 function calc_sweptnormals!(sweptnormals::AbstractMatrix, 

@@ -29,7 +29,25 @@ end
 mean(xs) = sum(xs)/length(xs)
 
 """
-    simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma; bodytype=RigidWakeBody{Union{ConstantSource,ConstantDoublet}}, span_NDIVS=nothing, rfl_NDIVS=nothing, airfoil_root="naca6412.dat", airfoil_tip="naca6412.dat", airfoil_path=def_rfl_path, opt_args...)
+`direction(; alpha=0, beta=0)`
+
+Return the unit vector of a freestream at `alpha` angle of attack (
+rotation about -y direction) and `beta` sideslip angle (rotation about +z 
+direction).
+
+Both angles must be in degrees.
+"""
+function direction(; alpha::Number=0, beta::Number=0, gamma::Number=0)
+    M = gt.rotation_matrix2(gamma, -alpha, beta)
+    return M[:, 1]
+end
+
+"""
+`simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
+bodytype=RigidWakeBody,
+span_NDIVS="automatic", rfl_NDIVS="automatic",
+airfoil_root="naca6412.dat", airfoil_tip="naca6412.dat",
+airfoil_path=def_rfl_path)`
 
 Generate a symmetric single-section wing and return it as the requested body
 type.
@@ -132,7 +150,7 @@ function distancetoline(line::Matrix; symmetry=nothing)
     X1 = view(line, :, size(line, 2))
 
     if isnothing(symmetry)
-        return distancetoline(X0, X1)
+        return distancetoline(X0, X1)(base)
     else
         X0sym = X0 - 2*dot(X0, symmetry)*symmetry
         X1sym = X1 - 2*dot(X1, symmetry)*symmetry
