@@ -115,8 +115,8 @@ ref_solver2 = pnl.Backslash(ref2)
 
 # Post-process reference solution
 pnl.calcfield_U!((ref1, ref2), Vinf; backend=pnl.FastMultipoleBackend())
-pnl.calcfield_Cp!((ref1, ref2), magVinf)
-pnl.calcfield_F!((ref1, ref2), magVinf, rho)
+pnl.calcfield_P!((ref1, ref2), magVinf, rho)
+pnl.calcfield_F!((ref1, ref2))
 
 F1_ref = sum(ref1.F, dims=2)
 F2_ref = sum(ref2.F, dims=2)
@@ -200,8 +200,8 @@ F1 = sum(body1.F, dims=2)
 F2 = sum(body2.F, dims=2)
 println("Body 1 total force: ", F1)
 println("Body 2 total force: ", F2)
-println("Body 1 max |Cp|: ", maximum(abs.(body1.Cp)))
-println("Body 2 max |Cp|: ", maximum(abs.(body2.Cp)))
+println("Body 1 max |P|: ", maximum(abs.(body1.P)))
+println("Body 2 max |P|: ", maximum(abs.(body2.P)))
 
 # Flow tangency diagnostic (must use tuple form to include cross-body influence)
 println("\n--- Flow Tangency ---")

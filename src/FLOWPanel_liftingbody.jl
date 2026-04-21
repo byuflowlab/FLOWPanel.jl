@@ -51,7 +51,7 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     O::Array{TF,1}                      # Position of CS of original grid
 
     # Fields
-    Cp::Vector{TF}
+    P::Vector{TF}
     F::Matrix{TF}
 
     # Internal variables
@@ -83,7 +83,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                                 nsheddings=sum((size(s, 2) for s in _normalize_shedding(shedding)); init=0),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
-                                Cp=zeros(TF, size(cells, 2)),
+                                P=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
                                 Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
                                 strength=zeros(TF, size(cells, 2), N),
@@ -154,7 +154,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                     nsheddings,
                     Das,
                     Oaxis, O,
-                    Cp, F,
+                    P, F,
                     strength,
                     potential,
                     dphidt,
@@ -1237,7 +1237,11 @@ function trace_trailing_edge(nodes::AbstractMatrix, cells::AbstractMatrix{Int},
 
     seed = _seed_edge_state(nodes, cells, normals, edge_to_cells, Int(first_node), Int(second_node);
                             bbox=bbox)
-    isnothing(seed) && error("Seed edge ($(first_node), $(second_node)) is not a valid two-sided trailing-edge candidate")
+    if isnothing(seed)
+        reason = _edge_state_failure_reason(nodes, cells, normals, edge_to_cells,
+                                            Int(first_node), Int(second_node); bbox=bbox)
+        error("Seed edge ($(first_node), $(second_node)) is not a valid two-sided trailing-edge candidate: $(reason)")
+    end
 
     visited = Set{Tuple{Int, Int}}()
     push!(visited, seed.key)
@@ -1353,6 +1357,33 @@ function _bbox_contains_point(bbox, point)
     bbox === nothing && return true
     lower, upper = _bbox_bounds(bbox)
     return all(lower[i] <= point[i] <= upper[i] for i in eachindex(point))
+end
+
+function _edge_state_failure_reason(nodes, cells, normals, edge_to_cells, tail::Int, head::Int;
+                                    bbox=nothing)
+    key = _canonical_edge(tail, head)
+    haskey(edge_to_cells, key) || return "edge ($(tail), $(head)) does not exist in the mesh"
+
+    midpoint = (view(nodes, :, tail) .+ view(nodes, :, head)) ./ 2
+    if !_bbox_contains_point(bbox, midpoint)
+        lower, upper = _bbox_bounds(bbox)
+        return "edge midpoint $(Tuple(midpoint)) lies outside bbox $(Tuple(lower)) to $(Tuple(upper))"
+    end
+
+    adj = edge_to_cells[key]
+    if length(adj) != 2
+        cells_str = join((string(a[1]) for a in adj), ", ")
+        detail = isempty(cells_str) ? "none" : cells_str
+        return "edge is adjacent to $(length(adj)) panel(s) ($(detail)); exactly 2 are required"
+    end
+
+    c1, c2 = adj[1][1], adj[2][1]
+    if _has_directed_edge(view(cells, :, c1), (tail, head)) ||
+       _has_directed_edge(view(cells, :, c2), (tail, head))
+        return nothing
+    end
+
+    return "edge is shared by panels $(c1) and $(c2), but neither panel contains the directed edge ($(tail), $(head)) in its winding order"
 end
 
 function _turn_angle(v1, v2)

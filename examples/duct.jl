@@ -215,11 +215,11 @@ AOA = AOAs[i]
     @time Us = pnl.calcfield_U!(body; backend)
     pnl.apply_freestream!(body, Uinfs[:,1])
 
-    # Calculate pressure coefficient (based on body.velocity)
-    @time Cps = pnl.calcfield_Cp!(body, magVinf; correct_kuttacondition=true)
+    # Calculate gauge pressure (based on body.velocity)
+    @time Ps = pnl.calcfield_P!(body, magVinf, rho; correct_kuttacondition=true)
 
-    # Calculate the force of each panel (based on Cp)
-    @time Fs = pnl.calcfield_F!(body, magVinf, rho)
+    # Calculate the force of each panel (based on P)
+    @time Fs = pnl.calcfield_F!(body)
 
     # check normal flow condition
     Us_tot = body.velocity

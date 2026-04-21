@@ -41,8 +41,8 @@ slicepoints = hcat([
     0.5 * (body.controlpoints[:, slice_indices[2i - 1]] + body.controlpoints[:, slice_indices[2i]])
     for i in 1:(length(slice_indices) ÷ 2)
 ]...)
-sliceCps = [
-    0.5 * (body.Cp[slice_indices[2i - 1]] + body.Cp[slice_indices[2i]])
+slicePs = [
+    0.5 * (body.P[slice_indices[2i - 1]] + body.P[slice_indices[2i]])
     for i in 1:(length(slice_indices) ÷ 2)
 ]
 sliceUs = [

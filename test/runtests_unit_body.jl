@@ -113,12 +113,12 @@ import GeometricTools as gt
 
         body4.velocity .= 1.0
         body4.potential .= 2.0
-        body4.Cp .= 3.0
+        body4.P .= 3.0
         body4.F .= 4.0
         pnl.reset!(body4)
         @test all(body4.velocity .== 0)
         @test all(body4.potential .== 0)
-        @test all(body4.Cp .== 0)
+        @test all(body4.P .== 0)
         @test all(body4.F .== 0)
 
         @test pnl.get_cell(body4, 1) == (CELLS_2TRI[1, 1], CELLS_2TRI[2, 1], CELLS_2TRI[3, 1])

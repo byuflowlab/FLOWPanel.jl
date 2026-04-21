@@ -4,7 +4,7 @@ import GeometricTools as gt
 using LinearAlgebra: diag
 
 @testset verbose=true "Solvers" begin
-    @testset "Backslash dispatch" begin
+    @testset "Backslash construction" begin
         nlb = make_octa_source_body()
         rwb = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
             Float64[
@@ -20,13 +20,13 @@ using LinearAlgebra: diag
             check_mesh=false,
             watertight=false,
         )
-        @test pnl.Backslash(nlb) isa pnl.BackslashNeumann
-        @test pnl.Backslash(rwb) isa pnl.BackslashDirichlet
+        @test pnl.Backslash(nlb) isa pnl.Backslash
+        @test pnl.Backslash(rwb) isa pnl.Backslash
     end
 
-    @testset "BackslashNeumann construction and solve" begin
+    @testset "Backslash Neumann construction and solve" begin
         body = make_octa_source_body()
-        solver = pnl.BackslashNeumann(body)
+        solver = pnl.Backslash(body)
         @test size(solver.G) == (body.ncells, body.ncells)
         @test all(diag(solver.G) .!= 0)
         @test solver.Glu !== nothing
@@ -48,11 +48,11 @@ using LinearAlgebra: diag
         @test maximum(residual) < 0.2
     end
 
-    @testset "BackslashDirichlet construction and solve" begin
+    @testset "Backslash Dirichlet construction and solve" begin
         body = make_nonlifting(Union{pnl.ConstantSource, pnl.ConstantDoublet}; DBC=true)
         pnl.calc_normals!(body)
         normals = copy(body.normals)
-        solver = pnl.BackslashDirichlet(body)
+        solver = pnl.Backslash(body)
         i1, i2, i3 = body.cells[:, 1]
         centroid1 = (body.nodes[:, i1] + body.nodes[:, i2] + body.nodes[:, i3]) ./ 3
         inward = body.controlpoints[:, 1] - centroid1
@@ -65,7 +65,7 @@ using LinearAlgebra: diag
         body.velocity[3, :] .= 0.2
         normals = pnl.calc_normals!(body)
         expected_sigma = -vec(sum(body.velocity .* normals; dims=1))
-        solver = pnl.BackslashDirichlet(body)
+        solver = pnl.Backslash(body)
         pnl.solve!(body, solver)
         @test any(abs.(body.strength[:, 2]) .> 0)
         @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
@@ -118,7 +118,7 @@ using LinearAlgebra: diag
             body.velocity[3, :] .= 0.2
         end
 
-        direct = pnl.BackslashDirichlet(body_direct)
+        direct = pnl.Backslash(body_direct)
         pnl.solve!(body_direct, direct; backend=pnl.DirectBackend())
 
         krylov = pnl.KrylovSolver(body_krylov; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=20)

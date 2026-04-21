@@ -68,9 +68,9 @@ Ugradmu = pnl.calcfield_Ugradmu(body; off=1e-8, force_cellTE=false, sharpTE=fals
 # total velocity
 pnl.addfields(body, "Ugradmu", "U")
 
-# pressure/force coefficients
-Cps = pnl.calcfield_Cp(body, magVinf)
-Fs = pnl.calcfield_F(body, magVinf, 1.225) # rho
+# pressure/force fields
+Ps = pnl.calcfield_P(body, magVinf, 1.225)
+Fs = pnl.calcfield_F(body)
 
 
 # -------- Visualization ----------------------------------------------------------

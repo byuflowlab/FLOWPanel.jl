@@ -133,8 +133,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
             ),
         rho=1.225,
         monitors=(),
-        cp_correct_kuttacondition=true,
-        cp_clip=nothing,
+        p_correct_kuttacondition=true,
+        p_clip=nothing,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         verbose=false
@@ -254,8 +254,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
             _compute_dphidt!(sys, dt)
         end
 
-        calcfield_Cp!(systems, norm(uinf); dphidt=Tuple(_get_dphidt(s) for s in systems), correct_kuttacondition=fill(cp_correct_kuttacondition, length(systems)), clip=cp_clip)
-        calcfield_F!(systems, norm(uinf), rho)
+        calcfield_P!(systems, norm(uinf), rho; dphidt=Tuple(_get_dphidt(s) for s in systems), correct_kuttacondition=fill(p_correct_kuttacondition, length(systems)), clip=p_clip)
+        calcfield_F!(systems; correct_kuttacondition=fill(p_correct_kuttacondition, length(systems)))
 
         #------- other solvers -------#
 

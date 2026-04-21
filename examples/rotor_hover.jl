@@ -83,6 +83,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 merge_sigma_relative=false, # use relative sigma for merging
                 merge_max_sigma_ratio=2.0, # prevents particles of very different strengths from merging
                 merge_skip_static=true, # skip merging static particles
+                check_neighboring_cells=false, # check neighboring cells for merging (prevents merging across large gaps)
                 merge_verbose=true)
 
 ## =========================================================

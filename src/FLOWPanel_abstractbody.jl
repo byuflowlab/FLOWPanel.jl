@@ -172,7 +172,7 @@ end
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
     body.potential .= 0.0
-    body.Cp .= 0.0
+    body.P .= 0.0
     body.F .= 0.0
     extra_reset!(body)
     return nothing
@@ -308,7 +308,7 @@ Generates:
 - `<name>_<idx>.vtm`      — VTK multiblock
 - `<name>_<idx>_body.vtu` — unstructured triangular surface mesh with data
 
-All fields stored on the body (strength, `Uinf`, `U`, `phi`, `Cp`, `Cps`,
+All fields stored on the body (strength, `Uinf`, `U`, `phi`, `P`, `Cps`,
 `Gamma`, `F`) are written when non-empty.  Body-type-specific fields are added
 via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
 `RigidWakeBody`) can contribute additional data without duplicating the common
@@ -346,8 +346,8 @@ function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
             # Surface velocity  (3 × ncells)
             vtk["velocity", VTKCellData()] = body.velocity
 
-            # Pressure coefficient (ncells,)
-            vtk["pressure coefficient", VTKCellData()] = body.Cp
+            # Gauge pressure (ncells,)
+            vtk["gauge pressure", VTKCellData()] = body.P
 
             # Distributed forces  (3 × ncells)
             vtk["F", VTKCellData()] = body.F

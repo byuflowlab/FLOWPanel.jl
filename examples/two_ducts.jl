@@ -94,8 +94,8 @@ end
 function postprocess!(bodies, Vinf, magVinf, rho, backend)
     pnl.calcfield_U!(bodies; backend)
     pnl.apply_freestream!(bodies, Vinf)
-    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
-    pnl.calcfield_F!(bodies, magVinf, rho)
+    pnl.calcfield_P!(bodies, magVinf, rho; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_F!(bodies)
 end
 
 function report_tangency(bodies, label)

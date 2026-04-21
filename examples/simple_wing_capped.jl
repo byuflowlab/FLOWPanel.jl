@@ -140,11 +140,11 @@ println("Post processing...")
 # Calculate surface velocity U on the body
 @time pnl.calcfield_U!((body,), Vinf; backend=backend)
 
-# Calculate pressure coefficient (based on U + U_∇μ)
-@time pnl.calcfield_Cp!(body, magVinf)
+# Calculate gauge pressure (based on U + U_∇μ)
+@time pnl.calcfield_P!(body, magVinf, rho)
 
-# Calculate the force of each panel (based on Cp)
-@time pnl.calcfield_F!(body, magVinf, rho)
+# Calculate the force of each panel (based on P)
+@time pnl.calcfield_F!(body)
 
 # --------- Integrated forces: lift and induced drag
 

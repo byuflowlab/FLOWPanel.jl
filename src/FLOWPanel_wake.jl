@@ -593,6 +593,7 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
     merge_sigma_relative::Bool            # sigma_relative kwarg
     merge_max_sigma_ratio::Float64        # max_sigma_ratio kwarg
     merge_skip_static::Bool               # skip_static kwarg
+    check_neighboring_cells::Bool         # check_neighboring_cells kwarg
     merge_verbose::Bool
 end
 
@@ -606,6 +607,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
         merge_sigma_relative=true,
         merge_max_sigma_ratio=2.0,
         merge_skip_static=true,
+        check_neighboring_cells=true,
         merge_verbose=false,
         kwargs...)
 
@@ -622,7 +624,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
     gamma_trim_threshold_TF = convert(TF, gamma_trim_threshold)
     return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
         panel_wake, pfield, method_trailing, method_unsteady, gamma_trim_threshold_TF,
-        merge_every, merge_r, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, merge_verbose
+        merge_every, merge_r, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, check_neighboring_cells, merge_verbose
     )
 end
 
@@ -693,6 +695,7 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
             sigma_relative=w.merge_sigma_relative,
             max_sigma_ratio=w.merge_max_sigma_ratio,
             skip_static=w.merge_skip_static,
+            check_neighboring_cells=w.check_neighboring_cells,
         )
     end
 
