@@ -881,9 +881,9 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         v2x, v2y, v2z = v2[1], v2[2], v2[3]
 
         # get the wake shedding direction using correct Das columns
-        @show i_surf = source_system.shedding_full[3, i_source]
-        @show das_col_1 = source_system.shedding_full[5, i_source]  # Das column for TE1
-        @show das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
+        i_surf = source_system.shedding_full[3, i_source]
+        das_col_1 = source_system.shedding_full[5, i_source]  # Das column for TE1
+        das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
         Dax, Day, Daz = source_system.Das[i_surf][1, das_col_1], source_system.Das[i_surf][2, das_col_1], source_system.Das[i_surf][3, das_col_1]
 
         # get strength

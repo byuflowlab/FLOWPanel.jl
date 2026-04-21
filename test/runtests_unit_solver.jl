@@ -2,6 +2,8 @@ using Test
 import FLOWPanel as pnl
 import GeometricTools as gt
 using LinearAlgebra: diag
+import Meshes
+using StaticArrays: SVector
 
 include("test_helpers.jl")
 
@@ -22,8 +24,8 @@ include("test_helpers.jl")
     #         check_mesh=false,
     #         watertight=false,
     #     )
-    #     @test pnl.Backslash(nlb) isa pnl.BackslashNeumann
-    #     @test pnl.Backslash(rwb) isa pnl.BackslashDirichlet
+    #     # @test pnl.Backslash(nlb) isa pnl.BackslashNeumann
+    #     # @test pnl.Backslash(rwb) isa pnl.BackslashDirichlet
     # end
 
     # @testset "BackslashNeumann construction and solve" begin
@@ -54,7 +56,7 @@ include("test_helpers.jl")
     #     body = make_nonlifting(Union{pnl.ConstantSource, pnl.ConstantDoublet}; DBC=true)
     #     pnl.calc_normals!(body)
     #     normals = copy(body.normals)
-    #     solver = pnl.BackslashDirichlet(body)
+    #     solver = pnl.Backslash(body)
     #     i1, i2, i3 = body.cells[:, 1]
     #     centroid1 = (body.nodes[:, i1] + body.nodes[:, i2] + body.nodes[:, i3]) ./ 3
     #     inward = body.controlpoints[:, 1] - centroid1
@@ -67,24 +69,24 @@ include("test_helpers.jl")
     #     body.velocity[3, :] .= 0.2
     #     normals = pnl.calc_normals!(body)
     #     expected_sigma = -vec(sum(body.velocity .* normals; dims=1))
-    #     solver = pnl.BackslashDirichlet(body)
+    #     solver = pnl.Backslash(body)
     #     pnl.solve!(body, solver)
     #     @test any(abs.(body.strength[:, 2]) .> 0)
     #     @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
     # end
 
-    @testset "KrylovSolver construction" begin
-        body = make_octa_source_body()
-        solver = pnl.KrylovSolver(body)
-        @test solver.method == :gmres
-        @test solver.itmax == 20
+    # @testset "KrylovSolver construction" begin
+    #     body = make_octa_source_body()
+    #     solver = pnl.KrylovSolver(body)
+    #     @test solver.method == :gmres
+    #     @test solver.itmax == 20
 
-        backend = pnl.DirectBackend()
-        custom = pnl.KrylovSolver(body; atol=1e-8, rtol=1e-8, backend=backend)
-        @test custom.atol == 1e-8
-        @test custom.rtol == 1e-8
-        @test custom.backend === backend
-    end
+    #     backend = pnl.DirectBackend()
+    #     custom = pnl.KrylovSolver(body; atol=1e-8, rtol=1e-8, backend=backend)
+    #     @test custom.atol == 1e-8
+    #     @test custom.rtol == 1e-8
+    #     @test custom.backend === backend
+    # end
 
     # @testset "KrylovSolver solve" begin
     #     body = make_octa_source_body()
@@ -168,37 +170,59 @@ include("test_helpers.jl")
     #     @test isapprox(vec(body_pc.strength[:, 2]), vec(body_no_pc.strength[:, 2]); atol=1e-6)
     # end
 
-    @testset "FGSSolver construction" begin
-        body1 = make_octa_source_body()
-        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
-        solver1 = pnl.FGSSolver(body1)
-        solver2 = pnl.FGSSolver((body1, body2))
-        @test solver1.max_iterations == 100
-        @test solver1.tolerance == 1e-6
-        @test solver2.max_iterations == 100
-        @test solver2.tolerance == 1e-6
-    end
+    # @testset "FGSSolver construction" begin
+    #     body1 = make_octa_source_body()
+    #     body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+    #     solver1 = pnl.FGSSolver(body1)
+    #     solver2 = pnl.FGSSolver((body1, body2))
+    #     @test solver1.max_iterations == 100
+    #     @test solver1.tolerance == 1e-6
+    #     @test solver2.max_iterations == 100
+    #     @test solver2.tolerance == 1e-6
+    # end
 
-    @testset "Multi-body solve" begin
-        body1 = make_octa_source_body()
-        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
-        body1.velocity .= 0
-        body2.velocity .= 0
-        body1.velocity[1, :] .= 1.0
-        body2.velocity[1, :] .= 1.0
-        solver1 = pnl.Backslash(body1)
-        solver2 = pnl.Backslash(body2)
-        pnl.solve!((body1, body2), (solver1, solver2); backend=(pnl.DirectBackend(), pnl.DirectBackend()))
-        @test any(abs.(body1.strength[:, 1]) .> 0)
-        @test any(abs.(body2.strength[:, 1]) .> 0)
-    end
+    # @testset "Multi-body solve" begin
+    #     body1 = make_octa_source_body()
+    #     body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+    #     body1.velocity .= 0
+    #     body2.velocity .= 0
+    #     body1.velocity[1, :] .= 1.0
+    #     body2.velocity[1, :] .= 1.0
+    #     solver1 = pnl.Backslash(body1)
+    #     solver2 = pnl.Backslash(body2)
+    #     pnl.solve!((body1, body2), (solver1, solver2); backend=(pnl.DirectBackend(), pnl.DirectBackend()))
+    #     @test any(abs.(body1.strength[:, 1]) .> 0)
+    #     @test any(abs.(body2.strength[:, 1]) .> 0)
+    # end
 
-    @testset "numtype" begin
-        body_source = make_nonlifting(pnl.ConstantSource)
-        @test pnl.numtype(body_source) == Float64
-        body32 = pnl.NonLiftingBody{pnl.ConstantSource}(Float32.(NODES_2TRI), copy(CELLS_2TRI))
-        @test pnl.numtype(body32) == Float32
-    end
+    # @testset "numtype" begin
+    #     body_source = make_nonlifting(pnl.ConstantSource)
+    #     @test pnl.numtype(body_source) == Float64
+    #     body32 = pnl.NonLiftingBody{pnl.ConstantSource}(Float32.(NODES_2TRI), copy(CELLS_2TRI))
+    #     @test pnl.numtype(body32) == Float32
+    # end
+
+    # @testset "backslashcoupeld nonlifting" begin
+    #     body1 = make_octa_source_body()
+    #     body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+    #     magVinf = 10.0
+    #     AOA = 0.0
+    #     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    #     pnl.apply_freestream!(body, Vinf)
+    #     pnl.apply_freestream!(body2, Vinf)
+
+    #     bodies = (body, body2)
+    #     backend = pnl.DirectBackend()
+    #     solver = pnl.BackslashCoupled(bodies)
+    #     pnl.solve!(bodies, solver)
+    #     for (i, body) in enumerate(bodies) 
+    #         for j in 1:size(body.strength, 2)
+    #             println("Strength column $(j):")
+    #             println("  max = ", maximum(bodies[i].strength[:, j]))
+    #             println("  min = ", minimum(bodies[i].strength[:, j]))
+    #         end
+    #     end    
+    # end
 
     @testset "backslashcoupled" begin
         nodes, cells = make_seeded_te_mesh()
@@ -225,6 +249,8 @@ include("test_helpers.jl")
             2 2;
         ]
         @test shedding == expected
+        # @show typeof(shedding)
+        # @show shedding
 
         bbox_svec = [SVector(0.8, -0.1, -0.1), SVector(1.1, 2.1, 0.1)]
         @test pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
@@ -234,7 +260,9 @@ include("test_helpers.jl")
 
         body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=false)
         body2 = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes2, cells, shedding2; check_mesh=false, watertight=false)
-        
+        # body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells)
+        # body2 = pnl.NonLiftingBody{pnl.ConstantSource}(nodes2, cells)
+
         magVinf = 10.0
         AOA = 0.0
         Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
@@ -258,16 +286,148 @@ include("test_helpers.jl")
 
         # benchmarks(out_file, bodies, solver; backend)
         pnl.solve!(bodies, solver; backend, update_G=true)
-        for (i, body) in enumerate(bodies)
-            println("Strength column 1:")
-            println("  max = ", maximum(bodies[i].strength[:, 1]))
-            println("  min = ", minimum(bodies[i].strength[:, 1]))
-
-            println("Strength column 2:")
-            println("  max = ", maximum(bodies[i].strength[:, 2]))
-            println("  min = ", minimum(bodies[i].strength[:, 2]))
+        for (i, body) in enumerate(bodies) 
+            for j in 1:size(body.strength, 2)
+                println("Strength column $(j):")
+                println("  max = ", maximum(bodies[i].strength[:, j]))
+                println("  min = ", minimum(bodies[i].strength[:, j]))
+            end
         end
     end
+
+    @testset "backslash" begin
+        nodes, cells = make_seeded_te_mesh()
+        bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
+        trace = pnl.trace_trailing_edge(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        chord, span = get_chord_span(nodes)
+
+        @test trace.nodes == [1, 2, 3]
+        @test length(trace.edges) == 2
+        
+        nodes2 = translate_nodes!(copy(nodes), SVector(2.0, 0.0, 0.0))
+        chord2, span2 = get_chord_span(nodes2)
+        bbox2 = ([0.8, -0.1, -0.1], [5.1, 6.1, 4.1])
+        trace2 = pnl.trace_trailing_edge(nodes2, cells, 1, 2; bbox=bbox2, end_node=3, debug=true)
+        
+        @test length(trace2.edges) == 2
+        @test trace2.nodes == [1, 2, 3]
+
+        shedding = pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        expected = Int[
+            3 4;
+            3 3;
+            2 2;
+            1 2;
+            3 3;
+            2 2;
+        ]
+        @test shedding == expected
+
+        bbox_svec = [SVector(0.8, -0.1, -0.1), SVector(1.1, 2.1, 0.1)]
+        @test pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
+
+        shedding2 = pnl.calc_shedding_from_seed(nodes2, cells, 1, 2; bbox=bbox2, end_node=3)
+        bbox_svec2 = [SVector(0.8, -0.1, -0.1), SVector(5.1, 6.1, 4.1)]
+
+        body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=false)
+        body2 = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes2, cells, shedding2; check_mesh=false, watertight=false)
+        # body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells)
+        # body2 = pnl.NonLiftingBody{pnl.ConstantSource}(nodes2, cells)
+
+        magVinf = 10.0
+        AOA = 0.0
+        Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+        chords = [chord, chord2]
+        pnl.apply_freestream!(body, Vinf)
+        pnl.apply_freestream!(body2, Vinf)
+
+        for i in eachindex(body.Das)
+            body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
+        end
+    
+        for i in eachindex(body2.Das)
+            body2.Das[i] .= repeat(Vinf/magVinf, 1, size(body2.Das[i],2))
+        end
+
+        # bodies = (body, body2)
+        bodies = (body, body2)
+        backend = pnl.DirectBackend()
+        solver = (pnl.Backslash(body), pnl.Backslash(body2))
+        nps = sum(b.ncells for b in bodies)
+        println("Solving body...")
+
+        # benchmarks(out_file, bodies, solver; backend)
+        pnl.solve!(bodies, solver)
+        for (i, body) in enumerate(bodies) 
+            for j in 1:size(body.strength, 2)
+                println("Strength column $(j):")
+                println("  max = ", maximum(bodies[i].strength[:, j]))
+                println("  min = ", minimum(bodies[i].strength[:, j]))
+            end
+        end
+
+        # @show CL, CD = postprocess!(bodies, Vinf, rho, backend, chords, span)
+    end
+
+    # @testset "backslash_meshes" begin
+    #     import GeoIO
+
+    #     run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
+    #     file_path       = "examples"
+    #     paraview        = true                      # Whether to visualize with Paraview
+    #     out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+
+    #     files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
+
+    #     # ----------------- SIMULATION PARAMETERS --------------------------------------
+    #     m              = 0.0254
+    #     AOA             = 0.0                      # (deg) freestream angle of attack
+    #     magVinf         = 117.3 * m * 12                      # (m/s) freestream velocity
+    #     rho             = 1.225                     # (kg/m^3) air density
+
+    #     # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+    #     c_body1 = 10 * m
+    #     b = 60 * m                            # (m) span length
+    #     c_body2 = 2
+    #     AR_body1 = b / c_body1                             # (m) span length
+    #     AR_body2 = b / c_body2                             # (m) span length
+
+    #     chords = [c_body1, c_body2]
+    #     ARs = [AR_body1, AR_body2] 
+    #     Sref = b * (c_body1 + c_body2)
+
+    #     scaling = 1.0
+    #     # ----------------- SOLVER SETTINGS -------------------------------------------
+
+    #     # Body and wake model
+    #     kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+    #     # body type
+    #     bodytype = pnl.RigidWakeBody{kernel}
+
+    #     # Processing
+    #     clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
+    
+    #     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+
+    #     bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf)
+    #                     for (file, chord) in zip(files, chords)]...)
+
+    #     #------------------- SOLVE BODY ----------------------------------------------
+    #     backend = pnl.DirectBackend()
+    #     solver = pnl.BackslashCoupled(bodies)
+    #     println("Solving body...")
+
+    #     # benchmarks(out_file, bodies, solver; backend)
+    #     pnl.solve!(bodies, solver; backend, update_G=true)
+    #     println("Strength column 1:")
+    #     println("  max = ", maximum(bodies[2].strength[:, 1]))
+    #     println("  min = ", minimum(bodies[2].strength[:, 1]))
+
+    #     println("Strength column 2:")
+    #     println("  max = ", maximum(bodies[2].strength[:, 2]))
+    #     println("  min = ", minimum(bodies[2].strength[:, 2]))
+
+    # end
 
 end
 

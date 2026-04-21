@@ -3,6 +3,7 @@ using LinearAlgebra: norm, dot, I
 import FLOWPanel as pnl
 import GeometricTools as gt
 import FastMultipole
+using StaticArrays: SVector
 
 const NODES_1TRI = Float64[
     0 1 0;
@@ -158,4 +159,121 @@ end
 function translate_nodes!(nodes, vector=SVector(0.0, 0.0, 0.0))
     nodes .+= vector
     return nodes
+end
+
+function generate_body(
+    meshfile::String,
+    chord::Float64,
+    span::Float64,
+    bodytype::Type{<:pnl.RigidWakeBody},
+    scaling::Float64 = 1.0,
+    flip::Int64 = 1,
+    Vinf::AbstractVector{<:Real} = zeros(3)
+)
+    magVinf = norm(Vinf)
+
+    # Read Gmsh mesh
+    msh = GeoIO.load(meshfile).geometry
+
+    # Transform the mesh: scale
+    msh = msh |> Meshes.Scale(scaling)
+
+    # Wrap into Grid object
+    grid = pnl.gt.GridTriangleSurface(msh)
+
+    # Create trailing edge line
+    nte = 200
+    trailingedge = zeros(3, nte)
+    trailingedge[1, :] .= chord
+    trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
+    trailingedge[3, :] .= 0.0
+
+    # Generate TE shedding matrix
+    shedding = pnl.calc_shedding(
+        grid._nodes,
+        pnl.grid2cells(grid),
+        trailingedge;
+        tolerance = 0.001 * span,
+        debug = true
+    )
+    # @show shedding = [shedding]
+    # @show grid._nodes
+    # @show pnl.grid2cells(grid)
+
+    # Generate the paneled body
+    body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
+
+    # initialize wake doublets
+    for i in eachindex(body.Das)
+        body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
+    end
+
+    pnl.apply_freestream!(body, Vinf)
+
+    return body
+end
+
+function make_seeded_te_mesh()
+    nodes = Float64[
+        1 1 1 0 0 0 0 0;
+        0 1 2 0 1 2 0 2;
+        0 0 0 1 1 1 -1 -1;
+    ]
+    cells = Int[
+        4 5 7 8;
+        2 3 1 2;
+        1 2 2 3;
+    ]
+    return nodes, cells
+end
+
+function make_relaxed_seed_mesh(second_edge_z)
+    nodes = Float64[
+        0 1 2 0 1 0 1;
+        0 0 0 1 1 -1 -1;
+        0 0 0 0 0 0 second_edge_z;
+    ]
+    cells = Int[
+        4 6 5 7;
+        1 2 2 3;
+        2 1 3 2;
+    ]
+    return nodes, cells
+end
+
+function postprocess!(bodies, Vinf, rho, backend, chords, span)
+    Dhat = Vinf / norm(Vinf)
+    Shat = [0, 1, 0]
+    Lhat = cross(Dhat, Shat)
+    Sref = 0.0
+    for chord in chords
+        Sref += chord * span
+        @show Sref
+    end
+
+    pnl.calcfield_U!(bodies, Vinf; backend)
+    pnl.apply_freestream!(bodies, Vinf)
+    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_F!(bodies, magVinf, rho)
+    LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
+
+    # Force coefficients
+    @show nondim = 0.5 * rho * norm(Vinf)^2 * Sref
+    CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
+    CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
+
+    return CL, CD
+end
+
+function get_chord_span(nodes::AbstractMatrix{<:Real})
+    @assert size(nodes, 1) == 3 "nodes must be 3×N (x,y,z)"
+
+    x = @view nodes[1, :]
+    y = @view nodes[2, :]
+    z = @view nodes[3, :]
+
+    chord = maximum(x) - minimum(x)
+    span  = maximum(y) - minimum(y)
+
+    return chord, span
 end
