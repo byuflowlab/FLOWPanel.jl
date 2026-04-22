@@ -3,36 +3,6 @@ import FLOWPanel as pnl
 import GeometricTools as gt
 using StaticArrays: SVector
 
-include("test_helpers.jl")
-
-function make_seeded_te_mesh()
-    nodes = Float64[
-        1 1 1 0 0 0 0 0;
-        0 1 2 0 1 2 0 2;
-        0 0 0 1 1 1 -1 -1;
-    ]
-    cells = Int[
-        4 5 7 8;
-        2 3 1 2;
-        1 2 2 3;
-    ]
-    return nodes, cells
-end
-
-function make_relaxed_seed_mesh(second_edge_z)
-    nodes = Float64[
-        0 1 2 0 1 0 1;
-        0 0 0 1 1 -1 -1;
-        0 0 0 0 0 0 second_edge_z;
-    ]
-    cells = Int[
-        4 6 5 7;
-        1 2 2 3;
-        2 1 3 2;
-    ]
-    return nodes, cells
-end
-
 @testset verbose=true "RigidWakeBody" begin
     @testset "construction" begin
         body = make_plate_vortex_body()
@@ -41,6 +11,36 @@ end
         @test length(body.shedding) == 1
         @test size(body.Das[1]) == (3, size(body.shedding[1], 2) + 1)
         @test size(body.strength) == (body.ncells, 1)
+
+        nodes = Float64[
+            0 1 1 0;
+            0 0 1 1;
+            0 0 0 0;
+        ]
+        cells = Int[
+            1 1;
+            2 4;
+            3 3;
+        ]
+        shedding = [reshape(Int[1, 2, 3, 2, 3, 2], 6, 1)]
+
+        body_fixed = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false)
+        pnl.calc_normals!(body_fixed)
+        @test body_fixed.normals[3, 1] > 0
+        @test body_fixed.normals[3, 2] > 0
+
+        body_flipped = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false, flip_normals=true)
+        pnl.calc_normals!(body_flipped)
+        @test body_flipped.normals[3, 1] < 0
+        @test body_flipped.normals[3, 2] < 0
+
+        open_grid = make_basic_triangle_surface()
+        open_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(open_grid, zeros(Int, 6, 0))
+        @test open_grid_body.watertight == false
+
+        closed_grid = make_octa_triangle_surface()
+        closed_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(closed_grid, zeros(Int, 6, 0))
+        @test closed_grid_body.watertight == true
     end
 
     @testset "shedding edge consistency" begin
@@ -63,13 +63,14 @@ end
 
     @testset "seeded shedding trace" begin
         nodes, cells = make_seeded_te_mesh()
+        final_cells = pnl.ensure_consistent_winding(nodes, cells; watertight=false)
         bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
 
-        trace = pnl.trace_trailing_edge(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        trace = pnl.trace_trailing_edge(nodes, final_cells, 1, 2; bbox=bbox, end_node=3)
         @test trace.nodes == [1, 2, 3]
         @test length(trace.edges) == 2
 
-        shedding = pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        shedding = pnl.calc_shedding_from_seed(nodes, final_cells, 1, 2; bbox=bbox, end_node=3)
         expected = Int[
             3 4;
             3 3;
@@ -81,11 +82,19 @@ end
         @test shedding == expected
 
         bbox_svec = [SVector(0.8, -0.1, -0.1), SVector(1.1, 2.1, 0.1)]
-        @test pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
+        @test pnl.calc_shedding_from_seed(nodes, final_cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
 
-        body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false)
+        body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, final_cells, shedding;
+                                                 check_mesh=false, watertight=false,
+                                                 ensure_winding=false)
         @test size(body.shedding[1]) == (6, 2)
         @test size(body.Das[1]) == (3, 3)
+        @test body.cells == final_cells
+        for i in axes(body.shedding[1], 2)
+            pi, nia, nib, pj, nja, njb = body.shedding[1][:, i]
+            @test Set(body.cells[[nia, nib], pi]) == Set([trace.nodes[i], trace.nodes[i+1]])
+            @test Set(body.cells[[nja, njb], pj]) == Set([trace.nodes[i], trace.nodes[i+1]])
+        end
     end
 
     @testset "seeded shedding validation" begin
@@ -110,13 +119,14 @@ end
 
     @testset "seeded shedding backslashcoupled" begin
         nodes, cells = make_seeded_te_mesh()
+        final_cells = pnl.ensure_consistent_winding(nodes, cells; watertight=false)
         bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
 
-        trace = pnl.trace_trailing_edge(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        trace = pnl.trace_trailing_edge(nodes, final_cells, 1, 2; bbox=bbox, end_node=3)
         @test trace.nodes == [1, 2, 3]
         @test length(trace.edges) == 2
 
-        shedding = pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox, end_node=3)
+        shedding = pnl.calc_shedding_from_seed(nodes, final_cells, 1, 2; bbox=bbox, end_node=3)
         expected = Int[
             3 4;
             3 3;
@@ -128,9 +138,16 @@ end
         @test shedding == expected
 
         bbox_svec = [SVector(0.8, -0.1, -0.1), SVector(1.1, 2.1, 0.1)]
-        @test pnl.calc_shedding_from_seed(nodes, cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
+        @test pnl.calc_shedding_from_seed(nodes, final_cells, 1, 2; bbox=bbox_svec, end_node=3) == expected
 
-        body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(nodes, cells, shedding; check_mesh=false, watertight=false)
+        body = pnl.RigidWakeBody{Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(
+            nodes,
+            final_cells,
+            shedding;
+            check_mesh=false,
+            watertight=false,
+            ensure_winding=false
+        )
         
         magVinf = 10.0
         AOA = 0.0

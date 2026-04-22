@@ -44,16 +44,22 @@ trailingedge[1, :] .= chord
 trailingedge[2, :] .= range(-b/2, stop=b/2, length=nte)
 trailingedge[3, :] .= 0.0
 
-shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001 * b)
-
 # --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
-wing = pnl.RigidWakeBody{kernel}(grid, shedding;
+wing = pnl.RigidWakeBody{kernel}(grid;
             CPoffset=1e-14,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
+shedding = pnl.calc_shedding(wing.nodes, wing.cells, trailingedge; tolerance=0.001 * b)
+wing = pnl.RigidWakeBody{kernel}(wing.nodes, wing.cells, shedding;
+            CPoffset=1e-14,
+            kerneloffset=1e-2,
+            kernelcutoff=1e-14,
+            semiinfinite_wake=false,
+            watertight=true,
+            ensure_winding=false)
 
 println("Wing: $(wing.nnodes) nodes, $(wing.ncells) panels, $(wing.nsheddings) shedding edges")
 

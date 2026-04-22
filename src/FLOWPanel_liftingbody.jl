@@ -78,8 +78,8 @@ _normalize_shedding(shedding::Vector{Array{Int, 2}}) = shedding
 
 function RigidWakeBody{E, N, TF, DBC}(
                                 nodes::Matrix{TF}, cells::Matrix{Int}, shedding;
-                                vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
-                                neighbor::Matrix{Int}=calc_neighbors(cells),
+                                vtk_cells=nothing,
+                                neighbor=nothing,
                                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                                 nsheddings=sum((size(s, 2) for s in _normalize_shedding(shedding)); init=0),
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
@@ -93,14 +93,30 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
-                                CPoffset=1e-14,
+                                CPoffset=1e-6,
                                 kerneloffset=1e-8,
                                 kernelcutoff=1e-14,
-                                characteristiclength=characteristiclength_unitary,
+                                characteristiclength=characteristiclength_sqrtarea,
                                 check_mesh=true, watertight=true,
-                                semiinfinite_wake=true
+                                semiinfinite_wake=true,
+                                ensure_winding::Bool=true,
+                                flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
     shedding = _normalize_shedding(shedding)
+    if ensure_winding
+        ensure_consistent_winding!(cells, nodes; watertight, flip_normals)
+    end
+    
+    # get neighbors
+    if isnothing(neighbor) 
+        neighbor = calc_neighbors(cells)
+    end
+
+    # generate vtk_cells if not provided
+    if isnothing(vtk_cells)
+        vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)]
+    end
+    ncells = size(cells, 2)
 
     # for i_surf in eachindex(shedding)
     #     @assert _checkTE(nodes, cells, shedding[i_surf]) "Got invalid trailing edge"
@@ -184,7 +200,7 @@ _write_vtk_body_fields!(vtk, body::RigidWakeBody) =
 
 function RigidWakeBody{E, N, TF, DBC}(
                                 grid::gt.GridTriangleSurface, shedding;
-                                check_mesh=true, CPoffset=1e-14, characteristiclength=characteristiclength_unitary, watertight=true, optargs...
+                                check_mesh=true, CPoffset=1e-14, characteristiclength=characteristiclength_sqrtarea, watertight=true, optargs...
                             ) where {E, N, TF, DBC}
     
     nodes = grid._nodes
@@ -192,9 +208,10 @@ function RigidWakeBody{E, N, TF, DBC}(
 
     # Automated sanity checks for Meshes.jl mesh
     if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
-
+        ensure_winding_local = get(optargs, :ensure_winding, true)
+        flip_normals_local = get(optargs, :flip_normals, false)
         mesh = grid.orggrid
-        watertight = gt.isclosed(mesh)
+        watertight, _ = iswatertight(nodes, cells)
 
         # # Check that topology is consistent with the solver
         # if watertight && E<:VortexRing && N==1
@@ -206,10 +223,14 @@ function RigidWakeBody{E, N, TF, DBC}(
         # Check that control points lay outside the geometry (based on
         # winding number)
         normals = zeros(3, size(cells, 2))
-        calc_normals!(nodes, cells, normals)
+        cells_check = ensure_winding_local ? ensure_consistent_winding(nodes, cells;
+                                                                       watertight=watertight,
+                                                                       flip_normals=flip_normals_local) :
+                                             cells
+        calc_normals!(nodes, cells_check, normals)
 
         controlpoints = zeros(3, size(cells, 2))
-        calc_controlpoints!(nodes, cells, controlpoints, normals;
+        calc_controlpoints!(nodes, cells_check, controlpoints, normals;
                                             off=CPoffset,
                                             characteristiclength=characteristiclength)
 

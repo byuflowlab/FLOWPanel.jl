@@ -29,9 +29,9 @@ const NODES_OCT = Float64[
      0  0  0  0  1 -1;
 ]
 const CELLS_OCT = Int[
-    1 1 2 2 1 1 2 2;
-    3 5 3 5 4 6 4 6;
-    5 3 6 6 3 5 3 4;
+    1 3 2 4 3 2 4 1;
+    3 2 4 1 1 3 2 4;
+    5 5 5 5 6 6 6 6;
 ]
 
 function exact_linear_system(n::Int; seed_shift::Int=0)
@@ -59,7 +59,9 @@ make_nonlifting(::Type{E}, nodes=NODES_2TRI, cells=CELLS_2TRI; kwargs...) where 
     pnl.NonLiftingBody{E}(copy(nodes), copy(cells); kwargs...)
 
 function make_octa_source_body()
-    body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT))
+    body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT); 
+                CPoffset=1e-14,
+                kerneloffset=1e-12)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= 1.0
@@ -140,7 +142,8 @@ end
 function evaluate_velocity_and_potential(target_body, source_body, backend)
     target_body.velocity .= 0
     target_body.potential .= 0
-    pnl.influence!(target_body, source_body, backend; scalar_potential=true, velocity=true)
+    scalar_potential = !FastMultipole.has_vector_potential(source_body)
+    pnl.influence!(target_body, source_body, backend; scalar_potential=scalar_potential, velocity=true)
     return copy(target_body.velocity), copy(target_body.potential)
 end
 
@@ -152,6 +155,13 @@ function make_basic_triangle_surface()
         gt.Meshes.Point(0.0, 0.0, 1.0),
     ]
     triangles = [gt.Meshes.connect((1, 2, 3)), gt.Meshes.connect((1, 3, 4))]
+    mesh = gt.Meshes.SimpleMesh(vertices, triangles)
+    return gt.GridTriangleSurface(mesh)
+end
+
+function make_octa_triangle_surface()
+    vertices = [gt.Meshes.Point(NODES_OCT[1, i], NODES_OCT[2, i], NODES_OCT[3, i]) for i in axes(NODES_OCT, 2)]
+    triangles = [gt.Meshes.connect(Tuple(CELLS_OCT[:, i])) for i in axes(CELLS_OCT, 2)]
     mesh = gt.Meshes.SimpleMesh(vertices, triangles)
     return gt.GridTriangleSurface(mesh)
 end
@@ -184,16 +194,31 @@ function generate_body(
     grid = pnl.gt.GridTriangleSurface(msh)
 
     # Generate TE shedding matrix
-    @show shedding = pnl.calc_shedding_from_seed(
-        grid._nodes,
-        pnl.grid2cells(grid),
-        firstnode, secondnode
-    )
-    # shedding = zeros(Int, 6, 0)
+    shedding = zeros(Int, 6, 0)
 
     # Generate the paneled body
-    body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
+    CPoffset = 1e-6
+    body = bodytype(grid, [shedding]; CPoffset, flip_normals=false)
     # pnl.write_vtk("spaced_nasa", body)
+
+    # Recompute shedding from the finalized cell winding used by `body`.
+    if firstnode == -1 || secondnode == -1
+        @warn "firstnode and secondnode not provided; TE shedding will be disabled. This may cause inaccurate results for lifting bodies."
+    else
+        shedding = pnl.calc_shedding_from_seed(
+            body.nodes,
+            body.cells,
+            firstnode, secondnode
+        )
+        body = bodytype(
+            body.nodes,
+            body.cells,
+            [shedding];
+            CPoffset,
+            flip_normals=false,
+            ensure_winding=false
+        )
+    end
 
     # initialize wake doublets
     for i in eachindex(body.Das)
@@ -240,7 +265,6 @@ function postprocess!(bodies, Vinf, rho, backend, chords, span)
     Sref = 0.0
     for chord in chords
         Sref += chord * span
-        @show Sref
     end
 
     pnl.calcfield_U!(bodies, Vinf; backend)
@@ -250,7 +274,7 @@ function postprocess!(bodies, Vinf, rho, backend, chords, span)
     LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
     # Force coefficients
-    @show nondim = 0.5 * rho * norm(Vinf)^2 * Sref
+    nondim = 0.5 * rho * norm(Vinf)^2 * Sref
     CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
     CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
 
@@ -275,11 +299,11 @@ Assumes freestream has already been applied.
 """
 function flow_tangency_residuals(bodies::Tuple)
     for body in bodies
-        calc_normals!(body)
-        calc_controlpoints!(body; off=1e-10)
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=1e-10)
     end
 
-    influence!(bodies, bodies; velocity=true)
+    pnl.influence!(bodies, bodies; scalar_potential=false, velocity=true)
 
     res = zeros(length(bodies))
     for (i, body) in enumerate(bodies)
@@ -296,15 +320,34 @@ function flow_tangency_residuals(bodies::Tuple)
     return res
 end
 
-function flow_potential_residuals(bodies::Tuple)
-    # bodies = Tuple(body for body in bodies if typeof(body) <:pnl.RigidWakeBody)
+function nonlifting_flow_tangency_max_residual(body::pnl.NonLiftingBody{<:Any, <:Any, <:Any, false})
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body; off=0.0)
+    pnl.influence!(body, body, pnl.DirectBackend(); velocity=true)
+
+    r = 0.0
+    for (vel, normal) in zip(eachcol(body.velocity), eachcol(body.normals))
+        vx, vy, vz = vel
+        nx, ny, nz = normal
+        r = max(r, abs(vx * nx + vy * ny + vz * nz))
+    end
+
+    return r
+end
+
+function nonlifting_flow_tangency_max_residual(body::pnl.NonLiftingBody{<:Any, <:Any, <:Any, true})
+    pnl.calc_normals!(body)
+    return maximum(abs.(vec(body.strength[:, 1]) .+ vec(sum(body.velocity .* body.normals; dims=1))))
+end
+
+function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
     for body in bodies
-        calc_normals!(body)
-        calc_controlpoints!(body; off=-1e-10)
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=cp_off)
         body.potential .= 0.0
     end
 
-    influence!(bodies, bodies; scalar_potential=true, velocity=false)
+    pnl.influence!(bodies, bodies; scalar_potential=true, velocity=false)
     res = zeros(length(bodies))
     for (i, body) in enumerate(bodies)
         r = 0.0
@@ -313,6 +356,6 @@ function flow_potential_residuals(bodies::Tuple)
         end
         res[i] = r / length(body.potential)
     end
-    
+
     return res
 end

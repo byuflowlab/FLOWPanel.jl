@@ -77,6 +77,7 @@ msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Sc
 
 # Wrap Meshes object into a Grid object from GeometricTools
 grid = pnl.gt.GridTriangleSurface(msh)
+body_preview = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 
 # Read all trailing edges
 sheddings = []
@@ -120,7 +121,7 @@ for (trailingedgefile, spandir) in trailingedges
     trailingedge = trailingedge[:, tokeep]
 
     # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*bref)
+    shedding = pnl.calc_shedding(body_preview.nodes, body_preview.cells, trailingedge; tolerance=0.001*bref)
 
     push!(sheddings, shedding)
 
@@ -130,7 +131,9 @@ end
 shedding = hcat(sheddings...)
 
 # Generate paneled body
-body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
+body = bodytype(body_preview.nodes, body_preview.cells, shedding;
+                CPoffset=(-1)^flip * 1e-14,
+                ensure_winding=false)
 
 println("Number of panels:\t$(body.ncells)")
 
