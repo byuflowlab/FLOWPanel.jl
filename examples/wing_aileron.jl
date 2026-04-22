@@ -133,17 +133,17 @@ function generate_body(
     trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
     trailingedge[3, :] .= 0.0
 
-    # Generate TE shedding matrix
+    # Generate the paneled body
+    body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
     shedding = pnl.calc_shedding(
-        grid._nodes,
-        pnl.grid2cells(grid),
+        body.nodes,
+        body.cells,
         trailingedge;
         tolerance = 0.001 * span
     )
-    shedding = [shedding]
-
-    # Generate the paneled body
-    body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
+    body = bodytype(body.nodes, body.cells, [shedding];
+                    CPoffset = (-1)^flip * 1e-14,
+                    ensure_winding=false)
 
     # initialize wake doublets
     for i in eachindex(body.Das)
