@@ -44,15 +44,14 @@ end
 function FunctionalAirfoil(nparameters::Int,
                             alphas::AbstractVector,
                             cls::AbstractVector, cds::AbstractVector, cms::AbstractVector,
-                            alpha0=NaN)
+                            alpha0=NaN, optargs=())
 
-    simple = SimpleAirfoil(alphas, cls, cds, cms)
+    simple = SimpleAirfoil(alphas, cls, cds, cms; optargs...)
 
     fun_cl(aoa, args...) = simple.spl_cl(aoa)
     fun_cd(aoa, args...) = simple.spl_cd(aoa)
     fun_cm(aoa, args...) = simple.spl_cm(aoa)
-
-    fun_claero = fun_cl
+    fun_claero(aoa, args...) = simple.spl_claero(aoa)
 
     return FunctionalAirfoil(nparameters, fun_cl, fun_cd, fun_cm, 
                                 fun_claero, isnan(alpha0) ? simple.alpha0 : alpha0)
@@ -143,16 +142,17 @@ function plot_slice(self::FunctionalAirfoil{N}, alphas, slice;
                                         stl="-",
                                         optargs...) where N
 
-    fun_cl = claero ? calc_claero : calc_cl
+    fun_cl = calc_cl
+    fun_claero = calc_claero
 
     @assert length(slice) == N-1 ""*
         "Invalid slice dimensions; expected $(N-1) dimension, got $(length(slice))"
 
     if isnothing(fig)
-        fig = plt.figure(figsize = [7, 0.75*5*3]*7/9)
+        fig = plt.figure(figsize = [7, 0.75*5*4]*7/9)
     end
     if isnothing(axs)
-        axs = fig.subplots(3, 1)
+        axs = fig.subplots(4, 1)
         axs = pyconvert(Array, axs)
     end
 
@@ -161,14 +161,19 @@ function plot_slice(self::FunctionalAirfoil{N}, alphas, slice;
     ax = axs[1]
     ax.plot(alphas, [fun_cl(self, a, slice...) for a in alphas], stl; optargs...)
 
-    ax.set_ylabel(claero ? L"c_{\ell_\mathrm{aero}}" : L"c_{\ell}")
+    ax.set_ylabel(L"c_{\ell}")
 
     ax = axs[2]
+    ax.plot(alphas, [fun_claero(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_{\ell_\mathrm{aero}}")
+
+    ax = axs[3]
     ax.plot(alphas, [calc_cd(self, a, slice...) for a in alphas], stl; optargs...)
 
     ax.set_ylabel(L"c_d")
 
-    ax = axs[3]
+    ax = axs[4]
     ax.plot(alphas, [calc_cm(self, a, slice...) for a in alphas], stl; optargs...)
 
     ax.set_ylabel(L"c_m")
@@ -639,6 +644,8 @@ struct SimpleAirfoil{N,
     cd::Td                              # Drag coefficient
     cm::Tm                              # Pitching moment coefficient
 
+    claero::Tl                          # Purely-aerodynamic lift coefficient
+
     alpha0::R                           # (deg) AOA at zero lift
 
     # Pre-computed Akima spline
@@ -646,15 +653,18 @@ struct SimpleAirfoil{N,
     spl_cd::Sd
     spl_cm::Sm
 
-    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm) where {Ta, Tl, Td, Tm}
+    spl_claero::Sl
+
+    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm; claero=cl) where {Ta, Tl, Td, Tm}
 
         # Spline data
         spl_cl = math.Akima(alpha, cl)
         spl_cd = math.Akima(alpha, cd)
         spl_cm = math.Akima(alpha, cm)
+        spl_claero = math.Akima(alpha, claero)
 
         # Find AOA at zero lift
-        f(u, p) = [spl_cl(u[1])]
+        f(u, p) = [spl_claero(u[1])]
         u0 = [0.0]
         prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
@@ -664,7 +674,7 @@ struct SimpleAirfoil{N,
             Ta, Tl, Td, Tm, 
             typeof(alpha0),
             typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)
-            }(alpha, cl, cd, cm, alpha0, spl_cl, spl_cd, spl_cm)
+            }(alpha, cl, cd, cm, claero, alpha0, spl_cl, spl_cd, spl_cm, spl_claero)
     end
 
 end
@@ -691,7 +701,7 @@ end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))
 
-calc_claero(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
+calc_claero(self::SimpleAirfoil, alpha) = self.spl_claero(alpha)
 calc_cl(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
 calc_cd(self::SimpleAirfoil, alpha) = self.spl_cd(alpha)
 calc_cm(self::SimpleAirfoil, alpha) = self.spl_cm(alpha)
@@ -702,7 +712,14 @@ function extrapolate(self::SimpleAirfoil, args...; optargs...)
                                                         args...; optargs...)
     alpha *= 180/pi
 
-    return SimpleAirfoil(alpha, cl, cd, cm)
+    if self.cl == self.claero
+        claero = cl
+    else
+        _, claero = extrapolate(self.alpha*pi/180, self.claero, self.cd, self.cm, 
+                                                        args...; optargs...)
+    end
+
+    return SimpleAirfoil(alpha, cl, cd, cm; claero)
 end
 
 """
@@ -717,7 +734,17 @@ function blend(airfoil0::SimpleAirfoil, airfoil1::SimpleAirfoil, weight::Number)
                                         airfoil1.cl, airfoil1.cd, airfoil1.cm, 
                                         weight)
 
-    return SimpleAirfoil(alphas, cls, cds, cms)
+    if airfoil0.cl == airfoil0.claero && airfoil1.cl == airfoil1.claero
+        claero = cls
+    else
+        _, claero = blend(airfoil0.alpha, 
+                                        airfoil0.claero, airfoil0.cd, airfoil0.cm, 
+                                        airfoil1.alpha, 
+                                        airfoil1.claero, airfoil1.cd, airfoil1.cm, 
+                                        weight)
+    end
+
+    return SimpleAirfoil(alphas, cls, cds, cms; claero)
 end
 
 
@@ -772,7 +799,7 @@ of AirfoilPrep, but with some modifications for better robustness and smoothness
 - `cl::Vector{Float64}`: correspnding extrapolated lift coefficients
 - `cd::Vector{Float64}`: correspnding extrapolated drag coefficients
 """
-function extrapolate(alpha, cl, cd, cm, AR=5.0, nalpha=50, mincd=0.0001)
+function extrapolate(alpha, cl, cd, cm; AR=5.0, nalpha=50, mincd=0.0001)
 
     # estimate cdmax
     cdmaxAR = 1.11 + 0.018 * AR
