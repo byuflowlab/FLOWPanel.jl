@@ -590,6 +590,7 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
     # Particle merge settings
     merge_every::Int                      # merge every N steps (0 = disabled)
     merge_r::Float64                      # r_merge kwarg
+    merge_r_hash::Float64                 # r_hash kwarg
     merge_sigma_relative::Bool            # sigma_relative kwarg
     merge_max_sigma_ratio::Float64        # max_sigma_ratio kwarg
     merge_skip_static::Bool               # skip_static kwarg
@@ -604,6 +605,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
         gamma_trim_threshold=1e-8,
         merge_every=0,
         merge_r=0.5,
+        merge_r_hash=-1.0,
         merge_sigma_relative=true,
         merge_max_sigma_ratio=2.0,
         merge_skip_static=true,
@@ -624,7 +626,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
     gamma_trim_threshold_TF = convert(TF, gamma_trim_threshold)
     return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
         panel_wake, pfield, method_trailing, method_unsteady, gamma_trim_threshold_TF,
-        merge_every, merge_r, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, check_neighboring_cells, merge_verbose
+        merge_every, merge_r, merge_r_hash, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, check_neighboring_cells, merge_verbose
     )
 end
 
@@ -692,6 +694,7 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
     if w.merge_every > 0 && step > 0 && step % w.merge_every == 0
         FLOWVPM.merge_particles!(w.pfield;
             r_merge=w.merge_r,
+            r_hash=w.merge_r_hash,
             sigma_relative=w.merge_sigma_relative,
             max_sigma_ratio=w.merge_max_sigma_ratio,
             skip_static=w.merge_skip_static,

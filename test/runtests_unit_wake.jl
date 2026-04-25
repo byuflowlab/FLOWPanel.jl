@@ -31,4 +31,12 @@ import FLOWVPM
         @test wake.pfield.np == 1
         @test collect(FLOWVPM.get_Gamma(wake.pfield, 1)) == [2e-3, 0.0, 0.0]
     end
+
+    @testset "PanelParticleWake stores merge hash radius" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body; merge_r=0.5, merge_r_hash=0.25)
+
+        @test wake.merge_r == 0.5
+        @test wake.merge_r_hash == 0.25
+    end
 end

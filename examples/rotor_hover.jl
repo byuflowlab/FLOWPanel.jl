@@ -5,6 +5,7 @@
 import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
+import GeoIO
 
 ## =========================================================
 # SIMULATION PARAMETERS
@@ -17,7 +18,7 @@ RPM     = 5400      # Rotation speed (rpm)
 Vinf    = magVinf * [0.0, -cosd(AOA), sind(AOA)]
 eta     = 0.3
 
-nrevs   = 1        # Number of revolutions
+nrevs   = 10        # Number of revolutions
 nt      = 36        # Number of time steps per revolution
 dt      = 60 / RPM / nt
 n_steps = nt * nrevs
@@ -28,16 +29,27 @@ t_range = range(0.0, step=dt, length=n_steps)
 # ==========================================================
 read_path   = joinpath(pnl.examples_path, "data")
 stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
+msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
 
 R       = 0.12      # Rotor radius
-RPM     = 6000      # Rotation speed (rpm)
+# RPM     = 6000      # Rotation speed (rpm)
 
-mesh = VSPGeom.readSTL(stl_file)[1]
-scale = 1/1000 # convert to meters
-radius = 119.38 * scale
-for point in mesh.points
-    point .*= scale
-end
+# STL file
+# mesh = VSPGeom.readSTL(stl_file)[1]
+# scale = 1/1000 # convert to meters
+# radius = 119.38 * scale
+# for point in mesh.points
+#     point .*= scale
+# end
+
+# MSH file
+msh = GeoIO.load(msh_file).geometry
+mesh = pnl.gt.GridTriangleSurface(msh)
+
+# scale to proper radius
+mesh._nodes .*= R / maximum(mesh._nodes[1, :])
+
+# place-holder shedding
 shedding = pnl.noshedding
 
 # --- Construct RigidWakeBody ---
@@ -49,21 +61,28 @@ rotor = pnl.RigidWakeBody{kernel}(mesh, shedding;
             semiinfinite_wake=false,
             watertight=true)
 
-pnl.write_vtk("rotor_hover", rotor)
+# pnl.write_vtk("rotor_hover", rotor)
+
+te_indices_1 = [9, 175, 127]
+te_indices_2 = [13, 286, 238]
 
 # update shedding
-bbox = (pnl.SVector{3}(-radius*1.2, -1.0, -1.0), pnl.SVector{3}(-radius*0.1, 1.0, 1.0))
-shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 1991, 1989; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-bbox = (pnl.SVector{3}(radius*0.1, -1.0, -1.0), pnl.SVector{3}(radius*1.2, 1.0, 1.0))
-shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 778, 776; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+bbox = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
+bbox = nothing
+shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2]; bbox, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+bbox = (pnl.SVector{3}(R*0.1, -1.0, -1.0), pnl.SVector{3}(R*1.2, 1.0, 1.0))
+bbox = nothing
+shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2]; bbox, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2],
-            CPoffset=1e-14,
-            kerneloffset=1e-2,
-            kernelcutoff=1e-14,
-            semiinfinite_wake=false,
-            watertight=true,
-            ensure_winding=false)
+                        CPoffset=1e-6,
+                        kerneloffset=R*0.001,
+                        kernelcutoff=1e-14,
+                        semiinfinite_wake=false,
+                        watertight=true,
+                        ensure_winding=true)
+
+pnl.write_vtk("rotor_hover", rotor)
 
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
@@ -76,11 +95,12 @@ overlap    = 2.0
 
 wake_rotor = pnl.PanelParticleWake(rotor;
                 nwakerows=1,
-                max_particles=20000,
+                max_particles=100000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
                 method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
                 merge_every=1, # merge every step
-                merge_r=radius * 0.02, # r_merge for merging particles
+                merge_r=R*0.02, # r_merge for merging particles
+                merge_r_hash=R*0.04, # r_merge for hashing particles
                 merge_sigma_relative=false, # use relative sigma for merging
                 merge_max_sigma_ratio=2.0, # prevents particles of very different strengths from merging
                 merge_skip_static=true, # skip merging static particles
@@ -131,11 +151,13 @@ systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
 monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
-                i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64),
+                    i_frame=-1, 
+                    normalization=pnl.RotorNormalization(rho, 2*R, 1)
+                ),
             )
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
-name = Threads.nthreads() > 1 ? "rotor_hover_mt" : "rotor_hover"
+name = "rotor_hover"
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=0.1,
     # set_Das_eta_freestream=0.1,

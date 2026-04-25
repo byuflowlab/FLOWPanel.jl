@@ -1,58 +1,3 @@
-"""
-    ForceMonitor(nt, i_system, i_frame, rho; Sref=1.0, Lref=1.0, TF=Float64)
-
-Storage monitor for integrated force and moment coefficient histories over `nt`
-simulation steps.  Forces and moments on `systems[i_system]` are computed in
-the coordinate system of `frames[i_frame]`.
-
-`CF` is normalised by `0.5 ρ |U∞|² Sref` and `CM` by `0.5 ρ |U∞|² Sref Lref`,
-with moments taken about the origin of the specified frame.
-"""
-struct ForceMonitor{TF}
-    CF::Vector{FastMultipole.SVector{3,TF}}
-    CM::Vector{FastMultipole.SVector{3,TF}}
-    i_system::Int
-    i_frame::Int
-    Sref::TF
-    Lref::TF
-    rho::TF
-end
-
-function ForceMonitor(nt::Int, i_system::Int;
-                       i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64)
-    CF = zeros(FastMultipole.SVector{3,TF}, nt)
-    CM = zeros(FastMultipole.SVector{3,TF}, nt)
-    return ForceMonitor{TF}(CF, CM, i_system, i_frame, TF(Sref), TF(Lref), TF(rho))
-end
-
-function (monitor::ForceMonitor)(systems::Tuple, wakes::Tuple,
-                                  frames::AbstractVector{<:ReferenceFrame},
-                                  uinf, i_step::Int)
-    body = systems[monitor.i_system]
-
-    # total force in global frame (body.F already populated by calcfield_F!)
-    Ftot = calcfield_Ftot(body)
-    Fvec = FastMultipole.SVector{3}(Ftot[1], Ftot[2], Ftot[3])
-
-    if monitor.i_frame < 0
-        # global frame: moment about the origin
-        Mtot = calcfield_Mtot(body, zeros(3))
-        Mvec = FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
-    else
-        # frame-local: moment about frame origin, rotated into frame axes
-        origin_global, R_f2g = frame_global_transform(frames, monitor.i_frame)
-        Mtot = calcfield_Mtot(body, collect(origin_global))
-        R_g2f = transpose(R_f2g)
-        Fvec = R_g2f * Fvec
-        Mvec = R_g2f * FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
-    end
-
-    # normalise to coefficients
-    qinf = monitor.rho / 2 * (uinf[1]^2 + uinf[2]^2 + uinf[3]^2)
-    monitor.CF[i_step + 1] = Fvec / (qinf * monitor.Sref)
-    monitor.CM[i_step + 1] = Mvec / (qinf * monitor.Sref * monitor.Lref)
-end
-
 #--- dphidt dispatch helpers ---#
 
 _store_neg_potential!(sys::AbstractLiftingBody) = (sys.dphidt .= .-sys.potential)
@@ -183,8 +128,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
     i_step = 0
     for t in t_range
         if verbose
-            print("\r\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
-            flush(stdout)
+            println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
+            # flush(stdout)
         end
 
         #------- controls -------#
