@@ -78,7 +78,12 @@ end
 function calc_bc_noflowthrough(Us::AbstractMatrix{T1},
                                normals::AbstractMatrix{T2}) where {T1, T2}
     RHS = zeros(promote_type(T1, T2), size(Us, 2))
-    calc_bc_noflowthrough!(RHS, Us, normals)
+    return calc_bc_noflowthrough!(RHS, Us, normals)
+end
+
+function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, <:Any, <:Any, true}, backend=DirectBackend(); optargs...)
+    # Set source strength for dirichlet bodies
+    RHS .-= self.potential
     return RHS
 end
 
@@ -597,6 +602,7 @@ end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
 
+    # println("Backslash")
     solver.Uext .= self.velocity
     solver.phi_ext .= self.potential
 
@@ -640,6 +646,8 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...)
+
+    println("FGS")
 
     for (i, body) in enumerate(bodies)
         solver.Uext[i] .= body.velocity
@@ -698,6 +706,8 @@ function solve!(bodies::Tuple, solvers::Tuple;
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
     optargs...)
+
+    # println("Tuple of bodies")
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
@@ -798,6 +808,213 @@ end
 
 ################################################################################
 
+# BACKSLASH COUPLED
+
+"""
+    BackslashCoupled{TF}
+
+A direct solver that assembles the full influence matrix G for all bodies and solves the coupled system using a single backslash operation.
+Components:
+- `G`: The full influence matrix for all bodies.
+- `Glu`: Cached LU factorization of G for efficient solves.
+- `rhs`: The right-hand side vector constructed from the boundary conditions of all bodies.
+- `Uext`: Cached external velocity at control points for all bodies.
+- `phi_ext`: Cached external potential at control points for all bodies.
+"""
+mutable struct BackslashCoupled{TF}
+    G::Matrix{TF}
+    Glu::LA.Factorization{TF}
+    rhs::Vector{TF}
+    Uext::Matrix{TF}
+    phi_ext::Vector{TF}
+end
+
+"""
+    BackslashCoupled(bodies::Tuple{<:AbstractBody{<:Any,<:Any,TF}}) where TF
+
+"""
+function BackslashCoupled(bodies::Tuple{Vararg{<:AbstractBody{<:Any,<:Any,TF,<:Any}}}) where TF
+    ncs = sum(b -> b.ncells, bodies)
+
+    G       = Matrix{TF}(I, ncs, ncs)
+    rhs     = zeros(TF, ncs)
+    Uext    = zeros(TF, 3, ncs)
+    phi_ext = zeros(TF, ncs)
+
+    Glu = lu!(G)  # dummy init; will be overwritten on first update_G=true
+
+    BackslashCoupled{TF}(G, Glu, rhs, Uext, phi_ext)
+end
+
+# Backslash(bodies::Tuple) = BackslashCoupled(bodies)
+
+### DIRICHLET
+"""
+    boundary_condition!(body::AbstractBody{<:Any,<:Any,<:Any,true}, RHS, backend; optargs...)
+
+For Dirichlet bodies, set the source strength to enforce the no-penetration condition and set the doublet strength to zero. Then compute the potential at the control points and write into RHS.
+"""
+function boundary_condition!(
+    body::AbstractBody{<:Any,<:Any,<:Any,true},
+    RHS,
+    backend; optargs...
+)
+    calc_bc_dirichlet(RHS, body, backend; optargs...)
+end
+
+### NEUMANN
+"""
+   boundary_condition!(body::AbstractBody{<:Any,<:Any,<:Any,false}, RHS, backend; optargs...)
+   
+For Neumann bodies, apply the no-flow-through boundary condition by computing the normal velocity at the control points and writing into RHS.
+"""
+function boundary_condition!(
+    body::AbstractBody{<:Any,<:Any,<:Any,false},
+    RHS,
+    backend; optargs...
+)
+    calc_bc_noflowthrough!(RHS, body.velocity, body.normals)
+end
+"""
+    boundary_condition!(bodies::Tuple, solver::BackslashCoupled, backend; optargs...)
+
+Apply the appropriate boundary condition for each body in `bodies` and write the results into the corresponding segment of `solver.rhs`.
+"""
+function boundary_condition!(
+    bodies::Tuple,
+    solver::BackslashCoupled,
+    backend; optargs...
+)
+
+    nps = [b.ncells for b in bodies]
+    offsets = cumsum(vcat(0, nps))
+    for (bi, body) in enumerate(bodies)
+        rows = offsets[bi]+1 : offsets[bi+1]
+        boundary_condition!(body, view(solver.rhs, rows), backend; optargs...)
+    end
+
+end
+
+write_solution!(body::AbstractBody{<:Any, <:Any, <:Any, true}, sol) = body.strength[:, 2] .= sol
+write_solution!(body::AbstractBody{<:Any, <:Any, <:Any, false}, sol) = body.strength[:, 1] .= sol
+
+### Induced
+### Induced function where all bodies are the targets induced(bodies, bodies, scalar_potential=Tuple(true if target body is Dirichlet, false if not))
+## Dirichlet Body
+function influence!(targets::Tuple, sources::Tuple, backend=DirectBackend(); optargs...)
+
+    if precalc
+        for target in targets
+            pre_evaluate_influence!(target)
+        end
+    end
+
+    influence!(targets, sources, backend; scalar_potential=[has_dirichlet_bc(target) for target in targets], velocity=[!has_dirichlet_bc(target) for target in targets], optargs...)
+
+    return nothing
+end
+
+# Dirichlet
+"""
+    set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, true})
+
+For Dirichlet bodies, set the source strength to enforce the no-penetration condition and set the doublet strength to zero.
+"""
+function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, true})
+    body.strength[:, 1] .= 0.0
+    for d in 1:3
+        body.strength[:, 2] .= view(body.velocity, d, :)
+        body.strength[:, 2] .*= view(body.normals, d, :)
+        body.strength[:, 1] .-= body.strength[:, 2]
+    end
+    body.strength[:, 2] .= 0.0
+    body.potential .= 0
+end
+
+# Neumann
+"""
+    set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, false})
+
+For Neumann bodies, set the source strength to zero.
+"""
+function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, false})
+    body.strength[:, 1] .= 0.0
+end
+
+function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
+
+    # println("BackslashCoupled")
+    # Sizes
+    npanels = [b.ncells for b in bodies]
+    offsets = cumsum(vcat(0, npanels))
+
+    # save external fields
+    for (bi, body) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        @views solver.Uext[:, r] .= body.velocity
+        @views solver.phi_ext[r]  .= body.potential
+    end
+
+    # flip CP offset
+    CPoffset_old = map(b -> b.CPoffset, bodies)
+    for b in bodies
+        b.CPoffset = abs(b.CPoffset) * (-1)^(has_dirichlet_bc(b))
+    end
+
+    for body in bodies
+        calc_normals!(body)
+        calc_controlpoints!(body)
+
+        ### Zero all strengths AND Set source strengths for Dirichlet bodies (function) set_strengths(body)
+        set_strengths(body)
+    end
+
+    influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+
+    ### get the boundary_condition for each body to write the RHS
+    boundary_condition!(bodies, solver, backend)
+
+    if update_G
+        # Zero G matrix
+        fill!(solver.G, 0)
+        
+        # Build G matrix
+        t_build = @elapsed begin
+            for (bi, source) in enumerate(bodies)
+                c = offsets[bi]+1 : offsets[bi+1] # columns of sources
+                for (ti, target) in enumerate(bodies)
+                    r = offsets[ti]+1 : offsets[ti+1] # rows of targets
+                    _G!(view(solver.G, r, c), target,
+                        source;
+                        update_geometry=false)
+                end
+            end
+        end
+
+        # Factorize G matrix and cache it in solver
+        solver.Glu = lu!(solver.G)
+    end
+
+    # solve with cached LU
+    sol = similar(solver.rhs)
+    t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
+
+    # write solution back
+    for (bi, b) in enumerate(bodies)
+        r = offsets[bi]+1 : offsets[bi+1]
+        write_solution!(b, view(sol, r))
+
+        b.CPoffset = CPoffset_old[bi]
+        @views b.velocity  .= solver.Uext[:, r]
+        @views b.potential .= solver.phi_ext[r]
+    end
+
+    # return t_build, t_solve
+end
+
+
+
+#####################################################################################
 # function solve!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1, TF},
 #                 solver::AbstractMatrixfulSolver{true};
 #                     solver_optargs=(),

@@ -69,32 +69,32 @@ msh = msh |> Meshes.Scale(scaling)
 grid = pnl.gt.GridTriangleSurface(msh)
 
 # get trailing edge line
-nte = 10000
+nte = 100
 trailingedge = zeros(3, nte)
 trailingedge[1, :] .= c 
 trailingedge[2, :] .= range(-b/2, stop=b/2, length=nte)
 trailingedge[3, :] .= 0.0
 
-# Generate TE shedding matrix
-# TE_indices = [161, 129, 97, 65, 3, 1, 268, 300, 332, 364, 396]
-# shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
-shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.001*b)
-
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
-
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
 
 # Generate paneled body
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
     body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
-    body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
-    body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
+    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    @show shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*b)
+    body = bodytype(body.nodes, body.cells, shedding; CPoffset=(-1)^flip * 1e-14, ensure_winding=false)
+    for i in eachindex(body.Das)
+        body.Das[i] .= repeat(Vinf / magVinf, 1, size(body.Das[i], 2))
+    end
 else
     error("Unsupported body type")
 end
+
+
+# Freestream at every control point
+Uinfs = repeat(Vinf, 1, body.ncells)
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -137,6 +137,7 @@ end
 # ----------------- POST PROCESSING ----------------------------------------
 println("Post processing...")
 
+#=
 # Calculate surface velocity U on the body
 @time Us = pnl.calcfield_U(body, body; backend)
 
@@ -186,3 +187,4 @@ CD = sign(dot(D, Dhat)) * norm(D) / nondim
     # Call Paraview
     # run(`paraview --data=$(str)`)
 # end
+=#

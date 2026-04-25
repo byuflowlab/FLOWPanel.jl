@@ -2,7 +2,95 @@ using Test
 import FLOWPanel as pnl
 import GeometricTools as gt
 
+function shared_edge_direction(cells::AbstractMatrix{Int}, ci::Int, a::Int, b::Int)
+    n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+    if (n1 == a && n2 == b) || (n2 == a && n3 == b) || (n3 == a && n1 == b)
+        return 1
+    elseif (n1 == b && n2 == a) || (n2 == b && n3 == a) || (n3 == b && n1 == a)
+        return -1
+    end
+    error("Cell $ci does not contain edge ($a, $b).")
+end
+
+const NODES_TET = Float64[
+    1  -1  -1   1;
+    1  -1   1  -1;
+    1   1  -1  -1;
+]
+const CELLS_TET = Int[
+    1  1  1  2;
+    3  4  2  4;
+    2  3  4  3;
+]
+
+const NODES_NONMANIFOLD = Float64[
+    0 1 0 0 0;
+    0 0 1 -1 0;
+    0 0 0 0 1;
+]
+const CELLS_NONMANIFOLD = Int[
+    1 2 1;
+    2 1 2;
+    3 4 5;
+]
+
 @testset verbose=true "Abstract Body Geometry And NonLiftingBody" begin
+    @testset "ensure_consistent_winding" begin
+        flipped_cells = copy(CELLS_TET)
+        flipped_cells[:, 2] = flipped_cells[[1, 3, 2], 2]
+        flipped_cells[:, 4] = flipped_cells[[1, 3, 2], 4]
+
+        consistent_cells = pnl.ensure_consistent_winding(NODES_TET, flipped_cells; watertight=true)
+        edge_to_cells = pnl._calc_edge_to_cells(consistent_cells)
+        for ((a, b), refs) in edge_to_cells
+            if length(refs) == 2
+                c1 = refs[1][1]
+                c2 = refs[2][1]
+                @test shared_edge_direction(consistent_cells, c1, a, b) == -shared_edge_direction(consistent_cells, c2, a, b)
+            end
+        end
+
+        normals = pnl.calc_normals(NODES_TET, consistent_cells)
+        body_centroid = vec(sum(NODES_TET; dims=2) ./ size(NODES_TET, 2))
+        for ci in axes(consistent_cells, 2)
+            centroid = vec(sum(view(NODES_TET, :, consistent_cells[:, ci]); dims=2) ./ 3)
+            @test dot(normals[:, ci], centroid - body_centroid) > 0
+        end
+
+        flipped_normals_cells = pnl.ensure_consistent_winding(NODES_TET, flipped_cells; watertight=true, flip_normals=true)
+        flipped_normals = pnl.calc_normals(NODES_TET, flipped_normals_cells)
+        @test isapprox(flipped_normals, -normals; atol=1e-12)
+    end
+
+    @testset "iswatertight" begin
+        @test pnl.iswatertight(NODES_TET, CELLS_TET) == (true, Int[])
+        @test pnl.iswatertight(NODES_OCT, CELLS_OCT) == (true, Int[])
+
+        @test pnl.iswatertight(NODES_2TRI, CELLS_2TRI) == (false, Int[])
+        @test pnl.iswatertight(NODES_2TRI, CELLS_2TRI; return_open_cells=true) == (false, [1, 2])
+
+        @test pnl.iswatertight(NODES_NONMANIFOLD, CELLS_NONMANIFOLD) == (false, Int[])
+        @test pnl.iswatertight(NODES_NONMANIFOLD, CELLS_NONMANIFOLD; return_open_cells=true) == (false, [1, 2, 3])
+
+        open_grid = make_basic_triangle_surface()
+        open_grid_raw = pnl.iswatertight(open_grid._nodes, pnl.grid2cells(open_grid); return_open_cells=true)
+        @test pnl.iswatertight(open_grid; return_open_cells=true) == open_grid_raw
+
+        closed_grid = make_octa_triangle_surface()
+        closed_grid_raw = pnl.iswatertight(closed_grid._nodes, pnl.grid2cells(closed_grid); return_open_cells=true)
+        @test closed_grid_raw == (true, Int[])
+        @test pnl.iswatertight(closed_grid; return_open_cells=true) == closed_grid_raw
+
+        open_body = make_nonlifting(pnl.ConstantSource)
+        open_body_raw = pnl.iswatertight(open_body.nodes, open_body.cells; return_open_cells=true)
+        @test pnl.iswatertight(open_body; return_open_cells=true) == open_body_raw
+
+        closed_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT); watertight=true)
+        closed_body_raw = pnl.iswatertight(closed_body.nodes, closed_body.cells; return_open_cells=true)
+        @test closed_body_raw == (true, Int[])
+        @test pnl.iswatertight(closed_body; return_open_cells=true) == closed_body_raw
+    end
+
     @testset "calc_normals!" begin
         normals = zeros(3, 1)
         pnl.calc_normals!(NODES_1TRI, CELLS_1TRI, normals)
@@ -154,5 +242,23 @@ import GeometricTools as gt
         @test size(grid_body.neighbor) == (3, grid_body.ncells)
         @test grid_body.nnodes == size(tri_grid._nodes, 2)
         @test grid_body.ncells == tri_grid.ncells
+        @test grid_body.watertight == false
+
+        closed_grid = make_octa_triangle_surface()
+        closed_grid_body = pnl.NonLiftingBody{pnl.ConstantSource}(closed_grid)
+        @test closed_grid_body.watertight == true
+
+        flipped_cells = copy(CELLS_TET)
+        flipped_cells[:, 3] = flipped_cells[[1, 3, 2], 3]
+        flipped_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_TET), flipped_cells; watertight=true)
+        pnl.calc_normals!(flipped_body)
+        body_centroid = vec(sum(flipped_body.nodes; dims=2) ./ flipped_body.nnodes)
+        for ci in 1:flipped_body.ncells
+            centroid = vec(sum(view(flipped_body.nodes, :, flipped_body.cells[:, ci]); dims=2) ./ 3)
+            @test dot(flipped_body.normals[:, ci], centroid - body_centroid) > 0
+        end
+
+        raw_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_TET), flipped_cells; watertight=true, ensure_winding=false)
+        @test raw_body.cells == flipped_cells
     end
 end

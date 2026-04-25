@@ -84,15 +84,6 @@ thetas = range(0, stop=2*pi+2*pi/nte, length=nte)
 trailingedge[2, :] .= 0.5*diameter * cos.(thetas)
 trailingedge[3, :] .= 0.5*diameter * sin.(thetas)
 
-# Generate TE shedding matrix
-# TE_indices = [161, 129, 97, 65, 3, 1, 268, 300, 332, 364, 396]
-# shedding = pnl.calc_shedding(grid, TE_indices, trailingedge; tolerance=0.001*b)
-shedding = pnl.calc_shedding(grid._nodes, pnl.grid2cells(grid), trailingedge; tolerance=0.01*diameter)
-# @show shedding[:,[22,24]]
-# shedding = shedding[:, 22:22]
-# shedding = hcat(shedding[:,1:21], shedding[:,22:22], shedding[:, 23:23]) # Only keep the first shedding points for debugging
-# shedding = hcat(shedding[:,1:21], shedding[:, 23:23]) # Only keep the first shedding points for debugging
-
 # Freestream vector
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
@@ -103,7 +94,12 @@ Uinfs = repeat(Vinf, 1, grid.ncells)
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
     body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
-    body = bodytype(grid, shedding; CPoffset=(-1)^flip * 1e-14)
+    body_preview = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    shedding = pnl.calc_shedding(body_preview.nodes, body_preview.cells,
+                                 trailingedge; tolerance=0.01*diameter)
+    body = bodytype(body_preview.nodes, body_preview.cells, shedding;
+                    CPoffset=(-1)^flip * 1e-14,
+                    ensure_winding=false)
     body.Das .= repeat(Vinf/magVinf, 1, body.nsheddings+1)
 else
     error("Unsupported body type")

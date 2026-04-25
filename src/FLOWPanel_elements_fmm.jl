@@ -145,8 +145,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
-
-    # return potential, velocity, velocity_gradient
+    
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
@@ -166,10 +165,10 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
+    # @show p
 
-    isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
+    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
 
-    # return potential, velocity, velocity_gradient
     return potential+p, velocity+v, velocity_gradient+vg
 end
 

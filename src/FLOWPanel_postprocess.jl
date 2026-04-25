@@ -578,12 +578,36 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
     out[:, 3] = Shat
     out[:, 3] *= aux
 
-    # Save field in body
-    # if addfield
-    #     add_field(body, "L", "vector", view(out, :, 1), "system")
-    #     add_field(body, "D", "vector", view(out, :, 2), "system")
-    #     add_field(body, "S", "vector", view(out, :, 3), "system")
-    # end
+    return out
+end
+
+function calcfield_LDS!(out::Matrix, bodies::Tuple,
+                        Lhat::Vector, Dhat::Vector,
+                        Shat::Vector;
+                        )
+
+    @assert size(out) == (3,3)
+
+    fill!(out, 0.0)
+
+    Ftot = zeros(eltype(out), 3)
+
+    # ---- same force integration idea as single-body version
+    for body in bodies
+        Fs = body.F
+        for i in 1:3
+            Ftot[i] += sum(view(Fs, i, :))
+        end
+    end
+
+    # ---- same projection logic as single-body version
+    L = dot(Ftot, Lhat)
+    D = dot(Ftot, Dhat)
+    S = dot(Ftot, Shat)
+
+    out[:,1] .= Lhat .* L
+    out[:,2] .= Dhat .* D
+    out[:,3] .= Shat .* S
 
     return out
 end
@@ -596,7 +620,7 @@ Calculate the integrated force decomposed as lift, drag, and sideslip according
 to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
 This is calculated from the force field stored in `body.F`.
 """
-function calcfield_LDS!(out, body, Lhat, Dhat, Shat; optargs...)
+function calcfield_LDS!(out, body::AbstractBody, Lhat, Dhat, Shat; optargs...)
     return calcfield_LDS!(out, body, body.F, Lhat, Dhat, Shat; optargs...)
 end
 
@@ -605,7 +629,7 @@ end
 
 `Shat` is calculated automatically from `Lhat` and `Dhat`,
 """
-function calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
+function calcfield_LDS!(out, body::AbstractBody, Lhat, Dhat; optargs...)
     return calcfield_LDS!(out, body, Lhat, Dhat, cross(Lhat, Dhat); optargs...)
 end
 

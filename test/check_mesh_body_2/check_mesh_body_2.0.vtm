@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VTKFile type="vtkMultiBlockDataSet" version="1.0" byte_order="LittleEndian">
+  <vtkMultiBlockDataSet>
+    <DataSet index="0" file="check_mesh_body_2.0.vtu"/>
+    <DataSet index="1" file="check_mesh_body_2_tw.1.0.vtu"/>
+  </vtkMultiBlockDataSet>
+</VTKFile>

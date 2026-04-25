@@ -57,12 +57,13 @@ shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 1991, 1989; bb
 bbox = (pnl.SVector{3}(radius*0.1, -1.0, -1.0), pnl.SVector{3}(radius*1.2, 1.0, 1.0))
 shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, 778, 776; bbox, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
-rotor = pnl.RigidWakeBody{kernel}(mesh, [shedding1, shedding2],
+rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2],
             CPoffset=1e-14,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
-            watertight=true)
+            watertight=true,
+            ensure_winding=false)
 
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 

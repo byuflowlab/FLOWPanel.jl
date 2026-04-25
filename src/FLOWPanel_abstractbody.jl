@@ -257,6 +257,44 @@ function _calc_edge_to_cells(cells::Matrix{Int})
 end
 
 """
+    iswatertight(nodes, cells; return_open_cells=false) -> (watertight, open_cells)
+
+Determine triangle-mesh watertightness from connectivity alone. A mesh is
+watertight iff every undirected edge is referenced by exactly two cells.
+
+When `return_open_cells=true`, the second return value contains the sorted,
+unique 1-based cell indices incident to any edge whose incidence count is not
+equal to two. Otherwise it is `Int[]`.
+"""
+function iswatertight(nodes::AbstractMatrix, cells::AbstractMatrix{<:Integer};
+                      return_open_cells::Bool=false)
+    edge_to_cells = _calc_edge_to_cells(Matrix{Int}(cells))
+    watertight = true
+    open_cells = Int[]
+
+    for refs in values(edge_to_cells)
+        if length(refs) != 2
+            watertight = false
+            if return_open_cells
+                append!(open_cells, first.(refs))
+            end
+        end
+    end
+
+    if return_open_cells
+        sort!(unique!(open_cells))
+    end
+
+    return watertight, open_cells
+end
+
+iswatertight(grid::gt.GridTriangleSurface; return_open_cells::Bool=false) =
+    iswatertight(grid._nodes, grid2cells(grid); return_open_cells=return_open_cells)
+
+iswatertight(body::AbstractBody; return_open_cells::Bool=false) =
+    iswatertight(body.nodes, body.cells; return_open_cells=return_open_cells)
+
+"""
     calc_neighbors(cells::Matrix{Int})
 
 Compute the `3 × ncells` neighbor matrix from triangle connectivity alone
@@ -286,6 +324,138 @@ function calc_neighbors(cells::Matrix{Int})
     end
 
     return neighbor
+end
+
+function _shared_edge_direction(cells::AbstractMatrix{Int}, ci::Int, a::Int, b::Int)
+    n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+
+    if (n1 == a && n2 == b) || (n2 == a && n3 == b) || (n3 == a && n1 == b)
+        return 1
+    elseif (n1 == b && n2 == a) || (n2 == b && n3 == a) || (n3 == b && n1 == a)
+        return -1
+    end
+
+    error("Cell $ci does not contain shared edge ($a, $b).")
+end
+
+_flip_triangle!(cells::AbstractMatrix{Int}, ci::Int) = ((cells[2, ci], cells[3, ci]) = (cells[3, ci], cells[2, ci]); cells)
+
+function _component_orientation_score(nodes::AbstractMatrix, cells::AbstractMatrix, component)
+    node_ids = sort!(collect(Set(vec(cells[:, component]))))
+    component_centroid = vec(sum(view(nodes, :, node_ids); dims=2)) ./ length(node_ids)
+    score = zero(promote_type(eltype(nodes), Float64))
+
+    for ci in component
+        i1, i2, i3 = cells[1, ci], cells[2, ci], cells[3, ci]
+        x1 = nodes[1, i1]; y1 = nodes[2, i1]; z1 = nodes[3, i1]
+        x2 = nodes[1, i2]; y2 = nodes[2, i2]; z2 = nodes[3, i2]
+        x3 = nodes[1, i3]; y3 = nodes[2, i3]; z3 = nodes[3, i3]
+
+        nx = (y2 - y1) * (z3 - z1) - (z2 - z1) * (y3 - y1)
+        ny = (z2 - z1) * (x3 - x1) - (x2 - x1) * (z3 - z1)
+        nz = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1)
+
+        cx = (x1 + x2 + x3) / 3
+        cy = (y1 + y2 + y3) / 3
+        cz = (z1 + z2 + z3) / 3
+
+        score += nx * (cx - component_centroid[1]) +
+                 ny * (cy - component_centroid[2]) +
+                 nz * (cz - component_centroid[3])
+    end
+
+    return score
+end
+
+function _winding_adjacency(cells::Matrix{Int})
+    edge_to_cells = _calc_edge_to_cells(cells)
+    adjacency = [Tuple{Int,Int,Int}[] for _ in 1:size(cells, 2)]
+
+    for ((a, b), refs) in edge_to_cells
+        if length(refs) >= 2
+            c1 = refs[1][1]
+            for k in 2:length(refs)
+                c2 = refs[k][1]
+                push!(adjacency[c1], (c2, a, b))
+                push!(adjacency[c2], (c1, a, b))
+            end
+        end
+    end
+
+    return adjacency, edge_to_cells
+end
+
+"""
+    ensure_consistent_winding!(cells, nodes; watertight=false, flip_normals=false)
+
+Normalize triangle winding in `cells` so each connected component has a
+consistent orientation. When `watertight=true`, each component is additionally
+flipped so its normals point outward relative to the component centroid.
+
+For open components, the first cell encountered in each component is preserved
+as the seed orientation unless `flip_normals=true`.
+"""
+function ensure_consistent_winding!(cells::Matrix{Int}, nodes::AbstractMatrix;
+                                    watertight::Bool=false,
+                                    flip_normals::Bool=false)
+    adjacency, _ = _winding_adjacency(cells)
+    visited = falses(size(cells, 2))
+    queue = Int[]
+
+    for start in 1:size(cells, 2)
+        visited[start] && continue
+
+        empty!(queue)
+        push!(queue, start)
+        visited[start] = true
+
+        component = Int[start]
+        qidx = 1
+
+        while qidx <= length(queue)
+            ci = queue[qidx]
+            qidx += 1
+
+            for (cj, a, b) in adjacency[ci]
+                if !visited[cj]
+                    if _shared_edge_direction(cells, ci, a, b) == _shared_edge_direction(cells, cj, a, b)
+                        _flip_triangle!(cells, cj)
+                    end
+
+                    visited[cj] = true
+                    push!(queue, cj)
+                    push!(component, cj)
+                end
+            end
+        end
+
+        if watertight && _component_orientation_score(nodes, cells, component) < 0
+            for ci in component
+                _flip_triangle!(cells, ci)
+            end
+        end
+
+        if flip_normals
+            for ci in component
+                _flip_triangle!(cells, ci)
+            end
+        end
+    end
+
+    return cells
+end
+
+"""
+    ensure_consistent_winding(nodes, cells; watertight=false, flip_normals=false)
+
+Return a copy of `cells` with triangle winding normalized component-wise.
+"""
+function ensure_consistent_winding(nodes::AbstractMatrix, cells::Matrix{Int};
+                                   watertight::Bool=false,
+                                   flip_normals::Bool=false)
+    return ensure_consistent_winding!(copy(cells), nodes;
+                                      watertight=watertight,
+                                      flip_normals=flip_normals)
 end
 
 ##### COMMON FUNCTIONS  ########################################################
