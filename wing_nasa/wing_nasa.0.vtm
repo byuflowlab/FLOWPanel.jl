@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VTKFile type="vtkMultiBlockDataSet" version="1.0" byte_order="LittleEndian">
+  <vtkMultiBlockDataSet>
+    <DataSet index="0" file="wing_nasa.0.vtu"/>
+  </vtkMultiBlockDataSet>
+</VTKFile>
