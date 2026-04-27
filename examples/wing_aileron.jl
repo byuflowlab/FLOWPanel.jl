@@ -1,109 +1,10 @@
-import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
-
 import Meshes
 import GeoIO
-
-# import CUDA                               # Uncomment this to use GPU (if available)
-
-# run_names = ["nasa_wing.msh", "nasa_surface_spaced.msh"]
-# run_names = ["nasa_surface_spaced.msh"]
-run_names = ["0010.msh"]
-file_path       = "examples"
-paraview        = true                      # Whether to visualize with Paraview
-out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
-
-files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
-
-# ----------------- SIMULATION PARAMETERS --------------------------------------
-m              = 0.0254
-AOA             = 10.0                      # (deg) freestream angle of attack
-magVinf         = 100.0                      # (m/s) freestream velocity
-rho             = 1.225                     # (kg/m^3) air density
-
-# ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-c_body1 = 10.0
-b = 60.0                           # (m) span length
-c_body2 = 2.0
-AR_body1 = b / c_body1                             # (m) span length
-AR_body2 = b / c_body2                             # (m) span length
-
-chords = [c_body1]
-ARs = [AR_body1] 
-
-scaling = 1.0
-# ----------------- SOLVER SETTINGS -------------------------------------------
-
-# Body and wake model
-kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
-# kernel = pnl.ConstantSource
-# body type
-# bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
-bodytype = pnl.RigidWakeBody{kernel}
-
-# Processing
-clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
-
-function postprocess!(bodies, Vinf, magVinf, rho, backend, chords, span)
-    Dhat = Vinf / norm(Vinf)
-    Shat = [0, 1, 0]
-    Lhat = cross(Dhat, Shat)
-    Sref = 0.0
-    for chord in chords
-        Sref += chord * span
-        @show Sref
-    end
-
-    pnl.calcfield_U!(bodies, Vinf; backend)
-    pnl.apply_freestream!(bodies, Vinf)
-    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
-    pnl.calcfield_F!(bodies, magVinf, rho)
-    LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
-
-    # Force coefficients
-    @show nondim = 0.5 * rho * magVinf^2 * Sref
-    CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
-    CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
-
-    return CL, CD
-end
-
-# ----------------- GENERATE BODY ---------------------------------------------
-
-function generate_body(
-    meshfile::String,
-    chord::Float64,
-    span::Float64,
-    bodytype::Type{<:pnl.NonLiftingBody},
-    scaling::Float64 = 1.0,
-    flip::Int64 = 1,
-    Vinf::AbstractVector{<:Real} = zeros(3)
-)
-    magVinf = norm(Vinf)
-
-    # Read Gmsh mesh
-    msh = GeoIO.load(meshfile).geometry
-
-    # Transform the mesh: scale
-    msh = msh |> Meshes.Scale(scaling)
-
-    # Wrap into Grid object
-    grid = pnl.gt.GridTriangleSurface(msh)
-
-    # Create trailing edge line
-    nte = 200
-    trailingedge = zeros(3, nte)
-    trailingedge[1, :] .= chord
-    trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
-    trailingedge[3, :] .= 0.0
-
-    # 6enerate the paneled body
-    body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
-
-    pnl.apply_freestream!(body, Vinf)
-
-    return body
-end
+import FLOWPanel as pnl
+import GeometricTools as gt
+using LinearAlgebra: diag
+using StaticArrays: SVector
 
 function generate_body(
     meshfile::String,
@@ -112,7 +13,9 @@ function generate_body(
     bodytype::Type{<:pnl.RigidWakeBody},
     scaling::Float64 = 1.0,
     flip::Int64 = 1,
-    Vinf::AbstractVector{<:Real} = zeros(3)
+    Vinf::AbstractVector{<:Real} = zeros(3),
+    firstnode=-1,
+    secondnode=-1
 )
     magVinf = norm(Vinf)
 
@@ -125,25 +28,32 @@ function generate_body(
     # Wrap into Grid object
     grid = pnl.gt.GridTriangleSurface(msh)
 
-    # Create trailing edge line
-    offset = minimum(grid._nodes[1, :])
-    nte = 200
-    trailingedge = zeros(3, nte)
-    trailingedge[1, :] .= chord + offset
-    trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
-    trailingedge[3, :] .= 0.0
-
     # Generate TE shedding matrix
-    shedding = pnl.calc_shedding(
-        grid._nodes,
-        pnl.grid2cells(grid),
-        trailingedge;
-        tolerance = 0.001 * span
-    )
-    shedding = [shedding]
+    shedding = zeros(Int, 6, 0)
 
     # Generate the paneled body
-    body = bodytype(grid, shedding; CPoffset = (-1)^flip * 1e-14)
+    CPoffset = 1e-6
+    body = bodytype(grid, [shedding]; CPoffset, flip_normals=false)
+    # pnl.write_vtk("spaced_nasa", body)
+
+    # Recompute shedding from the finalized cell winding used by `body`.
+    if firstnode == -1 || secondnode == -1
+        @warn "firstnode and secondnode not provided; TE shedding will be disabled. This may cause inaccurate results for lifting bodies."
+    else
+        shedding = pnl.calc_shedding_from_seed(
+            body.nodes,
+            body.cells,
+            firstnode, secondnode
+        )
+        body = bodytype(
+            body.nodes,
+            body.cells,
+            [shedding];
+            CPoffset,
+            flip_normals=false,
+            ensure_winding=false
+        )
+    end
 
     # initialize wake doublets
     for i in eachindex(body.Das)
@@ -155,82 +65,172 @@ function generate_body(
     return body
 end
 
-# function benchmarks(out, bodies, solver; backend=DirectBackend())
-#     @time begin
-#         t_build, t_solve = pnl.solve!(bodies, solver; backend, update_G=true)
-#     end
+function postprocess!(bodies, Vinf, rho, backend, chords, span)
+    Dhat = Vinf / norm(Vinf)
+    Shat = [0, 1, 0]
+    Lhat = cross(Dhat, Shat)
+    Sref = 0.0
+    for chord in chords
+        Sref += chord * span
+    end
+    
+    pnl.calcfield_U!(bodies, Vinf; backend)
+    # pnl.apply_freestream!(bodies, Vinf)
+    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_F!(bodies, magVinf, rho)
+    LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
-#     nps = sum(b.ncells for b in bodies)
+    # Force coefficients
+    nondim = 0.5 * rho * norm(Vinf)^2 * Sref
+    CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
+    CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
 
-#     open(out, "a") do io 
-#         write(io, 
-#         "$(nps),$(t_build),$(t_solve)\n"
-#         )
-#         flush(io)
-#     end
-#     return t_build, t_solve
-# end
+    return CL, CD
+end
+
+"""
+Assumes freestream has already been applied.
+"""
+function flow_tangency_residuals(bodies::Tuple)
+    for body in bodies
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=1e-10)
+    end
+
+    pnl.influence!(bodies, bodies; scalar_potential=false, velocity=true)
+
+    res = zeros(length(bodies))
+    for (i, body) in enumerate(bodies)
+        r = 0.0
+        for (vel, normal) in zip(eachcol(body.velocity), eachcol(body.normals))
+            vx, vy, vz = vel
+            nx, ny, nz = normal
+            r1 = vx * nx + vy * ny + vz * nz
+            r += r1 * r1
+        end
+        res[i] = r / size(body.normals, 2)
+    end
+
+    return res
+end
+
+function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
+    for body in bodies
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=cp_off)
+        body.potential .= 0.0
+    end
+
+    pnl.influence!(bodies, bodies; scalar_potential=true, velocity=false)
+    res = zeros(length(bodies))
+    for (i, body) in enumerate(bodies)
+        r = 0.0
+        for potential in body.potential
+            r += potential * potential
+        end
+        res[i] = r / length(body.potential)
+    end
+
+    return res
+end
+
+function benchmarks(out, bodies::Tuple, solvers, backends)
+    for (solver, backend) in zip(solvers, backends)    
+        @time begin
+            t_build, t_solve = pnl.solve!(bodies, solver)
+        end
+
+        nps = sum(b.ncells for b in bodies)
+
+        for body in bodies
+            body.velocity .= 0.0
+            pnl.apply_freestream!(body, Vinf)
+        end
+
+        # CL, CD = postprocess!(bodies, Vinf, rho, backend, chords, b)
+        # @show CL, CD
+
+        res = flow_tangency_residuals(bodies)
+        println("Flow Tangency Residuals: ", res)
+
+        for body in bodies
+            body.velocity .= 0.0
+            pnl.apply_freestream!(body, Vinf)
+        end
+        pot = flow_potential_residuals(bodies)
+        println("Flow Potential Residuals: ", pot)
+
+        # Check if file exists and is non-empty
+        write_header = !isfile(out) || filesize(out) == 0
+
+        open(out, "a") do io
+            if write_header
+                write(io, "solver,nps,t_build,t_solve,res,pot\n")
+            end
+
+            write(io,
+                "$(typeof(solver)),$(nps),$(t_build),$(t_solve),$(res),$(pot)\n"
+            )
+        end
+    end
+end
+
+run_names = ["nasa_wing.msh", "nasa_surface_spaced_repaired.msh"]
+file_path       = "examples"
+paraview        = true                      # Whether to visualize with Paraview
+out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+
+files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
+nodes1 = [42, 43]
+nodes2 = [34, 35]
+nodes1 = [42, 19]
+nodes2 = [34, 3]
+
+# ----------------- SIMULATION PARAMETERS --------------------------------------
+m              = 0.0254
+AOA             = 0.0                      # (deg) freestream angle of attack
+magVinf         = 117.3 * m * 12                      # (m/s) freestream velocity
+rho             = 1.225                     # (kg/m^3) air density
+
+# ----------------- GEOMETRY DESCRIPTION ---------------------------------------
+c_body1 = 10 * m
+b = 60 * m                            # (m) span length
+c_body2 = 2 * m
+AR_body1 = b / c_body1                             # (m) span length
+AR_body2 = b / c_body2                             # (m) span length
+
+chords = [c_body1, c_body2]
+ARs = [AR_body1, AR_body2] 
+Sref = b * (c_body1 + c_body2)
+
+scaling = 1.0
+# ----------------- SOLVER SETTINGS -------------------------------------------
+
+# Body and wake model
+kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+# body type
+bodytype = pnl.RigidWakeBody{kernel}
+
+# Processing
+clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
 
 Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
 
-body = generate_body(files[1], chords[1], b, bodytype, scaling, 1, Vinf)
-# bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf)
-                # for (file, chord) in zip(files, chords)]...)
+bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstnode, secondnode)
+                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
 #------------------- SOLVE BODY ----------------------------------------------
 backend = pnl.DirectBackend()
-# backend = pnl.FastMultipoleBackend()
-solver = pnl.BackslashCoupled((body,))
-# solver = pnl.Backslash(body)
-# solver = pnl.FGSSolver((body,))
+backend2 = fill(pnl.DirectBackend(), length(bodies))
+backends = (backend, backend2)
+solver = pnl.BackslashCoupled(bodies)
+solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
+solvers = (solver, solver2)
 println("Solving body...")
-# body = body
 
-# benchmarks(out_file, bodies, solver; backend)
-pnl.solve!((body,), solver)
+benchmarks(out_file, bodies, solvers, backends)
 
-# pnl.solve!(bodies, solver)
-println("Strength column 1:")
-println("  max = ", maximum(body.strength[:, 1]))
-println("  min = ", minimum(body.strength[:, 1]))
-
-println("Strength column 2:")
-println("  max = ", maximum(body.strength[:, 2]))
-println("  min = ", minimum(body.strength[:, 2]))
-
-# ----------------- POST PROCESSING ----------------------------------------
-println("Post processing...")
-
-CL, CD = postprocess!((body,), Vinf, magVinf, rho, backend, chords, b)
-println("CL =$(CL)")
-println("CD =$(CD)")
-
-###
-# LDS[:, 1] = Lift
-# LDS[:, 2] = Drag
-# LDS[:, 3] = Side
-###
-
-# Force coefficients
-# nondim = 0.5 * rho * magVinf^2 * sum(Sref)
-# CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
-# CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
-
-# @show CL
-# @show CD
-
-println("done")
-
-#=
-# ----------------- VISUALIZATION ----------------------------------------------
-# if paraview
-    str = save_path*"/"
-
-    # Save wing as a VTK
-    str *= pnl.save(body, run_name; path=save_path)
-    # str *= pnl.save(body, run_name; path=save_path, out_wake=false)
-
-    # Call Paraview
-    # run(`paraview --data=$(str)`)
+# write vtk files
+# for i in eachindex(bodies)
+    # pnl.write_vtk("check_mesh_body_$(i)", bodies[i])
 # end
-=#

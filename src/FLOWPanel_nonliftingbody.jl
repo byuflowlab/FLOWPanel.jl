@@ -59,8 +59,8 @@ end
 
 function NonLiftingBody{E, N, TF, DBC}(
                 nodes::Matrix{TF}, cells::Matrix{Int};
-                vtk_cells::Vector{<:WriteVTK.MeshCell}=[WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)],
-                neighbor::Matrix{Int}=zeros(Int, 3, size(cells, 2)),
+                vtk_cells=nothing,
+                neighbor=nothing,
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
                 Cp=zeros(TF, size(cells, 2)),
@@ -75,8 +75,18 @@ function NonLiftingBody{E, N, TF, DBC}(
                 kernelcutoff=1e-14,
                 characteristiclength=characteristiclength_unitary,
                 watertight=false,
-                inside_offset=1e-6
+                inside_offset=1e-6,
+                ensure_winding::Bool=true,
+                flip_normals::Bool=false
               ) where {E, N, TF, DBC}
+    if ensure_winding 
+        ensure_consistent_winding!(cells, nodes; watertight, flip_normals)
+    end
+    neighbor = neighbor === nothing || ensure_winding ? calc_neighbors(cells) : neighbor
+    vtk_cells = vtk_cells === nothing || ensure_winding ?
+                [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:size(cells, 2)] :
+                vtk_cells
+    ncells = size(cells, 2)
 
     return NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
@@ -113,21 +123,11 @@ function NonLiftingBody{E, N, TF, DBC}(
     nodes = grid._nodes
     cells = grid2cells(grid)
     
-    # Extract neighbor info from cells connectivity
-    neighbor = calc_neighbors(cells)
-
-    vtk_cells = [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_TRIANGLE, cells[:, i]) for i in 1:grid.ncells]
-
-    # check if mesh is watertight
-    watertight_guess = false
-    if typeof(grid.orggrid) <: gt.Meshes.Mesh
-        mesh = grid.orggrid
-        watertight_guess = gt.isclosed(mesh)
-    end
+    watertight_guess, _ = iswatertight(nodes, cells)
     
     return NonLiftingBody{E, N, TF, DBC}(
                 nodes, cells;
-                vtk_cells=vtk_cells, neighbor=neighbor, watertight=watertight_guess, optargs...
+                watertight=watertight_guess, optargs...
               )
 end
 

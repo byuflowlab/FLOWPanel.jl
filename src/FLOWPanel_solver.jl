@@ -602,7 +602,7 @@ end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
 
-    println("Backslash")
+    # println("Backslash")
     solver.Uext .= self.velocity
     solver.phi_ext .= self.potential
 
@@ -707,7 +707,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
     verbose::Bool = false,
     optargs...)
 
-    println("Tuple of bodies")
+    # println("Tuple of bodies")
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
@@ -823,7 +823,7 @@ Components:
 """
 mutable struct BackslashCoupled{TF}
     G::Matrix{TF}
-    Glu::LA.Factorization{TF}  # Was having singularity issues when trying to initialize the LU decomp from a G matrix of zeros
+    Glu::LA.Factorization{TF}
     rhs::Vector{TF}
     Uext::Matrix{TF}
     phi_ext::Vector{TF}
@@ -910,7 +910,7 @@ function influence!(targets::Tuple, sources::Tuple, backend=DirectBackend(); opt
     end
 
     influence!(targets, sources, backend; scalar_potential=[has_dirichlet_bc(target) for target in targets], velocity=[!has_dirichlet_bc(target) for target in targets], optargs...)
-    
+
     return nothing
 end
 
@@ -943,7 +943,7 @@ end
 
 function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
 
-    println("BackslashCoupled")
+    # println("BackslashCoupled")
     # Sizes
     npanels = [b.ncells for b in bodies]
     offsets = cumsum(vcat(0, npanels))
@@ -991,20 +991,14 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
             end
         end
 
-        # println(size(solver.G))
-        # println(LA.rank(solver.G))
-        # println(LA.cond(solver.G))
-        
         # Factorize G matrix and cache it in solver
-        # @show solver.G
         solver.Glu = lu!(solver.G)
     end
 
     # solve with cached LU
     sol = similar(solver.rhs)
     t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
-    # println("Solve: ", sol[1:2])
-    
+
     # write solution back
     for (bi, b) in enumerate(bodies)
         r = offsets[bi]+1 : offsets[bi+1]

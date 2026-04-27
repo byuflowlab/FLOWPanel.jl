@@ -14,3 +14,7 @@ temp*
 # Jupyter notebook temps
 .ipynb_checkpoints
 
+# WriteVTK outputs
+*.vtu
+*.vtm
+*.pvd

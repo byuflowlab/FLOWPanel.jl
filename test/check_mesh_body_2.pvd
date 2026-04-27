@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VTKFile type="Collection" version="1.0" byte_order="LittleEndian" compressor="vtkZLibDataCompressor">
+  <Collection>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_2/check_mesh_body_2.0.vtm"/>
+  </Collection>
+</VTKFile>
