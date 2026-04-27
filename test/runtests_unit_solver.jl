@@ -5,36 +5,6 @@ using LinearAlgebra: diag
 import Meshes
 using StaticArrays: SVector
 
-<<<<<<< HEAD
-@testset verbose=true "Solvers" begin
-    @testset "Backslash construction" begin
-        nlb = make_octa_source_body()
-        rwb = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
-            Float64[
-                0 1 1 0;
-                0 0 1 1;
-                0 0 0 0;
-            ],
-            Int[
-                1 1;
-                2 3;
-                3 4;
-            ];
-            check_mesh=false,
-            watertight=false,
-        )
-        @test pnl.Backslash(nlb) isa pnl.Backslash
-        @test pnl.Backslash(rwb) isa pnl.Backslash
-    end
-
-    @testset "Backslash Neumann construction and solve" begin
-        body = make_octa_source_body()
-        solver = pnl.Backslash(body)
-        @test size(solver.G) == (body.ncells, body.ncells)
-        @test all(diag(solver.G) .!= 0)
-        @test solver.Glu !== nothing
-        @test length(solver.rhs) == body.ncells
-=======
 # @testset verbose=true "Solvers" begin
 
 #     @testset "Backslash Neumann construction and solve" begin
@@ -44,7 +14,6 @@ using StaticArrays: SVector
 #         @test all(isapprox.(diag(solver.G), 0.5; atol=1e-1))
 #         @test solver.Glu !== nothing
 #         @test length(solver.rhs) == body.ncells
->>>>>>> backslashcoupled
 
 #         body.velocity .= 0
 #         body.velocity[1, :] .= 1.0
@@ -86,30 +55,6 @@ using StaticArrays: SVector
 #         @test any(abs.(body.strength[:, 2]) .> 0)
 #     end
 
-<<<<<<< HEAD
-    @testset "Backslash Dirichlet construction and solve" begin
-        body = make_nonlifting(Union{pnl.ConstantSource, pnl.ConstantDoublet}; DBC=true)
-        pnl.calc_normals!(body)
-        normals = copy(body.normals)
-        solver = pnl.Backslash(body)
-        i1, i2, i3 = body.cells[:, 1]
-        centroid1 = (body.nodes[:, i1] + body.nodes[:, i2] + body.nodes[:, i3]) ./ 3
-        inward = body.controlpoints[:, 1] - centroid1
-        @test dot(inward, normals[:, 1]) < 0
-        @test size(solver.G) == (body.ncells, body.ncells)
-
-        body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(copy(NODES_OCT), copy(CELLS_OCT); DBC=true)
-        body.velocity .= 0
-        body.velocity[1, :] .= 1.0
-        body.velocity[3, :] .= 0.2
-        normals = pnl.calc_normals!(body)
-        expected_sigma = -vec(sum(body.velocity .* normals; dims=1))
-        solver = pnl.Backslash(body)
-        pnl.solve!(body, solver)
-        @test any(abs.(body.strength[:, 2]) .> 0)
-        @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
-    end
-=======
 #     # @testset "KrylovSolver construction" begin
 #     #     body = make_octa_source_body()
 #     #     solver = pnl.KrylovSolver(body)
@@ -122,7 +67,6 @@ using StaticArrays: SVector
 #     #     @test custom.rtol == 1e-8
 #     #     @test custom.backend === backend
 #     # end
->>>>>>> backslashcoupled
 
 #     # @testset "KrylovSolver solve" begin
 #     #     body = make_octa_source_body()
@@ -494,8 +438,5 @@ using StaticArrays: SVector
         for i in eachindex(bodies)
             pnl.write_vtk("check_mesh_body_$(i)", bodies[i])
         end
-    # end
-
-# end
-
+        
 println("done.")

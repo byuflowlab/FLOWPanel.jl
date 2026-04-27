@@ -602,7 +602,7 @@ end
 
 function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
 
-    # println("Backslash")
+    println("Backslash")
     solver.Uext .= self.velocity
     solver.phi_ext .= self.potential
 
@@ -628,17 +628,23 @@ function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, Vor
     if update_G
         G = solver.G
         G .= 0.0
-        _G!(G, self, self; kerneloffset=self.kerneloffset)
-        Glu = lu!(G)
+        t_build = @elapsed begin
+            _G!(G, self, self; kerneloffset=self.kerneloffset)
+            Glu = lu!(G)
+        end
     else
         Glu = solver.Glu
+        t_build = 0.0
     end
 
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    t_solve = @elapsed begin
+        ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    end
 
     self.CPoffset = CPoffset_old
     self.velocity .= solver.Uext
     self.potential .= solver.phi_ext
+    return t_build, t_solve
 end
 
 function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend(
@@ -707,7 +713,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
     verbose::Bool = false,
     optargs...)
 
-    # println("Tuple of bodies")
+    println("Tuple of bodies")
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
@@ -718,8 +724,9 @@ function solve!(bodies::Tuple, solvers::Tuple;
     velocity_flags = [!has_dirichlet_bc(body) for body in bodies]
 
     converged = false
+    t_solve = 0.0
+    t_build = 0.0
     for iter in 1:max_outer_iterations
-
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
 
@@ -731,7 +738,10 @@ function solve!(bodies::Tuple, solvers::Tuple;
                     optargs...)
             end
 
-            solve!(body, solver; backend=backend[i], optargs...)
+            update_G = iter == 1
+            tb, ts = solve!(body, solver; backend=backend[i], update_G, optargs...)
+            t_build += tb
+            t_solve += ts
         end
 
         max_delta = 0.0
@@ -763,7 +773,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
         body.velocity .= prev_velocity[i]
     end
 
-    return nothing
+    return t_build, t_solve
 end
 
 
@@ -943,7 +953,7 @@ end
 
 function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
 
-    # println("BackslashCoupled")
+    println("BackslashCoupled")
     # Sizes
     npanels = [b.ncells for b in bodies]
     offsets = cumsum(vcat(0, npanels))
@@ -1009,7 +1019,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views b.potential .= solver.phi_ext[r]
     end
 
-    # return t_build, t_solve
+    return t_build, t_solve
 end
 
 

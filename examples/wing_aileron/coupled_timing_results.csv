@@ -1,4 +1,25 @@
-solver,nps,t_build,t_solve,res,pot
-FLOWPanel.BackslashCoupled{Float64},224,0.0041682,1.88e-5,[82.26988288808992, 3357.322327653764],[1.562853528161457e-11, 2.570617999873818e-11]
-FLOWPanel.BackslashCoupled{Float64},224,0.00546,1.71e-5,[82.26988288808992, 3357.322327653764],[1.562853528161457e-11, 2.570617999873818e-11]
-FLOWPanel.BackslashCoupled{Float64},224,0.004816,2.57e-5,[82.26988288808992, 3357.322327653764],[1.562853528161457e-11, 2.570617999873818e-11]
+solver,nps,t_build,t_solve
+BackslashCoupled,0.0058962,2.25e-5
+BackslashIterate,0.0048733,8.81e-5
+BackslashCoupled,0.0056194,2.7e-5
+BackslashIterate,0.0061041,6.720000000000001e-5
+BackslashCoupled,0.0110101,5.26e-5
+BackslashIterate,0.0026752,5.99e-5
+BackslashCoupled,0.007155,2.74e-5
+BackslashIterate,0.0032355,5.7300000000000004e-5
+BackslashCoupled,0.006082,2.18e-5
+BackslashIterate,0.0061256,8.34e-5
+BackslashCoupled,0.0087463,2.03e-5
+BackslashIterate,0.0041251,6.2e-5
+BackslashCoupled,0.0094177,4.64e-5
+BackslashIterate,0.0048995,7.28e-5
+BackslashCoupled,0.0068412,1.92e-5
+BackslashIterate,0.0037207000000000004,6.37e-5
+BackslashCoupled,0.0062555,2.7e-5
+BackslashIterate,0.0041637,6.49e-5
+BackslashCoupled,0.0063531,3.49e-5
+BackslashIterate,0.004405,6.73e-5
+BackslashCoupled,0.0036529,4.24e-5
+BackslashIterate,0.0041758,9.779999999999999e-5
+BackslashCoupled,0.0065796,5.25e-5
+BackslashIterate,0.0047592,7.35e-5

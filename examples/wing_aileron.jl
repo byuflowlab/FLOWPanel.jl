@@ -134,47 +134,6 @@ function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
     return res
 end
 
-function benchmarks(out, bodies::Tuple, solvers, backends)
-    for (solver, backend) in zip(solvers, backends)    
-        @time begin
-            t_build, t_solve = pnl.solve!(bodies, solver)
-        end
-
-        nps = sum(b.ncells for b in bodies)
-
-        for body in bodies
-            body.velocity .= 0.0
-            pnl.apply_freestream!(body, Vinf)
-        end
-
-        # CL, CD = postprocess!(bodies, Vinf, rho, backend, chords, b)
-        # @show CL, CD
-
-        res = flow_tangency_residuals(bodies)
-        println("Flow Tangency Residuals: ", res)
-
-        for body in bodies
-            body.velocity .= 0.0
-            pnl.apply_freestream!(body, Vinf)
-        end
-        pot = flow_potential_residuals(bodies)
-        println("Flow Potential Residuals: ", pot)
-
-        # Check if file exists and is non-empty
-        write_header = !isfile(out) || filesize(out) == 0
-
-        open(out, "a") do io
-            if write_header
-                write(io, "solver,nps,t_build,t_solve,res,pot\n")
-            end
-
-            write(io,
-                "$(typeof(solver)),$(nps),$(t_build),$(t_solve),$(res),$(pot)\n"
-            )
-        end
-    end
-end
-
 run_names = ["nasa_wing.msh", "nasa_surface_spaced_repaired.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
@@ -220,17 +179,43 @@ bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstn
                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
 #------------------- SOLVE BODY ----------------------------------------------
-backend = pnl.DirectBackend()
-backend2 = fill(pnl.DirectBackend(), length(bodies))
-backends = (backend, backend2)
 solver = pnl.BackslashCoupled(bodies)
+println("Solving bodies...")
+
+@show nps = sum(b.ncells for b in bodies)
+
+t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
+
+write_header = !isfile(out_file) || filesize(out_file) == 0
+
+open(out_file, "a") do io
+    if write_header
+        write(io, "solver,nps,t_build,t_solve,res,pot\n")
+    end
+
+    write(io,
+        "BackslashCoupled,$(t_build),$(t_solve)\n"
+    )
+end
+
+println("Resetting bodies...")
+
+for body in bodies
+    body.velocity .= 0.0
+    pnl.apply_freestream!(body, Vinf)
+end
+
+backend2 = fill(pnl.DirectBackend(), length(bodies))
 solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
-solvers = (solver, solver2)
-println("Solving body...")
 
-benchmarks(out_file, bodies, solvers, backends)
+println("Solving bodies part 2...")
 
-# write vtk files
-# for i in eachindex(bodies)
-    # pnl.write_vtk("check_mesh_body_$(i)", bodies[i])
-# end
+t_build2, t_solve2 = pnl.solve!(bodies, solver2)
+
+open(out_file, "a") do io
+    write(io,
+        "BackslashIterate,$(t_build2),$(t_solve2)\n"
+    )
+end
+
+println("done")
