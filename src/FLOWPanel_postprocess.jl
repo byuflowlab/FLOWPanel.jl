@@ -213,31 +213,37 @@ end
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_Cp!(out, body, Us, Uref; dphidt=nothing, correct_kuttacondition=true, clip=nothing)
-    calcfield_Cp!(body, Uref; dphidt=nothing, optargs...)
-    calcfield_Cp!(bodies, Uref; dphidt=..., correct_kuttacondition=..., optargs...)
+    calcfield_P!(out, body, Us, Uinf, rho; dphidt=nothing, correct_kuttacondition=true, clip=nothing)
+    calcfield_P!(body, Uinf, rho; dphidt=nothing, optargs...)
+    calcfield_P!(bodies, Uinf, rho; dphidt=..., correct_kuttacondition=..., optargs...)
 
-Compute and store the surface pressure coefficient field.
+Compute and store the dimensional gauge pressure field using the Bernoulli
+equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
+
+The field is calculated in-place and added to `out` (hence, make sure that `out`
+starts with all zeroes).
 """
-function calcfield_Cp!(out::Arr1,
-                        body::Union{NonLiftingBody, AbstractLiftingBody},
-                        Us::Arr2, Uref::Number;
-                        dphidt::Union{Nothing, AbstractVector}=nothing,
-                        correct_kuttacondition=true,
-                        clip::Union{Nothing, Function}=nothing,
-                        ) where {Arr1<:AbstractArray{<:Number,1},
-                                 Arr2<:AbstractArray{<:Number,2}}
+function calcfield_P!(out::Arr1,
+                       body::Union{NonLiftingBody, AbstractLiftingBody},
+                       Us::Arr2, Uinf::Number, rho::Number;
+                       dphidt::Union{Nothing, AbstractVector}=nothing,
+                       correct_kuttacondition=true,
+                       clip::Union{Nothing, Function}=nothing,
+                       ) where {Arr1<:AbstractArray{<:Number,1},
+                                Arr2<:AbstractArray{<:Number,2}}
 
-    # Calculate pressure coefficient
+    half_rho = rho / 2
+    Uinf2 = Uinf^2
+
+    # Steady Bernoulli: P = 0.5*rho*(Uinf^2 - U^2)
     for (i, U) in enumerate(eachcol(Us))
-        out[i] += 1 - (norm(U)/Uref)^2
+        out[i] += half_rho * (Uinf2 - norm(U)^2)
     end
 
-    # Unsteady Bernoulli term: -2(∂φ/∂t) / V∞²
+    # Unsteady Bernoulli term: -rho * dphidt
     if !isnothing(dphidt)
-        inv_Uref2 = 2.0 / Uref^2
         for i in eachindex(out)
-            out[i] -= inv_Uref2 * dphidt[i]
+            out[i] -= rho * dphidt[i]
         end
     end
 
@@ -260,31 +266,19 @@ function calcfield_Cp!(out::Arr1,
 
     # Clip values if requested
     if !isnothing(clip)
-        for (i, Cp) in enumerate(out)
-            out[i] = clip(Cp)
+        for (i, P) in enumerate(out)
+            out[i] = clip(P)
         end
     end
 
     return out
 end
 
-"""
-    calcfield_Cp!(out::Vector, body::AbstractBody, Uref;
-                            U_fieldname="U", fieldname="Cp")
+calcfield_P!(body::AbstractBody, Uinf, rho; dphidt=nothing, optargs...) = calcfield_P!(body.P, body, body.velocity, Uinf, rho; dphidt, optargs...)
 
-Calculate the pressure coefficient
-``C_p = 1 - \\left(\\frac{u}{U_\\mathrm{ref}}\\right)^2}``, where ``u`` is
-the velocity field named `U_fieldname` under `body`. The ``C_p`` is saved
-as a field named `fieldname`.
-
-The field is calculated in-place and added to `out` (hence, make sure that `out`
-starts with all zeroes).
-"""
-calcfield_Cp!(body::AbstractBody, Uref; dphidt=nothing, optargs...) = calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt, optargs...)
-
-function calcfield_Cp!(bodies::Tuple, Uref; dphidt=fill(nothing, length(bodies)), correct_kuttacondition=fill(true, length(bodies)), optargs...) 
+function calcfield_P!(bodies::Tuple, Uinf, rho; dphidt=fill(nothing, length(bodies)), correct_kuttacondition=fill(true, length(bodies)), optargs...)
     for (i, body) in enumerate(bodies)
-        calcfield_Cp!(body.Cp, body, body.velocity, Uref; dphidt=dphidt[i], correct_kuttacondition=correct_kuttacondition[i], optargs...)
+        calcfield_P!(body.P, body, body.velocity, Uinf, rho; dphidt=dphidt[i], correct_kuttacondition=correct_kuttacondition[i], optargs...)
     end
 end
 
@@ -292,15 +286,15 @@ end
 # FORCE FIELDS
 ################################################################################
 """
-    calcfield_F!(out, body, areas, normals, Cps, Uinf, rho; correct_kuttacondition=true)
-    calcfield_F!(body, Uinf, rho; correct_kuttacondition=true)
-    calcfield_F!(bodies, Uinf, rho; correct_kuttacondition=...)
+    calcfield_F!(out, body, areas, normals, Ps; correct_kuttacondition=true)
+    calcfield_F!(body; correct_kuttacondition=true)
+    calcfield_F!(bodies; correct_kuttacondition=...)
 
-Compute and store distributed surface forces from the current pressure field.
+Compute and store distributed surface forces from the current gauge pressure
+field:  ``F = -P \\cdot A \\cdot \\hat{n}``
 """
 function calcfield_F!(out::Arr0, body::AbstractBody,
-                         areas::Arr1, normals::Arr2, Cps::Arr3,
-                         Uinf::Number, rho::Number;
+                         areas::Arr1, normals::Arr2, Ps::Arr3;
                          correct_kuttacondition=true,
                          ) where {   Arr0<:AbstractArray{<:Number,2},
                                      Arr1<:AbstractArray{<:Number,1},
@@ -317,21 +311,12 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
     @assert size(normals, 1)==3 && size(normals, 2)==body.ncells ""*
         "Invalid `normals` matrix."*
         " Expected size $((3, body.ncells)); got $(size(normals))."
-    @assert length(Cps)==body.ncells ""*
-        "Invalid `Cps` vector."*
-        " Expected length $(body.ncells); got $(length(Cps))."
+    @assert length(Ps)==body.ncells ""*
+        "Invalid `Ps` vector."*
+        " Expected length $(body.ncells); got $(length(Ps))."
 
-    # # If F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}, where Cp = 1 - (u/u∞)^2,
-    # # we can calculate F directly as F = 0.5*ρ*(u^2 - u∞^2) * A * hat{n}
-    # for (i, (U, area, normal)) in enumerate(zip(eachcol(Us), areas, eachcol(normals)))
-    #     val = 0.5*rho*(norm(U)^2 - Uinf^2) * area
-    #     out[1, i] += val*normal[1]
-    #     out[2, i] += val*normal[2]
-    #     out[3, i] += val*normal[3]
-    # end
-
-    for (i, (Cp, area, normal)) in enumerate(zip(Cps, areas, eachcol(normals)))
-        val = -0.5*rho*Uinf^2 * Cp * area
+    for (i, (P, area, normal)) in enumerate(zip(Ps, areas, eachcol(normals)))
+        val = -P * area
         out[1, i] += val*normal[1]
         out[2, i] += val*normal[2]
         out[3, i] += val*normal[3]
@@ -342,28 +327,19 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
     # NOTE: This overwrites any previous force value instead of accumulating it
     if correct_kuttacondition && typeof(body) <: AbstractLiftingBody
 
-        # if typeof(body.grid) <: gt.GridTriangleSurface{gt.Meshes.SimpleMesh}
-        #     @warn "Kutta correction requested in calcfield_F, but"*
-        #             " current implementation is wrong for unstructured meshes!"
-        # end
-
-        q = 0.5*rho*Uinf^2
-
         # Iterate over TE panels
         for shedding in body.shedding
             for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
 
                 if pj != -1
-                    # Average Cp across upper (pi) and lower (pj) TE panels
-                    aveCp = (Cps[pi] + Cps[pj]) / 2
+                    aveP = (Ps[pi] + Ps[pj]) / 2
 
-                    # Convert Cp to force as F = -Cp * 0.5*ρ*u∞^2 * A * hat{n}
-                    out[1, pi] = -aveCp * q * areas[pi] * normals[1, pi]
-                    out[2, pi] = -aveCp * q * areas[pi] * normals[2, pi]
-                    out[3, pi] = -aveCp * q * areas[pi] * normals[3, pi]
-                    out[1, pj] = -aveCp * q * areas[pj] * normals[1, pj]
-                    out[2, pj] = -aveCp * q * areas[pj] * normals[2, pj]
-                    out[3, pj] = -aveCp * q * areas[pj] * normals[3, pj]
+                    out[1, pi] = -aveP * areas[pi] * normals[1, pi]
+                    out[2, pi] = -aveP * areas[pi] * normals[2, pi]
+                    out[3, pi] = -aveP * areas[pi] * normals[3, pi]
+                    out[1, pj] = -aveP * areas[pj] * normals[1, pj]
+                    out[2, pj] = -aveP * areas[pj] * normals[2, pj]
+                    out[3, pj] = -aveP * areas[pj] * normals[3, pj]
 
                 end
             end
@@ -373,12 +349,12 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
     return out
 end
 
-calcfield_F!(body::AbstractBody, Uinf::Number, rho::Number; correct_kuttacondition=true) =
-    calcfield_F!(body.F, body, calc_areas(body), body.normals, body.Cp, Uinf, rho; correct_kuttacondition)
+calcfield_F!(body::AbstractBody; correct_kuttacondition=true) =
+    calcfield_F!(body.F, body, calc_areas(body), body.normals, body.P; correct_kuttacondition)
 
-function calcfield_F!(bodies::Tuple, Uinf::Number, rho::Number; correct_kuttacondition=fill(true, length(bodies)))
+function calcfield_F!(bodies::Tuple; correct_kuttacondition=fill(true, length(bodies)))
     for (i, body) in enumerate(bodies)
-        calcfield_F!(body.F, body, calc_areas(body), body.normals, body.Cp, Uinf, rho; correct_kuttacondition=correct_kuttacondition[i])
+        calcfield_F!(body.F, body, calc_areas(body), body.normals, body.P; correct_kuttacondition=correct_kuttacondition[i])
     end
 end
 

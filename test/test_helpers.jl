@@ -117,8 +117,8 @@ function solve_source_body!(body; uinf=[1.0, 0.0, 0.0], rho=1.0, backend=pnl.Dir
     end
 
     body.velocity .= tgt.velocity
-    pnl.calcfield_Cp!(body, norm(uinf))
-    pnl.calcfield_F!(body, norm(uinf), rho)
+    pnl.calcfield_P!(body, norm(uinf), rho)
+    pnl.calcfield_F!(body)
     return body
 end
 

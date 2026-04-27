@@ -149,11 +149,11 @@ UDeltaGamma = pnl.calcfield_Ugradmu(body; Gammai=2)
 # Add both velocities together
 pnl.addfields(body, "Ugradmu", "U")
 
-# Calculate pressure coefficient (based on U + U_∇μ)
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+# Calculate gauge pressure (based on U + U_∇μ)
+@time Ps = pnl.calcfield_P(body, magVinf, rho)
 
-# Calculate the force of each panel (based on Cp)
-@time Fs = pnl.calcfield_F(body, magVinf, rho)
+# Calculate the force of each panel (based on P)
+@time Fs = pnl.calcfield_F(body)
 
 # --------- Integrated forces: lift and induced drag
 

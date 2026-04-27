@@ -191,11 +191,11 @@ Us_doublet = deepcopy(Us) # save for comparison/verification
 
 
 
-# Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(wing, magVinf)
+# Calculate gauge pressure
+@time Ps = pnl.calcfield_P(wing, magVinf, rho)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(wing, magVinf, rho)
+@time Fs = pnl.calcfield_F(wing)
 
 Ftot = sum(Fs, dims=2)
 @show Ftot

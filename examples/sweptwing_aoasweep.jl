@@ -50,11 +50,11 @@ for AOA in AOAs
     # Add both velocities together
     pnl.addfields(body, "Ugradmu", "U")
 
-    # Calculate pressure coeffiecient
-    Cps = pnl.calcfield_Cp(body, magVinf)
+    # Calculate gauge pressure
+    Ps = pnl.calcfield_P(body, magVinf, rho)
 
     # Calculate the force of each panel
-    Fs = pnl.calcfield_F(body, magVinf, rho)
+    Fs = pnl.calcfield_F(body)
 
     # Integrated force decomposed into lift and drag
     Dhat = Vinf/pnl.norm(Vinf)    # Drag direction

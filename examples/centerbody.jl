@@ -149,13 +149,13 @@ Udotn = sum(Us_tot .* normals, dims=1)
 resid = maximum(abs.(Udotn))
 println("Max flow tangency residual: $resid")
 
-# Calculate pressure coefficient
+# Calculate gauge pressure
 eachcol(body.velocity) .+= Ref(Vinf)
-@time pnl.calcfield_Cp!(body, magVinf)
-Cps = copy(body.Cp)
+@time pnl.calcfield_P!(body, magVinf, rho)
+Ps = copy(body.P)
 
 # Calculate the force of each panel
-@time pnl.calcfield_F!(body, magVinf, rho)
+@time pnl.calcfield_F!(body)
 Fs = copy(body.F)
 
 

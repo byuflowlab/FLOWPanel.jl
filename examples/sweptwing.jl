@@ -177,11 +177,11 @@ UDeltaGamma = pnl.calcfield_Ugradmu(body)
 # Add both velocities together
 pnl.addfields(body, "Ugradmu", "U")
 
-# Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+# Calculate gauge pressure
+@time Ps = pnl.calcfield_P(body, magVinf, rho)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body, magVinf, rho)
+@time Fs = pnl.calcfield_F(body)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------

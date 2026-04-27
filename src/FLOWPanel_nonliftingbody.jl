@@ -40,7 +40,7 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     O::Array{TF,1}                      # Position of CS of original grid
 
     # Fields
-    Cp::Vector{TF}
+    P::Vector{TF}
     F::Matrix{TF}
 
     # Internal variables
@@ -63,7 +63,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 neighbor=nothing,
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                Cp=zeros(TF, size(cells, 2)),
+                P=zeros(TF, size(cells, 2)),
                 F=zeros(TF, 3, size(cells, 2)),
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
@@ -92,7 +92,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
-                Cp, F,
+                P, F,
                 strength,
                 potential,
                 velocity,

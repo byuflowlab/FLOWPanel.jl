@@ -9,34 +9,35 @@ using Statistics: mean
         solve_source_body!(body)
 
         cps = body.controlpoints
-        cpvals = body.Cp
+        pvals = body.P
         xcoords = view(cps, 1, :)
         ycoords = view(cps, 2, :)
         zcoords = view(cps, 3, :)
 
+        # With rho=1, Uinf=1: q = 0.5, so P_stag = q*1.0 = 0.5, P_equator = q*(-1.25) = -0.625
         i_stag = argmax(xcoords)
-        @test isapprox(cpvals[i_stag], 1.0; atol=0.05)
+        @test isapprox(pvals[i_stag], 0.5; atol=0.025)
 
         eq_mask = abs.(xcoords) .< 0.05
         @test any(eq_mask)
-        cp_equator = mean(cpvals[eq_mask])
-        @test isapprox(cp_equator, -1.25; atol=0.2)
+        p_equator = mean(pvals[eq_mask])
+        @test isapprox(p_equator, -0.625; atol=0.1)
 
         q = 0.5 * pi
         ftot = pnl.calcfield_Ftot!(zeros(3), body, body.F)
         @test abs(ftot[1]) / q < 0.05
         @test abs(ftot[3]) / q < 0.05
 
-        pos_y = cpvals[ycoords .> 0]
-        neg_y = cpvals[ycoords .< 0]
+        pos_y = pvals[ycoords .> 0]
+        neg_y = pvals[ycoords .< 0]
         @test !isempty(pos_y)
         @test !isempty(neg_y)
-        @test abs(mean(pos_y) - mean(neg_y)) < 0.02
+        @test abs(mean(pos_y) - mean(neg_y)) < 0.01
 
-        pos_z = cpvals[zcoords .> 0]
-        neg_z = cpvals[zcoords .< 0]
+        pos_z = pvals[zcoords .> 0]
+        neg_z = pvals[zcoords .< 0]
         @test !isempty(pos_z)
         @test !isempty(neg_z)
-        @test abs(mean(pos_z) - mean(neg_z)) < 0.02
+        @test abs(mean(pos_z) - mean(neg_z)) < 0.01
     end
 end
