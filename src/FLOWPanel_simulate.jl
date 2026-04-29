@@ -47,27 +47,13 @@ function _collect_wake_sources(wakes::Tuple)
     return result
 end
 
-#--- single-body backward-compat wrapper ---#
-
 """
-    simulate!(system, wake, frames, maneuver!, Uinf, t_range; body_solver=Backslash(system), optargs...)
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), rho=1.225, monitors=(), ...)
 
 Advance one or more coupled body-wake systems through `t_range`, solving the
 aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
-function simulate!(system::AbstractBody{TK,NK,TF}, wake::AbstractFreeWake, frames, maneuver!::Function, Uinf::Function, t_range;
-        body_solver=Backslash(system), optargs...
-    ) where {TK, NK, TF}
-    # wrap maneuver to match tuple signature
-    _maneuver!(frames, systems, wakes, t) = maneuver!(frames, systems[1], wakes[1], t)
-    simulate!((system,), (wake,), frames, _maneuver!, Uinf, t_range;
-        body_solvers=(body_solver,), optargs...)
-end
-
-#--- primary tuple-based simulate! ---#
-
 function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Uinf::Function, t_range;
         name="default_sim", path="./default_simulation",
         body_solvers::Tuple,
@@ -82,8 +68,10 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         p_clip=nothing,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
+        start_step::Int=0,
         verbose=false
     )
+    @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
         mkpath(path)
@@ -125,8 +113,8 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
     end
 
     # begin simulation
-    i_step = 0
-    for t in t_range
+    i_step = start_step
+    for t in @view t_range[start_step+1:end]
         if verbose
             println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
             # flush(stdout)
@@ -213,16 +201,19 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
         if !isnothing(path)
             for (i, sys) in enumerate(systems)
-                body_name = length(systems) == 1 ? name : name * "_body$(i)"
+                body_name = name * "_body$(i)"
                 write_vtk(joinpath(path, body_name), sys, i_step, t; overwrite=i_step==0)
             end
 
             for (i, w) in enumerate(wakes)
                 if !isnothing(w)
-                    wake_name = length(systems) == 1 ? name * "_wake" : name * "_wake$(i)"
+                    wake_name = name * "_wake$(i)"
                     write_vtk(joinpath(path, wake_name), w, i_step, t; overwrite=i_step==0)
                 end
             end
+
+            # frame-state companion file for simulate_warmstart!
+            _write_frame_state_toml(path, name, frames, i_step, t; truncate=(i_step==0))
         end
 
         for monitor in monitors
@@ -237,7 +228,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
             # propagate wake
             for w in wakes
-                !isnothing(w) && propagate!(w, dt; step=i_step)
+                !isnothing(w) && propagate!(w, dt; step=i_step, frames)
             end
 
             # propagate rigid-body kinematics
