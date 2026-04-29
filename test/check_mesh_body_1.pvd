@@ -8,5 +8,6 @@
     <DataSet timestep="0.0" part="0" file="check_mesh_body_1/check_mesh_body_1.0.vtm"/>
     <DataSet timestep="0.0" part="0" file="check_mesh_body_1/check_mesh_body_1.0.vtm"/>
     <DataSet timestep="0.0" part="0" file="check_mesh_body_1/check_mesh_body_1.0.vtm"/>
+    <DataSet timestep="0.0" part="0" file="check_mesh_body_1/check_mesh_body_1.0.vtm"/>
   </Collection>
 </VTKFile>

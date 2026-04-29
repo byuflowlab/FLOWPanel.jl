@@ -18,7 +18,8 @@ export  solve, save, influence!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas,
         calc_shedding, calc_shedding_from_seed, trace_trailing_edge,
-        WingNormalization, RotorNormalization
+        WingNormalization, RotorNormalization,
+        simulate_warmstart!
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA
@@ -71,7 +72,7 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "simulate",
+                    "wake", "simulate_monitors", "simulate", "warmstart",
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end

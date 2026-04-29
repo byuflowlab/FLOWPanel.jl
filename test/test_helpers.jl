@@ -340,6 +340,82 @@ function nonlifting_flow_tangency_max_residual(body::pnl.NonLiftingBody{<:Any, <
     return maximum(abs.(vec(body.strength[:, 1]) .+ vec(sum(body.velocity .* body.normals; dims=1))))
 end
 
+has_dirichlet_body(body::pnl.AbstractBody{<:Any, <:Any, <:Any, DBC}) where DBC = DBC
+
+"""
+Evaluate the solved Neumann boundary condition by adding the induced velocity
+field to the current external velocity field and projecting onto panel normals.
+"""
+function flow_tangency_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=1e-10)
+    Uext = [copy(body.velocity) for body in bodies]
+
+    for body in bodies
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=cp_off)
+    end
+
+    pnl.influence!(bodies, bodies, backend; scalar_potential=false, velocity=true)
+
+    res = zeros(length(bodies))
+    for (i, body) in enumerate(bodies)
+        r = 0.0
+        for (vel, normal) in zip(eachcol(body.velocity), eachcol(body.normals))
+            r = max(r, abs(dot(vel, normal)))
+        end
+        res[i] = r
+    end
+
+    for (body, velocity) in zip(bodies, Uext)
+        body.velocity .= velocity
+    end
+
+    return res
+end
+
+"""
+Evaluate the solved Dirichlet boundary condition by recomputing the interior
+perturbation potential induced by the solved source/doublet strengths.
+"""
+function interior_potential_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=-1e-10)
+    phi_ext = [copy(body.potential) for body in bodies]
+
+    for body in bodies
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=cp_off)
+        body.potential .= 0.0
+    end
+
+    pnl.influence!(bodies, bodies, backend; scalar_potential=true, velocity=false)
+
+    res = [maximum(abs.(body.potential)) for body in bodies]
+
+    for (body, potential) in zip(bodies, phi_ext)
+        body.potential .= potential
+    end
+
+    return res
+end
+
+function assert_boundary_residuals(
+    bodies::Tuple;
+    backend=pnl.DirectBackend(),
+    tangency_atol=1e-10,
+    potential_atol=1e-10,
+)
+    tangency_residuals = flow_tangency_max_residuals(bodies; backend)
+    potential_residuals = interior_potential_max_residuals(bodies; backend)
+
+    for (i, body) in enumerate(bodies)
+        if has_dirichlet_body(body)
+            @test potential_residuals[i] < potential_atol
+        else
+            @test tangency_residuals[i] < tangency_atol
+        end
+    end
+
+    return (; tangency_residuals, potential_residuals)
+end
+
 function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
     for body in bodies
         pnl.calc_normals!(body)
