@@ -190,11 +190,51 @@ using StaticArrays: SVector
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
         solver1 = pnl.FGSSolver(body1)
-        solver2 = pnl.FGSSolver((body1, body2))
         @test solver1.max_iterations == 100
         @test solver1.tolerance == 1e-6
-        @test solver2.max_iterations == 100
-        @test solver2.tolerance == 1e-6
+        @test size(solver1.Uext) == (3, body1.ncells)
+        @test size(solver1.phi_ext) == (body1.ncells,)
+        @test_throws MethodError pnl.FGSSolver((body1, body2))
+    end
+
+    @testset "FGSSolver boundary-condition preparation" begin
+        nodes, cells = make_seeded_te_mesh()
+        shedding = pnl.calc_shedding_from_seed(nodes, cells, 1, 2;
+            bbox=([0.8, -0.1, -0.1], [1.1, 2.1, 0.1]),
+            end_node=3)
+
+        function make_dirichlet_body(initial_doublet)
+            body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+                copy(nodes), copy(cells), [copy(shedding)];
+                check_mesh=false,
+                watertight=true)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.strength .= 0
+            body.strength[:, 2] .= initial_doublet
+            for i in eachindex(body.Das)
+                body.Das[i] .= repeat([1.0, 0.0, 0.0], 1, size(body.Das[i], 2))
+            end
+            pnl.calc_normals!(body)
+            pnl.calc_controlpoints!(body)
+            return body
+        end
+
+        body_backslash = make_dirichlet_body(1.0)
+        backslash = pnl.BackslashCoupled((body_backslash,))
+        pnl.solve!((body_backslash,), backslash; backend=pnl.DirectBackend(), update_G=true)
+
+        body_fgs = make_dirichlet_body(1.0)
+        fgs = pnl.FGSSolver(body_fgs; leaf_size=10000, tolerance=1e-12, max_iterations=5)
+        pnl.solve!(body_fgs, fgs)
+
+        @test body_fgs.strength[:, 1] ≈ body_backslash.strength[:, 1] atol=1e-12
+        @test body_fgs.strength[:, 2] ≈ body_backslash.strength[:, 2] atol=1e-12
+
+        neumann = make_octa_source_body()
+        neumann.strength[:, 1] .= 3.0
+        pnl.set_strengths(neumann)
+        @test all(iszero, neumann.strength[:, 1])
     end
 
     @testset "Multi-body solve" begin

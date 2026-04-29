@@ -444,9 +444,9 @@ end
 
 """
     FGSSolver(body; kwargs...)
-    FGSSolver(bodies; kwargs...)
 
-Block fixed-point / Gauss-Seidel-style solver for one or more coupled bodies.
+Matrix-free solver for a single body. Use `solve!(bodies, solvers)` with one
+solver per body for coupled multi-body solves.
 """
 mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     fgs::TFGS
@@ -459,19 +459,16 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     rlx::Float64
     reverse_pass::Bool
     verbose::Bool
-    Uext::Vector{Matrix{TF}}            # vector of per-body external velocity storage
-    phi_ext::Vector{Vector{TF}}         # vector of per-body external potential storage
-    solution_history::Vector{Array{TF, 3}}  # per-body NP × NK × NT rolling buffer; slot 1 = most recent
+    Uext::Matrix{TF}                    # external velocity storage
+    phi_ext::Vector{TF}                 # external potential storage
+    solution_history::Array{TF, 3}      # NP × NK × NT rolling buffer; slot 1 = most recent
     solution_history_length::Int            # NT — buffer capacity
     solution_history_nsaved::Int            # number of populated slots, clamped to NT
     project_solution::Bool                  # warm-start next solve via polynomial extrapolation
     project_solution_order::Int             # extrapolation order: 1 = linear, 2 = quadratic, ...
 end
 
-# Single-body convenience constructor
-FGSSolver(body::AbstractBody; kwargs...) = FGSSolver((body,); kwargs...)
-
-function FGSSolver(bodies::Tuple;
+function FGSSolver(body::AbstractBody;
         max_iterations::Int=100,         # Maximum number of iterations
         inner_iterations::Int=1,
         tolerance::Real=1e-6,            # Convergence tolerance
@@ -490,40 +487,27 @@ function FGSSolver(bodies::Tuple;
     )
 
     # save and set CPoffset to negative for Dirichlet bodies (interior solve)
-    CPoffset_olds = zeros(Float64, length(bodies))
-    for (i, body) in enumerate(bodies)
-        CPoffset_olds[i] = body.CPoffset
-        body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
-    end
+    CPoffset_old = body.CPoffset
+    body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
 
     # calculate control points if needed
     if calc_cps
-        for body in bodies
-            calc_normals!(body)
-            calc_controlpoints!(body)
-        end
+        calc_normals!(body)
+        calc_controlpoints!(body)
     end
 
     # generate solver
-    TF = promote_type(numtype.(bodies)...)
+    TF = numtype(body)
+    bodies = (body,)
     fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
 
-    # restore CPoffsets
-    for (body, CPoffset_old) in zip(bodies, CPoffset_olds)
-        body.CPoffset = CPoffset_old
-    end
+    # restore CPoffset
+    body.CPoffset = CPoffset_old
 
-    Uext = [zeros(TF, 3, body.ncells) for body in bodies]
-    phi_ext = [zeros(TF, body.ncells) for body in bodies]
-    solution_history = [zeros(TF, body.ncells, size(body.strength, 2), solution_history_length) for body in bodies]
+    Uext = zeros(TF, 3, body.ncells)
+    phi_ext = zeros(TF, body.ncells)
+    solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
     return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order)
-end
-
-#--- test solve! ---#
-
-# Single-body convenience: wrap and delegate to tuple method
-function solve!(self::AbstractBody, solver::FGSSolver; kwargs...)
-    solve!((self,), solver; kwargs...)
 end
 
 ################################################################################
@@ -667,90 +651,77 @@ end
 # Polynomial extrapolation in time: warm-start body.strength using the rolling
 # history saved by save_solution!. Slot 1 holds the most recent saved strength.
 # Coefficients (slot 1 = most recent): s_new = Σ_{j=0..order} (-1)^j * binomial(order+1, j+1) * H[:,:,j+1]
-@inline function project_solution!(bodies::Tuple, solver::FGSSolver)
+@inline function project_solution!(body::AbstractBody, solver::FGSSolver)
     solver.project_solution || return nothing
     n = solver.solution_history_nsaved
     n < 2 && return nothing
     order = min(solver.project_solution_order, n - 1)
-    @inbounds for i in eachindex(bodies)
-        body = bodies[i]
-        H = solver.solution_history[i]
-        c0 = order + 1
-        @views @. body.strength = c0 * H[:, :, 1]
-        for j in 1:order
-            c = ifelse(isodd(j), -binomial(order + 1, j + 1), binomial(order + 1, j + 1))
-            @views @. body.strength += c * H[:, :, j + 1]
-        end
+    H = solver.solution_history
+    c0 = order + 1
+    @views @. body.strength = c0 * H[:, :, 1]
+    @inbounds for j in 1:order
+        c = ifelse(isodd(j), -binomial(order + 1, j + 1), binomial(order + 1, j + 1))
+        @views @. body.strength += c * H[:, :, j + 1]
     end
     return nothing
 end
 
 # Push the converged body.strength into the per-body rolling history.
 # Slot 1 is most recent: shift slots [1..NT-1] right by one, then write slot 1.
-@inline function save_solution!(bodies::Tuple, solver::FGSSolver)
+@inline function save_solution!(body::AbstractBody, solver::FGSSolver)
     NT = solver.solution_history_length
     NT == 0 && return nothing
-    @inbounds for i in eachindex(bodies)
-        body = bodies[i]
-        H = solver.solution_history[i]
-        for j in NT:-1:2
-            @views @. H[:, :, j] = H[:, :, j - 1]
-        end
-        @views @. H[:, :, 1] = body.strength
+    H = solver.solution_history
+    @inbounds for j in NT:-1:2
+        @views @. H[:, :, j] = H[:, :, j - 1]
     end
+    @views @. H[:, :, 1] = body.strength
     solver.solution_history_nsaved = min(solver.solution_history_nsaved + 1, NT)
     return nothing
 end
 
-function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend(
+function solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...)
 
-    for (i, body) in enumerate(bodies)
-        solver.Uext[i] .= body.velocity
-        solver.phi_ext[i] .= body.potential
-    end
+    solver.Uext .= body.velocity
+    solver.phi_ext .= body.potential
+
+    dirichlet_bc = has_dirichlet_bc(body)
 
     # Set CPoffset: negative (interior) for Dirichlet, positive (exterior) for Neumann
-    CPoffset_olds = Tuple(body.CPoffset for body in bodies)
-    for body in bodies
-        body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
-    end
+    CPoffset_old = body.CPoffset
+    body.CPoffset = abs(body.CPoffset) * (-1)^dirichlet_bc
 
     # update control points
-    for body in bodies
-        normals = calc_normals!(body)
-        calc_controlpoints!(body, normals)
-    end
+    normals = calc_normals!(body)
+    calc_controlpoints!(body, normals)
 
     # warm-start strengths from history (no-op if disabled or insufficient history)
-    project_solution!(bodies, solver)
+    project_solution!(body, solver)
 
-    # Dirichlet solves keep source strengths fixed by the no-penetration
-    # condition while solving the doublet/vortex column.
-    for body in bodies
-        has_dirichlet_bc(body) && _set_fixed_source_strength_from_velocity!(body, body.velocity, body.normals)
-    end
+    # Match BackslashCoupled's boundary-condition-dependent initial strengths.
+    set_strengths(body)
 
-    # store source strengths per body
-    prior_sigmas = [copy(body.strength[:, 1]) for body in bodies]
+    # Store fixed source strengths for Dirichlet bodies.
+    prior_sigma = dirichlet_bc ? copy(body.strength[:, 1]) : nothing
 
     # induced potential due to source strengths for dirichlet bodies (interior solve)
-    influence!(bodies, bodies, backend;
-        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
-        velocity=[false for b in bodies],
+    influence!(body, body, backend;
+        scalar_potential=dirichlet_bc,
+        velocity=false,
         optargs...)
 
     # run solver
-    FastMultipole.solve!(bodies, solver.fgs;
+    FastMultipole.solve!(body, solver.fgs;
         max_iterations=solver.max_iterations,
         inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance,
         rlx=solver.rlx,
-        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
-        gradient=[!has_dirichlet_bc(b) for b in bodies],
+        scalar_potential=dirichlet_bc,
+        gradient=!dirichlet_bc,
         hessian=false,
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
@@ -758,17 +729,15 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
     )
 
     # restore properties
-    for (i, body) in enumerate(bodies)
-        if has_dirichlet_bc(body)
-            body.strength[:, 1] .= prior_sigmas[i]
-        end
-        body.CPoffset = CPoffset_olds[i]
-        body.velocity .= solver.Uext[i]
-        body.potential .= solver.phi_ext[i]
+    if dirichlet_bc
+        body.strength[:, 1] .= prior_sigma
     end
+    body.CPoffset = CPoffset_old
+    body.velocity .= solver.Uext
+    body.potential .= solver.phi_ext
 
     # save converged strengths into rolling history (no-op if disabled)
-    save_solution!(bodies, solver)
+    save_solution!(body, solver)
 end
 
 function solve!(bodies::Tuple, solvers::Tuple;

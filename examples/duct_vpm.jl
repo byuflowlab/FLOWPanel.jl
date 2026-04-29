@@ -92,8 +92,8 @@ end
 # frames_A = make_frames(body_A)
 # solver_A = pnl.Backslash(body_A)
 
-# @time pnl.simulate!(body_A, wake_A, frames_A, maneuver, Uinf, t_range;
-#     eta, body_solver=solver_A, backend, verbose=true, path="panel_wake", name="test_stability")
+# @time pnl.simulate!((body_A,), (wake_A,), frames_A, maneuver, Uinf, t_range;
+#     body_solvers=(solver_A,), backend, verbose=true, path="panel_wake", name="test_stability")
 
 # strength_A = copy(body_A.strength)
 
@@ -127,8 +127,8 @@ solver_B = pnl.FGSSolver(body_B;
 l = d * aspectratio
 dt = magVinf / l / (n_rfl * 500)
 # t_range2 = range(0.0, step=dt, length=11) 
-@time pnl.simulate!(body_B, wake_B, frames_B, maneuver, Uinf, t_range;
-    body_solver=solver_B, backend, verbose=true, path="vpm", name="fgs")#, eta)
+@time pnl.simulate!((body_B,), (wake_B,), frames_B, maneuver, Uinf, t_range;
+    body_solvers=(solver_B,), backend, verbose=true, path="vpm", name="fgs")
 
 strength_B = copy(body_B.strength)
 
@@ -162,8 +162,8 @@ strength_B = copy(body_B.strength)
 #     body_C.Das[1] .= repeat(Vinf * dt_val * eta, 1, size(body_C.Das[1], 2))
 #     wake_C = pnl.PanelWake(body_C; nwakerows=3)
 #     frames_C = make_frames(body_C)
-#     pnl.simulate!(body_C, wake_C, frames_C, maneuver, Uinf, t_range;
-#         eta, body_solver=pnl.Backslash(body_C), backend, verbose=false, path=nothing)
+#     pnl.simulate!((body_C,), (wake_C,), frames_C, maneuver, Uinf, t_range;
+#         body_solvers=(pnl.Backslash(body_C),), backend, verbose=false, path=nothing)
 #     strength_C = body_C.strength
 #     rel_err_C = abs.(strength_A[significant] .- strength_C[significant]) ./ abs.(strength_A[significant])
 #     sorted_C = sort(rel_err_C)

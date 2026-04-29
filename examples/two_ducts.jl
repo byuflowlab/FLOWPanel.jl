@@ -223,10 +223,10 @@ backend_fmm = pnl.FastMultipoleBackend(
 )
 
 # # ============================================================================
-# # TEST 3: Single coupled FGSSolver (both bodies in one solver)
+# # TEST 3: Tuple-of-solvers FGSSolver (one solver per body)
 # # ============================================================================
 # println("\n" * "="^60)
-# println("TEST 3: Single coupled FGSSolver (leaf_size=10000)")
+# println("TEST 3: Tuple-of-solvers FGSSolver (leaf_size=10000)")
 # println("="^60)
 
 # setup_bodies!(body1, Vinf, magVinf)
@@ -234,8 +234,8 @@ backend_fmm = pnl.FastMultipoleBackend(
 # body1.strength .= 0.0
 # body2.strength .= 0.0
 
-# println("\nInitializing coupled FGSSolver...")
-# @time fgs_coupled = pnl.FGSSolver((body1, body2);
+# println("\nInitializing one FGSSolver per body...")
+# @time fgs_coupled = (pnl.FGSSolver(body1;
 #     leaf_size=10000,
 #     expansion_order=10,
 #     multipole_acceptance=0.4,
@@ -246,14 +246,25 @@ backend_fmm = pnl.FastMultipoleBackend(
 #     shrink=true,
 #     reverse_pass=false,
 #     verbose=false
-# )
+# ), pnl.FGSSolver(body2;
+#     leaf_size=10000,
+#     expansion_order=10,
+#     multipole_acceptance=0.4,
+#     max_iterations=500,
+#     inner_iterations=20,
+#     tolerance=1e-8,
+#     rlx=1.0,
+#     shrink=true,
+#     reverse_pass=false,
+#     verbose=false
+# ))
 
 # println("\nSolving...")
 # @time pnl.solve!((body1, body2), fgs_coupled; backend=backend_fmm)
 
 # println("\nPost-processing...")
 # postprocess!((body1, body2), Vinf, magVinf, rho, backend_fmm)
-# report_tangency((body1, body2), "FGSSolver (coupled)")
+# report_tangency((body1, body2), "FGSSolver (tuple-of-solvers)")
 
 # ============================================================================
 # COMPARISON
