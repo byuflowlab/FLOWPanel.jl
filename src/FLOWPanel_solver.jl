@@ -378,7 +378,7 @@ function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolve
     self.velocity .= solver.Uext
 end
 
-function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; update_G=false, optargs...) where {B,TF}
 
     solver.Uext .= self.velocity
 
@@ -396,13 +396,15 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
     ncols = self.ncells
     symmetric, hermitian = false, false
     prod! = (y, x, α, β) -> solver(y, x, α, β)
-    A = LinearOperators.LinearOperator(
+    tb = @elapsed begin
+        A = LinearOperators.LinearOperator(
             TF2,
             nrows,
             ncols,
             symmetric, hermitian,
             prod!
         )
+    end
 
     RHS = zeros(TF2, nrows)
     self.potential .= 0
@@ -411,9 +413,9 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
 
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
     if solver.preconditioner !== nothing
-        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        ts = Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     else
-        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        ts = Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     end
     @show workspace.stats
 
@@ -424,7 +426,9 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
     self.CPoffset = CPoffset_old
     self.velocity .= solver.Uext
     self.potential .= 0
+    return tb, ts
 end
+
 
 ###############################################################################
 # FGS Solver
