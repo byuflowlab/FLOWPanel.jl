@@ -361,13 +361,15 @@ function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolve
     # LinearOperators expects a callable (function) whose methods can be inspected.
     # Wrap the solver instance in a small closure so `methods` sees a function.
     prod! = (y, x, α, β) -> solver(y, x, α, β)
-    A = LinearOperators.LinearOperator(
+    tb = @elapsed begin 
+        A = LinearOperators.LinearOperator(
             TF2,
             nrows,
             ncols,
             symmetric, hermitian,
             prod!
         )
+    end
 
     # construct right-hand side
     RHS = zeros(TF2, nrows)
@@ -376,9 +378,13 @@ function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolve
     # allocate and launch krylov solver
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
     if solver.preconditioner !== nothing
-        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        ts = @elapsed begin
+            Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        end
     else
+        ts = @elapsed begin
         Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        end
     end
     @show workspace.stats
 
@@ -388,6 +394,7 @@ function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolve
 
     # restore external velocity
     self.velocity .= solver.Uext
+    return tb, ts
 end
 
 function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; update_G=false, optargs...) where {B,TF}
@@ -425,9 +432,9 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
 
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
     if solver.preconditioner !== nothing
-        ts = Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    else
-        ts = Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+    else 
+        ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     end
     @show workspace.stats
 
@@ -488,7 +495,7 @@ function FGSSolver(bodies::Tuple;
         recenter=false,
         verbose=false,
         calc_cps=true,
-        solution_history_length::Int=0,      # 0 disables history & projection
+                solution_history_length::Int=0,      # 0 disables history & projection
         project_solution::Bool=false,        # warm-start next solve via polynomial extrapolation
         project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
     )
@@ -544,17 +551,19 @@ function solve!(body::NonLiftingBody{TK,NK,TF,false}, solver::Backslash;
     Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
-        _G!(solver.G, body, body; optargs...)
-        Glu = lu!(solver.G)
+        tb = @elapsed begin
+            _G!(solver.G, body, body; optargs...)
+            Glu = lu!(solver.G)
+        end
     end
 
     rhs = solver.rhs
     rhs .= zero(eltype(rhs))
     calc_bc_noflowthrough!(rhs, body.velocity, normals)
 
-    ldiv!(view(body.strength, :, strength_index), Glu, rhs)
+    ts = @elapsed ldiv!(view(body.strength, :, strength_index), Glu, rhs)
 
-    return nothing
+    return tb, ts
 end
 
 function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2, TF, true},
@@ -586,17 +595,20 @@ function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2
     Glu = solver.Glu
     if update_G
         solver.G .= 0.0
+        tb = @elapsed begin
         _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
         Glu = lu!(solver.G)
+        end
     end
+    tb = 0.0
 
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    ts = @elapsed ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
 
     self.CPoffset = CPoffset_old
     self.velocity .= solver.Uext
     self.potential .= solver.phi_ext
 
-    return nothing
+    return tb, ts
 end
 
 # function solve!(self::RigidWakeBody{TK, 1, TF},
@@ -734,7 +746,7 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         normals = calc_normals!(body)
         calc_controlpoints!(body, normals)
     end
-
+    
     # warm-start strengths from history (no-op if disabled or insufficient history)
     project_solution!(bodies, solver)
 
@@ -776,7 +788,7 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
         body.velocity .= solver.Uext[i]
         body.potential .= solver.phi_ext[i]
     end
-
+    
     # save converged strengths into rolling history (no-op if disabled)
     save_solution!(bodies, solver)
 end
