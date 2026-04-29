@@ -218,4 +218,24 @@ open(out_file, "a") do io
     )
 end
 
+println("Resetting bodies...")
+
+for body in bodies
+    body.velocity .= 0.0
+    pnl.apply_freestream!(body, Vinf)
+end
+
+backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
+solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
+
+println("Solving bodies part 2...")
+
+t_build3, t_solve3 = pnl.solve!(bodies, solver3)
+
+open(out_file, "a") do io
+    write(io,
+        "Krylove,$(t_build3),$(t_solve3)\n"
+    )
+end
+
 println("done")
