@@ -299,6 +299,8 @@ _kinematic_velocity_te!(::AbstractBody, v_global, ω_global, origin_global) = no
 
 #------- kinematic velocity -------#
 
+kinematic_velocity!(system::AbstractBody, frames::AbstractVector{<:ReferenceFrame}) = kinematic_velocity!((system,), frames)
+
 function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}) where TF
 
     # begin recursion

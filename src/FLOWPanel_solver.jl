@@ -847,6 +847,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
+    update_cps_normals::Bool = true,
     optargs...)
 
     # println("Tuple of bodies")
@@ -859,11 +860,13 @@ function solve!(bodies::Tuple, solvers::Tuple;
     prev_strengths = [copy(body.strength) for body in bodies]
     
     # update control points and normals
-    CPoffsets_old = map(body -> body.CPoffset, bodies)
-    for body in bodies
-        body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
-        normals = calc_normals!(body)
-        calc_controlpoints!(body, normals)
+    if update_cps_normals
+        CPoffsets_old = map(body -> body.CPoffset, bodies)
+        for body in bodies
+            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
+            normals = calc_normals!(body)
+            calc_controlpoints!(body, normals)
+        end
     end
 
     converged = false
@@ -911,7 +914,9 @@ function solve!(bodies::Tuple, solvers::Tuple;
     # restore velocities and CPoffsets
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
-        body.CPoffset = CPoffsets_old[i]
+        if update_cps_normals
+            body.CPoffset = CPoffsets_old[i]
+        end
     end
 
     return nothing
