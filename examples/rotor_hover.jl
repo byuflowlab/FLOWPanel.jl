@@ -13,13 +13,10 @@ import GeoIO
 magVinf = 0.0001    # Freestream velocity magnitude (m/s)
 AOA     = 0.0       # Angle of attack (degrees)
 rho     = 1.225     # Air density (kg/m^3)
-RPM     = 5400      # Rotation speed (rpm)
-
+RPM     = 6000      # Rotation speed (rpm)
 Vinf    = magVinf * [0.0, -cosd(AOA), sind(AOA)]
-eta     = 0.3
-
 nrevs   = 10        # Number of revolutions
-nt      = 36        # Number of time steps per revolution
+nt      = 72        # Number of time steps per revolution
 dt      = 60 / RPM / nt
 n_steps = nt * nrevs
 t_range = range(0.0, step=dt, length=n_steps)
@@ -31,7 +28,7 @@ read_path   = joinpath(pnl.examples_path, "data")
 stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
 msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
 
-R       = 0.12      # Rotor radius
+R       = 0.119      # Rotor radius
 # RPM     = 6000      # Rotation speed (rpm)
 
 # STL file
@@ -94,18 +91,19 @@ p_per_step = 2
 overlap    = 2.0
 
 wake_rotor = pnl.PanelParticleWake(rotor;
-                nwakerows=1,
+                nwakerows=2,
                 max_particles=100000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
                 method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
-                merge_every=1, # merge every step
-                merge_r=R*0.02, # r_merge for merging particles
-                merge_r_hash=R*0.04, # r_merge for hashing particles
-                merge_sigma_relative=false, # use relative sigma for merging
-                merge_max_sigma_ratio=2.0, # prevents particles of very different strengths from merging
-                merge_skip_static=true, # skip merging static particles
-                check_neighboring_cells=false, # check neighboring cells for merging (prevents merging across large gaps)
-                merge_verbose=true)
+                particle_maintenance=pnl.ParticleMaintenance((
+                    pnl.MergeParticles(every=1,
+                        r=R*0.02,
+                        r_hash=R*0.04,
+                        sigma_relative=false,
+                        max_sigma_ratio=2.0,
+                        skip_static=true,
+                        check_neighboring_cells=false),
+                )))
 
 ## =========================================================
 # SIMULATION SETUP

@@ -45,6 +45,10 @@ function solve!(self, solver; optargs...)
     throw(ErrorException("solve! not implemented for body of type $(typeof(self)) and solver of type $(typeof(solver))"))
 end
 
+function _solve!(self, solver; optargs...)
+    throw(ErrorException("_solve! not implemented for body of type $(typeof(self)) and solver of type $(typeof(solver))"))
+end
+
 ################################################################################
 
 
@@ -218,6 +222,51 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
     return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
 end
 
+function _set_formulation_geometry!(body::AbstractBody{<:Any,<:Any,<:Any,DBC},
+                                    update_cps_normals::Bool) where DBC
+    CPoffset_old = body.CPoffset
+    if update_cps_normals
+        body.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
+        normals = calc_normals!(body)
+        calc_controlpoints!(body, normals)
+    end
+    return CPoffset_old
+end
+
+function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolver;
+        backend=DirectBackend(),
+        update_cps_normals::Bool=true,
+        optargs...)
+
+    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
+
+    try
+        set_strengths!(body)
+        body.potential .= zero(eltype(body.potential))
+        influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        _solve!(body, solver; backend, optargs...)
+    finally
+        body.CPoffset = CPoffset_old
+    end
+
+    return nothing
+end
+
+function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
+        backend=DirectBackend(),
+        update_cps_normals::Bool=true,
+        optargs...)
+
+    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
+    try
+        _solve!(body, solver; backend, optargs...)
+    finally
+        body.CPoffset = CPoffset_old
+    end
+
+    return nothing
+end
+
 function numtype(self::AbstractBody)
     return promote_type(eltype(self.nodes),
                         eltype(self.strength))
@@ -300,6 +349,18 @@ function _set_source_strength_from_velocity!(body::AbstractBody{<:Any, 2, <:Any}
     return nothing
 end
 
+function _set_fixed_source_strength_from_velocity!(body::AbstractBody{<:Any, 2, <:Any},
+                                                   velocity::AbstractMatrix,
+                                                   normals::AbstractMatrix)
+    body.strength[:, 1] .= 0.0
+    for d in 1:3
+        @views @. body.strength[:, 1] -= velocity[d, :] * normals[d, :]
+    end
+    return nothing
+end
+
+_set_fixed_source_strength_from_velocity!(::AbstractBody, ::AbstractMatrix, ::AbstractMatrix) = nothing
+
 function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
 
     @assert length(B) == solver.body.ncells "Length of strengths vector does not match number of panels in body."
@@ -334,12 +395,11 @@ function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B,
     C .+= α .* solver.body.potential
 end
 
-function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
 
     # save external velocity and update solver fields
     solver.Uext .= self.velocity
-    solver.normals .= _calc_normals(self)
-    calc_controlpoints!(self, solver.normals)
+    solver.normals .= self.normals
 
     # construct matrix-free linear operator
     TF2 = TF
@@ -376,19 +436,12 @@ function solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolve
 
     # restore external velocity
     self.velocity .= solver.Uext
+    return nothing
 end
 
-function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
+function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
 
-    solver.Uext .= self.velocity
-
-    CPoffset_old = self.CPoffset
-    self.CPoffset = -abs(CPoffset_old)
-
-    solver.normals .= calc_normals!(self)
-    calc_controlpoints!(self)
-
-    _set_source_strength_from_velocity!(self, solver.Uext, solver.normals)
+    solver.normals .= self.normals
     solver.source_strengths .= view(self.strength, :, 1)
 
     TF2 = TF
@@ -405,8 +458,6 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
         )
 
     RHS = zeros(TF2, nrows)
-    self.potential .= 0
-    influence!(self, self, solver.backend; scalar_potential=true, velocity=false)
     RHS .= -self.potential
 
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
@@ -421,9 +472,143 @@ function solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:A
     self.strength[:, 1] .= solver.source_strengths
     _set_strength(self, solver.unabbreviated_strengths)
 
-    self.CPoffset = CPoffset_old
-    self.velocity .= solver.Uext
-    self.potential .= 0
+    return nothing
+end
+
+"""
+    KrylovCoupled(bodies; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend())
+
+Matrix-free coupled solver for a tuple of bodies.
+"""
+mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
+    bodies::TB
+    backend::B
+    rhs::Vector{TF}
+    x::Vector{TF}
+    Ax::Vector{TF}
+    method::Symbol
+    itmax::Int
+    atol::Float64
+    rtol::Float64
+end
+
+function KrylovCoupled(bodies::Tuple;
+        method::Symbol=:gmres,
+        itmax::Int=20,
+        atol::Real=1e-6,
+        rtol::Real=1e-6,
+        backend::AbstractBackend=FastMultipoleBackend())
+
+    TF = promote_type(map(numtype, bodies)...)
+    ncs = sum(body -> body.ncells, bodies)
+    rhs = zeros(TF, ncs)
+    x = zeros(TF, ncs)
+    Ax = zeros(TF, ncs)
+
+    return KrylovCoupled{typeof(bodies),typeof(backend),TF}(
+        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol))
+end
+
+function _coupled_offsets(bodies::Tuple)
+    npanels = [body.ncells for body in bodies]
+    return cumsum(vcat(0, npanels))
+end
+
+function _write_coupled_unknowns!(bodies::Tuple, x::AbstractVector)
+    offsets = _coupled_offsets(bodies)
+    for (i, body) in enumerate(bodies)
+        r = offsets[i]+1:offsets[i+1]
+        if has_dirichlet_bc(body)
+            body.strength[:, 1] .= zero(eltype(body.strength))
+            body.strength[:, 2] .= view(x, r)
+        else
+            body.strength[:, 1] .= view(x, r)
+        end
+    end
+    return nothing
+end
+
+function _collect_coupled_operator!(Ax::AbstractVector, bodies::Tuple)
+    offsets = _coupled_offsets(bodies)
+    for (i, body) in enumerate(bodies)
+        r = offsets[i]+1:offsets[i+1]
+        if has_dirichlet_bc(body)
+            Ax[r] .= body.potential
+        else
+            @views Ax[r] .= vec(sum(body.velocity .* body.normals; dims=1))
+        end
+    end
+    return Ax
+end
+
+function (solver::KrylovCoupled)(C, B, α, β)
+    _write_coupled_unknowns!(solver.bodies, B)
+
+    for body in solver.bodies
+        body.velocity .= zero(eltype(body.velocity))
+        body.potential .= zero(eltype(body.potential))
+    end
+
+    scalar_potential = [has_dirichlet_bc(body) for body in solver.bodies]
+    velocity = [!has_dirichlet_bc(body) for body in solver.bodies]
+    influence!(solver.bodies, solver.bodies, solver.backend; scalar_potential, velocity)
+    _collect_coupled_operator!(solver.Ax, solver.bodies)
+
+    C .*= β
+    C .+= α .* solver.Ax
+    return nothing
+end
+
+function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, optargs...)
+    offsets = _coupled_offsets(bodies)
+    CPoffset_old = map(body -> body.CPoffset, bodies)
+    velocity_old = [copy(body.velocity) for body in bodies]
+    potential_old = [copy(body.potential) for body in bodies]
+    fixed_sources = Vector{Any}(undef, length(bodies))
+
+    try
+        for (i, body) in enumerate(bodies)
+            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
+            normals = calc_normals!(body)
+            calc_controlpoints!(body, normals)
+            set_strengths!(body)
+            fixed_sources[i] = has_dirichlet_bc(body) ? copy(body.strength[:, 1]) : nothing
+        end
+
+        scalar_potential = [has_dirichlet_bc(body) for body in bodies]
+        velocity = [!has_dirichlet_bc(body) for body in bodies]
+        influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
+        for (i, body) in enumerate(bodies)
+            if has_dirichlet_bc(body)
+                body.potential .+= potential_old[i]
+            end
+        end
+        boundary_condition!(bodies, solver, backend; optargs...)
+
+        TF = eltype(solver.rhs)
+        n = length(solver.rhs)
+        prod! = (y, x, α, β) -> solver(y, x, α, β)
+        A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
+        workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
+        Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        solver.x .= workspace.x
+
+        for (i, body) in enumerate(bodies)
+            r = offsets[i]+1:offsets[i+1]
+            if has_dirichlet_bc(body)
+                body.strength[:, 1] .= fixed_sources[i]
+            end
+            write_solution!(body, view(solver.x, r))
+        end
+    finally
+        for (i, body) in enumerate(bodies)
+            body.CPoffset = CPoffset_old[i]
+            body.velocity .= velocity_old[i]
+            body.potential .= potential_old[i]
+        end
+    end
+
+    return nothing
 end
 
 ###############################################################################
@@ -432,11 +617,11 @@ end
 
 """
     FGSSolver(body; kwargs...)
-    FGSSolver(bodies; kwargs...)
 
-Block fixed-point / Gauss-Seidel-style solver for one or more coupled bodies.
+Matrix-free solver for a single body. Use `solve!(bodies, solvers)` with one
+solver per body for coupled multi-body solves.
 """
-struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
+mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     fgs::TFGS
     expansion_order::Int
     leaf_size::Int
@@ -447,14 +632,16 @@ struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     rlx::Float64
     reverse_pass::Bool
     verbose::Bool
-    Uext::Vector{Matrix{TF}}            # vector of per-body external velocity storage
-    phi_ext::Vector{Vector{TF}}         # vector of per-body external potential storage
+    Uext::Matrix{TF}                    # external velocity storage
+    phi_ext::Vector{TF}                 # external potential storage
+    solution_history::Array{TF, 3}      # NP × NK × NT rolling buffer; slot 1 = most recent
+    solution_history_length::Int            # NT — buffer capacity
+    solution_history_nsaved::Int            # number of populated slots, clamped to NT
+    project_solution::Bool                  # warm-start next solve via polynomial extrapolation
+    project_solution_order::Int             # extrapolation order: 1 = linear, 2 = quadratic, ...
 end
 
-# Single-body convenience constructor
-FGSSolver(body::AbstractBody; kwargs...) = FGSSolver((body,); kwargs...)
-
-function FGSSolver(bodies::Tuple;
+function FGSSolver(body::AbstractBody;
         max_iterations::Int=100,         # Maximum number of iterations
         inner_iterations::Int=1,
         tolerance::Real=1e-6,            # Convergence tolerance
@@ -467,54 +654,42 @@ function FGSSolver(bodies::Tuple;
         recenter=false,
         verbose=false,
         calc_cps=true,
+        solution_history_length::Int=0,      # 0 disables history & projection
+        project_solution::Bool=false,        # warm-start next solve via polynomial extrapolation
+        project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
     )
 
     # save and set CPoffset to negative for Dirichlet bodies (interior solve)
-    CPoffset_olds = zeros(Float64, length(bodies))
-    for (i, body) in enumerate(bodies)
-        CPoffset_olds[i] = body.CPoffset
-        body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
-    end
+    CPoffset_old = body.CPoffset
+    body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
 
     # calculate control points if needed
     if calc_cps
-        for body in bodies
-            calc_normals!(body)
-            calc_controlpoints!(body)
-        end
+        calc_normals!(body)
+        calc_controlpoints!(body)
     end
 
     # generate solver
-    TF = promote_type(numtype.(bodies)...)
+    TF = numtype(body)
+    bodies = (body,)
     fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
 
-    # restore CPoffsets
-    for (body, CPoffset_old) in zip(bodies, CPoffset_olds)
-        body.CPoffset = CPoffset_old
-    end
+    # restore CPoffset
+    body.CPoffset = CPoffset_old
 
-    Uext = [zeros(TF, 3, body.ncells) for body in bodies]
-    phi_ext = [zeros(TF, body.ncells) for body in bodies]
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext)
-end
-
-#--- test solve! ---#
-
-# Single-body convenience: wrap and delegate to tuple method
-function solve!(self::AbstractBody, solver::FGSSolver; kwargs...)
-    solve!((self,), solver; kwargs...)
+    Uext = zeros(TF, 3, body.ncells)
+    phi_ext = zeros(TF, body.ncells)
+    solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order)
 end
 
 ################################################################################
 
-function solve!(body::NonLiftingBody{TK,NK,TF,false}, solver::Backslash;
+function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
         backend=DirectBackend(), strength_index=1,
         update_G::Bool=false,
         optargs...
     ) where {TK, NK, TF}
-
-    normals = calc_normals!(body)
-    calc_controlpoints!(body)
 
     Glu = solver.Glu
     if update_G
@@ -525,36 +700,17 @@ function solve!(body::NonLiftingBody{TK,NK,TF,false}, solver::Backslash;
 
     rhs = solver.rhs
     rhs .= zero(eltype(rhs))
-    calc_bc_noflowthrough!(rhs, body.velocity, normals)
+    calc_bc_noflowthrough!(rhs, body.velocity, body.normals)
 
     ldiv!(view(body.strength, :, strength_index), Glu, rhs)
 
     return nothing
 end
 
-function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2, TF, true},
+function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, 2, TF, true},
                 solver::Backslash; backend=DirectBackend(),
                 update_G::Bool=false, optargs...) where TF
 
-    solver.Uext .= self.velocity
-    solver.phi_ext .= self.potential
-
-    CPoffset_old = self.CPoffset
-    self.CPoffset = -abs(CPoffset_old)
-
-    calc_normals!(self)
-    calc_controlpoints!(self)
-
-    self.strength[:, 1] .= 0.0
-    for d in 1:3
-        self.strength[:, 2] .= view(self.velocity, d, :)
-        self.strength[:, 2] .*= view(self.normals, d, :)
-        self.strength[:, 1] .-= self.strength[:, 2]
-    end
-    self.strength[:, 2] .= 0.0
-
-    self.potential .= 0
-    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
     solver.rhs .= -self.potential
 
     Glu = solver.Glu
@@ -565,10 +721,6 @@ function solve!(self::NonLiftingBody{<:Union{ConstantSource, ConstantDoublet}, 2
     end
 
     ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
-
-    self.CPoffset = CPoffset_old
-    self.velocity .= solver.Uext
-    self.potential .= solver.phi_ext
 
     return nothing
 end
@@ -600,89 +752,75 @@ end
 
 # end
 
-function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
-
-    # println("Backslash")
-    solver.Uext .= self.velocity
-    solver.phi_ext .= self.potential
-
-    CPoffset_old = self.CPoffset
-    self.CPoffset = -abs(CPoffset_old)
-
-    calc_normals!(self)
-    calc_controlpoints!(self)
-
-    self.strength[:, 1] .= 0.0
-    for d in (1,2,3)
-        self.strength[:, 2] .= view(self.velocity, d, :)
-        self.strength[:, 2] .*= view(self.normals, d, :)
-        self.strength[:, 1] .-= self.strength[:, 2]
+# Polynomial extrapolation in time: warm-start body.strength using the rolling
+# history saved by save_solution!. Slot 1 holds the most recent saved strength.
+# Coefficients (slot 1 = most recent): s_new = Σ_{j=0..order} (-1)^j * binomial(order+1, j+1) * H[:,:,j+1]
+@inline function project_solution!(body::AbstractBody, solver::FGSSolver)
+    solver.project_solution || return false
+    n = solver.solution_history_nsaved
+    n < 2 && return false
+    order = min(solver.project_solution_order, n - 1)
+    H = solver.solution_history
+    c0 = order + 1
+    @views @. body.strength = c0 * H[:, :, 1]
+    @inbounds for j in 1:order
+        c = ifelse(isodd(j), -binomial(order + 1, j + 1), binomial(order + 1, j + 1))
+        @views @. body.strength += c * H[:, :, j + 1]
     end
-    self.strength[:, 2] .= 0.0
-
-    self.potential .= 0
-    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
-    solver.rhs .= self.potential
-    solver.rhs .*= -1.0
-
-    if update_G
-        G = solver.G
-        G .= 0.0
-        _G!(G, self, self; kerneloffset=self.kerneloffset)
-        Glu = lu!(G)
-    else
-        Glu = solver.Glu
-    end
-
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
-
-    self.CPoffset = CPoffset_old
-    self.velocity .= solver.Uext
-    self.potential .= solver.phi_ext
+    return true
 end
 
-function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend(
+# Push the converged body.strength into the per-body rolling history.
+# Slot 1 is most recent: shift slots [1..NT-1] right by one, then write slot 1.
+@inline function save_solution!(body::AbstractBody, solver::FGSSolver)
+    NT = solver.solution_history_length
+    NT == 0 && return nothing
+    H = solver.solution_history
+    @inbounds for j in NT:-1:2
+        @views @. H[:, :, j] = H[:, :, j - 1]
+    end
+    @views @. H[:, :, 1] = body.strength
+    solver.solution_history_nsaved = min(solver.solution_history_nsaved + 1, NT)
+    return nothing
+end
+
+@inline _fgs_solved_strength_index(body::AbstractBody) = has_dirichlet_bc(body) && size(body.strength, 2) >= 2 ? 2 : 1
+
+function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
     ), optargs...)
 
-    println("FGS")
+    dirichlet_bc = has_dirichlet_bc(body)
+    strength_index = _fgs_solved_strength_index(body)
+    nprint = min(5, body.ncells)
+    prior_sigma = dirichlet_bc ? copy(body.strength[:, 1]) : nothing
 
-    for (i, body) in enumerate(bodies)
-        solver.Uext[i] .= body.velocity
-        solver.phi_ext[i] .= body.potential
+    # warm-start strengths from history (no-op if disabled or insufficient history)
+    projected = project_solution!(body, solver)
+    if dirichlet_bc
+        body.strength[:, 1] .= prior_sigma
     end
-
-    # Set CPoffset: negative (interior) for Dirichlet, positive (exterior) for Neumann
-    CPoffset_olds = Tuple(body.CPoffset for body in bodies)
-    for body in bodies
-        body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
+    projected_strengths = if solver.verbose && projected
+        vals = copy(view(body.strength, 1:nprint, strength_index))
+        println("FGSSolver projected first $(nprint) strengths (column $(strength_index)): ", vals)
+        vals
+    else
+        if solver.verbose && solver.project_solution
+            println("FGSSolver projection skipped; saved history count = $(solver.solution_history_nsaved)")
+        end
+        nothing
     end
-
-    # update control points
-    for body in bodies
-        normals = calc_normals!(body)
-        calc_controlpoints!(body, normals)
-    end
-
-    # store source strengths per body
-    prior_sigmas = [copy(body.strength[:, 1]) for body in bodies]
-
-    # induced potential due to source strengths for dirichlet bodies (interior solve)
-    influence!(bodies, bodies, backend;
-        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
-        velocity=[false for b in bodies],
-        optargs...)
 
     # run solver
-    FastMultipole.solve!(bodies, solver.fgs;
+    FastMultipole.solve!(body, solver.fgs;
         max_iterations=solver.max_iterations,
         inner_iterations=solver.inner_iterations,
         tolerance=solver.tolerance,
         rlx=solver.rlx,
-        scalar_potential=[has_dirichlet_bc(b) for b in bodies],
-        gradient=[!has_dirichlet_bc(b) for b in bodies],
+        scalar_potential=dirichlet_bc,
+        gradient=!dirichlet_bc,
         hessian=false,
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
@@ -690,14 +828,18 @@ function solve!(bodies::Tuple, solver::FGSSolver; backend = FastMultipoleBackend
     )
 
     # restore properties
-    for (i, body) in enumerate(bodies)
-        if has_dirichlet_bc(body)
-            body.strength[:, 1] .= prior_sigmas[i]
-        end
-        body.CPoffset = CPoffset_olds[i]
-        body.velocity .= solver.Uext[i]
-        body.potential .= solver.phi_ext[i]
+    if dirichlet_bc
+        body.strength[:, 1] .= prior_sigma
     end
+
+    if solver.verbose && projected
+        actual_strengths = copy(view(body.strength, 1:nprint, strength_index))
+        println("FGSSolver actual first $(nprint) strengths after solve (column $(strength_index)): ", actual_strengths)
+        println("FGSSolver actual - projected first $(nprint) strengths: ", actual_strengths .- projected_strengths)
+    end
+
+    # save converged strengths into rolling history (no-op if disabled)
+    save_solution!(body, solver)
 end
 
 function solve!(bodies::Tuple, solvers::Tuple;
@@ -705,17 +847,27 @@ function solve!(bodies::Tuple, solvers::Tuple;
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
+    update_cps_normals::Bool = true,
     optargs...)
 
     # println("Tuple of bodies")
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
+    backends = backend isa Tuple || backend isa AbstractVector ? backend : fill(backend, N)
 
     prev_velocity = [copy(body.velocity) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
-    scalar_potential_flags = [has_dirichlet_bc(body) for body in bodies]
-    velocity_flags = [!has_dirichlet_bc(body) for body in bodies]
+    
+    # update control points and normals
+    if update_cps_normals
+        CPoffsets_old = map(body -> body.CPoffset, bodies)
+        for body in bodies
+            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
+            normals = calc_normals!(body)
+            calc_controlpoints!(body, normals)
+        end
+    end
 
     converged = false
     for iter in 1:max_outer_iterations
@@ -723,15 +875,15 @@ function solve!(bodies::Tuple, solvers::Tuple;
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
 
-            for (j, source) in enumerate(bodies)
-                j == i && continue
-                influence!(body, source, backend[j];
-                    scalar_potential=scalar_potential_flags[i],
-                    velocity=velocity_flags[i],
+            sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
+            if !isempty(sources)
+                influence!((body,), sources, backends[i];
+                    scalar_potential=false,
+                    velocity=true,
                     optargs...)
             end
 
-            solve!(body, solver; backend=backend[i], optargs...)
+            solve!(body, solver; backend=backends[i], update_cps_normals=false)
         end
 
         max_delta = 0.0
@@ -759,8 +911,12 @@ function solve!(bodies::Tuple, solvers::Tuple;
         println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
     end
 
+    # restore velocities and CPoffsets
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
+        if update_cps_normals
+            body.CPoffset = CPoffsets_old[i]
+        end
     end
 
     return nothing
@@ -791,11 +947,8 @@ function FlatGroundSolver(body::NonLiftingBody{ConstantSource, 1, TF}) where TF
     return FlatGroundSolver(rhs)
 end
 
-function solve!(body::NonLiftingBody{ConstantSource, 1, TF}, solver::FlatGroundSolver{TF}; optargs...) where TF
-    normals = calc_normals!(body)
-    calc_controlpoints!(body)
-
-    calc_bc_noflowthrough!(solver.rhs, body.velocity, normals)
+function _solve!(body::NonLiftingBody{ConstantSource, 1, TF}, solver::FlatGroundSolver{TF}; optargs...) where TF
+    calc_bc_noflowthrough!(solver.rhs, body.velocity, body.normals)
 
     for i in 1:body.ncells
         # For a flat ground problem with constant source panels, the influence of each panel on itself is -0.5
@@ -821,7 +974,7 @@ Components:
 - `Uext`: Cached external velocity at control points for all bodies.
 - `phi_ext`: Cached external potential at control points for all bodies.
 """
-mutable struct BackslashCoupled{TF}
+mutable struct BackslashCoupled{TF} <: AbstractSolver
     G::Matrix{TF}
     Glu::LA.Factorization{TF}
     rhs::Vector{TF}
@@ -895,6 +1048,21 @@ function boundary_condition!(
 
 end
 
+function boundary_condition!(
+    bodies::Tuple,
+    solver::KrylovCoupled,
+    backend; optargs...
+)
+
+    nps = [b.ncells for b in bodies]
+    offsets = cumsum(vcat(0, nps))
+    for (bi, body) in enumerate(bodies)
+        rows = offsets[bi]+1 : offsets[bi+1]
+        boundary_condition!(body, view(solver.rhs, rows), backend; optargs...)
+    end
+
+end
+
 write_solution!(body::AbstractBody{<:Any, <:Any, <:Any, true}, sol) = body.strength[:, 2] .= sol
 write_solution!(body::AbstractBody{<:Any, <:Any, <:Any, false}, sol) = body.strength[:, 1] .= sol
 
@@ -920,7 +1088,7 @@ end
 
 For Dirichlet bodies, set the source strength to enforce the no-penetration condition and set the doublet strength to zero.
 """
-function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, true})
+function set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, true})
     body.strength[:, 1] .= 0.0
     for d in 1:3
         body.strength[:, 2] .= view(body.velocity, d, :)
@@ -928,7 +1096,6 @@ function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, true})
         body.strength[:, 1] .-= body.strength[:, 2]
     end
     body.strength[:, 2] .= 0.0
-    body.potential .= 0
 end
 
 # Neumann
@@ -937,7 +1104,7 @@ end
 
 For Neumann bodies, set the source strength to zero.
 """
-function set_strengths(body::AbstractBody{<:Any, <:Any, <:Any, false})
+function set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, false})
     body.strength[:, 1] .= 0.0
 end
 
@@ -962,14 +1129,25 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
     end
 
     for body in bodies
+        # update normals/controlpoints
         calc_normals!(body)
         calc_controlpoints!(body)
 
-        ### Zero all strengths AND Set source strengths for Dirichlet bodies (function) set_strengths(body)
-        set_strengths(body)
+        # zero all strengths and set source strengths for Dirichlet bodies
+        set_strengths!(body)
+
+        # reset potential
+        body.potential .= zero(eltype(body.potential))
     end
 
     influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+
+    for (bi, body) in enumerate(bodies)
+        if has_dirichlet_bc(body)
+            r = offsets[bi]+1 : offsets[bi+1]
+            @views body.potential .+= solver.phi_ext[r]
+        end
+    end
 
     ### get the boundary_condition for each body to write the RHS
     boundary_condition!(bodies, solver, backend)
@@ -1015,152 +1193,6 @@ end
 
 
 #####################################################################################
-# function solve!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1, TF},
-#                 solver::AbstractMatrixfulSolver{true};
-#                     solver_optargs=(),
-#                     elprescribe::AbstractArray{Tuple{Int, Float64}}=[(1, 0.0)],
-#                     GPUArray=Array{TF},
-#                     update_G::Bool=true,
-#                     optargs...
-#                 ) where TF<:Real
-#     if size(self.velocity) != (3, self.ncells)
-#         error("Invalid body velocity;"*
-#               " expected size (3, $(self.ncells)), got $(size(self.velocity))")
-#     end
-
-#     normals = _calc_normals(self)
-#     CPs = _calc_controlpoints(self, normals)
-
-#     G, RHS = _G_U_RHS(self, self.velocity, CPs, normals, elprescribe;
-#                                                 GPUArray=GPUArray,
-#                                                 optargs...)
-
-#     Gamma = GPUArray(undef, self.ncells-length(elprescribe))
-#     solve_matrix!(Gamma, G, RHS, solver; solver_optargs...)
-
-#     if !(GPUArray <: Array)
-#         Gamma = Array{TF}(Gamma)
-#     end
-
-#     set_solution(self, nothing, Gamma, elprescribe, self.velocity)
-# end
-
-# function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
-#     return _G_U_RHS_leastsquares(self, args...; optargs...)
-# end
-
-# function _G_U_RHS(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
-#     @warn "_G_U_RHS called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
-#     this is deprecated and may be removed in the future."
-#     return _G_U_RHS_leastsquares(self, args...; optargs...)
-# end
-
-# function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 1}, args...; optargs...)
-#     return _G_U_RHS_leastsquares!(self, args...; optargs...)
-# end
-
-# function _G_U_RHS!(self::RigidWakeBody{<:Union{VortexRing, ConstantDoublet}, 2}, args...; optargs...)
-#     @warn "_G_U_RHS! called for RigidWakeBody{VortexRing, 2} as though `2` indicates the least-squares solver;
-#     this is deprecated and may be removed in the future."
-#     return _G_U_RHS_leastsquares!(self, args...; optargs...)
-# end
-
-# function _G_U_RHS_leastsquares(self::AbstractBody,
-#                                 Uinfs::AbstractMatrix{T1}, CPs, normals,
-#                                 elprescribe::AbstractArray{Tuple{Int, T2}},
-#                                 args...;
-#                                 GPUArray=Array{promote_type(T1, T2)},
-#                                 optargs...
-#                                 ) where {T1, T2}
-
-#     T = promote_type(T1, T2)
-
-#     n = self.ncells
-#     npres = length(elprescribe)
-
-#     G = zeros(T, n, n)
-#     Gred = zeros(T, n, n-npres)
-#     tGred = zeros(T, n-npres, n)
-#     gpuGred = GPUArray(undef, size(Gred))
-#     Gls = GPUArray(undef, n-npres, n-npres)
-#     RHS = zeros(T, n)
-#     RHSls = GPUArray(undef, n-npres)
-
-#     _G_U_RHS_leastsquares!(self, G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-#                 Uinfs, CPs, normals,
-#                 elprescribe,
-#                 args...; optargs...)
-
-#     return Gls, RHSls
-# end
-
-# function _G_U_RHS_leastsquares!(self::AbstractBody,
-#                                 G, Gred, tGred, gpuGred, Gls, RHS, RHSls,
-#                                 Uinfs, CPs, normals,
-#                                 elprescribe::AbstractArray{Tuple{Int, T}};
-#                                 onlycomputeG=false,
-#                                 optargs...
-#                                 ) where {T<:Number}
-
-#     n = self.ncells
-#     npres = length(elprescribe)
-
-#     @assert size(G, 1)==n && size(G, 2)==n ""*
-#         "Invalid $(size(G, 1))x$(size(G, 2)) matrix G; expected $(n)x$(n)"
-#     @assert size(Gred, 1)==n && size(Gred, 2)==n-npres ""*
-#         "Invalid $(size(Gred, 1))x$(size(Gred, 2)) matrix Gred; expected $(n)x$(n-npres)"
-#     @assert size(tGred, 1)==n-npres && size(tGred, 2)==n ""*
-#         "Invalid $(size(tGred, 1))x$(size(tGred, 2)) matrix tGred; expected $(n-npres)x$(n)"
-#     @assert size(Gls, 1)==n-npres && size(Gls, 2)==n-npres ""*
-#         "Invalid $(size(Gls, 1))x$(size(Gls, 2)) matrix Gls; expected $(n)x$(n-npres)"
-
-#     @assert length(RHS)==n "Invalid RHS length $(length(RHS)); expected $(n)"
-#     @assert length(RHSls)==n-npres "Invalid RHSls length $(length(RHSls)); expected $(n-pres)"
-
-#     sort!(elprescribe, by = x -> x[1])
-
-#     calc_bc_noflowthrough!(RHS, Uinfs, normals)
-
-#     _G_U!(self, G, CPs, normals; optargs...)
-
-#     if onlycomputeG
-#         return Gls, RHSls
-#     end
-
-#     for (eli, elval) in elprescribe
-#         for i in 1:length(RHS)
-#             RHS[i] -= elval*G[i, eli]
-#         end
-#     end
-
-#     prev_eli = 0
-#     for (i, (eli, elval)) in enumerate(elprescribe)
-
-#         Gred[:, (prev_eli+2-i):(eli-i)] .= view(G, :, (prev_eli+1):(eli-1))
-
-#         if i==length(elprescribe) && eli!=size(G, 2)
-#             Gred[:, (eli-i+1):end] .= view(G, :, eli+1:size(G, 2))
-#         end
-
-#         prev_eli = eli
-#     end
-
-#     if typeof(gpuGred) <: Array
-#         permutedims!(tGred, Gred, [2, 1])
-#         LA.mul!(RHSls, tGred, RHS)
-#         LA.mul!(Gls, tGred, Gred)
-
-#     else
-#         copyto!(gpuGred, Gred)
-#         tGred = transpose(gpuGred)
-#         LA.mul!(RHSls, tGred, typeof(RHSls)(RHS))
-#         LA.mul!(Gls, tGred, gpuGred)
-
-#     end
-
-#     return Gls, RHSls
-# end
-
 # function solve!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3, TF},
 #                 solver::AbstractMatrixfulSolver{true};
 #                     solver_optargs=(),

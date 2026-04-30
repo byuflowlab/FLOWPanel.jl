@@ -433,7 +433,7 @@ FastMultipole.body_to_multipole!(system::PanelWake{ConstantDoublet, 1, <:Any}, a
 FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole_quad!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-function propagate!(wake::PanelWake, dt; step=0)
+function propagate!(wake::PanelWake, dt; step=0, frames=nothing)
     for i_surf in eachindex(wake.nodes)
         view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
         view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
@@ -573,6 +573,177 @@ function _shed_particles!(pfield, r1, r2, Γ, ::NoShed)
     return nothing
 end
 
+#--- Particle Maintenance Policies ---#
+
+abstract type AbstractParticleTrimPolicy end
+abstract type AbstractParticleFunctionalPolicy end
+
+struct ParticleMaintenance{TT<:Tuple,TF<:Tuple}
+    trim_policies::TT
+    functional_policies::TF
+end
+
+ParticleMaintenance() = ParticleMaintenance((), ())
+ParticleMaintenance(maintenance::ParticleMaintenance) = maintenance
+ParticleMaintenance(policy::Union{AbstractParticleTrimPolicy,AbstractParticleFunctionalPolicy}) =
+    ParticleMaintenance((policy,))
+
+function ParticleMaintenance(policies::Tuple)
+    trim_policies, functional_policies = _split_particle_policies(policies)
+    return ParticleMaintenance(trim_policies, functional_policies)
+end
+
+function _split_particle_policies(policies::Tuple)
+    isempty(policies) && return ((), ())
+
+    policy = first(policies)
+    trim_policies, functional_policies = _split_particle_policies(Base.tail(policies))
+
+    if policy isa AbstractParticleTrimPolicy
+        return ((policy, trim_policies...), functional_policies)
+    elseif policy isa AbstractParticleFunctionalPolicy
+        return (trim_policies, (policy, functional_policies...))
+    else
+        throw(ArgumentError("Invalid particle maintenance policy of type $(typeof(policy))"))
+    end
+end
+
+struct ParticleMaintenanceContext{TF}
+    frames::TF
+    step::Int
+end
+
+struct MinGamma{T} <: AbstractParticleTrimPolicy
+    threshold::T
+end
+
+struct MaxGamma{T} <: AbstractParticleTrimPolicy
+    threshold::T
+end
+
+struct GlobalBox{T} <: AbstractParticleTrimPolicy
+    xmin::SVector{3,T}
+    xmax::SVector{3,T}
+end
+
+function GlobalBox(xmin, xmax)
+    xmin_s = SVector{3}(xmin)
+    xmax_s = SVector{3}(xmax)
+    T = promote_type(eltype(xmin_s), eltype(xmax_s))
+    return GlobalBox(SVector{3,T}(xmin_s), SVector{3,T}(xmax_s))
+end
+
+struct FrameBox{T} <: AbstractParticleTrimPolicy
+    i_frame::Int
+    xmin::SVector{3,T}
+    xmax::SVector{3,T}
+end
+
+function FrameBox(i_frame::Integer, xmin, xmax)
+    xmin_s = SVector{3}(xmin)
+    xmax_s = SVector{3}(xmax)
+    T = promote_type(eltype(xmin_s), eltype(xmax_s))
+    return FrameBox(Int(i_frame), SVector{3,T}(xmin_s), SVector{3,T}(xmax_s))
+end
+
+struct PreparedFrameBox{T,TO,TR} <: AbstractParticleTrimPolicy
+    origin_global::TO
+    Rg2f::TR
+    xmin::SVector{3,T}
+    xmax::SVector{3,T}
+end
+
+struct MergeParticles{TR,TH,TM} <: AbstractParticleFunctionalPolicy
+    every::Int
+    r::TR
+    r_hash::TH
+    sigma_relative::Bool
+    max_sigma_ratio::TM
+    skip_static::Bool
+    check_neighboring_cells::Bool
+end
+
+MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
+    max_sigma_ratio=2.0, skip_static=true, check_neighboring_cells=true) =
+    MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
+                   skip_static, check_neighboring_cells)
+
+prepare_particle_policy(policy, ::ParticleMaintenanceContext) = policy
+
+function prepare_particle_policy(policy::FrameBox, ctx::ParticleMaintenanceContext)
+    isnothing(ctx.frames) && throw(ArgumentError("FrameBox particle trimming requires frames"))
+    transform = frame_global_transform(ctx.frames, policy.i_frame)
+    isnothing(transform) && throw(ArgumentError("FrameBox references unknown frame index $(policy.i_frame)"))
+    origin_global, R_f2g = transform
+    return PreparedFrameBox(origin_global, R_f2g', policy.xmin, policy.xmax)
+end
+
+prepare_particle_policies(policies::Tuple, ctx::ParticleMaintenanceContext) =
+    Tuple(prepare_particle_policy(policy, ctx) for policy in policies)
+
+function _particle_gamma_magnitude(pfield, i)
+    gamma = FLOWVPM.get_Gamma(pfield, i)
+    return sqrt(sum(abs2, gamma))
+end
+
+keep(policy::MinGamma, pfield, i, ::ParticleMaintenanceContext) =
+    _particle_gamma_magnitude(pfield, i) >= policy.threshold
+
+keep(policy::MaxGamma, pfield, i, ::ParticleMaintenanceContext) =
+    _particle_gamma_magnitude(pfield, i) <= policy.threshold
+
+function keep(policy::GlobalBox, pfield, i, ::ParticleMaintenanceContext)
+    x = FLOWVPM.get_X(pfield, i)
+    return all(policy.xmin .<= x .<= policy.xmax)
+end
+
+function keep(policy::PreparedFrameBox, pfield, i, ::ParticleMaintenanceContext)
+    x = SVector{3}(FLOWVPM.get_X(pfield, i))
+    x_local = policy.Rg2f * (x - policy.origin_global)
+    return all(policy.xmin .<= x_local .<= policy.xmax)
+end
+
+function _keep_particle(policies::Tuple, pfield, i, ctx::ParticleMaintenanceContext)
+    for policy in policies
+        keep(policy, pfield, i, ctx) || return false
+    end
+    return true
+end
+
+function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMaintenanceContext)
+    if policy.every > 0 && ctx.step > 0 && ctx.step % policy.every == 0
+        FLOWVPM.merge_particles!(pfield;
+            r_merge=policy.r,
+            r_hash=policy.r_hash,
+            sigma_relative=policy.sigma_relative,
+            max_sigma_ratio=policy.max_sigma_ratio,
+            skip_static=policy.skip_static,
+            check_neighboring_cells=policy.check_neighboring_cells,
+        )
+    end
+    return nothing
+end
+
+function apply_particle_policies!(policies::Tuple, pfield, ctx::ParticleMaintenanceContext)
+    for policy in policies
+        apply_particle_policy!(policy, pfield, ctx)
+    end
+    return nothing
+end
+
+function apply_particle_maintenance!(pfield, maintenance::ParticleMaintenance, ctx::ParticleMaintenanceContext)
+    apply_particle_policies!(maintenance.functional_policies, pfield, ctx)
+    prepared_trim_policies = prepare_particle_policies(maintenance.trim_policies, ctx)
+
+    for i in pfield.np:-1:1
+        if !_keep_particle(prepared_trim_policies, pfield, i, ctx)
+            FLOWVPM.remove_particle(pfield, i)
+        end
+    end
+
+    return nothing
+end
+
 #------- Vortex Particle Wake -------#
 
 """
@@ -581,36 +752,19 @@ end
 Hybrid wake model that combines a near-body panel wake with vortex particles
 shed downstream from the trailing edge.
 """
-struct PanelParticleWake{TK,NK,TF,TPF,MT,MU} <: AbstractFreeWake
+struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
     method_unsteady::MU                             # particle shedding method
-    gamma_trim_threshold::TF              # remove particles with |Gamma| below this value
-    # Particle merge settings
-    merge_every::Int                      # merge every N steps (0 = disabled)
-    merge_r::Float64                      # r_merge kwarg
-    merge_r_hash::Float64                 # r_hash kwarg
-    merge_sigma_relative::Bool            # sigma_relative kwarg
-    merge_max_sigma_ratio::Float64        # max_sigma_ratio kwarg
-    merge_skip_static::Bool               # skip_static kwarg
-    check_neighboring_cells::Bool         # check_neighboring_cells kwarg
-    merge_verbose::Bool
+    particle_maintenance::TPM             # particle merge/trim policy chain
 end
 
 function PanelParticleWake(body::AbstractLiftingBody;
         nwakerows=3, max_particles=10000,
         method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
         method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
-        gamma_trim_threshold=1e-8,
-        merge_every=0,
-        merge_r=0.5,
-        merge_r_hash=-1.0,
-        merge_sigma_relative=true,
-        merge_max_sigma_ratio=2.0,
-        merge_skip_static=true,
-        check_neighboring_cells=true,
-        merge_verbose=false,
+        particle_maintenance=ParticleMaintenance(),
         kwargs...)
 
     panel_wake = PanelWake(body; nwakerows, kwargs...)
@@ -623,10 +777,9 @@ function PanelParticleWake(body::AbstractLiftingBody;
     # Infer type params from the actual panel_wake
     WTK = typeof(panel_wake).parameters[1]
     WNK = typeof(panel_wake).parameters[2]
-    gamma_trim_threshold_TF = convert(TF, gamma_trim_threshold)
-    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady)}(
-        panel_wake, pfield, method_trailing, method_unsteady, gamma_trim_threshold_TF,
-        merge_every, merge_r, merge_r_hash, merge_sigma_relative, merge_max_sigma_ratio, merge_skip_static, check_neighboring_cells, merge_verbose
+    maintenance = ParticleMaintenance(particle_maintenance)
+    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady),typeof(maintenance)}(
+        panel_wake, pfield, method_trailing, method_unsteady, maintenance
     )
 end
 
@@ -667,22 +820,7 @@ end
 
 update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
-function trim_weak_particles!(w::PanelParticleWake)
-    threshold = w.gamma_trim_threshold
-    threshold <= zero(threshold) && return nothing
-
-    for i in w.pfield.np:-1:1
-        gamma = FLOWVPM.get_Gamma(w.pfield, i)
-        gamma_mag = sqrt(sum(abs2, gamma))
-        if gamma_mag < threshold
-            FLOWVPM.remove_particle(w.pfield, i)
-        end
-    end
-
-    return nothing
-end
-
-function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
+function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing)
 
     # panel wake
     propagate!(w.panel_wake, dt)
@@ -690,19 +828,8 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0)
     # convect particles
     FLOWVPM._euler(w.pfield, dt; relax)
 
-    # particle merging
-    if w.merge_every > 0 && step > 0 && step % w.merge_every == 0
-        FLOWVPM.merge_particles!(w.pfield;
-            r_merge=w.merge_r,
-            r_hash=w.merge_r_hash,
-            sigma_relative=w.merge_sigma_relative,
-            max_sigma_ratio=w.merge_max_sigma_ratio,
-            skip_static=w.merge_skip_static,
-            check_neighboring_cells=w.check_neighboring_cells,
-        )
-    end
-
-    trim_weak_particles!(w)
+    # particle maintenance
+    apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step))
 end
 
 function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)

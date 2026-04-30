@@ -73,9 +73,9 @@ Files are included in this order (reflects the dependency chain):
     - `BackslashDirichlet` — direct matrix solve (Dirichlet/interior-Dirichlet formulation)
   - `AbstractMatrixFreeSolver` — applies system operator without storing the full matrix
     - `KrylovSolver` — matrix-free GMRES via `Krylov.jl`, works with `FastMultipoleBackend`
-    - `FGSSolver` — block fixed-point / Gauss-Seidel-style solver for coupled multi-body problems; key params: `max_iterations`, `tolerance`, `rlx` (relaxation)
+    - `FGSSolver` — matrix-free Gauss-Seidel-style solver for a single body; key params: `max_iterations`, `tolerance`, `rlx` (relaxation)
 
-**Multi-body solving**: `solve!(bodies::Tuple, solver::FGSSolver)` couples multiple bodies. Also supports heterogeneous solvers via `solve!(bodies::Tuple, solvers::Tuple)`.
+**Multi-body solving**: use `solve!(bodies::Tuple, solvers::Tuple)`, including one `FGSSolver(body)` per body when using FGS in coupled solves.
 
 **N-body backends** (`FLOWPanel_fmm.jl`):
 - `DirectBackend` — O(N²) direct summation via `FastMultipole.direct!`

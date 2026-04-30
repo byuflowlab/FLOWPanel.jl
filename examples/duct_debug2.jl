@@ -92,8 +92,8 @@ wake_A = pnl.PanelParticleWake(body_A; max_particles=50000, nwakerows=1,
 frames_A = make_frames(body_A)
 solver_A = pnl.Backslash(body_A)
 
-pnl.simulate!(body_A, wake_A, frames_A, maneuver, Uinf, t_range;
-    eta, body_solver=solver_A, backend, verbose=false, path="vpm", name="bsd")
+pnl.simulate!((body_A,), (wake_A,), frames_A, maneuver, Uinf, t_range;
+    body_solvers=(solver_A,), backend, verbose=false, path="vpm", name="bsd")
 
 strength_A = copy(wake_A.panel_wake.strength[1])
 
@@ -122,8 +122,8 @@ solver_B = pnl.FGSSolver(body_B;
             verbose=false
         )
 
-pnl.simulate!(body_B, wake_B, frames_B, maneuver, Uinf, t_range;
-    eta, body_solver=solver_B, backend, verbose=false, path="vpm", name="fgs")
+pnl.simulate!((body_B,), (wake_B,), frames_B, maneuver, Uinf, t_range;
+    body_solvers=(solver_B,), backend, verbose=false, path="vpm", name="fgs")
 
 strength_B = copy(wake_B.panel_wake.strength[1])
 

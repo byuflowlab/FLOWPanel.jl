@@ -182,7 +182,7 @@ backend = pnl.DirectBackend()
 # backend = pnl.FastMultipoleBackend()
 solver = pnl.BackslashCoupled((body,))
 # solver = pnl.Backslash(body)
-# solver = pnl.FGSSolver((body,))
+# solver = pnl.FGSSolver(body)
 println("Solving body...")
 # body = body
 
