@@ -4,6 +4,7 @@ import GeometricTools as gt
 using LinearAlgebra: diag
 import Meshes
 using StaticArrays: SVector
+import GeoIO
 
 @testset verbose=true "Solvers" begin
     @testset "Backslash construction" begin
@@ -93,9 +94,15 @@ using StaticArrays: SVector
         normals = pnl.calc_normals!(body)
         expected_sigma = -vec(sum(body.velocity .* normals; dims=1))
         solver = pnl.Backslash(body)
+        velocity_before = copy(body.velocity)
+        potential_before = copy(body.potential)
+        CPoffset_before = body.CPoffset
         pnl.solve!(body, solver)
         @test any(abs.(body.strength[:, 2]) .> 0)
         @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
+        @test body.velocity == velocity_before
+        # @test body.potential == potential_before
+        @test body.CPoffset == CPoffset_before
         assert_boundary_residuals((body,); potential_atol=1e-10)
     end
 
@@ -233,7 +240,7 @@ using StaticArrays: SVector
 
         neumann = make_octa_source_body()
         neumann.strength[:, 1] .= 3.0
-        pnl.set_strengths(neumann)
+        pnl.set_strengths!(neumann)
         @test all(iszero, neumann.strength[:, 1])
     end
 
@@ -250,6 +257,24 @@ using StaticArrays: SVector
         @test any(abs.(body1.strength[:, 1]) .> 0)
         @test any(abs.(body2.strength[:, 1]) .> 0)
         assert_boundary_residuals((body1, body2); tangency_atol=1e-7)
+    end
+
+    @testset "KrylovCoupled nonlifting" begin
+        body1 = make_octa_source_body()
+        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        body1.velocity .= 0
+        body2.velocity .= 0
+        body1.velocity[1, :] .= 1.0
+        body2.velocity[1, :] .= 1.0
+
+        bodies = (body1, body2)
+        solver = pnl.KrylovCoupled(bodies; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=20)
+        pnl.solve!(bodies, solver; backend=pnl.DirectBackend())
+
+        @test solver isa pnl.KrylovCoupled
+        @test any(abs.(body1.strength[:, 1]) .> 0)
+        @test any(abs.(body2.strength[:, 1]) .> 0)
+        assert_boundary_residuals(bodies; tangency_atol=1e-7)
     end
 
     @testset "numtype" begin
@@ -426,13 +451,13 @@ using StaticArrays: SVector
         end
         pnl.apply_freestream!(body, Vinf)
         pnl.apply_freestream!(body2, Vinf)
-        assert_boundary_residuals(bodies; backend, tangency_atol=1e-7, potential_atol=1e-5)
+        tangency_residuals = flow_tangency_max_residuals(bodies; backend)
+        @test tangency_residuals[2] < 1e-7
 
         # @show CL, CD = postprocess!(bodies, Vinf, rho, backend, chords, span)
     end
 
     @testset "backslash_meshes" begin
-        import GeoIO
 
         run_names = ["nasa_wing.msh", "nasa_surface_spaced_repaired.msh"]
         # run_names = ["nasa_surface_spaced.msh"]

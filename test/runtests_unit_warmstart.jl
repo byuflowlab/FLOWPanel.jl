@@ -6,7 +6,7 @@ if !isdefined(@__MODULE__, :make_plate_vortex_body)
 end
 
 struct WarmstartNoopSolver <: pnl.AbstractSolver end
-pnl.solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
+pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
 
 @testset "simulate_warmstart! consistency (PanelParticleWake)" begin
     import FastMultipole
