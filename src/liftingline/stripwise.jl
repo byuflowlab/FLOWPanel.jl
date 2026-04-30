@@ -79,7 +79,7 @@ function calc_sweptcl(self::FunctionalAirfoil, sweep::Number, alpha_Λ::Number,
     # Find AOA at zero lift
     if isnan(self.alpha0)
 
-        f(u, p) = [cl(u[1], args...)]
+        f(u, p) = [self.fun_claero(u[1], args...)]
         u0 = [0.0]
         prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
@@ -655,7 +655,7 @@ struct SimpleAirfoil{N,
 
     spl_claero::Sl
 
-    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm; claero=cl) where {Ta, Tl, Td, Tm}
+    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm; claero=cl, u0=[0.0]) where {Ta, Tl, Td, Tm}
 
         # Spline data
         spl_cl = math.Akima(alpha, cl)
@@ -665,7 +665,7 @@ struct SimpleAirfoil{N,
 
         # Find AOA at zero lift
         f(u, p) = [spl_claero(u[1])]
-        u0 = [0.0]
+        # u0 = [0.0]
         prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
         alpha0 = result.u[1]
@@ -712,7 +712,7 @@ function extrapolate(self::SimpleAirfoil, args...; optargs...)
                                                         args...; optargs...)
     alpha *= 180/pi
 
-    if self.cl == self.claero
+    if self.cl === self.claero
         claero = cl
     else
         _, claero = extrapolate(self.alpha*pi/180, self.claero, self.cd, self.cm, 
@@ -734,7 +734,7 @@ function blend(airfoil0::SimpleAirfoil, airfoil1::SimpleAirfoil, weight::Number)
                                         airfoil1.cl, airfoil1.cd, airfoil1.cm, 
                                         weight)
 
-    if airfoil0.cl == airfoil0.claero && airfoil1.cl == airfoil1.claero
+    if airfoil0.cl === airfoil0.claero && airfoil1.cl === airfoil1.claero
         claero = cls
     else
         _, claero = blend(airfoil0.alpha, 
@@ -933,6 +933,48 @@ function extrapolate(alpha, cl, cd, cm; AR=5.0, nalpha=50, mincd=0.0001)
     # --- End Julia replacement ---
 
     return alphafull, clfull, cdfull, cmfull
+end
+
+"""
+Truong, V. K. "An analytical model for airfoil aerodynamic characteristics over 
+the entire 360deg angle of attack range". J. Renewable Sustainable Energy. 2020
+"""
+function stall_naca0012!(alphas, cls, cds; 
+                        aoa_lo_clip=-20, aoa_up_clip=20, 
+                        hardness_lo=0.3, hardness_up=0.2, 
+                        Cd90_0 = 2.08,
+                        pn2_star = 8.36e-2,
+                        pn3_star = 4.06e-1,
+                        pt1_star = 9.00e-2,
+                        pt2_star = -1.78e-1,
+                        pt3_star = -2.98e-1)
+
+    for (i, (aoa, cl, cd)) in enumerate(zip(alphas, cls, cds))
+
+        # Post-stall correction (values for NACA 0012)
+        cosa = cosd(aoa)
+        sina = sind(aoa)
+
+        Cd90 = Cd90_0 + pn2_star * cosa + pn3_star * cosa^2
+        CN = Cd90 * sina
+        CT = (pt1_star + pt2_star * cosa + pt3_star * cosa^3) * sina^2
+
+        cl_stalled = CN * cosa + CT * sina
+        cd_stalled = CN * sina - CT * cosa
+
+        # Smoothly blend with stalled NACA 0012 outside of bounds
+        cl_final = math.sigmoid_blend(cl_stalled, cl, aoa, aoa_lo_clip, hardness_lo)
+        cl_final = math.sigmoid_blend(cl_final, cl_stalled, aoa, aoa_up_clip, hardness_up)
+
+        cd_final = math.sigmoid_blend(cd_stalled, cd, aoa, aoa_lo_clip, hardness_lo)
+        cd_final = math.sigmoid_blend(cd_final, cd_stalled, aoa, aoa_up_clip, hardness_up)
+
+        cls[i] = cl_final
+        cds[i] = cd_final
+
+    end
+
+
 end
 
 function blend(alphas1::AbstractArray, 
