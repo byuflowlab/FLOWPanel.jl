@@ -172,7 +172,7 @@ end
 # RUN CONVERGENCE STUDY
 # ==========================================================
 R = 0.12
-np = 120 # number of particles per revolution
+np = 144 # number of particles per revolution
 
 # Constant values
 # nt = 36
@@ -182,7 +182,7 @@ overlap0 = 2.0
 
 
 # Variable values
-nts         = [10, 20, 40, 60, 120]
+nts         = [18, 36, 72, 144]
 p_per_steps = Int.(np ./ nts)
 
 for i in eachindex(p_per_steps)
