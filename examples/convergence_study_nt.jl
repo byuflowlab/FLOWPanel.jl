@@ -97,8 +97,8 @@ function run_convergence(p_per_step, overlap, nt, kerneloffset)
                 method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
                 particle_maintenance=pnl.ParticleMaintenance((
                     pnl.MergeParticles(every=1,
-                        r=R*0.02,
-                        r_hash=R*0.04,
+                        r=R*0.02 * (36/nt), # larger merging radius for fewer time steps
+                        r_hash=R*0.04 * (36/nt),
                         sigma_relative=false,
                         max_sigma_ratio=2.0,
                         skip_static=true,
