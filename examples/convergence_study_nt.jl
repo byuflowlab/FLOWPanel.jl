@@ -91,18 +91,19 @@ function run_convergence(p_per_step, overlap, nt, kerneloffset)
     # WAKE SETUP
     # ==========================================================
     wake_rotor = pnl.PanelParticleWake(rotor;
-                    nwakerows=1,
-                    max_particles=100000,
-                    method_trailing=pnl.OverlapPPS(overlap, p_per_step),
-                    method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
-                    merge_every=1, # merge every step
-                    merge_r=R*0.02, # r_merge for merging particles
-                    merge_r_hash=R*0.04, # r_merge for hashing particles
-                    merge_sigma_relative=false, # use relative sigma for merging
-                    merge_max_sigma_ratio=2.0, # prevents particles of very different strengths from merging
-                    merge_skip_static=true, # skip merging static particles
-                    check_neighboring_cells=false, # check neighboring cells for merging (prevents merging across large gaps)
-                    merge_verbose=true)
+                nwakerows=2,
+                max_particles=100000,
+                method_trailing=pnl.OverlapPPS(overlap, p_per_step),
+                method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
+                particle_maintenance=pnl.ParticleMaintenance((
+                    pnl.MergeParticles(every=1,
+                        r=R*0.02,
+                        r_hash=R*0.04,
+                        sigma_relative=false,
+                        max_sigma_ratio=2.0,
+                        skip_static=true,
+                        check_neighboring_cells=false),
+                )))
 
     ## =========================================================
     # SIMULATION SETUP
@@ -154,13 +155,13 @@ function run_convergence(p_per_step, overlap, nt, kerneloffset)
                 )
 
     println("\nBegin rotor hover simulation ($(n_steps) steps)...")
-    name = "rotor_convergence"
+    name = "rotor_convergence_nt"
     @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
         set_Das_eta_kinematic=0.1,
         # set_Das_eta_freestream=0.1,
         monitors,
         body_solvers, backend, rho, verbose=true,
-        path="rotor_convergence", name
+        path="rotor_convergence_nt", name
     )
 
     out_name = "CT_v_t_hover_RPM"*"$RPM"*"_pps$p_per_step"*"_nt$nt"*"_overlap$overlap"*"_kerneloff$kerneloffset"*".csv"
