@@ -7,6 +7,7 @@ using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
 using DelimitedFiles
+using LinearAlgebra
 
 function run_convergence(p_per_step, overlap, nt, kerneloffset)
     ## =========================================================
@@ -97,8 +98,8 @@ function run_convergence(p_per_step, overlap, nt, kerneloffset)
                 method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
                 particle_maintenance=pnl.ParticleMaintenance((
                     pnl.MergeParticles(every=1,
-                        r=R*0.02 * (36/nt), # larger merging radius for fewer time steps
-                        r_hash=R*0.04 * (36/nt),
+                        r=R*0.02,
+                        r_hash=R*0.04,
                         sigma_relative=false,
                         max_sigma_ratio=2.0,
                         skip_static=true,
@@ -182,16 +183,17 @@ overlap0 = 2.0
 
 
 # Variable values
-nts         = [18, 36, 72, 144]
+nts         = [36, 72, 144]
 p_per_steps = Int.(np ./ nts)
 
 for i in eachindex(p_per_steps)
     nt = nts[i]
     p_per_step = p_per_steps[i]
-    sigma0 = overlap0 * (2*pi*R) / (2*nt*p_per_step) # maintain sigma constant through each run
+    sigma0 = overlap0 * (2*pi*R) / (2*36*1) # maintain sigma constant through each run
     overlap    = sigma0 * (nt*p_per_step) * 2 ./ (2*pi*R)
     println("Simulation settings:\n p_per_step: $p_per_step\n nt: $nt\n sigma: $sigma0\n λ: $overlap")
     @show Threads.nthreads()
+    @show BLAS.get_num_threads()
 
     run_convergence(p_per_step, overlap, nt, kerneloffset)
 end
