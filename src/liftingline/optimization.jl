@@ -341,11 +341,15 @@ function run_liftingline(;
     (; lift, drag, side) = forcesmoments        # Forces (vectors)
     (; roll, pitch, yaw) = forcesmoments        # Moments (vectors)
     (; X0) = forcesmoments                      # Point about with the moments where calculated
+
+    (; liftaero, dragi, sideaero) = forcesmoments # Aero-only forces (vectors)
     
     (; Ftot, Mtot) = forcesmoments              # Total force and moment vectors
     
     (; CD, CY, CL) = coefficients               # Drag, side, and lift forces
     (; Cl, Cm, Cn) = coefficients               # Roll, pitch, and yawing moment
+
+    (; CLaero, CDi, CYaero) = coefficients      # Induced drag, aero-only side, and aero-only lift forces
     
     # (; Dhat, Shat, Lhat) = coefficients       # Direction of each force
     # (; lhat, mhat, nhat) = coefficients       # Direction of each moment
@@ -356,9 +360,14 @@ function run_liftingline(;
     D = CD * (q*Aref)
     Y = CY * (q*Aref)
     L = CL * (q*Aref)
+
     l = Cl * (q*Aref*cref)
     m = Cm * (q*Aref*cref)
     n = Cn * (q*Aref*cref)
+
+    Di = CDi * (q*Aref)
+    Yaero = CYaero * (q*Aref)
+    Laero = CLaero * (q*Aref)
 
     if stability_derivatives
     
@@ -384,6 +393,10 @@ function run_liftingline(;
         Cl = FD.value(Cl)
         Cm = FD.value(Cm)
         Cn = FD.value(Cn)
+
+        CDi = FD.value(CDi)
+        CYaero = FD.value(CYaero)
+        CLaero = FD.value(CLaero)
         
         D = FD.value(D)
         Y = FD.value(Y)
@@ -391,6 +404,10 @@ function run_liftingline(;
         l = FD.value(l)
         m = FD.value(m)
         n = FD.value(n)
+
+        Di = FD.value(Di)
+        Yaero = FD.value(Yaero)
+        Laero = FD.value(Laero)
         
         lift = FD.value.(lift)
         drag = FD.value.(drag)
@@ -445,6 +462,8 @@ function run_liftingline(;
     end
     
     return (;   CD, CY, CL, Cl, Cm, Cn,                       # Force and moment coefficients
+
+                CDi, CYaero, CLaero,                          # Aero-only forces
         
                 dCDdα, dCYdα, dCLdα, dCldα, dCmdα, dCndα,     # Stability derivatives
                 dCDdβ, dCYdβ, dCLdβ, dCldβ, dCmdβ, dCndβ,
@@ -452,6 +471,7 @@ function run_liftingline(;
                 q, Aref, bref, cref,                          # Non-dimensionalization parameters
         
                 D, Y, L, l, m, n,                             # Dimensional forces and moments (scalars)
+                Di, Yaero, Laero,                             # Dimensional aero-only forces (scalars)
         
                 Dhat, Shat, Lhat,                             # Direction of forces and moments (vectors)
                 lhat, mhat, nhat,

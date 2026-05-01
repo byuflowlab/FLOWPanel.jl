@@ -78,6 +78,17 @@ function calc_forcesmoments(ll::LiftingLine,
     D = LDS[:, 2]
     S = LDS[:, 3]
 
+    # Repeat calculation for aero-only lift and drag
+    calcfield_cl(ll; aero=true)
+    calcfield_cd(ll; aero=true)
+    calcfield_F(ll, rho; aero=true)
+    Ftotaero = calcfield_Ftot(ll; aero=true)
+    LDSaero = calcfield_LDS(ll, Lhat, Dhat, Shat; aero=true)
+
+    Laero = LDSaero[:, 1]
+    Di = LDSaero[:, 2]
+    Saero = LDSaero[:, 3]
+
     # Integrated moment
     Mtot = calcfield_Mtot(ll, X0, rho)
 
@@ -115,6 +126,8 @@ function calc_forcesmoments(ll::LiftingLine,
     return (;   lift=L, drag=D, side=S, roll, pitch, yaw, 
                 Ftot, Mtot,
                 Dhat, Shat, Lhat, lhat, mhat, nhat,
+                liftaero=Laero, dragi=Di, sideaero=Saero,
+                Ftotaero,
                 X0)
 end
 
@@ -151,6 +164,9 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     (; Dhat, Shat, Lhat) = forcesmoments
     (; lhat, mhat, nhat) = forcesmoments
 
+    # Fetch aero-only forces
+    (; liftaero, dragi, sideaero) = forcesmoments
+
     # Coefficients
     # CL = sign(dot(lift, Lhat)) * norm(lift) / (q*Aref)
     # CD = sign(dot(drag, Dhat)) * norm(drag) / (q*Aref)
@@ -172,6 +188,10 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     CL = sgnCL * norm(lift) / (q*Aref)
     CD = sgnCD * norm(drag) / (q*Aref)
     CY = sgnCY * norm(side) / (q*Aref)
+
+    CLaero = sgnCL * norm(liftaero) / (q*Aref)
+    CDi = sgnCD * norm(dragi) / (q*Aref)
+    CYaero = sgnCY * norm(sideaero) / (q*Aref)
     
     Cl = sgnCl * norm(roll) / (q*Aref*cref)
     Cm = sgnCm * norm(pitch) / (q*Aref*cref)
@@ -194,6 +214,7 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
 
     # Outputs
     return (;   CL, CD, CY, Cl, Cm, Cn,
+                CLaero, CDi, CYaero,
                 Dhat, Shat, Lhat, lhat, mhat, nhat,
                 q, Aref, bref, cref,
                 X0)
@@ -294,7 +315,8 @@ starts with all zeroes).
 """
 function calcfield_cl!(out::AbstractVector, 
                         ll::LiftingLine;
-                        addfield=true, fieldname="cl")
+                        aero=false,
+                        addfield=true, fieldname=aero ? "claero" : "cl")
 
     # Error cases
     @assert length(out)==ll.nelements ""*
@@ -306,7 +328,7 @@ function calcfield_cl!(out::AbstractVector,
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
-        clΛ = calc_sweptcl(element, sweep, aoa, view(ll.elements_settings, ei, :)...)
+        clΛ = calc_sweptcl(element, sweep, aoa, view(ll.elements_settings, ei, :)...; claero=aero)
 
         out[ei] = clΛ
 
@@ -354,26 +376,33 @@ calcfield_cd(ll)
 """
 function calcfield_cd!(out::AbstractVector, 
                         ll::LiftingLine;
-                        addfield=true, fieldname="cd")
+                        aero=false,
+                        addfield=true, fieldname=aero ? "cdaero" : "cd")
 
     # Error cases
     @assert length(out)==ll.nelements ""*
         "Invalid `out` vector."*
         " Expected size $((ll.nelements, )); got $(size(out))."
 
-    for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
-        
-        out[ei] = calc_cd(element, aoa, view(ll.elements_settings, ei, :)...)
+    if aero
 
-        # NOTE: Goates 2022 JoA, Sec. V.E, recommends using the effective swept
-        #       AOA, but we are getting too high of a cd. Hence, here we switch
-        #       to the unswept AOA, assumming that Us is the unswept velocity.
+        out .= 0
 
-        # # Calculate unswept AOA
-        # aoa_unswept = calc_aoa(ll, ll.Us, ei)
+    else
+        for (ei, (element, aoa)) in enumerate(zip(ll.elements, ll.aoas))  # Iterate over stripwise elements
+            
+            out[ei] = calc_cd(element, aoa, view(ll.elements_settings, ei, :)...)
 
-        # out[ei] = calc_cd(element, aoa_unswept)
+            # NOTE: Goates 2022 JoA, Sec. V.E, recommends using the effective swept
+            #       AOA, but we are getting too high of a cd. Hence, here we switch
+            #       to the unswept AOA, assumming that Us is the unswept velocity.
 
+            # # Calculate unswept AOA
+            # aoa_unswept = calc_aoa(ll, ll.Us, ei)
+
+            # out[ei] = calc_cd(element, aoa_unswept)
+
+        end
     end
 
     # Save field in lifting line
@@ -481,7 +510,8 @@ sections.
 """
 function calcfield_F!(out::AbstractMatrix, ll::LiftingLine{R}, 
                         cls::AbstractVector, cds::AbstractVector, rho::Number;
-                                                addfield=true, fieldname="f") where R
+                        aero=false,
+                        addfield=true, fieldname=aero ? "faero" : "f") where R
 
     # Error cases
     @assert size(out, 1)==3 && size(out, 2)==ll.nelements ""*
@@ -564,8 +594,10 @@ Similar to [`calcfield_F!`](@ref) but automatically pre-allocating `out` if it
 hasn't been pre-allocated yet
 """
 function calcfield_F(ll::LiftingLine{R}, args...; 
-                        cl_fieldname="cl", cd_fieldname="cd", 
-                        fieldname="F", optargs...) where {R}
+                        aero=false,
+                        cl_fieldname=aero ? "claero" : "cl", 
+                        cd_fieldname=aero ? "cdaero" : "cd", 
+                        fieldname=aero ? "Faero" : "F", optargs...) where {R}
 
     # Error cases
     @assert check_field(ll, cl_fieldname) ""*
@@ -581,17 +613,30 @@ function calcfield_F(ll::LiftingLine{R}, args...;
     
     out = zeros(R, 3, ll.nelements)
 
-    return calcfield_F!(out, ll, cls, cds, args...; fieldname, optargs...)
+    return calcfield_F!(out, ll, cls, cds, args...; aero, fieldname, optargs...)
 
 end
 
 
-function calcfield_Ftot(ll::LiftingLine{R}, args...; optargs...) where R 
-    return calcfield_Ftot!(zeros(R, 3), ll, args...; optargs...)
+function calcfield_Ftot(ll::LiftingLine{R}, args...; 
+                            aero=false, 
+                            F_fieldname=aero ? "Faero" : "F",
+                            fieldname=aero ? "Ftotaero" : "Ftot",
+                            optargs...) where R 
+
+    return calcfield_Ftot!(zeros(R, 3), ll, args...; 
+                            F_fieldname, fieldname, optargs...)
+
 end
 
-function calcfield_LDS(ll::LiftingLine{R}, args...; optargs...) where R 
-    return calcfield_LDS!(zeros(R, 3, 3), ll, args...; optargs...)
+function calcfield_LDS(ll::LiftingLine{R}, args...; 
+                            aero=false, 
+                            F_fieldname=aero ? "Faero" : "F",
+                            field_suffix=aero ? "aero" : "",
+                            optargs...) where R 
+
+    return calcfield_LDS!(zeros(R, 3, 3), ll, args...; 
+                            F_fieldname, field_suffix, optargs...)
 end
 
 
