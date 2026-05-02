@@ -283,7 +283,7 @@ end
 #--- public API ---#
 
 """
-    simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!, Uinf, t_range; restart_path, restart_name, restart_step=-1, body_solvers, optargs...)
+    simulate_warmstart!(systems, wakes, frames, maneuver!, Uinf, t_range; restart_path, restart_name, restart_step=-1, body_solvers, backend_wake=backend, backend_solve=backend, backend_system=backend, optargs...)
 
 Resume a simulation from VTK output and a `{name}.frames.toml` companion file
 written by a previous `simulate!` call. The body and wake objects must be
@@ -297,16 +297,19 @@ on the final step of a run), then forwards to `simulate!` with
 `start_step=restart_step+1` so that subsequent steps append to the same VTK and
 TOML output.
 """
-function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Uinf::Function, t_range;
+function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
         name="default_sim", path="./default_simulation",
         restart_path=nothing, restart_name=nothing,
         restart_step::Int=-1,
-        body_solvers::Tuple,
+        body_solvers,
         backend=FastMultipoleBackend(;
                 expansion_order=10,
                 multipole_acceptance=0.4,
                 leaf_size=100,
             ),
+        backend_wake=backend,
+        backend_solve=backend,
+        backend_system=backend,
         rho=1.225,
         monitors=(),
         p_correct_kuttacondition=true,
@@ -315,6 +318,13 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
         set_Das_eta_freestream=NaN,
         verbose=false,
     )
+    systems_tuple = _systems_tuple(systems)
+    wakes_tuple = _wakes_tuple(systems, wakes)
+    _validate_body_solvers(systems, body_solvers)
+    _validate_influence_backend(:backend_wake, backend_wake)
+    _validate_influence_backend(:backend_system, backend_system)
+    _validate_solve_backend(systems, body_solvers, backend_solve)
+
     rpath = isnothing(restart_path) ? path : restart_path
     rname = isnothing(restart_name) ? name : restart_name
 
@@ -332,7 +342,7 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
     end
 
     # 2. Mirror simulate!'s pre-loop initialization on the freshly-constructed bodies.
-    for sys in systems
+    for sys in systems_tuple
         calc_normals!(sys)
         calc_controlpoints!(sys; off=abs(sys.CPoffset))
     end
@@ -341,33 +351,33 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
         dt0 = t_range[2] - t_range[1]
         if !isnan(set_Das_eta_freestream)
             uinf0 = Uinf(t_range[1])
-            for sys in systems
+            for sys in systems_tuple
                 extra_reset!(sys)
                 extra_apply_freestream!(sys, uinf0)
                 _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
             end
         end
         if !isnan(set_Das_eta_kinematic)
-            for sys in systems
+            for sys in systems_tuple
                 extra_reset!(sys)
             end
-            kinematic_velocity!(systems, frames)
-            for sys in systems
+            kinematic_velocity!(systems_tuple, frames)
+            for sys in systems_tuple
                 _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
             end
         end
-        for sys in systems
+        for sys in systems_tuple
             reset!(sys)
         end
     end
 
     # 3. Load on-disk state at restart_step.
-    for (i, sys) in enumerate(systems)
+    for (i, sys) in enumerate(systems_tuple)
         body_name = rname * "_body$(i)"
         _load_body_vtk!(sys, rpath, body_name, restart_step)
     end
 
-    for (i, w) in enumerate(wakes)
+    for (i, w) in enumerate(wakes_tuple)
         isnothing(w) && continue
         wake_name = rname * "_wake$(i)"
         if w isa PanelParticleWake
@@ -382,7 +392,7 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
     _load_frame_state_toml!(frames, rpath, rname, restart_step)
 
     # 4. Refresh derived geometry that wasn't persisted.
-    for sys in systems
+    for sys in systems_tuple
         calc_normals!(sys)
         calc_controlpoints!(sys; off=abs(sys.CPoffset))
     end
@@ -392,15 +402,15 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
     #    that simulate! itself would use at that step.
     dt_end = t_range[restart_step + 2] - t_range[restart_step + 1]
 
-    for w in wakes
+    for w in wakes_tuple
         !isnothing(w) && propagate!(w, dt_end; step=restart_step, frames)
     end
-    propagate_kinematics!(systems, frames, dt_end)
-    for sys in systems
+    propagate_kinematics!(systems_tuple, frames, dt_end)
+    for sys in systems_tuple
         calc_normals!(sys)
         calc_controlpoints!(sys; off=abs(sys.CPoffset))
     end
-    for (sys, w) in zip(systems, wakes)
+    for (sys, w) in zip(systems_tuple, wakes_tuple)
         !isnothing(w) && shed_wake!(w, sys)
     end
 
@@ -409,6 +419,9 @@ function simulate_warmstart!(systems::Tuple, wakes::Tuple, frames, maneuver!::Fu
         name=name, path=path,
         body_solvers=body_solvers,
         backend=backend,
+        backend_wake=backend_wake,
+        backend_solve=backend_solve,
+        backend_system=backend_system,
         rho=rho,
         monitors=monitors,
         p_correct_kuttacondition=p_correct_kuttacondition,

@@ -20,7 +20,7 @@ using FLOWPanel.FastMultipole.StaticArrays
 
 include(joinpath(pnl.examples_path, "duct_postprocessing.jl"))
 
-run_name        = "duct-hill00"             # Name of this run
+run_name        = "duct-unsteady"             # Name of this run
 
 save_path       = run_name                  # Where to save outputs
 fluiddomain     = false                     # Whether to generate fluid domain
@@ -169,8 +169,8 @@ AOA = AOAs[i]
     println("Initializaing solver...")
     @time body_solver = pnl.FGSSolver(body;
         max_iterations=50,         # Maximum number of iterations
-        inner_iterations=10,       # Maximum number of inner iterations
-        reverse_pass=true,        # Whether to do reverse sweeps or not
+        inner_iterations=20,       # Maximum number of inner iterations
+        reverse_pass=false,        # Whether to do reverse sweeps or not
         tolerance=1.0e-5,            # Convergence tolerance
         rlx=1.0,                  # Relaxation factor
         expansion_order,
@@ -178,8 +178,12 @@ AOA = AOAs[i]
         leaf_size=150,
         shrink=true,
         recenter=false,
+        solution_history_length=3,      # 0 disables history & projection
+        project_solution=false,        # warm-start next solve via polynomial extrapolation
+        project_solution_order=1,
+        verbose=true
     )
-    body_solver = pnl.Backslash(body)
+    # body_solver = pnl.Backslash(body)
 
     # initialize wake
     wake = pnl.PanelWake(body; nwakerows=100)
@@ -198,7 +202,7 @@ AOA = AOAs[i]
 
     println("\nBegin simulation...")
     @time begin
-        pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
-            eta, body_solver, backend, verbose=true
+        pnl.simulate!((body,), (wake,), frames, maneuver, Uinf, t_range;
+            body_solvers=(body_solver,), backend, verbose=true, name=run_name, path=save_path,
         )
     end

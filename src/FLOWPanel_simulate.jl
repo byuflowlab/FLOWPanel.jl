@@ -27,6 +27,63 @@ _accumulate_Das!(::AbstractBody, eta) = nothing
 
 #--- wake tuple helpers ---#
 
+function _systems_tuple(systems::Tuple)
+    for system in systems
+        system isa AbstractBody || throw(ArgumentError("Each system must be an AbstractBody, got $(typeof(system))"))
+    end
+    return systems
+end
+_systems_tuple(system::AbstractBody) = (system,)
+_systems_tuple(systems) = throw(ArgumentError("systems must be an AbstractBody or a Tuple of AbstractBody objects, got $(typeof(systems))"))
+
+function _wakes_tuple(systems::Tuple, wakes)
+    wakes isa Tuple || throw(ArgumentError("wakes must be a Tuple when systems is a Tuple, got $(typeof(wakes))"))
+    length(wakes) == length(systems) || throw(ArgumentError("Number of wakes ($(length(wakes))) must match number of systems ($(length(systems)))"))
+    for wake in wakes
+        (isnothing(wake) || wake isa AbstractFreeWake) || throw(ArgumentError("Each wake must be an AbstractFreeWake or nothing, got $(typeof(wake))"))
+    end
+    return wakes
+end
+
+function _wakes_tuple(system::AbstractBody, wake)
+    (isnothing(wake) || wake isa AbstractFreeWake) || throw(ArgumentError("wake must be an AbstractFreeWake or nothing when systems is an AbstractBody, got $(typeof(wake))"))
+    return (wake,)
+end
+
+function _validate_body_solvers(systems::Tuple, body_solvers)
+    if body_solvers isa Tuple
+        length(body_solvers) == length(systems) || throw(ArgumentError("Number of body_solvers ($(length(body_solvers))) must match number of systems ($(length(systems)))"))
+    elseif !(body_solvers isa AbstractSolver)
+        throw(ArgumentError("body_solvers must be a Tuple or an AbstractSolver, got $(typeof(body_solvers))"))
+    end
+    return body_solvers
+end
+
+function _validate_body_solvers(system::AbstractBody, body_solvers)
+    if body_solvers isa Tuple
+        throw(ArgumentError("body_solvers must be an AbstractSolver when systems is an AbstractBody, got $(typeof(body_solvers))"))
+    elseif !(body_solvers isa AbstractSolver)
+        throw(ArgumentError("body_solvers must be a Tuple or an AbstractSolver, got $(typeof(body_solvers))"))
+    end
+    return body_solvers
+end
+
+function _validate_influence_backend(name::Symbol, backend)
+    backend isa AbstractBackend || throw(ArgumentError("$(name) must be an AbstractBackend for influence! calls, got $(typeof(backend))"))
+    return backend
+end
+
+function _validate_solve_backend(systems, body_solvers, backend)
+    if systems isa AbstractBody && (backend isa Tuple || backend isa AbstractVector)
+        throw(ArgumentError("backend_solve must be a single backend when systems is an AbstractBody, got $(typeof(backend))"))
+    elseif body_solvers isa Tuple && (backend isa Tuple || backend isa AbstractVector)
+        length(backend) == length(_systems_tuple(systems)) || throw(ArgumentError("backend_solve length ($(length(backend))) must match number of systems ($(length(_systems_tuple(systems))))"))
+    elseif body_solvers isa AbstractSolver && (backend isa Tuple || backend isa AbstractVector)
+        throw(ArgumentError("backend_solve must be a single backend when body_solvers is an AbstractSolver, got $(typeof(backend))"))
+    end
+    return backend
+end
+
 function _collect_wake_probes(wakes::Tuple)
     result = ()
     for w in wakes
@@ -36,6 +93,9 @@ function _collect_wake_probes(wakes::Tuple)
     end
     return result
 end
+
+_collect_wake_probes(wake::AbstractFreeWake) = _collect_wake_probes((wake,))
+_collect_wake_probes(::Nothing) = ()
 
 function _collect_wake_sources(wakes::Tuple)
     result = ()
@@ -47,21 +107,27 @@ function _collect_wake_sources(wakes::Tuple)
     return result
 end
 
+_collect_wake_sources(wake::AbstractFreeWake) = _collect_wake_sources((wake,))
+_collect_wake_sources(::Nothing) = ()
+
 """
-    simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), rho=1.225, monitors=(), ...)
+    simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), backend_wake=backend, backend_solve=backend, backend_system=backend, rho=1.225, monitors=(), ...)
 
 Advance one or more coupled body-wake systems through `t_range`, solving the
 aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
-function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Uinf::Function, t_range;
+function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
         name="default_sim", path="./default_simulation",
-        body_solvers::Tuple,
+        body_solvers,
         backend=FastMultipoleBackend(;
                 expansion_order=10,
                 multipole_acceptance=0.4,
                 leaf_size=100,
             ),
+        backend_wake=backend,
+        backend_solve=backend,
+        backend_system=backend,
         rho=1.225,
         monitors=(),
         p_correct_kuttacondition=true,
@@ -72,15 +138,21 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         verbose=false
     )
     @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
+    systems_tuple = _systems_tuple(systems)
+    wakes_tuple = _wakes_tuple(systems, wakes)
+    _validate_body_solvers(systems, body_solvers)
+    _validate_influence_backend(:backend_wake, backend_wake)
+    _validate_influence_backend(:backend_system, backend_system)
+    _validate_solve_backend(systems, body_solvers, backend_solve)
+
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
         mkpath(path)
     end
 
-    # update control points and normals
-    for sys in systems
-        calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+    # update control points and normals according to Neumann/Dirichlet BCs
+    for sys in systems_tuple
+        _set_formulation_geometry!(sys, true)
     end
 
     # set Das from freestream and/or kinematic velocity at trailing edges
@@ -89,7 +161,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
         if !isnan(set_Das_eta_freestream)
             uinf0 = Uinf(t_range[1])
-            for sys in systems
+            for sys in systems_tuple
                 extra_reset!(sys)
                 extra_apply_freestream!(sys, uinf0)
                 _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
@@ -97,17 +169,17 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         if !isnan(set_Das_eta_kinematic)
-            for sys in systems
+            for sys in systems_tuple
                 extra_reset!(sys)
             end
-            kinematic_velocity!(systems, frames)
-            for sys in systems
+            kinematic_velocity!(systems_tuple, frames)
+            for sys in systems_tuple
                 _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
             end
         end
 
         # reset velocity fields modified during Das computation
-        for sys in systems
+        for sys in systems_tuple
             reset!(sys)
         end
     end
@@ -124,71 +196,75 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
 
         # update frames based on maneuver
         # (RPMs, tilting systems, prescribed trajectory, etc.)
-        dynamics_toggle = maneuver!(frames, systems, wakes, t)
+        dynamics_toggle = maneuver!(frames, systems_tuple, wakes_tuple, t)
 
         #------- aerodynamics -------#
 
         # store -φ_old for dφ/dt computation (before reset wipes potential)
-        for sys in systems
+        for sys in systems_tuple
             _store_neg_potential!(sys)
         end
 
         # reset potential/velocity
-        for w in wakes
+        for w in wakes_tuple
             !isnothing(w) && reset!(w)
         end
-        for sys in systems
+        for sys in systems_tuple
             reset!(sys)
         end
 
         # get probes
-        wake_probes = _collect_wake_probes(wakes)
-        targets = (systems..., wake_probes...)
-        wake_sources = _collect_wake_sources(wakes)
+        wake_probes = _collect_wake_probes(wakes_tuple)
+        targets = (systems_tuple..., wake_probes...)
+        wake_sources = _collect_wake_sources(wakes_tuple)
 
         # freestream
         uinf = Uinf(t)
-        apply_freestream!(systems, uinf)
-        for w in wakes
+        apply_freestream!(systems_tuple, uinf)
+        for w in wakes_tuple
             !isnothing(w) && apply_freestream!(w, uinf)
         end
 
         # kinematics
-        kinematic_velocity!(systems, frames)
+        kinematic_velocity!(systems_tuple, frames)
 
         # dt for this step
         dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
 
         # snap first row of wake nodes to the trailing edge
-        for (sys, w) in zip(systems, wakes)
+        for (sys, w) in zip(systems_tuple, wakes_tuple)
             !isnothing(w) && update_TE!(w, sys)
         end
 
         # apply wake velocity to body surface
         if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend_wake; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
         end
 
         # solve systems with cross-body coupling
-        solve!(systems, body_solvers; backend=fill(backend, length(systems)))
+        if systems isa Tuple
+            solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
+        else
+            solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
+        end
 
         # update control points (normals should not have changed)
-        for sys in systems
+        for sys in systems_tuple
             calc_controlpoints!(sys; off=abs(sys.CPoffset))
         end
 
         # system-on-all influence
-        influence!(targets, systems, backend; precalc=false, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        influence!(targets, systems_tuple, backend_system; precalc=false, scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
         #--- forces and moments ---#
 
         # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt
-        for sys in systems
+        for sys in systems_tuple
             _compute_dphidt!(sys, dt)
         end
 
-        calcfield_P!(systems, norm(uinf), rho; dphidt=Tuple(_get_dphidt(s) for s in systems), correct_kuttacondition=fill(p_correct_kuttacondition, length(systems)), clip=p_clip)
-        calcfield_F!(systems; correct_kuttacondition=fill(p_correct_kuttacondition, length(systems)))
+        calcfield_P!(systems_tuple, norm(uinf), rho; dphidt=Tuple(_get_dphidt(s) for s in systems_tuple), correct_kuttacondition=fill(p_correct_kuttacondition, length(systems_tuple)), clip=p_clip)
+        calcfield_F!(systems_tuple; correct_kuttacondition=fill(p_correct_kuttacondition, length(systems_tuple)))
 
         #------- other solvers -------#
 
@@ -200,12 +276,12 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         #------- save state -------#
 
         if !isnothing(path)
-            for (i, sys) in enumerate(systems)
+            for (i, sys) in enumerate(systems_tuple)
                 body_name = name * "_body$(i)"
                 write_vtk(joinpath(path, body_name), sys, i_step, t; overwrite=i_step==0)
             end
 
-            for (i, w) in enumerate(wakes)
+            for (i, w) in enumerate(wakes_tuple)
                 if !isnothing(w)
                     wake_name = name * "_wake$(i)"
                     write_vtk(joinpath(path, wake_name), w, i_step, t; overwrite=i_step==0)
@@ -217,7 +293,7 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
         end
 
         for monitor in monitors
-            monitor(systems, wakes, frames, uinf, i_step)
+            monitor(systems_tuple, wakes_tuple, frames, uinf, i_step)
         end
 
         #------- propagate system -------#
@@ -227,22 +303,21 @@ function simulate!(systems::Tuple, wakes::Tuple, frames, maneuver!::Function, Ui
             #--- state evolution ---#
 
             # propagate wake
-            for w in wakes
+            for w in wakes_tuple
                 !isnothing(w) && propagate!(w, dt; step=i_step, frames)
             end
 
             # propagate rigid-body kinematics
-            propagate_kinematics!(systems, frames, dt)
+            propagate_kinematics!(systems_tuple, frames, dt)
 
-            # update control points and normals
-            for sys in systems
-                calc_normals!(sys)
-                calc_controlpoints!(sys; off=abs(sys.CPoffset))
+            # update control points and normals according to Neumann/Dirichlet BCs
+            for sys in systems_tuple
+                _set_formulation_geometry!(sys, true)
             end
 
             #--- shed new wake ---#
 
-            for (sys, w) in zip(systems, wakes)
+            for (sys, w) in zip(systems_tuple, wakes_tuple)
                 !isnothing(w) && shed_wake!(w, sys)
             end
 

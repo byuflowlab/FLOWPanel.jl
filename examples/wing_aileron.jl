@@ -179,8 +179,13 @@ bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstn
                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
 #------------------- SOLVE BODY ----------------------------------------------
-solver = pnl.BackslashCoupled(bodies)
-println("Solving bodies...")
+backend = pnl.DirectBackend()
+# backend = pnl.FastMultipoleBackend()
+solver = pnl.BackslashCoupled((body,))
+# solver = pnl.Backslash(body)
+# solver = pnl.FGSSolver(body)
+println("Solving body...")
+# body = body
 
 @show nps = sum(b.ncells for b in bodies)
 

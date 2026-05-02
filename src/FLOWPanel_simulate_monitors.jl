@@ -61,10 +61,11 @@ function ForceMonitor(nt::Int, i_system::Int;
     return ForceMonitor{TF, typeof(normalization)}(force, moment, i_system, i_frame, normalization)
 end
 
-function (monitor::ForceMonitor)(systems::Tuple, wakes::Tuple,
+function (monitor::ForceMonitor)(systems, wakes,
                                   frames::AbstractVector{<:ReferenceFrame},
                                   uinf, i_step::Int)
-    body = systems[monitor.i_system]
+    systems_tuple = _systems_tuple(systems)
+    body = systems_tuple[monitor.i_system]
 
     # total force in global frame (body.F already populated by calcfield_F!)
     Ftot = calcfield_Ftot(body)
@@ -84,7 +85,7 @@ function (monitor::ForceMonitor)(systems::Tuple, wakes::Tuple,
     end
 
     # normalise to coefficients
-    CF_norm, CM_norm = monitor.normalization(Fvec, Mvec, systems, frames, uinf)
+    CF_norm, CM_norm = monitor.normalization(Fvec, Mvec, systems_tuple, frames, uinf)
     monitor.force[:, i_step + 1] .= CF_norm
     monitor.moment[:, i_step + 1] .= CM_norm
 end

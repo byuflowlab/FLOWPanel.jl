@@ -271,7 +271,7 @@ const CELLS_OCT = Int[1 1 2 2 1 1 2 2;
 | Property | Test |
 |----------|------|
 | Single body | `FGSSolver(body)` succeeds |
-| Multi-body tuple | `FGSSolver((body1, body2))` succeeds |
+| Multi-body tuple | `FGSSolver((body1, body2))` is unsupported |
 | Default params | `solver.max_iterations == 100`, `solver.tolerance == 1e-6` |
 
 ### 5.8 Multi-body `solve!`

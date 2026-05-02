@@ -79,7 +79,7 @@ function make_plate_vortex_body()
         2 3;
         3 4;
     ]
-    shedding = [reshape(Int[1, 2, 3, 2, 3, 2], 6, 1)]
+    shedding = [pnl.calc_shedding_from_seed(nodes, cells, 1, 3)]
     body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
