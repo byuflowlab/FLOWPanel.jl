@@ -189,7 +189,7 @@ function calc_residuals!(residuals::AbstractVector,
         # Area of this section
         area = ll.chords[ei] * math.abs_smooth( dl1*ll.spans[1, ei] + dl2*ll.spans[2, ei] + dl3*ll.spans[3, ei], 0.01)
 
-        # Calculate Lmabda just like Gamma (using Eq. 41 in Goates 2022 JoA paper)
+        # Calculate Lambda just like Gamma (using Eq. 41 in Goates 2022 JoA paper)
         Lambda = cd * 0.5*magUΛ^2*area / magUxdl    # Source filament strength
         sigma = Lambda/math.abs_smooth(ll.chords[ei]*cosd(sweep), 0.01)   # Equivalent constant source panel strength
 

@@ -185,13 +185,17 @@ function calc_forcemoment_coefficients(ll::LiftingLine,
     sgnCm = dot(pitch, mhat) / sqrt(dot(pitch, mhat)^2)
     sgnCn = dot(yaw, nhat) / sqrt(dot(yaw, nhat)^2)
 
+    sgnCLaero = dot(liftaero, Lhat) / sqrt(dot(liftaero, Lhat)^2)
+    sgnCDi = dot(dragi, Dhat) / sqrt(dot(dragi, Dhat)^2)
+    sgnCYaero = dot(sideaero, Shat) / sqrt(dot(sideaero, Shat)^2)
+
     CL = sgnCL * norm(lift) / (q*Aref)
     CD = sgnCD * norm(drag) / (q*Aref)
     CY = sgnCY * norm(side) / (q*Aref)
 
-    CLaero = sgnCL * norm(liftaero) / (q*Aref)
-    CDi = sgnCD * norm(dragi) / (q*Aref)
-    CYaero = sgnCY * norm(sideaero) / (q*Aref)
+    CLaero = sgnCLaero * norm(liftaero) / (q*Aref)
+    CDi = sgnCDi * norm(dragi) / (q*Aref)
+    CYaero = sgnCYaero * norm(sideaero) / (q*Aref)
     
     Cl = sgnCl * norm(roll) / (q*Aref*cref)
     Cm = sgnCm * norm(pitch) / (q*Aref*cref)
