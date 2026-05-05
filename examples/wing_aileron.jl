@@ -60,12 +60,12 @@ function generate_body(
         body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
     end
 
-    pnl.apply_freestream!(body, Vinf)
+    # pnl.apply_freestream!(body, Vinf)
 
     return body
 end
 
-function postprocess!(bodies, Vinf, rho, backend, chords, span)
+function postprocess!(bodies, Vinf, rho, chords, span)
     Dhat = Vinf / norm(Vinf)
     Shat = [0, 1, 0]
     Lhat = cross(Dhat, Shat)
@@ -74,14 +74,13 @@ function postprocess!(bodies, Vinf, rho, backend, chords, span)
         Sref += chord * span
     end
     
-    pnl.calcfield_U!(bodies, Vinf; backend)
-    # pnl.apply_freestream!(bodies, Vinf)
-    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
-    pnl.calcfield_F!(bodies, magVinf, rho)
+    pnl.calcfield_U!(bodies, Vinf)
+    pnl.calcfield_P!(bodies, magVinf, rho)
+    pnl.calcfield_F!(bodies)
     LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
     # Force coefficients
-    nondim = 0.5 * rho * norm(Vinf)^2 * Sref
+    @show nondim = 0.5 * rho * norm(Vinf)^2 * Sref
     CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
     CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
 
@@ -146,15 +145,16 @@ nodes1 = [42, 19]
 nodes2 = [34, 3]
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
-m              = 0.0254
-AOA             = 0.0                      # (deg) freestream angle of attack
-magVinf         = 117.3 * m * 12                      # (m/s) freestream velocity
+# m              = 0.0254
+AOAs = [-8.0, -5.0, -3.0, -1.0, 0.0, 1.0, 3.0, 5.0, 8.0, 10.0]
+# AOA             = 0.0                      # (deg) freestream angle of attack
+magVinf         = 117.3 * 12                      # (m/s) freestream velocity
 rho             = 1.225                     # (kg/m^3) air density
 
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
-c_body1 = 10 * m
-b = 60 * m                            # (m) span length
-c_body2 = 2 * m
+c_body1 = 10.0
+b = 60.0                           # (m) span length
+c_body2 = 2.0
 AR_body1 = b / c_body1                             # (m) span length
 AR_body2 = b / c_body2                             # (m) span length
 
@@ -173,36 +173,134 @@ bodytype = pnl.RigidWakeBody{kernel}
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
 
-Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
 
-bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstnode, secondnode)
-                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+                    for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
-#------------------- SOLVE BODY ----------------------------------------------
-backend = pnl.DirectBackend()
-# backend = pnl.FastMultipoleBackend()
-solver = pnl.BackslashCoupled((body,))
-# solver = pnl.Backslash(body)
-# solver = pnl.FGSSolver(body)
-println("Solving body...")
-# body = body
-
-@show nps = sum(b.ncells for b in bodies)
-
-t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
-
-write_header = !isfile(out_file) || filesize(out_file) == 0
-
-open(out_file, "a") do io
-    if write_header
-        write(io, "solver,nps,t_build,t_solve,res,pot\n")
+    #------------------- SOLVE BODY ----------------------------------------------
+ 
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
     end
 
-    write(io,
-        "BackslashCoupled,$(t_build),$(t_solve)\n"
-    )
+    backend = pnl.DirectBackend()
+    solver = pnl.BackslashCoupled(bodies)
+    println("Solving body...")
+
+    nps = sum(b.ncells for b in bodies)
+
+    t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
+
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "BackslashCoupled\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build),$(t_solve)\n"
+        )
+    end
+
+    println("Resetting bodies...")
+end
+    
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
+    end
+
+    solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
+
+    println("Solving bodies part 2...")
+
+    t_build2, t_solve2 = pnl.solve!(bodies, solver2; backend=backend2)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "BackslashIterative\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build2),$(t_solve2)\n"
+        )
+    end
+
+    println("Resetting bodies...")
 end
 
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
+    end
+
+    backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
+    solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
+
+    t_build3, t_solve3 = pnl.solve!(bodies, solver3)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "KrylovSolver\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
+        )
+    end
+
+    println("Resetting bodies...")
+end
+
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
+    end
+
+    solver4 = pnl.KrylovCoupled(bodies)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "KrylovCoupled\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
+        )
+    end
+
+    println("Resetting bodies...")
+end
+#=
+# write_header = !isfile(out_file) || filesize(out_file) == 0
+
+# open(out_file, "a") do io
+#     if write_header
+#         write(io, "solver,nps,t_build,t_solve,res,pot\n")
+#     end
+
+#     write(io,
+#         "BackslashCoupled,$(t_build),$(t_solve)\n"
+#     )
+# end
 println("Resetting bodies...")
 
 for body in bodies
@@ -210,12 +308,11 @@ for body in bodies
     pnl.apply_freestream!(body, Vinf)
 end
 
-backend2 = fill(pnl.DirectBackend(), length(bodies))
 solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
 
 println("Solving bodies part 2...")
 
-t_build2, t_solve2 = pnl.solve!(bodies, solver2)
+t_build2, t_solve2 = pnl.solve!(bodies, solver2; backend=backend2)
 
 open(out_file, "a") do io
     write(io,
@@ -233,13 +330,13 @@ end
 backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
 solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
 
-println("Solving bodies part 2...")
+println("Solving bodies part 3...")
 
 t_build3, t_solve3 = pnl.solve!(bodies, solver3)
 
 open(out_file, "a") do io
     write(io,
-        "Krylove,$(t_build3),$(t_solve3)\n"
+        "Krylov,$(t_build3),$(t_solve3)\n"
     )
 end
 
@@ -250,18 +347,18 @@ for body in bodies
     pnl.apply_freestream!(body, Vinf)
 end
 
-backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
-solver4 = (
-    pnl.KrylovSolver(bodies[1]; preconditioner_cell_size = 3 * c_body1),
-    pnl.KrylovSolver(bodies[2]; preconditioner_cell_size = 3 * c_body2)
-)
+solver4 = pnl.KrylovCoupled(bodies)
 
-t_build4, t_solve4 = pnl.solve!(bodies, solver3)
+println("Solving bodies part 4...")
+
+t_build4, t_solve4 = pnl.solve!(bodies, solver4)
 
 open(out_file, "a") do io
     write(io,
-        "KrylovPreconditioned,$(t_build4),$(t_solve4)\n"
+        "KrylovCoupled,$(t_build4),$(t_solve4)\n"
     )
 end
 
+
 println("done")
+=#

@@ -239,17 +239,18 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
-
+    ts = 0.0
+    tb = 0.0
     try
         set_strengths!(body)
         body.potential .= zero(eltype(body.potential))
-        influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
-        _solve!(body, solver; backend, optargs...)
+        tb += @elapsed influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        ts += @elapsed _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return nothing
+    return tb, ts
 end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
@@ -257,14 +258,15 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
         update_cps_normals::Bool=true,
         optargs...)
 
+    ts = 0.0
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try
-        _solve!(body, solver; backend, optargs...)
+        ts += @elapsed _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return nothing
+    return ts
 end
 
 function numtype(self::AbstractBody)
@@ -442,7 +444,7 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
 
     # restore external velocity
     self.velocity .= solver.Uext
-    return nothing
+    return tb, ts
 end
 
 function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
@@ -480,7 +482,7 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
     self.strength[:, 1] .= solver.source_strengths
     _set_strength(self, solver.unabbreviated_strengths)
 
-    return nothing
+    return tb, ts
 end
 
 """
@@ -573,6 +575,8 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
     velocity_old = [copy(body.velocity) for body in bodies]
     potential_old = [copy(body.potential) for body in bodies]
     fixed_sources = Vector{Any}(undef, length(bodies))
+    tb = 0.0
+    ts = 0.0
 
     try
         for (i, body) in enumerate(bodies)
@@ -596,9 +600,11 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         TF = eltype(solver.rhs)
         n = length(solver.rhs)
         prod! = (y, x, α, β) -> solver(y, x, α, β)
-        A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
+        tb += @elapsed begin
+            A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
+        end
         workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
-        Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
         solver.x .= workspace.x
 
         for (i, body) in enumerate(bodies)
@@ -616,9 +622,8 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
     end
 
-    return nothing
+    return tb, ts
 end
-
 
 ###############################################################################
 # FGS Solver
@@ -700,6 +705,7 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
         optargs...
     ) where {TK, NK, TF}
 
+    tb = 0.0
     Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
@@ -725,16 +731,14 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
     solver.rhs .= -self.potential
 
     Glu = solver.Glu
+    tb = 0.0
     if update_G
         solver.G .= 0.0
-        tb = @elapsed begin
-        _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
+        tb += _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
         Glu = lu!(solver.G)
-        end
     end
-    tb = 0.0
 
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    ts = @elapsed ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
 
     return tb, ts
 end
@@ -765,48 +769,6 @@ end
 #     self.strength[:, 1] .= Gamma
 
 # end
-
-function solve!(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing}, 2, TF}, solver::Backslash; backend=DirectBackend(), update_G=false, optargs...) where TF
-
-    # println("Backslash")
-    solver.Uext .= self.velocity
-    solver.phi_ext .= self.potential
-
-    CPoffset_old = self.CPoffset
-    self.CPoffset = -abs(CPoffset_old)
-
-    calc_normals!(self)
-    calc_controlpoints!(self)
-
-    self.strength[:, 1] .= 0.0
-    for d in (1,2,3)
-        self.strength[:, 2] .= view(self.velocity, d, :)
-        self.strength[:, 2] .*= view(self.normals, d, :)
-        self.strength[:, 1] .-= self.strength[:, 2]
-    end
-    self.strength[:, 2] .= 0.0
-
-    self.potential .= 0
-    influence!(self, self, backend; scalar_potential=true, velocity=false, optargs...)
-    solver.rhs .= self.potential
-    solver.rhs .*= -1.0
-    solver.rhs .-= solver.phi_ext
-
-    if update_G
-        G = solver.G
-        G .= 0.0
-        _G!(G, self, self; kerneloffset=self.kerneloffset)
-        Glu = lu!(G)
-    else
-        Glu = solver.Glu
-    end
-
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
-
-    self.CPoffset = CPoffset_old
-    self.velocity .= solver.Uext
-    self.potential .= solver.phi_ext
-end
 
 # Polynomial extrapolation in time: warm-start body.strength using the rolling
 # history saved by save_solution!. Slot 1 holds the most recent saved strength.
@@ -939,8 +901,9 @@ function solve!(bodies::Tuple, solvers::Tuple;
                     velocity=true,
                     optargs...)
             end
-
-            solve!(body, solver; backend=backends[i], update_cps_normals=false)
+            tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false)
+            t_build += tb
+            t_solve += ts
         end
 
         max_delta = 0.0
@@ -1208,6 +1171,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
 
     ### get the boundary_condition for each body to write the RHS
     boundary_condition!(bodies, solver, backend)
+    t_solve = 0.0
 
     if update_G
         # Zero G matrix
@@ -1224,15 +1188,14 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
                         update_geometry=false)
                 end
             end
-        end
-
         # Factorize G matrix and cache it in solver
         solver.Glu = lu!(solver.G)
+        end
     end
 
     # solve with cached LU
     sol = similar(solver.rhs)
-    t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
+    t_solve += @elapsed ldiv!(sol, solver.Glu, solver.rhs)
 
     # write solution back
     for (bi, b) in enumerate(bodies)
