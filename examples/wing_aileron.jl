@@ -1,4 +1,5 @@
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import FLOWPanel: norm, dot, cross
 
 import Meshes
@@ -56,7 +57,10 @@ function postprocess!(bodies, Vinf, magVinf, rho, backend, chords, span)
 
     pnl.calcfield_U!(bodies, Vinf; backend)
     pnl.apply_freestream!(bodies, Vinf)
-    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_P!(bodies, magVinf, rho; correct_kuttacondition=fill(true, length(bodies)))
+    for body in bodies
+        pnl.calcfield_Cp(body, magVinf, rho)
+    end
     pnl.calcfield_F!(bodies, magVinf, rho)
     LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
@@ -87,8 +91,8 @@ function generate_body(
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
 
-    # Wrap into Grid object
-    grid = pnl.gt.GridTriangleSurface(msh)
+    # Extract nodes and cells from Meshes object
+    nodes, cells = pnl.meshes2nodes_cells(msh)
 
     # Create trailing edge line
     nte = 200
@@ -98,7 +102,7 @@ function generate_body(
     trailingedge[3, :] .= 0.0
 
     # 6enerate the paneled body
-    body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
+    body = bodytype(nodes, cells; CPoffset = (-1)^flip * 1e-14)
 
     pnl.apply_freestream!(body, Vinf)
 
@@ -122,11 +126,11 @@ function generate_body(
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
 
-    # Wrap into Grid object
-    grid = pnl.gt.GridTriangleSurface(msh)
+    # Extract nodes and cells from Meshes object
+    nodes, cells = pnl.meshes2nodes_cells(msh)
 
     # Create trailing edge line
-    offset = minimum(grid._nodes[1, :])
+    offset = minimum(nodes[1, :])
     nte = 200
     trailingedge = zeros(3, nte)
     trailingedge[1, :] .= chord + offset
@@ -134,14 +138,8 @@ function generate_body(
     trailingedge[3, :] .= 0.0
 
     # Generate the paneled body
-    body = bodytype(grid; CPoffset = (-1)^flip * 1e-14)
-    shedding = pnl.calc_shedding(
-        body.nodes,
-        body.cells,
-        trailingedge;
-        tolerance = 0.001 * span
-    )
-    body = bodytype(body.nodes, body.cells, [shedding];
+    shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance = 0.001 * span)
+    body = bodytype(nodes, cells, [shedding];
                     CPoffset = (-1)^flip * 1e-14,
                     ensure_winding=false)
 

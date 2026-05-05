@@ -38,9 +38,9 @@ function solve_linear(self::LiftingLine, Uinfs::AbstractMatrix;
     Uind!(self, self.midpoints, self.Us)
 
     if addfields
-        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
-        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
-        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
+        _add_field!(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+        _add_field!(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+        _add_field!(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
     end
 
     return nothing

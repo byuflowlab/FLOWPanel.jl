@@ -1,11 +1,10 @@
 using Test
 import FLOWPanel as pnl
-import GeometricTools as gt
 using Statistics: mean
 
 @testset verbose=true "Analytical Validation" begin
     @testset "Sphere in uniform flow - Neumann" begin
-        body = make_sphere_source_body(ntheta=12, nphi=24)
+        body = make_sphere_source_body(ntheta=18, nphi=36)
         solve_source_body!(body)
 
         cps = body.controlpoints
@@ -39,5 +38,18 @@ using Statistics: mean
         @test !isempty(pos_z)
         @test !isempty(neg_z)
         @test abs(mean(pos_z) - mean(neg_z)) < 0.01
+
+        @testset "Cp pointwise comparison" begin
+            q = 0.5 * 1.0 * 1.0^2  # 0.5*rho*Uinf^2
+            Cp = body.P ./ q
+            # Analytic: Cp = 1 - (9/4)*sin²θ; on the unit sphere sin²θ = y² + z²
+            Cp_analytic = [1 - (9/4) * (cps[2, i]^2 + cps[3, i]^2) for i in 1:size(cps, 2)]
+            abs_err = abs.(Cp .- Cp_analytic)
+            @test maximum(abs_err) < 0.15
+            @test mean(abs_err) < 0.05
+            @show maximum(abs_err)
+            @show mean(abs_err)
+            @show minimum(abs_err)
+        end
     end
 end

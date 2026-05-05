@@ -239,14 +239,17 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
+    potential_old = copy(body.potential)
 
     try
         set_strengths!(body)
         body.potential .= zero(eltype(body.potential))
         influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        body.potential .+= potential_old
         _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
+        body.potential .= potential_old
     end
 
     return nothing
@@ -256,6 +259,13 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
         backend=DirectBackend(),
         update_cps_normals::Bool=true,
         optargs...)
+
+    if body isa RigidWakeBody && body.watertight
+        @warn "Solving a watertight RigidWakeBody with the Neumann formulation " *
+              "(DBC=false) gives a rank-deficient influence matrix; results " *
+              "will be unreliable. Use DBC=true (Dirichlet) for closed " *
+              "surfaces, or remove a cap to make the surface non-watertight." maxlog=1
+    end
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try

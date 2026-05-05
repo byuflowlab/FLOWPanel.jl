@@ -13,7 +13,7 @@
     monitor_slice(body, controlpoints, fieldname, sliceposs; slicenormal=[0, 1, 0], row=false, filter=(x, i)->true, proc_xfun=(points, vals)->getindex.(eachcol(points), 1), proc_yfun=(points, vals)->vals, disp_plot=true, save_path=nothing, ...)
     monitor_slice(body, fieldname, sliceposs; optargs...)
 
-Extract one or more slices of a field, optionally plot them with `PyPlot`, and
+Extract one or more slices of a field, optionally plot them with `PythonPlot`, and
 optionally write CSV/VTK outputs.
 """
 function monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
@@ -105,11 +105,11 @@ function monitor_slice(body::Union{NonLiftingBody, AbstractLiftingBody},
                 field_type = nd==1 ? "scalar" : nd==2 ? "vector" : error("Invalid field with dims $(nd)")
                 field_data = nd==1 ? vals : collect(eachcol(vals))
 
-                gt.generateVTK(filepref*"-$(axi)", collect(eachcol(points));
-                                    lines=[collect(0:size(points, 2))],
+                _write_vtk_points_or_lines(filepref*"-$(axi)", points;
+                                    cells=[collect(0:size(points, 2)-1)],
                                     point_data=[Dict(   "field_name"=>fieldname,
                                                         "field_type"=>field_type,
-                                                        "field_data"=>vals)],
+                                                        "field_data"=>field_data)],
                                     num=num, path=save_path)
             end
 

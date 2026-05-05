@@ -1,6 +1,5 @@
 using Test
 import FLOWPanel as pnl
-import GeometricTools as gt
 
 @testset verbose=true "FMM Backends" begin
     @testset "backend construction" begin

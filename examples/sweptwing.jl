@@ -14,7 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
-import PyPlot as plt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import PythonPlot as plt
 
 run_name        = "sweptwing000"                # Name of this run
 
@@ -92,7 +93,7 @@ bodyoptargs_r = (;
                 )
 
 # Loft left side of the wing from left to right
-@time wing_left = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
+@time wing_left = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                             bodytype=bodytype, bodyoptargs=bodyoptargs_l,
                             airfoil_root=airfoil, airfoil_tip=airfoil,
                             airfoil_path=airfoil_path,
@@ -104,7 +105,7 @@ bodyoptargs_r = (;
 wing_left.Das .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings+1)
 
 # Loft right side of the wing from right to left
-@time wing_right = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
+@time wing_right = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                             bodytype=bodytype, bodyoptargs=bodyoptargs_r,
                             airfoil_root=airfoil, airfoil_tip=airfoil,
                             airfoil_path=airfoil_path,
@@ -213,7 +214,7 @@ side = [-1, 1][2]               # Side of wing to plot, -1==left, 1==right
 wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
 spanposs = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
 
-fig1, axs = plot_Cps(wingside, spanposs, b;
+fig1, axs = plot_Cps(wingside, spanposs, b, rho, magVinf;
                             xscaling=ar/b, AOA=AOA,
                             xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-")
 fig1.tight_layout()
@@ -224,7 +225,7 @@ side = [-1, 1][2]
 wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
 spanposs = side*[0, 0.04, 0.08, 0.16, 0.24, 0.51, 0.65, 0.9, 0.95]
 
-fig2, axs = plot_deltaCps(wingside, spanposs, b;
+fig2, axs = plot_deltaCps(wingside, spanposs, b, rho, magVinf;
                             xscaling=ar/b, AOA=AOA,
                             xlims=[-0.1, 1.1], ylims=[0, -1.0], stl="-")
 fig2.tight_layout()

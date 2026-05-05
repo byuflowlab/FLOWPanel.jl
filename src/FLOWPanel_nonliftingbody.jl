@@ -17,13 +17,12 @@
 
 """
     NonLiftingBody{E, N}
-    NonLiftingBody{E}(grid; DBC=false, optargs...)
     NonLiftingBody{E}(mesh; DBC=false, optargs...)
     NonLiftingBody{E}(nodes, cells; DBC=false, optargs...)
 
 Concrete body type for non-lifting surfaces discretized with source, doublet,
-or vortex-ring panels. Constructors accept a triangulated grid, a `VSPGeom`
-mesh, or raw node/cell arrays.
+or vortex-ring panels. Constructors accept a `VSPGeom` mesh or raw node/cell
+arrays.
 """
 mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
 
@@ -116,30 +115,6 @@ function NonLiftingBody{E, N, TF}(
 end
 
 function NonLiftingBody{E, N, TF, DBC}(
-                grid::gt.GridTriangleSurface;
-                optargs...
-              ) where {E, N, TF, DBC}
-    
-    nodes = grid._nodes
-    cells = grid2cells(grid)
-    
-    watertight_guess, _ = iswatertight(nodes, cells)
-    
-    return NonLiftingBody{E, N, TF, DBC}(
-                nodes, cells;
-                watertight=watertight_guess, optargs...
-              )
-end
-
-function NonLiftingBody{E, N, TF}(
-                grid::gt.GridTriangleSurface;
-                DBC::Bool=false,
-                optargs...
-              ) where {E, N, TF}
-    return NonLiftingBody{E, N, TF, DBC}(grid; optargs...)
-end
-
-function NonLiftingBody{E, N, TF, DBC}(
                 mesh::VSPGeom.TriMesh;
                 optargs...
               ) where {E, N, TF, DBC}
@@ -161,14 +136,6 @@ _count(::Type{VortexRing}) = 1
 _count(::Type{Union{ConstantSource, ConstantDoublet}}) = 2
 _count(::Type{Union{ConstantSource, VortexRing}}) = 2
 _count(::Type{<:Any}) = error("Unsupported kernel type for NonLiftingBody.")
-
-function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E}
-    return NonLiftingBody{E, _count(E), eltype(grid._nodes), DBC}(grid; optargs...)
-end
-
-function (NonLiftingBody{E, N})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E, N}
-    return NonLiftingBody{E, N, eltype(grid._nodes), DBC}(grid; optargs...)
-end
 
 function (NonLiftingBody{E})(mesh::VSPGeom.TriMesh; DBC::Bool=false, optargs...) where {E}
     nodes, _ = trimesh2cells(mesh)
@@ -286,78 +253,8 @@ end
 ################################################################################
 # COMMON FUNCTIONS
 ################################################################################
-"""
-    generate_loft(bodytype, args...; bodyoptargs=(), dimsplit=2, optargs...)
-
-Generate a lofted non-lifting body from `GeometricTools.generate_loft`.
-"""
-function generate_loft(bodytype::Type{B}, args...; bodyoptargs=(),
-                        dimsplit::Int64=2, optargs...) where {B<:NonLiftingBody}
-    # Loft the surface geometry
-    grid = gt.generate_loft(args...; optargs...)
-
-    # Split the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    return bodytype(triang_grid; bodyoptargs...)
-end
-
-"""
-    generate_revolution(bodytype, args...; bodyoptargs=(), dimsplit=2, loop_dim=2, optargs...)
-
-Generate a non-lifting body of revolution from `GeometricTools.surface_revolution`.
-"""
-function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
-                             dimsplit::Int64=2, loop_dim::Int64=2,
-                             optargs...)  where {B<:NonLiftingBody}
-    # Revolve the geometry
-    grid = _surface_revolution_compat(args...; loop_dim=loop_dim, optargs...)
-
-    # Split the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    return bodytype(triang_grid; bodyoptargs...)
-end
 
 ##### END OF COMMON FUNTIONS ###################################################
-
-"""
-    generate_revolution_liftbody(bodytype, args...; bodyoptargs=(), optargs...)
-
-Backward-compatible wrapper that constructs a revolved geometry and returns the
-requested non-lifting body type.
-"""
-function generate_revolution_liftbody(bodytype::Type{B}, args...; bodyoptargs=(),
-                                                  gridprocessing=nothing,
-                                                  dimsplit::Int=1,
-                                                  # loop_dim::Int=1,
-                                                  loop_dim::Int=2,
-                                                  axis_angle=270,
-                                                  optargs...) where {B<:NonLiftingBody}
-    # Revolves the geometry
-    grid = _surface_revolution_compat(args...; loop_dim=loop_dim,
-                                              axis_angle=axis_angle, optargs...)
-
-    # Intermediate processing of grid: rotate to align centerline with x-axis
-    if gridprocessing==nothing
-        Oaxis = gt.rotation_matrix2(0, 0, 90)
-        O = zeros(3)
-        gt.lintransform!(grid, Oaxis, O)
-
-    # User-defined intermediate processing of grid
-    else
-        gridprocessing(grid)
-    end
-
-    # Splits the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    # construct body
-    return bodytype(triang_grid; bodyoptargs...)
-end
 
 """
     FlatGround(center, normal, radius; panel_length=radius/5, bodyoptargs...)

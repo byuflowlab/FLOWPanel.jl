@@ -3,6 +3,7 @@
 # Created: December 5, 2025
 
 import FLOWPanel as pnl
+using Printf
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
@@ -21,7 +22,7 @@ nrevs   = 1        # Number of revolutions
 nt      = 36        # Number of time steps per revolution
 dt      = 60 / RPM / nt
 n_steps = nt * nrevs
-t_range = range(0.0, step=dt, length=n_steps)[1:3]
+t_range = range(0.0, step=dt, length=n_steps)[1:10]
 
 # ==========================================================
 # Sensitivity parameters
@@ -177,12 +178,115 @@ maneuver!(frames, systems, wakes, t) = nothing
 systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
+mu_log = Tuple{Int,Float64,Float64}[]
+function mu_monitor(systems, wakes, frames, uinf, i_step)
+    body = systems[1]
+    mu = view(body.strength, :, 2)
+    push!(mu_log, (i_step, maximum(abs, mu), sum(abs, mu) / length(mu)))
+end
+
+# wake-induced velocity probe at body control points, split panel vs particle
+wake_v_log = Tuple{Int,Float64,Float64,Float64,Float64,Float64,Float64,Float64}[]
+const wake_v_probes = pnl.FastMultipole.ProbeSystem(rotor.ncells, Float64)
+function _reset_probes_at_cps!(probes, body)
+    zero_v = zero(SVector{3, Float64})
+    zero_h = zero(SMatrix{3, 3, Float64, 9})
+    @inbounds for k in 1:body.ncells
+        probes.position[k] = SVector{3, Float64}(
+            body.controlpoints[1, k],
+            body.controlpoints[2, k],
+            body.controlpoints[3, k],
+        )
+        probes.gradient[k] = zero_v
+        probes.scalar_potential[k] = 0.0
+        probes.hessian[k] = zero_h
+    end
+end
+function _vmag_stats(probes, body)
+    n_dot_v_sum = 0.0
+    v_mag_sum = 0.0
+    v_mag_max = 0.0
+    @inbounds for k in 1:body.ncells
+        V = probes.gradient[k]
+        nrm = SVector{3, Float64}(body.normals[1, k], body.normals[2, k], body.normals[3, k])
+        n_dot_v_sum += abs(V[1]*nrm[1] + V[2]*nrm[2] + V[3]*nrm[3])
+        m = sqrt(V[1]^2 + V[2]^2 + V[3]^2)
+        v_mag_sum += m
+        v_mag_max = max(v_mag_max, m)
+    end
+    return n_dot_v_sum / body.ncells, v_mag_sum / body.ncells, v_mag_max
+end
+function wake_v_monitor(systems, wakes, frames, uinf, i_step)
+    body = systems[1]
+    wake_sources = pnl._collect_wake_sources(wakes)
+
+    # split sources: PanelParticleWake's get_sources is (panel_wake_sources..., pfield)
+    # so all but the last are panels, and the last is the particle field
+    panel_sources = isempty(wake_sources) ? () : wake_sources[1:end-1]
+    particle_source = isempty(wake_sources) ? () : (wake_sources[end],)
+
+    # 1) panel-only contribution
+    _reset_probes_at_cps!(wake_v_probes, body)
+    if !isempty(panel_sources)
+        pnl.influence!((wake_v_probes,), panel_sources, backend;
+            precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
+    end
+    p_ndv_mean, p_v_mean, p_v_max = _vmag_stats(wake_v_probes, body)
+
+    # find the body CP with worst panel-induced |V|, and distance to nearest wake vertex
+    if i_step > 0 && !isempty(panel_sources)
+        worst_k = 0
+        worst_v = 0.0
+        @inbounds for k in 1:body.ncells
+            V = wake_v_probes.gradient[k]
+            m = sqrt(V[1]^2 + V[2]^2 + V[3]^2)
+            if m > worst_v
+                worst_v = m; worst_k = k
+            end
+        end
+        cp = SVector{3,Float64}(body.controlpoints[1, worst_k], body.controlpoints[2, worst_k], body.controlpoints[3, worst_k])
+        # nearest wake-panel vertex; PanelParticleWake.panel_wake.nodes is a Vector{Array{TF,3}} indexed by surface
+        min_d = Inf
+        pw = wakes[1].panel_wake
+        for i_surf in eachindex(pw.nodes)
+            nodes_surf = pw.nodes[i_surf]   # (3, nrows+1, nshed+1)
+            for j in axes(nodes_surf, 2), k2 in axes(nodes_surf, 3)
+                vx = nodes_surf[1, j, k2]; vy = nodes_surf[2, j, k2]; vz = nodes_surf[3, j, k2]
+                d = sqrt((vx-cp[1])^2 + (vy-cp[2])^2 + (vz-cp[3])^2)
+                if d < min_d; min_d = d; end
+            end
+        end
+        @printf("    [step %d] worst body CP idx=%d at (%.4f,%.4f,%.4f), |V|=%.2f, nearest wake vertex at d=%.4f mm\n",
+                i_step, worst_k, cp[1], cp[2], cp[3], worst_v, min_d*1000)
+    end
+
+    # 2) particle-only contribution
+    _reset_probes_at_cps!(wake_v_probes, body)
+    if !isempty(particle_source)
+        pnl.influence!((wake_v_probes,), particle_source, backend;
+            precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
+    end
+    pa_ndv_mean, pa_v_mean, pa_v_max = _vmag_stats(wake_v_probes, body)
+
+    # reference: ω·R_tip
+    ωmag = abs(frames[1].ω)
+    rmax = 0.0
+    @inbounds for k in 1:body.ncells
+        rmax = max(rmax, sqrt(body.controlpoints[1, k]^2 + body.controlpoints[3, k]^2))
+    end
+    omega_R_tip = ωmag * rmax
+
+    push!(wake_v_log, (i_step, p_ndv_mean, p_v_mean, p_v_max, pa_ndv_mean, pa_v_mean, pa_v_max, omega_R_tip))
+end
+
 monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                     i_frame=-1,
                     normalization=pnl.RotorNormalization(rho, 2*R, 1),
                     # normalization=pnl.NoNormalization(),
                     verbose=false
                 ),
+            mu_monitor,
+            wake_v_monitor,
             # pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
             #         rho, backend,
             #         normalization=pnl.RotorNormalization(rho, 2*R, 1)
@@ -197,8 +301,18 @@ name = "rotor_hover"
     # set_Das_eta_freestream=0.1,
     monitors,
     body_solvers, backend, rho, verbose=true,
-    path="rotor_hover", name,
+    path="rotor_hover_mudiag", name,
     p_correct_kuttacondition=p_correct_kuttacondition_flag
 )
 
 println("Thrust Coefficient: ", monitors[1].force[2,:])
+println("\n|μ| evolution (step, max, mean):")
+for (i, mx, mn) in mu_log
+    println("  step $i: max=$(round(mx, sigdigits=5))  mean=$(round(mn, sigdigits=5))")
+end
+println("\nWake-induced velocity at body CPs (panels vs particles; ωR_tip ≈ $(round(wake_v_log[end][8], sigdigits=4))):")
+println("  step | panel: n·V mean   |V| mean   |V| max  || particle: n·V mean   |V| mean   |V| max")
+for (i, p_ndv, p_vm, p_vx, pa_ndv, pa_vm, pa_vx, _) in wake_v_log
+    @printf("  %4d |        %7.3f   %7.3f   %7.3f  ||           %7.3f   %7.3f   %7.3f\n",
+        i, p_ndv, p_vm, p_vx, pa_ndv, pa_vm, pa_vx)
+end

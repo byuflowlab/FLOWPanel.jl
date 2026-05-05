@@ -3,8 +3,11 @@
 
 using FLOWPanel
 const pnl = FLOWPanel
-using FLOWPanel.gt.Meshes
-import FLOWPanel.PyPlot as plt
+using FLOWPanel.FastMultipole: ProbeSystem
+using FLOWPanel.FastMultipole.StaticArrays: SVector
+using Meshes
+import PythonPlot as plt
+import PythonPlot: @L_str
 colormap = plt.get_cmap("RdBu",15)
 
 
@@ -25,22 +28,12 @@ function make_single_triangle_body(; semiinfinite_wake=false)
     triangle = [connect((1,2,3))]
     mesh = SimpleMesh(vertices, triangle)
 
-    # Wrap it as a GridTriangleSurface
-    grid = FLOWPanel.gt.GridTriangleSurface(mesh)
-
-    # Construct NonLiftingBody passing `cells` explicitly to avoid calling gt-based grid2cells
-    # body = pnl.NonLiftingBody{pnl.ConstantSource}(grid)
-    # body = pnl.NonLiftingBody{pnl.ConstantDoublet}(grid)
-    # body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(grid)
+    # Extract nodes/cells matrices from the Meshes.jl SimpleMesh
+    nodes, cells = pnl.meshes2nodes_cells(mesh)
 
     shedding = zeros(Int, 6, 0)
-    # shedding[1,1] = 1
-    # shedding[2,1] = 2
-    # shedding[3,1] = 3
-    # shedding[4,1] = -1
-    body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.VortexRing}}(grid, [shedding];
+    body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.VortexRing}}(nodes, cells, [shedding];
         semiinfinite_wake)
-    # body.Das[1][2,:] .= -1
 
     return body
 end
@@ -50,8 +43,8 @@ body = make_single_triangle_body()
 
 # set unit strength
 str = 1.0
-# body.strength[1,1] = str
-body.strength[1,2] = str
+body.strength[1,1] = str
+# body.strength[1,2] = str
 
 normals = pnl.calc_normals!(body)
 @show normals # outward facing
@@ -70,11 +63,17 @@ backend = pnl.FastMultipoleBackend(
                                     multipole_acceptance=1.0,
                                     leaf_size=10000,
                                 )
+probes_direct = ProbeSystem(npoints)
+for i in 1:npoints
+    probes_direct.position[i] = SVector(points[1,i], points[2,i], points[3,i])
+end
+pnl.influence!(probes_direct, body, backend; scalar_potential=true, velocity=true)
 out_direct = zeros(3, npoints)
-pnl.Uind!(body, points, out_direct, backend)
-# out_direct .*= normals[:,1]
 phi_direct = zeros(npoints)
-pnl.phi!(body, points, phi_direct, backend)
+for i in 1:npoints
+    out_direct[:, i] .= probes_direct.gradient[i]
+    phi_direct[i] = probes_direct.scalar_potential[i]
+end
 
 # get semi-infinite panel potential and velocities
 phi_semiinfinite = zeros(npoints)
@@ -99,11 +98,17 @@ backend_fmm = pnl.FastMultipoleBackend(
                                     multipole_acceptance=0.5,
                                     leaf_size=1,
                                 )
+probes_fmm = ProbeSystem(npoints)
+for i in 1:npoints
+    probes_fmm.position[i] = SVector(points[1,i], points[2,i], points[3,i])
+end
+pnl.influence!(probes_fmm, body, backend_fmm; scalar_potential=true, velocity=true)
 out_fmm = zeros(3, npoints)
-pnl.Uind!(body, points, out_fmm, backend_fmm)
-# out_fmm .*= normals[:,1]
 phi_fmm = zeros(npoints)
-pnl.phi!(body, points, phi_fmm, backend_fmm)
+for i in 1:npoints
+    out_fmm[:, i] .= probes_fmm.gradient[i]
+    phi_fmm[i] = probes_fmm.scalar_potential[i]
+end
 
 # plot results
 out_direct_z = out_direct[3, :]
@@ -113,16 +118,16 @@ fig.clf()
 fig.add_subplot(121, xlabel="z", ylabel="phi")
 fig.add_subplot(122, xlabel="z", ylabel="Uind_z")
 axs = fig.get_axes()
-axs[2].plot(dz, out_direct_z, label="direct")
-axs[2].plot(dz, out_fmm_z, "--", label="FMM")
-axs[2].plot(dz, U_semiinfinite[3,:], ":", label="semi-infinite panel")
-axs[2].plot(dz, U_semiinfinite2[3,:], ":", label="semi-infinite panel2")
-axs[2].legend()
-axs[1].plot(dz, phi_direct, label="direct")
-axs[1].plot(dz, phi_fmm, "--", label="FMM")
-axs[1].plot(dz, phi_semiinfinite, ":", label="semi-infinite panel")
-axs[1].plot(dz, phi_semiinfinite2, ":", label="semi-infinite panel2")
+axs[1].plot(dz, out_direct_z, label="direct")
+axs[1].plot(dz, out_fmm_z, "--", label="FMM")
+axs[1].plot(dz, U_semiinfinite[3,:], ":", label="semi-infinite panel")
+axs[1].plot(dz, U_semiinfinite2[3,:], ":", label="semi-infinite panel2")
 axs[1].legend()
+axs[0].plot(dz, phi_direct, label="direct")
+axs[0].plot(dz, phi_fmm, "--", label="FMM")
+axs[0].plot(dz, phi_semiinfinite, ":", label="semi-infinite panel")
+axs[0].plot(dz, phi_semiinfinite2, ":", label="semi-infinite panel2")
+axs[0].legend()
 plt.tight_layout()
 
 # plot results with flipped axes
@@ -131,8 +136,8 @@ fig3.clf()
 fig3.add_subplot(121, xlabel=L"\phi", ylabel="z")
 fig3.add_subplot(122, xlabel=L"\vec{u} \cdot \hat{n}", ylabel="z")
 axs3 = fig3.get_axes()
-axs3[1].plot(phi_direct, dz, label="direct", color=colormap(14))
-axs3[2].plot(out_direct_z, dz, label="direct", color=colormap(14))
+axs3[0].plot(phi_direct, dz, label="direct", color=colormap(14))
+axs3[1].plot(out_direct_z, dz, label="direct", color=colormap(14))
 for ax in axs3
     ax.spines["top"].set_visible(false)
     ax.spines["right"].set_visible(false)

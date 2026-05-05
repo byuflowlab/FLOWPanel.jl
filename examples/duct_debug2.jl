@@ -10,6 +10,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
@@ -34,14 +36,14 @@ kernel   = Union{pnl.ConstantSource, pnl.VortexRing}
 bodytype = pnl.RigidWakeBody{kernel}
 
 function make_body()
-    xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+    xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                           NDIVS_rfl, NDIVS_rfl; verify_spline=false)
     ys[end] = ys[1]
     xs *= d * aspectratio
     ys *= d * aspectratio
     ys .+= d / 2
     points = hcat(xs, ys)
-    return pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+    return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                 bodyoptargs=(CPoffset=1e-12, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,

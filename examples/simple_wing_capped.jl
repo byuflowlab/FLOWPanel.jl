@@ -1,7 +1,8 @@
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import FLOWPanel: norm, dot, cross
 
-import FLOWPanel.GeometricTools.Meshes
+import Meshes
 import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
@@ -14,7 +15,7 @@ paraview        = true                      # Whether to visualize with Paraview
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
-AOA             = 15.0                      # (deg) freestream angle of attack
+AOA             = 5.0                      # (deg) freestream angle of attack
 magVinf         = 1.0                      # (m/s) freestream velocity
 rho             = 1.225                     # (kg/m^3) air density
 AR = 4.0                               # Aspect ratio of the wing (b/c)
@@ -46,6 +47,7 @@ Sref            = c * b                       # (m^2) reference area
 # kernel = pnl.ConstantSource               # Kernel type to use
 # kernel = pnl.ConstantDoublet               # Kernel type to use
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}               # Kernel type to use
 
 # body type
 # bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
@@ -57,16 +59,15 @@ clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that ar
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Read Gmsh mesh
+println("Loading mesh...")
 msh = GeoIO.load(meshfile).geometry
+println("Done.\n")
 
 # Transform the original mesh: Translate, rotate, and scale
 msh = msh |> Meshes.Scale(scaling)
 
 # Uncomment this to do 10 smoothing iterations on the mesh
 # msh = msh |> Meshes.TaubinSmoothing(10)
-
-# Wrap Meshes object into a Grid object from GeometricTools
-grid = pnl.gt.GridTriangleSurface(msh)
 
 # get trailing edge line
 nte = 10000
@@ -79,13 +80,15 @@ trailingedge[3, :] .= 0.0
 Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
 # Generate paneled body
+println("Generating body...")
+nodes, cells = pnl.meshes2nodes_cells(msh)
+
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    body = bodytype(nodes, cells; CPoffset=(-1)^flip * 1e-14)
 elseif bodytype <: pnl.RigidWakeBody
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
-    shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*b)
-    shedding2 = pnl.calc_shedding_from_seed(body.nodes, body.cells, 396, 364; bbox=nothing, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-    body = bodytype(body.nodes, body.cells, shedding; CPoffset=(-1)^flip * 1e-14, ensure_winding=false)
+    shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance=0.001*b)
+    shedding2 = pnl.calc_shedding_from_seed(nodes, cells, 396, 364; bbox=nothing, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+    body = bodytype(nodes, cells, shedding; CPoffset=(-1)^flip * 1e-14, ensure_winding=false)
     body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
 else
     error("Unsupported body type")
@@ -113,19 +116,19 @@ backend = pnl.FastMultipoleBackend(
 # Solve body (panel strengths) giving `Uinfs` as boundary conditions and
 @time begin
     # global solver = pnl.Backslash(body; least_squares=true)
-    solver = pnl.KrylovSolver(body;
-        method=:gmres,
-        itmax=40,
-        atol=1e-4,
-        rtol=1e-4,
-        # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
-        backend=pnl.FastMultipoleBackend(
-                    expansion_order=7,
-                    multipole_acceptance=0.4,
-                    leaf_size=10
-                )
-    )
-    # solver = pnl.Backslash(body)
+    # solver = pnl.KrylovSolver(body;
+    #     method=:gmres,
+    #     itmax=40,
+    #     atol=1e-4,
+    #     rtol=1e-4,
+    #     # elprescribe=Tuple{Int,Float64}[],   # No prescribed strengths
+    #     backend=pnl.FastMultipoleBackend(
+    #                 expansion_order=7,
+    #                 multipole_acceptance=0.4,
+    #                 leaf_size=10
+    #             )
+    # )
+    solver = pnl.Backslash(body)
     body.velocity .= Uinfs
     pnl.solve!(body, solver; backend)
 end

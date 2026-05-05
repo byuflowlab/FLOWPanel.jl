@@ -123,8 +123,8 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, core_size, overflowed)
 end
 
-PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100) where {TK,NK,TF} =
-    PanelWake(body.shedding, kernel, TF; nwakerows)
+PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100, kwargs...) where {TK,NK,TF} =
+    PanelWake(body.shedding, kernel, TF; nwakerows, kwargs...)
 
 function reset!(wake::PanelWake)
     for vel in wake.velocity

@@ -14,6 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 
@@ -50,12 +52,12 @@ d               = 2*0.835                   # (m) duct diameter
 
 # ----------------- SOLVER PARAMETERS ------------------------------------------
 # Discretization
-NDIVS_theta     = 20                        # Number of azimuthal panels
+NDIVS_theta     = 80                        # Number of azimuthal panels
 
 # NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
 #       either an integer, or an array of tuples as shown below
 
-n_rfl           = 6                        # This controls the number of chordwise panels
+n_rfl           = 8                        # This controls the number of chordwise panels
 
 NDIVS_rfl_up = [                            # Discretization of airfoil upper surface
             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
@@ -84,7 +86,7 @@ bodytype = pnl.RigidWakeBody{kernel} # Elements and wake model
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Re-discretize the contour of the body of revolution according to NDIVS
-xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                         NDIVS_rfl_up, NDIVS_rfl_lo;
                                         verify_spline=false)
 
@@ -103,7 +105,7 @@ ys .+= d/2
 points = hcat(xs, ys)
 
 # Generate body of revolution
-body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
                                                         CPoffset=1e-6,
                                                         kerneloffset=1e-2,
@@ -229,7 +231,7 @@ AOA = AOAs[i]
 
     # ----------------- COMPARISON TO EXPERIMENTAL DATA ------------------------
     # Plot surface pressure along slices of the duct
-    fig, axs = plot_Cp(body, AOA)
+    fig, axs = plot_Cp(body, AOA, rho, magVinf)
 
     if save_plots
         fname = "$(run_name)-Cp-AOA$(ceil(Int, AOA)).png"

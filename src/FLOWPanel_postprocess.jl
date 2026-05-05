@@ -3,8 +3,8 @@
     Definition of methods for post-processing solver results.
 
 # AUTHORSHIP
-  * Created by  : Eduardo J. Alvarez
-  * Email       : Edo.AlvarezR@gmail.com
+  * Created by  : Eduardo J. Alvarez and Ryan Anderson
+  * Email       : Edo.AlvarezR@gmail.com; rymanderson@gmail.com
   * Date        : Oct 2022
   * License     : MIT License
 =###############################################################################
@@ -78,7 +78,7 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
     return nothing
 end
 
-calcfield_U!(targetbody; optargs...) = calcfield_U!((targetbody,); optargs...)
+calcfield_U!(targetbody, args...; optargs...) = calcfield_U!((targetbody,), args...; optargs...)
 
 ################################################################################
 # GRADIENT COMPUTATION
@@ -201,6 +201,7 @@ function compute_mu_gradient!(grad_mu,
 
         # 6. Solve the 3x3 local system
         g = ATA \ ATb
+
         grad_mu[1, i] -= g[1] * scale
         grad_mu[2, i] -= g[2] * scale
         grad_mu[3, i] -= g[3] * scale
@@ -280,6 +281,17 @@ function calcfield_P!(bodies::Tuple, Uinf, rho; dphidt=fill(nothing, length(bodi
     for (i, body) in enumerate(bodies)
         calcfield_P!(body.P, body, body.velocity, Uinf, rho; dphidt=dphidt[i], correct_kuttacondition=correct_kuttacondition[i], optargs...)
     end
+end
+
+"""
+    calcfield_Cp(body::AbstractBody, uinf, rho)
+
+Compute and return the pressure coefficient field from the dimensional gauge
+pressure stored in `body.P`.
+"""
+function calcfield_Cp(body::AbstractBody, uinf::Number, rho::Number)
+    qinf = 0.5 * rho * uinf^2
+    return body.P ./ qinf
 end
 
 ################################################################################

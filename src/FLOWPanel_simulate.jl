@@ -110,6 +110,42 @@ end
 _collect_wake_sources(wake::AbstractFreeWake) = _collect_wake_sources((wake,))
 _collect_wake_sources(::Nothing) = ()
 
+function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
+        set_Das_eta_kinematic=NaN,
+        set_Das_eta_freestream=NaN)
+    if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic)
+        return systems
+    end
+
+    systems_tuple = _systems_tuple(systems)
+
+    if !isnan(set_Das_eta_freestream)
+        uinf0 = Uinf(t0)
+        for sys in systems_tuple
+            extra_reset!(sys)
+            extra_apply_freestream!(sys, uinf0)
+            _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
+        end
+    end
+
+    if !isnan(set_Das_eta_kinematic)
+        for sys in systems_tuple
+            extra_reset!(sys)
+        end
+        kinematic_velocity!(systems_tuple, frames)
+        for sys in systems_tuple
+            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+        end
+    end
+
+    # reset velocity fields modified during Das computation
+    for sys in systems_tuple
+        reset!(sys)
+    end
+
+    return systems
+end
+
 """
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), backend_wake=backend, backend_solve=backend, backend_system=backend, rho=1.225, monitors=(), ...)
 
@@ -155,33 +191,9 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         _set_formulation_geometry!(sys, true)
     end
 
-    # set Das from freestream and/or kinematic velocity at trailing edges
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
-        dt0 = t_range[2] - t_range[1]
-
-        if !isnan(set_Das_eta_freestream)
-            uinf0 = Uinf(t_range[1])
-            for sys in systems_tuple
-                extra_reset!(sys)
-                extra_apply_freestream!(sys, uinf0)
-                _accumulate_Das!(sys, dt0 * set_Das_eta_freestream)
-            end
-        end
-
-        if !isnan(set_Das_eta_kinematic)
-            for sys in systems_tuple
-                extra_reset!(sys)
-            end
-            kinematic_velocity!(systems_tuple, frames)
-            for sys in systems_tuple
-                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
-            end
-        end
-
-        # reset velocity fields modified during Das computation
-        for sys in systems_tuple
-            reset!(sys)
-        end
+        initialize_Das!(systems_tuple, frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_eta_kinematic, set_Das_eta_freestream)
     end
 
     # begin simulation

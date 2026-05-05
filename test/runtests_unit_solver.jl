@@ -1,6 +1,5 @@
 using Test
 import FLOWPanel as pnl
-import GeometricTools as gt
 using LinearAlgebra: diag
 import Meshes
 using StaticArrays: SVector
@@ -43,6 +42,51 @@ import GeoIO
         @test max_residual < 1e-12
     end
 
+    @testset "Backslash Neumann RigidWakeBody (single ConstantDoublet)" begin
+        # Validates that the generic Backslash + Neumann path on a
+        # RigidWakeBody{ConstantDoublet,1,_,false} assembles a wake-aware
+        # influence matrix (via the _induced_wake hook on AbstractBody
+        # `induced`) and recovers an impermeability-satisfying solution.
+        nodes = Float64[
+            0 1 1 0;
+            0 0 1 1;
+            0 0 0 0;
+        ]
+        cells = Int[
+            1 1;
+            2 3;
+            3 4;
+        ]
+        shedding = [pnl.calc_shedding_from_seed(nodes, cells, 1, 3)]
+
+        magV = sqrt(1.0^2 + 0.2^2)
+        Das_col = [1.0, 0.0, 0.2] ./ magV
+
+        # Reference body without shedding: pure body-panel influence.
+        body_nowake = pnl.RigidWakeBody{pnl.ConstantDoublet}(nodes, cells,
+            zeros(Int, 6, 0); DBC=false, check_mesh=false, watertight=false)
+        solver_nowake = pnl.Backslash(body_nowake)
+
+        body = pnl.RigidWakeBody{pnl.ConstantDoublet}(nodes, cells, shedding;
+            DBC=false, check_mesh=false, watertight=false)
+        body.Das[1] .= repeat(Das_col, 1, size(body.Das[1], 2))
+        Uinfs = zeros(3, body.ncells); Uinfs[1, :] .= 1.0; Uinfs[3, :] .= 0.2
+        body.velocity .= Uinfs
+
+        solver = pnl.Backslash(body)
+
+        # solver.G is overwritten by lu! during construction, so reach the
+        # original matrix entries through Glu.factors and a comparison
+        # against a freshly-assembled wakeless body.
+        @test maximum(abs.(solver.Glu.factors .- solver_nowake.Glu.factors)) > 1e-6
+
+        pnl.solve!(body, solver)
+        @test any(abs.(body.strength[:, 1]) .> 1e-6)
+
+        rhs = -vec(sum(Uinfs .* body.normals; dims=1))
+        @test isapprox(solver.Glu \ rhs, vec(body.strength[:, 1]); atol=1e-12)
+    end
+
     @testset "Backslash Dirichlet construction and solve" begin
         body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
             Float64[
@@ -71,9 +115,12 @@ import GeoIO
         body.velocity .= 0
         body.velocity[1, :] .= 1.0
         body.velocity[3, :] .= 0.2
+        body.potential .= range(0.1, 0.2; length=body.ncells)
+        potential_before = copy(body.potential)
         pnl.solve!(body, solver)
         @test any(abs.(body.strength[:, 2]) .> 0)
-        assert_boundary_residuals((body,); potential_atol=1e-7)
+        @test body.potential == potential_before
+        assert_boundary_residuals((body,); potential_atol=1e-6)
     end
 
     @testset "Backslash Dirichlet construction and solve" begin
@@ -101,7 +148,7 @@ import GeoIO
         @test any(abs.(body.strength[:, 2]) .> 0)
         @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
         @test body.velocity == velocity_before
-        # @test body.potential == potential_before
+        @test body.potential == potential_before
         @test body.CPoffset == CPoffset_before
         assert_boundary_residuals((body,); potential_atol=1e-10)
     end

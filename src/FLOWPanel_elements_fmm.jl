@@ -161,11 +161,8 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    isnan(potential) && println("Warning: NaN potential induced at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
-
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
-    # @show p
 
     # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
 
@@ -181,9 +178,13 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
+    # influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
 
-    return potential, velocity, velocity_gradient
+    # check for wake (if any)
+    p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
+
+    return potential+p, velocity+v, velocity_gradient+vg
 end
 
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
@@ -195,7 +196,10 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
 
-    return potential, velocity, velocity_gradient
+    # check for wake (if any)
+    p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
+
+    return potential+p, velocity+v, velocity_gradient+vg
 end
 
 # Function to calculate the distance from point P to the line segment AB
@@ -815,6 +819,11 @@ function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, 
     return source_buffer[6, i_source]
 end
 
+function get_strength_doublet(source_system::AbstractBody{Union{ConstantSource, VortexRing}, 2, <:Any}, source_buffer, i_source)
+    # get the strength of the doublet
+    return source_buffer[6, i_source]
+end
+
 function get_strength_doublet(source_system::AbstractBody{<:Union{ConstantDoublet, VortexRing}, 1, <:Any}, source_buffer, i_source)
     # get the strength of the doublet
     return source_buffer[5, i_source]
@@ -1007,15 +1016,15 @@ function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}
     v2 = vertices[2]
     vw1 = vertices[4]
     control_point = (v1 + v2 + vw1) * 0.333333333333333
-    R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
-    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, kerneloffset, R, derivatives_switch)
+    R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
+    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
 
     # influence of the second triangle
     vw2 = vertices[3]
     control_point = (vw1 + v2 + vw2) * 0.333333333333333
-    R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
-    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, kerneloffset, R, derivatives_switch)
-
+    R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
+    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+    
     return p+dp, vel+dvel, g+dg
 end
 

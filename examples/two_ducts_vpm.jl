@@ -22,6 +22,8 @@ origin  https://github.com/byuflowlab/FLOWPanel.jl.git (push)
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
@@ -53,7 +55,7 @@ function make_lifting_duct(; semiinfinite_wake=false)
     kernel   = Union{pnl.ConstantSource, pnl.VortexRing}
     bodytype = pnl.RigidWakeBody{kernel}
 
-    xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+    xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                           NDIVS_rfl, NDIVS_rfl; verify_spline=false)
     ys[end] = ys[1]
     xs *= d * aspectratio
@@ -61,7 +63,7 @@ function make_lifting_duct(; semiinfinite_wake=false)
     ys .+= d / 2
     points = hcat(xs, ys)
 
-    return pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+    return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                 bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
@@ -72,7 +74,7 @@ function make_nonlifting_duct()
     kernel   = pnl.ConstantSource
     bodytype = pnl.NonLiftingBody{kernel}
 
-    xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+    xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                           NDIVS_rfl, NDIVS_rfl; verify_spline=false)
     ys[end] = ys[1]
     xs *= d * aspectratio
@@ -80,7 +82,7 @@ function make_nonlifting_duct()
     ys .+= d / 2
     points = hcat(xs, ys)
 
-    return pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+    return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                 bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio))
