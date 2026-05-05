@@ -102,7 +102,7 @@ rotor_8k = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
 p_per_step = 2
 overlap    = 2.0
 
-wake_rotor = pnl.PanelParticleWake(rotor_1k;
+wake_rotor = pnl.PanelParticleWake(rotor_8k;
                 nwakerows=2,
                 max_particles=100000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
@@ -135,12 +135,12 @@ Uinf(t) = Vinf
 #             reverse_pass=false,
 #             verbose=false
 #         )
-solver_rotor = pnl.Backslash(rotor_1k)
+solver_rotor = pnl.Backslash(rotor_8k)
 
 backend = pnl.FastMultipoleBackend()
 
 # Reference frame
-frames = pnl.ReferenceFrame(rotor_1k;
+frames = pnl.ReferenceFrame(rotor_8k;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
     ω_axis = SVector{3}(0.0, 1.0, 0.0),
@@ -157,7 +157,7 @@ maneuver!(frames, systems, wakes, t) = nothing
 ## =========================================================
 # RUN SIMULATION
 # ==========================================================
-systems      = (rotor_1k,)
+systems      = (rotor_8k,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
 monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
@@ -166,16 +166,16 @@ monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                 ),
             )
 
-nc = rotor_1k.ncells # number of cells on this run
+nc = rotor_8k.ncells # number of cells on this run
 
 println("\nBegin rotor hover simulation ($(n_steps) steps, $(nc) cells)...")
-name = "rotor_hover"
+name = "rotor_hover_8k"
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=0.1,
     # set_Das_eta_freestream=0.1,
     monitors,
     body_solvers, backend, rho, verbose=true,
-    path="rotor_hover", name
+    path="rotor_hover_8k", name
 )
 
 
