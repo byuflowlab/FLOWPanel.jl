@@ -184,5 +184,5 @@ name = "rotor_hover_8k"
 )
 
 
-out_name = "CT_v_t_hover_RPM"*"$RPM"*"_nc$nc"*"_pps$p_per_step"*"_nt$nt"*"_overlap$overlap"*"_kerneloff$kerneloffset"*".csv"
+out_name = "CT_v_t_hover_RPM"*"$RPM"*"_nc$nc"*"_pps$p_per_step"*"_nt$nt"*"_overlap$overlap"*"_kerneloff0.00012"*".csv"
 writedlm(out_name, monitors[1].force, ',')
