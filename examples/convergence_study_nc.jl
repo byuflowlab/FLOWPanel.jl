@@ -26,22 +26,6 @@ t_range = range(0.0, step=dt, length=n_steps)
 ## =========================================================
 # ROTOR GEOMETRY
 # ==========================================================
-read_path    = joinpath(pnl.examples_path, "data")
-msh_file_1k  = joinpath(read_path, "phantom_3_1k.msh")
-msh_file_4k  = joinpath(read_path, "phantom_3_4k.msh")
-msh_file_8k  = joinpath(read_path, "phantom_3_8k.msh")
-
-R       = 0.119      # Rotor radius
-
-te_1k_1 = [10, 73]
-te_1k_2 = [13, 144]
-
-te_4k_1 = [9, 175]
-te_4k_2 = [13, 286]
-
-te_8k_1 = [10, 196]
-te_8k_2 = [13, 406]
-
 function build_rotor(msh_file, te_1, te_2, R=0.119; find_te=false)
 
     # MSH files
@@ -92,9 +76,30 @@ function build_rotor(msh_file, te_1, te_2, R=0.119; find_te=false)
     return rotor
 end
 
-rotor_1k = build_rotor(msh_file_1k, te_1k_1, te_1k_2)
-rotor_4k = build_rotor(msh_file_4k, te_4k_1, te_4k_2)
-rotor_8k = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
+read_path    = joinpath(pnl.examples_path, "data")
+msh_file_1k  = joinpath(read_path, "phantom_3_1k.msh")
+msh_file_4k  = joinpath(read_path, "phantom_3_4k.msh")
+msh_file_8k  = joinpath(read_path, "phantom_3_8k.msh")
+msh_file_16k  = joinpath(read_path, "phantom_3_16k.msh")
+
+R       = 0.119      # Rotor radius
+
+te_1k_1 = [10, 73]
+te_1k_2 = [13, 144]
+
+te_4k_1 = [9, 175]
+te_4k_2 = [13, 286]
+
+te_8k_1 = [10, 196]
+te_8k_2 = [13, 406]
+
+te_16k_1 = [10, 268]
+te_16k_2 = [13, 562]
+
+rotor_1k  = build_rotor(msh_file_1k, te_1k_1, te_1k_2)
+rotor_4k  = build_rotor(msh_file_4k, te_4k_1, te_4k_2)
+rotor_8k  = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
+rotor_16k = build_rotor(msh_file_16k, te_16k_1, te_16k_2)
 
 ## =========================================================
 # WAKE SETUP
@@ -102,7 +107,7 @@ rotor_8k = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
 p_per_step = 2
 overlap    = 2.0
 
-wake_rotor = pnl.PanelParticleWake(rotor_8k;
+wake_rotor = pnl.PanelParticleWake(rotor_16k;
                 nwakerows=2,
                 max_particles=100000,
                 method_trailing=pnl.OverlapPPS(overlap, p_per_step),
@@ -135,12 +140,12 @@ Uinf(t) = Vinf
 #             reverse_pass=false,
 #             verbose=false
 #         )
-solver_rotor = pnl.Backslash(rotor_8k)
+solver_rotor = pnl.Backslash(rotor_16k)
 
 backend = pnl.FastMultipoleBackend()
 
 # Reference frame
-frames = pnl.ReferenceFrame(rotor_8k;
+frames = pnl.ReferenceFrame(rotor_16k;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
     ω_axis = SVector{3}(0.0, 1.0, 0.0),
@@ -157,7 +162,7 @@ maneuver!(frames, systems, wakes, t) = nothing
 ## =========================================================
 # RUN SIMULATION
 # ==========================================================
-systems      = (rotor_8k,)
+systems      = (rotor_16k,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
 monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
@@ -166,7 +171,7 @@ monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                 ),
             )
 
-nc = rotor_8k.ncells # number of cells on this run
+nc = rotor_16k.ncells # number of cells on this run
 
 println("\nBegin rotor hover simulation ($(n_steps) steps, $(nc) cells)...")
 name = "rotor_hover_8k"
