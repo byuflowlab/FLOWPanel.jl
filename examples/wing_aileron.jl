@@ -176,7 +176,7 @@ clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that ar
 for (i, AOA) in enumerate(AOAs)
     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
 
-    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+    bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
                     for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
     #------------------- SOLVE BODY ----------------------------------------------
@@ -210,7 +210,7 @@ end
     
 for (i, AOA) in enumerate(AOAs)
     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+    bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
     for body in bodies
@@ -237,37 +237,37 @@ for (i, AOA) in enumerate(AOAs)
     println("Resetting bodies...")
 end
 
+# for (i, AOA) in enumerate(AOAs)
+#     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+#     bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
+#                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+
+#     for body in bodies
+#         body.velocity .= 0.0
+#         pnl.apply_freestream!(body, Vinf)
+#     end
+
+#     backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
+#     solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
+
+#     t_build3, t_solve3 = pnl.solve!(bodies, solver3)
+#     CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+
+#     open(out_file, "a") do io
+#         if i == 1
+#             write(io, "KrylovSolver\n")
+#         end
+#         write(io,
+#             "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
+#         )
+#     end
+
+#     println("Resetting bodies...")
+# end
+
 for (i, AOA) in enumerate(AOAs)
     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
-                for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
-
-    for body in bodies
-        body.velocity .= 0.0
-        pnl.apply_freestream!(body, Vinf)
-    end
-
-    backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
-    solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
-
-    t_build3, t_solve3 = pnl.solve!(bodies, solver3)
-    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
-
-    open(out_file, "a") do io
-        if i == 1
-            write(io, "KrylovSolver\n")
-        end
-        write(io,
-            "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
-        )
-    end
-
-    println("Resetting bodies...")
-end
-
-for (i, AOA) in enumerate(AOAs)
-    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-    bodies = tuple([generate_body(file, chord, b, bodytype, m, 1, Vinf, firstnode, secondnode)
+    bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
     for body in bodies
