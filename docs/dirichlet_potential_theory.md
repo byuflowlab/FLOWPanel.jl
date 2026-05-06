@@ -2,6 +2,32 @@
 
 This note records the identity checked by `test/dirichlet_potential_test.jl`.
 
+## Summary
+
+For an outward-facing normal on a closed boundary $\partial \Omega$,
+
+$$\begin{align}
+\frac{\phi}{2} &= \int \limits_{\partial \Omega} \phi \frac{\partial}{\partial n}\left( -\frac{1}{4\pi r} \right) dS - \int \limits_{\partial \Omega} \left( -\frac{1}{4\pi r} \right) \frac{\partial \phi}{\partial n} dS
+\end{align}$$
+Off the boundary, the factor of $\frac{1}{2}$ on the LHS becomes unity.
+
+In this equation, $\phi$ is the potential we are trying to solve for, as well as the doublet strengths. In the second term of the RHS, $\frac{\partial \phi}{\partial n}$ is the source strengths, equal to the normal component of the induced velocity field $\hat{n} \cdot \nabla \phi$. 
+
+The tricky part is understanding the role of the $\phi/2$ term and how it can be manipulated. After discretizing the surface into flat panels and evaluating on the surface, the self-induced panel potential due to a doublet is zero. Thus, the $\phi/2$ term is equivalent to adding a self-induced doublet potential of $\mu/2$, which appears on the diagonal of the matrix expression:
+
+$$\begin{align}
+\frac{1}{2} I \phi - G \phi &= -\phi_\mathrm{source}\\
+\left( \frac{1}{2} I - G \right) \phi &= -\phi_\mathrm{source}
+\end{align}$$
+
+If $G$ is formed by evaluating the potential just above the surface, then the $\frac12 I$ on the diagonal is recovered automatically. In addition, there are contributions due to unknown wake panels that are included. Calling this matrix $\tilde{G}$, we can say
+
+$$\begin{align}
+-\tilde{G} \phi &= -\phi_\mathrm{source}
+\end{align}$$
+
+Below, I expound some of the details with the help of ChatGPT and Claude.
+
 ## Continuous Identity
 
 Let
