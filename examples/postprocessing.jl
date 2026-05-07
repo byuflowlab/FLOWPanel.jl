@@ -80,29 +80,30 @@ plot!(plt_conv_ko, 1:length(t_p), fill(CT_exp, length(t_p)),
 # savefig(plt_conv_pps, savepath*"/pps_convergence.png")
 
 ## Number of cells
-n_cells = [1136, 4338] # Number of panels on the grid
+n_cells = [1136, 4338, 8842, 16880] # Number of panels on the grid
 
 data_c1 = readdlm("CT_v_t_hover_RPM5400_nc1136_pps2_nt36_overlap2.0_kerneloff0.00012.csv", ',')
 data_c2 = readdlm("CT_v_t_hover_RPM5400_pps2_nt36_overlap2.0_kerneloff0.00012.csv", ',')
-# data_c3 = readdlm("CT_v_t_hover_RPM5400_nc8824pps2_nt36_overlap2.0_kerneloff1.2e-5.csv", ',')
+data_c3 = readdlm("CT_v_t_hover_RPM5400_nc8824_pps2_nt36_overlap2.0_kerneloff0.00012.csv", ',')
+data_c4 = readdlm("CT_v_t_hover_RPM5400_nc16880_pps2_nt36_overlap2.0_kerneloff0.00012.csv", ',')
 
 t_c = data_c1[2, :]
-CT_data_c = [data_c1[2,:] data_c2[2,:]]# data_c3[2,:]]
+CT_data_c = [data_c1[2,:] data_c2[2,:] data_c3[2,:] data_c4[2,:]]
 
 di = 36 * 2 # nt*2 = last 2 revolutions
 CT_c = sum(CT_data_c[end-di+1 : end, :]; dims=1) / length(t_c[end-di+1 : end])
 # percent_error_c = abs.((CT_c .- CT_exp) ./ CT_exp) * 100
 
 plt_CT_nc = plot(n_cells, CT_c';
-    title   = "Coefficient of Thrust "*L"(n_t = 36, np = 2)",
+    title   = "Coefficient of Thrust "*L"(n_t = 36, n_p = 2)",
     xlabel  = "Number of cells",
     ylabel  = L"C_T",
-    ylims   = [0.0095, 0.012],
+    # ylims   = [0.0095, 0.012],
     markers = :circle,
-    label   = L"no. of cells")
+    label   = "no. of cells")
 # savefig(plt_CT_ppr, savepath*"/ppr_ct.png")
 
-plt_conv_nc = plot(1:length(t_c), CT_data_c[:,1];
+plt_conv_nc = plot(1:length(t_c), CT_data_c[:,3];
     title  = L"N_{cells}=1136",
     xlabel = "time step",
     ylabel = L"C_T",
