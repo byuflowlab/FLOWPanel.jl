@@ -942,6 +942,9 @@ the entire 360deg angle of attack range". J. Renewable Sustainable Energy. 2020
 function stall_naca0012!(alphas, cls, cds; 
                         aoa_lo_clip=-20, aoa_up_clip=20, 
                         hardness_lo=0.3, hardness_up=0.2, 
+                        offset_lo=0, offset_up=0,
+                        factor_lo=1, factor_up=1,
+                        fun_lo=aoa->0, fun_up=aoa->0, 
                         Cd90_0 = 2.08,
                         pn2_star = 8.36e-2,
                         pn3_star = 4.06e-1,
@@ -961,6 +964,21 @@ function stall_naca0012!(alphas, cls, cds;
 
         cl_stalled = CN * cosa + CT * sina
         cd_stalled = CN * sina - CT * cosa
+
+        offset = 0
+        offset = math.sigmoid_blend(offset_lo, offset, aoa, aoa_lo_clip, hardness_lo)
+        offset = math.sigmoid_blend(offset, offset_up, aoa, aoa_up_clip, hardness_up)
+
+        factor = 1
+        factor = math.sigmoid_blend(factor_lo, factor, aoa, aoa_lo_clip, hardness_lo)
+        factor = math.sigmoid_blend(factor, factor_up, aoa, aoa_up_clip, hardness_up)
+
+        fun = 0
+        fun = math.sigmoid_blend(fun_lo(aoa), fun, aoa, aoa_lo_clip, hardness_lo)
+        fun = math.sigmoid_blend(fun, fun_up(aoa), aoa, aoa_up_clip, hardness_up)
+
+        cl_stalled = factor*(cl_stalled + offset) + fun
+        cd_stalled = factor*(cd_stalled + offset) + fun
 
         # Smoothly blend with stalled NACA 0012 outside of bounds
         cl_final = math.sigmoid_blend(cl_stalled, cl, aoa, aoa_lo_clip, hardness_lo)
