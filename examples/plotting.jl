@@ -58,7 +58,7 @@ aoa_exp = CL_exp[:,1]
 cl_exp  = CL_exp[:,2]
 
 # --- Plot ---
-plot(aoa_c, cl_c, label="Coupled", lw=2)
+plot(aoa_c, cl_c, label="Coupled", lw=2, grid=false)
 plot!(aoa_i, cl_i, label="Iterative", lw=2, ls=:dash)
 scatter!(aoa_exp, cl_exp, label="Experimental", ms=4)
 
@@ -66,4 +66,4 @@ xlabel!("AOA (deg)")
 ylabel!("CL")
 title!("AOA vs CL Comparison")
 
-savefig("first_check.png")
+savefig("second_check.png")

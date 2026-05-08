@@ -6,14 +6,18 @@ import GeometricTools as gt
 using LinearAlgebra: diag
 using StaticArrays: SVector
 
+## May use kerneloffset for vortexring bodies
+
 function generate_body(
     meshfile::String,
     chord::Float64,
     span::Float64,
     bodytype::Type{<:pnl.RigidWakeBody},
+    translate::NTuple{3,Float64} = (0.0, 0.0, 0.0),
     scaling::Float64 = 1.0,
     flip::Int64 = 1,
     Vinf::AbstractVector{<:Real} = zeros(3),
+    kerneloffset::Float64=1.0e-6,
     firstnode=-1,
     secondnode=-1
 )
@@ -24,6 +28,7 @@ function generate_body(
 
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
+    msh = msh |> Meshes.Translate(translate)
 
     # Wrap into Grid object
     grid = pnl.gt.GridTriangleSurface(msh)
@@ -33,7 +38,7 @@ function generate_body(
 
     # Generate the paneled body
     CPoffset = 1e-6
-    body = bodytype(grid, [shedding]; CPoffset, flip_normals=false)
+    body = bodytype(grid, [shedding]; CPoffset, kerneloffset, flip_normals=false)
     # pnl.write_vtk("spaced_nasa", body)
 
     # Recompute shedding from the finalized cell winding used by `body`.
@@ -50,6 +55,7 @@ function generate_body(
             body.cells,
             [shedding];
             CPoffset,
+            kerneloffset,
             flip_normals=false,
             ensure_winding=false
         )
@@ -60,18 +66,16 @@ function generate_body(
         body.Das[i] .= repeat(Vinf/magVinf, 1, size(body.Das[i],2))
     end
 
-    # pnl.apply_freestream!(body, Vinf)
-
     return body
 end
 
-function postprocess!(bodies, Vinf, rho, chords, span)
+function postprocess!(bodies, Vinf, rho, chords, span, scaling::Float64=1.0)
     Dhat = Vinf / norm(Vinf)
     Shat = [0, 1, 0]
     Lhat = cross(Dhat, Shat)
     Sref = 0.0
     for chord in chords
-        Sref += chord * span
+        Sref += chord * span * scaling * scaling
     end
     
     pnl.calcfield_U!(bodies, Vinf)
@@ -133,51 +137,75 @@ function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
     return res
 end
 
-run_names = ["nasa_wing.msh", "nasa_surface_spaced_repaired.msh"]
+run_names       = ["wing.msh", "surface.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
-out_file = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+out_file        = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
 
 files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
-nodes1 = [42, 43]
-nodes2 = [34, 35]
-nodes1 = [42, 19]
-nodes2 = [34, 3]
+nodes1 = [788, 788]
+nodes2 = [768, 768]
+# nodes1 = [-1, -1]
+# nodes2 = [-1, -1]
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
-# m              = 0.0254
-# AOAs = [-8.0, -5.0, -3.0, -1.0, 0.0, 1.0, 3.0, 5.0, 8.0, 10.0]
-AOAs             = 0.0                      # (deg) freestream angle of attack
-magVinf         = 117.3 * 12                      # (m/s) freestream velocity
+m              = 0.0254
+AOAs = [
+-9.58790170132325  
+-7.841209829867704 
+-5.988657844990541 
+-4.136105860113403 
+-2.3894139886577754
+-0.536862003780719 
+ 1.3156899810964084
+ 3.168241965973529 
+ 5.02079395085066  
+ 6.926275992438619 
+ 8.672967863894144 
+10.472589792060482 
+12.325141776937613 
+14.230623818525515 
+15.077504725897917 
+16.400756143667294 
+18.465028355387517 
+]
+
+# AOAs = [-8.0]
+
+magVinf         = 117.3 * 12 * m                      # (m/s) freestream velocity
 rho             = 1.225                     # (kg/m^3) air density
 
 # ----------------- GEOMETRY DESCRIPTION ---------------------------------------
 c_body1 = 10.0
-b = 60.0                           # (m) span length
-c_body2 = 2.0
+b = 60.0                        # (m) span length
+c_body2 = 2.0 
 AR_body1 = b / c_body1                             # (m) span length
 AR_body2 = b / c_body2                             # (m) span length
 
 chords = [c_body1, c_body2]
 ARs = [AR_body1, AR_body2] 
 Sref = b * (c_body1 + c_body2)
-
-scaling = 1.0
+scaling = m
+trs = [
+    (0.0, 0.0, 0.0),
+    (10.15*m, 0.0, -0.2*m)
+]
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
 # Body and wake model
-kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}               # Kernel type to use
 # body type
 bodytype = pnl.RigidWakeBody{kernel}
 
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
-
+paraview        = false
+#=
 for (i, AOA) in enumerate(AOAs)
-    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
-    bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
-                    for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+    bodies = tuple([generate_body(file, chord, b, bodytype, tr, scaling, 1, Vinf, firstnode, secondnode)
+                    for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
 
     #------------------- SOLVE BODY ----------------------------------------------
  
@@ -194,58 +222,72 @@ for (i, AOA) in enumerate(AOAs)
 
     t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
 
-    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
 
-    # open(out_file, "a") do io
-    #     if i == 1
-    #         write(io, "BackslashCoupled\n")
-    #     end
-    #     write(io,
-    #         "$AOA,$CL,$CD,$(t_build),$(t_solve)\n"
-    #     )
-    # end
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "BackslashCoupled\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build),$(t_solve)\n"
+        )
+    end
 
-    filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
-    files1 = split(filestr1, ", ")
-    pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
+    if i == 1 && paraview
+        filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
+        files1 = split(filestr1, ", ")
+        pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
 
-    filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
-    files2 = split(filestr2, ", ")
-    pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
+        filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
+        files2 = split(filestr2, ", ")
+        pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
 
-    run(`paraview $pvd1 $pvd2`, wait=false)
+        run(`paraview $pvd1 $pvd2`, wait=false)
+    end
 end
 
+=#
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
+    bodies = tuple([generate_body(file, chord, b, bodytype, tr, scaling, 1, Vinf, firstnode, secondnode)
+                    for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
 
-# for (i, AOA) in enumerate(AOAs)
-#     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-#     bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
-#                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
+    end
 
-#     for body in bodies
-#         body.velocity .= 0.0
-#         pnl.apply_freestream!(body, Vinf)
-#     end
+    solver2 = (pnl.Backslash(bodies[1]),pnl.Backslash(bodies[2]))
 
-#     solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
+    println("Solving bodies part 2...")
 
-#     println("Solving bodies part 2...")
+    t_build2, t_solve2 = pnl.solve!(bodies, solver2)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
 
-#     t_build2, t_solve2 = pnl.solve!(bodies, solver2; backend=backend2)
-#     CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "BackslashIterative\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build2),$(t_solve2)\n"
+        )
+    end
 
-#     open(out_file, "a") do io
-#         if i == 1
-#             write(io, "BackslashIterative\n")
-#         end
-#         write(io,
-#             "$AOA,$CL,$CD,$(t_build2),$(t_solve2)\n"
-#         )
-#     end
+    if i == 1 && paraview
+        filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
+        files1 = split(filestr1, ", ")
+        pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
 
-#     println("Resetting bodies...")
-# end
+        filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
+        files2 = split(filestr2, ", ")
+        pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
+
+        run(`paraview $pvd1 $pvd2`, wait=false)
+    end
+
+    println("Resetting bodies...")
+end
 
 # for (i, AOA) in enumerate(AOAs)
 #     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
