@@ -84,9 +84,9 @@ function solve(self::LiftingLine,
     selfUind!(self, self.Us)
 
     if addfields
-        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
-        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
-        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
+        _add_field!(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+        _add_field!(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+        _add_field!(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
     end
 
     return result, solver_cache

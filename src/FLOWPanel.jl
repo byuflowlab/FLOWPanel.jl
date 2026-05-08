@@ -18,8 +18,9 @@ export  solve, save, influence!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas,
         calc_shedding, calc_shedding_from_seed, trace_trailing_edge,
-        WingNormalization, RotorNormalization,
-        simulate_warmstart!
+        meshes2nodes_cells,
+        WingNormalization, NoNormalization, RotorNormalization,
+        simulate_warmstart!, initialize_Das!
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA
@@ -31,12 +32,9 @@ import Requires: @require
 import FastMultipole
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
 using WriteVTK
+import Meshes
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
-# GeometricTools from https://github.com/byuflowlab/GeometricTools.jl
-import GeometricTools
-const gt = GeometricTools
-import GeometricTools: Meshes
 import ImplicitAD as IAD
 import ImplicitAD: ForwardDiff as FD, ReverseDiff as RD
 import FLOWMath as math
@@ -56,7 +54,7 @@ const examples_path = joinpath(module_path, "..", "examples")
 const ONE_OVER_4PI = 1.0 / (4.0 * pi)
 
 # Discretization parameter type
-const ndivstype = Union{Float64, gt.multidisctype, Nothing}
+const ndivstype = Union{Float64, AbstractVector, Nothing}
 
 # Shedding matrix for a RigidWakeBody without shedding
 const noshedding = zeros(Int, 6, 0)
@@ -83,16 +81,16 @@ DEBUG[] = false
 """
     __init__()
 
-Load optional runtime integrations, including plotting monitors when `PyPlot`
+Load optional runtime integrations, including plotting monitors when `PythonPlot`
 is available.
 """
 function __init__()
 
-    # Conditionally load monitors if PyPlot is available
+    # Conditionally load monitors if PythonPlot is available
     try
-        @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
+        @require PythonPlot="274fc56d-3b97-40fa-a1cd-1b4a50311bf9" begin
 
-            import .PyPlot as plt
+            import .PythonPlot as plt
 
             for header_name in ["monitor"]
               include("FLOWPanel_"*header_name*".jl")
@@ -101,7 +99,7 @@ function __init__()
         end
 
     catch e
-        @warn "PyPlot is not available; monitors will not be loaded"
+        @warn "PythonPlot is not available; monitors will not be loaded"
     end
 
 end

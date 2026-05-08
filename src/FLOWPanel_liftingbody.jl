@@ -16,7 +16,6 @@
 ################################################################################
 """
     RigidWakeBody{E, N}
-    RigidWakeBody{E}(grid, shedding; DBC=true, optargs...)
     RigidWakeBody{E}(mesh, shedding; DBC=true, optargs...)
     RigidWakeBody{E}(nodes, cells, shedding; DBC=true, optargs...)
 
@@ -85,7 +84,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 Oaxis = Matrix{TF}(I(3)), O = zeros(TF, 3),
                                 P=zeros(TF, size(cells, 2)),
                                 F=zeros(TF, 3, size(cells, 2)),
-                                Das::Vector{Matrix{TF}} = [zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
+                                Das::Vector{Array{TF,2}} = Array{TF,2}[],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
                                 dphidt=zeros(TF, size(cells, 2)),
@@ -103,6 +102,17 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
     shedding = _normalize_shedding(shedding)
+    if isempty(Das)
+        Das = [zeros(TF, 3, size(s,2)+1) for s in shedding]
+    elseif length(Das) != length(shedding)
+        error("Invalid Das; expected $(length(shedding)) shedding surfaces, got $(length(Das)).")
+    else
+        for i_surf in eachindex(shedding)
+            expected_size = (3, size(shedding[i_surf], 2) + 1)
+            size(Das[i_surf]) == expected_size ||
+                error("Invalid Das[$i_surf]; expected size $expected_size, got $(size(Das[i_surf])).")
+        end
+    end
     if ensure_winding
         ensure_consistent_winding!(cells, nodes; watertight, flip_normals)
     end
@@ -199,75 +209,6 @@ _write_vtk_body_fields!(vtk, body::RigidWakeBody) =
     (vtk["dphidt", WriteVTK.VTKCellData()] = body.dphidt)
 
 function RigidWakeBody{E, N, TF, DBC}(
-                                grid::gt.GridTriangleSurface, shedding;
-                                check_mesh=true, CPoffset=1e-14, characteristiclength=characteristiclength_sqrtarea, watertight=true, optargs...
-                            ) where {E, N, TF, DBC}
-    
-    nodes = grid._nodes
-    cells = grid2cells(grid)
-
-    # Automated sanity checks for Meshes.jl mesh
-    if check_mesh && typeof(grid.orggrid) <: gt.Meshes.Mesh
-        ensure_winding_local = get(optargs, :ensure_winding, true)
-        flip_normals_local = get(optargs, :flip_normals, false)
-        mesh = grid.orggrid
-        watertight, _ = iswatertight(nodes, cells)
-
-        # # Check that topology is consistent with the solver
-        # if watertight && E<:VortexRing && N==1
-        #     @warn "Requested direct vortex ring solver on an closed mesh;"*
-        #     " least-squares solver is recommended instead"*
-        #     " (use `RigidWakeBody{VortexRing, 1}`)"
-        # end
-
-        # Check that control points lay outside the geometry (based on
-        # winding number)
-        normals = zeros(3, size(cells, 2))
-        cells_check = ensure_winding_local ? ensure_consistent_winding(nodes, cells;
-                                                                       watertight=watertight,
-                                                                       flip_normals=flip_normals_local) :
-                                             cells
-        calc_normals!(nodes, cells_check, normals)
-
-        controlpoints = zeros(3, size(cells, 2))
-        calc_controlpoints!(nodes, cells_check, controlpoints, normals;
-                                            off=CPoffset,
-                                            characteristiclength=characteristiclength)
-
-        (minw, maxw) = calc_minmax_winding(mesh, controlpoints)
-
-        if abs(minw) > eps()^0.75 || abs(maxw) >= eps()^0.75
-
-            if watertight
-                @warn "Found winding numbers other than 0, which might indicate"*
-                " that control points are inside the geometry; flipping the"*
-                " sign of `CPoffset` is recommended; (minw, maxw) ="*
-                " $((minw, maxw))"
-            else
-                @warn "Found winding numbers other than 0, which might indicate"*
-                " that control points are inside the geometry; however,"*
-                " geometry is not watertight, so it might be ok."*
-                " (minw, maxw) = $((minw, maxw))"
-            end
-        end
-
-    end
-
-    return RigidWakeBody{E, N, TF, DBC}(
-                    nodes, cells, shedding;
-                    watertight, CPoffset, characteristiclength, optargs...
-                )
-end
-
-function RigidWakeBody{E, N, TF}(
-                                grid::gt.GridTriangleSurface, shedding;
-                                DBC::Bool=true,
-                                optargs...
-                            ) where {E, N, TF}
-    return RigidWakeBody{E, N, TF, DBC}(grid, shedding; optargs...)
-end
-
-function RigidWakeBody{E, N, TF, DBC}(
                                 mesh::VSPGeom.TriMesh, shedding;
                                 optargs...
                             ) where {E, N, TF, DBC}
@@ -283,14 +224,6 @@ function RigidWakeBody{E, N, TF}(
     return RigidWakeBody{E, N, TF, DBC}(mesh, shedding; optargs...)
 end
 
-function (RigidWakeBody{E})(grid::gt.GridTriangleSurface, shedding; DBC::Bool=true, optargs...) where {E}
-    return RigidWakeBody{E, kernel_dim(E), eltype(grid._nodes), DBC}(grid, shedding; optargs...)
-end
-
-function (RigidWakeBody{E, N})(grid::gt.GridTriangleSurface, shedding; DBC::Bool=true, optargs...) where {E, N}
-    return RigidWakeBody{E, N, eltype(grid._nodes), DBC}(grid, shedding; optargs...)
-end
-
 function (RigidWakeBody{E})(mesh::VSPGeom.TriMesh, shedding; DBC::Bool=true, optargs...) where {E}
     nodes, _ = trimesh2cells(mesh)
     return RigidWakeBody{E, kernel_dim(E), eltype(nodes), DBC}(mesh, shedding; optargs...)
@@ -299,14 +232,6 @@ end
 function (RigidWakeBody{E, N})(mesh::VSPGeom.TriMesh, shedding; DBC::Bool=true, optargs...) where {E, N}
     nodes, _ = trimesh2cells(mesh)
     return RigidWakeBody{E, N, eltype(nodes), DBC}(mesh, shedding; optargs...)
-end
-
-function (RigidWakeBody{E})(grid::gt.GridTriangleSurface; optargs...) where {E}
-    return RigidWakeBody{E}(grid, Vector{Array{Int, 2}}(); optargs...)
-end
-
-function (RigidWakeBody{E, N})(grid::gt.GridTriangleSurface; optargs...) where {E, N}
-    return RigidWakeBody{E, N}(grid, Vector{Array{Int, 2}}(); optargs...)
 end
 
 function (RigidWakeBody{E})(mesh::VSPGeom.TriMesh; optargs...) where {E}
@@ -724,7 +649,7 @@ end
 # FASTMULTIPOLE BACKEND SUPPORT
 ################################################################################
 
-FastMultipole.has_vector_potential(::AbstractBody{VortexRing, 1, <:Any}) = true
+FastMultipole.has_vector_potential(::AbstractBody{VortexRing, 1, <:Any}) = false
 
 FastMultipole.has_vector_potential(::AbstractBody{Union{VortexRing, UniformVortexSheet}, 2, <:Any}) = true
 
@@ -822,35 +747,110 @@ function body_to_multipole_vl!(multipole_coefficients, harmonics, x1, x2, center
 end
 
 function FastMultipole.body_to_multipole!(system::AbstractBody{VortexRing, NK}, multipole_coefficients, source_buffer::Matrix{TF}, center, bodies_index, harmonics, expansion_order) where {TF, NK}
-    # loop over bodies
-    for i_source in bodies_index
+    # # loop over bodies
+    # for i_source in bodies_index
        
-        # get vertices
-        v1x = source_buffer[5+NK, i_source]
-        v1y = source_buffer[6+NK, i_source]
-        v1z = source_buffer[7+NK, i_source]
-        v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
-        v2x = source_buffer[8+NK, i_source]
-        v2y = source_buffer[9+NK, i_source]
-        v2z = source_buffer[10+NK, i_source]
-        v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
-        v3x = source_buffer[11+NK, i_source]
-        v3y = source_buffer[12+NK, i_source]
-        v3z = source_buffer[13+NK, i_source]
-        v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
+    #     # get vertices
+    #     v1x = source_buffer[5+NK, i_source]
+    #     v1y = source_buffer[6+NK, i_source]
+    #     v1z = source_buffer[7+NK, i_source]
+    #     v1 = FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z)
+    #     v2x = source_buffer[8+NK, i_source]
+    #     v2y = source_buffer[9+NK, i_source]
+    #     v2z = source_buffer[10+NK, i_source]
+    #     v2 = FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z)
+    #     v3x = source_buffer[11+NK, i_source]
+    #     v3y = source_buffer[12+NK, i_source]
+    #     v3z = source_buffer[13+NK, i_source]
+    #     v3 = FastMultipole.StaticArrays.SVector{3,TF}(v3x, v3y, v3z)
 
-        # extract strength from buffer
-        gamma = source_buffer[5, i_source]
+    #     # extract strength from buffer
+    #     gamma = source_buffer[5, i_source]
 
-        # side 1
-        body_to_multipole_vl!(multipole_coefficients, harmonics, v1, v2, center, gamma, expansion_order)
+    #     # side 1
+    #     body_to_multipole_vl!(multipole_coefficients, harmonics, v1, v2, center, gamma, expansion_order)
 
-        # side 2
-        body_to_multipole_vl!(multipole_coefficients, harmonics, v2, v3, center, gamma, expansion_order)
+    #     # side 2
+    #     body_to_multipole_vl!(multipole_coefficients, harmonics, v2, v3, center, gamma, expansion_order)
 
-        # side 3
-        body_to_multipole_vl!(multipole_coefficients, harmonics, v3, v1, center, gamma, expansion_order)
+    #     # side 3
+    #     body_to_multipole_vl!(multipole_coefficients, harmonics, v3, v1, center, gamma, expansion_order)
 
+    # end
+    # loop over bodies
+    for i_body in bodies_index
+        # relative body position
+        # i1 = 5 + strength_dims(system)
+        # x1 = SVector{3}(buffer[i1,i_body], buffer[i1+1,i_body], buffer[i1+2,i_body])
+        # x2 = SVector{3}(buffer[i1+3,i_body], buffer[i1+4,i_body], buffer[i1+5,i_body])
+        # x3 = SVector{3}(buffer[i1+6,i_body], buffer[i1+7,i_body], buffer[i1+8,i_body])
+        x1 = FastMultipole.get_vertex(source_buffer, system, i_body, 1)
+        x2 = FastMultipole.get_vertex(source_buffer, system, i_body, 2)
+        x3 = FastMultipole.get_vertex(source_buffer, system, i_body, 3)
+        x0 = x1 - center
+        xu = x2 - x1
+        xv = x3 - x1
+
+        # get normal
+        normal = cross(xu, xv)
+        normal /= norm(normal)
+
+        # get strength
+        strength = FastMultipole.SVector{1,TF}(source_buffer[5, i_body])
+        # strength = strength .* scale_strength
+
+        # update values
+        element = FastMultipole.Panel{FastMultipole.Dipole}
+        FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength, expansion_order)
+
+        # add wake panel
+        if !system.semiinfinite_wake
+            # which vertices connect to the wake
+            idx1 = Int(source_buffer[end-7, i_body])
+            if idx1 > 0
+                # first vertex and wake
+                Dax, Day, Daz = source_buffer[end-6, i_body], source_buffer[end-5, i_body], source_buffer[end-4, i_body]
+                Da = FastMultipole.SVector{3}(Dax, Day, Daz)
+                vs = (x1, x2, x3)
+                v1 = vs[idx1]
+                v1w = v1 + Da
+
+                # second vertex and wake
+                idx2 = Int(source_buffer[end-3, i_body])
+                v2 = vs[idx2]
+                Dbx, Dby, Dbz = source_buffer[end-2, i_body], source_buffer[end-1, i_body], source_buffer[end, i_body]
+                Db = FastMultipole.SVector{3}(Dbx, Dby, Dbz)
+                v2w = v2 + Db
+                
+                # body-to-multipole: first triangle
+                x0 = v1 - center
+                xu = v2 - v1
+                xv = v1w - v1
+                
+                # get normal
+                normal = cross(xu, xv)
+                normal /= norm(normal)
+
+                # doublet strength
+                strength_doublet = FastMultipole.SVector{1,TF}(strength[1])
+
+                # update values
+                element = FastMultipole.Panel{FastMultipole.Dipole}
+                FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength_doublet, expansion_order)
+
+                # body-to-multipole: second triangle
+                x0 = v1w - center
+                xu = v2 - v1w
+                xv = v2w - v1w
+
+                # get normal
+                normal = cross(xu, xv)
+                normal /= norm(normal)
+
+                # update values
+                FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength_doublet, expansion_order)
+            end
+        end
     end
 end
 

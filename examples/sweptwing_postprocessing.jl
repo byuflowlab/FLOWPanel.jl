@@ -3,11 +3,11 @@
     Postprocessing functions of swept wing example and experimental data
 =###############################################################################
 
-import PyPlot as plt
+import PythonPlot as plt
 import CSV
 import DataFrames: DataFrame
 import OrderedCollections: OrderedDict
-import PyPlot: @L_str
+import PythonPlot: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 expdata_path = joinpath(pnl.examples_path, "data")
@@ -21,7 +21,7 @@ function cross!(out, A, B)
 end
 cross(A,B) = (out = zeros(3); cross!(out, A, B); return out)
 
-function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b;
+function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;
                         spandirection=[0, 1, 0], AOA=nothing,
                         _fig=nothing, _axs=nothing,
                         ttl=nothing, xscaling=1,
@@ -86,7 +86,8 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         end
 
         # Position of grid columns that are the closest to target
-        points, Cps = pnl.slicefield(body, controlpoints, "Cp", spanpos*b/2, spandirection, false)
+        points, Ps = pnl.slicefield(body, controlpoints, "P", spanpos*b/2, spandirection, false)
+        Cps = Ps ./ (0.5 * rho * magVinf^2)
 
         chordposs = points[1, :]
         chordposs .-= minimum(chordposs)
@@ -121,14 +122,14 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
 end
 
-function plot_Cps(body, spanposs, b; optargs...)
+function plot_Cps(body, spanposs, b, rho, magVinf; optargs...)
     normals_b = pnl._calc_normals(body)
     controlpoints_b = pnl._calc_controlpoints(body, normals_b)
 
-    return plot_Cps(body, controlpoints_b, spanposs, b; optargs...)
+    return plot_Cps(body, controlpoints_b, spanposs, b, rho, magVinf; optargs...)
 end
 
-function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b;
+function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;
                         spandirection=[0, 1, 0], AOA=nothing,
                         _fig=nothing, _axs=nothing,
                         ttl=nothing, xscaling=1,
@@ -164,7 +165,8 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
         end
 
         # Position of grid columns that are the closest to target
-        points, Cps = pnl.slicefield(body, controlpoints, "Cp", spanpos*b/2, spandirection, false)
+        points, Ps = pnl.slicefield(body, controlpoints, "P", spanpos*b/2, spandirection, false)
+        Cps = Ps ./ (0.5 * rho * magVinf^2)
 
         chordposs = points[1, :]
         chordposs .-= minimum(chordposs)
@@ -204,11 +206,11 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
 
 end
 
-function plot_deltaCps(body, spanposs, b; optargs...)
+function plot_deltaCps(body, spanposs, b, rho, magVinf; optargs...)
     normals_b = pnl._calc_normals(body)
     controlpoints_b = pnl._calc_controlpoints(body, normals_b)
 
-    return plot_deltaCps(body, controlpoints_b, spanposs, b; optargs...)
+    return plot_deltaCps(body, controlpoints_b, spanposs, b, rho, magVinf; optargs...)
 end
 
 

@@ -1,4 +1,4 @@
-import PyPlot as plt
+import PythonPlot as plt
 import LaTeXStrings: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
@@ -6,7 +6,7 @@ include(joinpath(pnl.examples_path, "plotformat.jl"))
 Compare solution to experimental surface pressure (figures 4.8 and 6.4 in Lewis
 1991)
 """
-function plot_Cp(body, AOA; plot_experimental=true)
+function plot_Cp(body, AOA, rho, magVinf; plot_experimental=true)
 
     fig = plt.figure("AOA $(AOA)", figsize=[7, 5*0.8]*2/3 .* [2, 1])
     axs = fig.subplots(1, 2)
@@ -26,7 +26,8 @@ function plot_Cp(body, AOA; plot_experimental=true)
 
         # Data filter to get only +z or only -z data points
         slicefilter(x, i) = (x[3] >= 0) == upperside
-        slicepoints, sliceCps = pnl.slice_scalarfield(body, :Cp, 2, 0.0, 0.1; filter=slicefilter)
+        slicepoints, slicePs = pnl.slice_scalarfield(body, :P, 2, 0.0, 0.1; filter=slicefilter)
+        sliceCps = slicePs ./ (0.5 * rho * magVinf^2)
 
         side = upperside ? "upper" : "lower"
 
@@ -101,15 +102,15 @@ function generate_fluiddomain(body, AOA, Vinf, d, aspectratio, save_path;
     NDIVS = ceil.(Int, (Pmax .- Pmin) ./ [dx, dy, dz]) # Divisions in each dimension
 
     # Generate grid
-    @time grid  = pnl.gt.Grid(Pmin, Pmax, NDIVS) # Grid
+    @time grid  = gt.Grid(Pmin, Pmax, NDIVS) # Grid
 
     if verbose; println("\t"^(v_lvl+1)*"Grid size:\t\t$(NDIVS)"); end;
     if verbose; println("\t"^(v_lvl+1)*"Number of nodes :\t$(grid.nnodes)"); end;
 
     # Translate and rotate grid to align with freestream
     O = zeros(3)
-    Oaxis = pnl.gt.rotation_matrix2(0, AOA, 0)
-    pnl.gt.lintransform!(grid, Oaxis, O)
+    Oaxis = gt.rotation_matrix2(0, AOA, 0)
+    gt.lintransform!(grid, Oaxis, O)
 
     # Targets where to probe the velocity
     targets = grid.nodes
@@ -124,11 +125,11 @@ function generate_fluiddomain(body, AOA, Vinf, d, aspectratio, save_path;
     @time pnl.Uind!(body, targets, Us)
 
     # Save fields
-    pnl.gt.add_field(grid, "phi", "scalar", phis, "node")
-    pnl.gt.add_field(grid, "U", "vector", collect(eachcol(Us)), "node")
+    gt.add_field(grid, "phi", "scalar", phis, "node")
+    gt.add_field(grid, "U", "vector", collect(eachcol(Us)), "node")
 
     # Output fluid domain
-    @time vtks = pnl.gt.save(grid, gridname; path=save_path, num=num)
+    @time vtks = gt.save(grid, gridname; path=save_path, num=num)
 
     return vtks
 end

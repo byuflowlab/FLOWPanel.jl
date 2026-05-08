@@ -14,6 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 using LinearAlgebra
@@ -85,7 +87,7 @@ bodytype = pnl.RigidWakeBody{kernel} # Elements and wake model
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Re-discretize the contour of the body of revolution according to NDIVS
-xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                         NDIVS_rfl_up, NDIVS_rfl_lo;
                                         verify_spline=false)
 
@@ -104,7 +106,7 @@ ys .+= d/2
 points = hcat(xs, ys)
 
 # Generate body of revolution
-generate_body() = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+generate_body() = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
                                                         CPoffset=1e-10,
                                                         kerneloffset=1e-10,

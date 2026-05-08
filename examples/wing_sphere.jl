@@ -11,9 +11,11 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm, I
-import FLOWPanel.GeometricTools.Meshes
+import Meshes
 import GeoIO
 
 # =============================================================================
@@ -36,7 +38,7 @@ meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")
 
 msh = GeoIO.load(meshfile).geometry
 msh = msh |> Meshes.Scale(1.0)
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 
 nte = 10000
 trailingedge = zeros(3, nte)
@@ -75,18 +77,18 @@ P_min = [theta_pad, 0.0, 0.0]
 P_max = [π - theta_pad, 2π, 0.0]
 NDIVS_sphere = [20, 40, 0]
 
-sphere_grid = pnl.gt.Grid(P_min, P_max, NDIVS_sphere; loop_dim=2)
+sphere_grid = gt.Grid(P_min, P_max, NDIVS_sphere; loop_dim=2)
 
 # Transform to Cartesian spherical coordinates
-pnl.gt.transform!(sphere_grid, X -> pnl.gt.spherical3D(vcat(R_sphere, X[1:2])))
+gt.transform!(sphere_grid, X -> gt.spherical3D(vcat(R_sphere, X[1:2])))
 
 # Translate downstream
 Oaxis_sphere = Matrix{Float64}(I, 3, 3)
 O_sphere = [x_sphere, 0.0, 0.0]
-pnl.gt.lintransform!(sphere_grid, Oaxis_sphere, O_sphere)
+gt.lintransform!(sphere_grid, Oaxis_sphere, O_sphere)
 
 # Triangulate and create body
-triang_sphere = pnl.gt.GridTriangleSurface(sphere_grid, 1)
+triang_sphere = gt.GridTriangleSurface(sphere_grid, 1)
 sphere = pnl.NonLiftingBody{pnl.ConstantSource}(triang_sphere)
 
 println("Sphere: $(sphere.nnodes) nodes, $(sphere.ncells) panels, center at $O_sphere")

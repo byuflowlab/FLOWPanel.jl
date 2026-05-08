@@ -1,6 +1,6 @@
 bodytype = pnl.RigidWakeBody{pnl.VortexRing}    # Elements and wake model
 
-body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         # Loop the azimuthal dimension to close the surface
                                         loop_dim=2,
                                         # Rotate the axis of rotation to align with x-axis

@@ -89,86 +89,6 @@ and the following functions
 """
 abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 
-"""
-    _surface_revolution_compat(profile, thetaNDIVS; loop_dim=0, axis_angle=0, low_a=0, up_a=360, save_path=nothing, paraview=true, file_name="myrev")
-
-Compatibility wrapper around `GeometricTools.surface_revolution` for newer
-`GeometricTools.Grid` constructors that require `loop_dim` as a keyword
-argument instead of a positional one.
-"""
-function _surface_revolution_compat(profile::AbstractMatrix{T}, thetaNDIVS::TN;
-                                    loop_dim::Integer=0,
-                                    axis_angle::Number=0,
-                                    low_a::Number=0,
-                                    up_a::Number=360,
-                                    save_path=nothing,
-                                    paraview::Bool=true,
-                                    file_name::AbstractString="myrev",
-                                    ) where {T<:Real, TN}
-    try
-        return gt.surface_revolution(profile, thetaNDIVS;
-                                     loop_dim=loop_dim,
-                                     axis_angle=axis_angle,
-                                     low_a=low_a,
-                                     up_a=up_a,
-                                     save_path=save_path,
-                                     paraview=paraview,
-                                     file_name=file_name)
-    catch e
-        if !(e isa MethodError && e.f === gt.Grid)
-            rethrow()
-        end
-    end
-
-    if size(profile, 2) != 2
-        error("Invalid point dimensions in `profile`. Expected 2 dimensions, got $(size(profile,2))")
-    elseif profile[1, :] == profile[end, :] && loop_dim == 0
-        @warn("Received a closed contour but parametric grid wasn't declared to" *
-              " loop, resulting in overlaping start/end points. Give it" *
-              " `loop_dim=1` to fix that.")
-    end
-
-    NDIVS = if TN <: Number
-        [size(profile, 1) - 1, thetaNDIVS, 0]
-    else
-        [[(1.0, size(profile, 1) - 1, 1.0, false)],
-         thetaNDIVS,
-         [(1.0, 0, 1.0, false)]]
-    end
-
-    P_min = [0, low_a, 0]
-    P_max = [1, up_a, 0]
-    grid = gt.Grid(P_min, P_max, NDIVS; loop_dim=loop_dim)
-
-    if axis_angle != 0
-        M = gt.rotation_matrix(0, 0, -axis_angle)
-        M2D = M[2:3, 2:3]
-        M3D = collect(M)'
-        points = collect(hcat([M2D * profile[i, :] for i in 1:size(profile, 1)]...))'
-    else
-        M3D = I
-        points = profile
-    end
-
-    function my_space_transform(X, ind)
-        p_ind = ind[1]
-        angle = X[2]
-        point = [0, points[p_ind, 1], points[p_ind, 2]]
-        return M3D * gt.axis_rotation(Float64[0, 0, 1], Float64(angle)) * point
-    end
-
-    gt.transform3!(grid, my_space_transform)
-
-    if save_path != nothing
-        gt.save(grid, file_name; path=save_path)
-        if paraview
-            run(`paraview --data=$(joinpath(save_path, file_name)).vtk`)
-        end
-    end
-
-    return grid
-end
-
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
     body.potential .= 0.0
@@ -196,20 +116,6 @@ velocities `Uinfs`.
 """
 function solve(self::AbstractBody, Uinfs::AbstractArray{<:Number, 2})
     error("solve(...) for body type $(typeof(self)) has not been implemented yet!")
-end
-
-"""
-    grid2cells(grid)
-
-Convert a `GeometricTools.GridTriangleSurface` into the `3 x ncells`
-connectivity matrix used by FLOWPanel body constructors.
-"""
-function grid2cells(grid::gt.GridTriangleSurface)
-    cells = zeros(Int, 3, grid.ncells)
-    for i in 1:grid.ncells
-        cells[:, i] .= gt.get_cell(grid, i)
-    end
-    return cells
 end
 
 """
@@ -287,9 +193,6 @@ function iswatertight(nodes::AbstractMatrix, cells::AbstractMatrix{<:Integer};
 
     return watertight, open_cells
 end
-
-iswatertight(grid::gt.GridTriangleSurface; return_open_cells::Bool=false) =
-    iswatertight(grid._nodes, grid2cells(grid); return_open_cells=return_open_cells)
 
 iswatertight(body::AbstractBody; return_open_cells::Bool=false) =
     iswatertight(body.nodes, body.cells; return_open_cells=return_open_cells)
@@ -543,6 +446,43 @@ end
 _write_vtk_body_fields!(vtk, ::AbstractBody) = nothing
 _write_vtk_other_fields!(vtm, name, body::AbstractBody, idx) = nothing
 
+function _vtk_stem(filename::AbstractString; path=nothing, num=nothing)
+    stem = isnothing(num) ? filename : filename * ".$num"
+    return isnothing(path) ? stem : joinpath(path, stem)
+end
+
+function _write_vtk_points_or_lines(filename::AbstractString, points;
+                                    cells=nothing,
+                                    point_data=(),
+                                    cell_data=(),
+                                    path=nothing,
+                                    num=nothing,
+                                    override_cell_type=nothing,
+                                    optargs...)
+    pts = points isa AbstractMatrix ? points : reduce(hcat, collect(points))
+    vtk_cells = if isnothing(cells)
+        [WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_VERTEX, [i]) for i in axes(pts, 2)]
+    else
+        celltype = isnothing(override_cell_type) ? WriteVTK.VTKCellTypes.VTK_POLY_LINE :
+                   override_cell_type == 4 ? WriteVTK.VTKCellTypes.VTK_POLY_LINE :
+                   override_cell_type
+        [WriteVTK.MeshCell(celltype, collect(c) .+ 1) for c in cells]
+    end
+
+    stem = _vtk_stem(filename; path, num)
+    saved = WriteVTK.vtk_grid(stem * ".vtu", pts, vtk_cells) do vtk
+        for data in point_data
+            vtk[data["field_name"], WriteVTK.VTKPointData()] = data["field_data"]
+        end
+        for data in cell_data
+            vtk[data["field_name"], WriteVTK.VTKCellData()] = data["field_data"]
+        end
+    end
+
+    files = saved isa AbstractVector{<:AbstractString} ? saved : WriteVTK.vtk_save(saved)
+    return join(files, ", ")
+end
+
 """
     get_ndivscells(body::AbstractBody)
 
@@ -581,21 +521,6 @@ get_nstrengths(self::AbstractBody) = size(self.strength, 1)
 set_strength(self::AbstractBody, i::Int, val) = (self.strength[i, :] .= val)
 
 """
-    get_unitvectors(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
-
-Returns the unit vectors `t`,`n`,`o` of the i-th panel, with `t` the tanget
-vector, `n` normal, and `o` oblique.
-"""
-get_unitvectors(body::AbstractBody, args...) = gt.get_unitvectors(body.grid, args...)
-
-"""
-    get_normal(body::AbstractBody, i::Int64 or coor::Array{Int64,1})
-
-Returns the normal vector the i-th panel.
-"""
-get_normal(body::AbstractBody, args...) = gt.get_normal(body.grid, args...)
-
-"""
     `rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
                 translation::Vector=zeros(3), reset_fields::Bool=true)`
 
@@ -613,9 +538,19 @@ function rotate!(body::AbstractBody, roll::Number, pitch::Number, yaw::Number;
                 )
 
     # Generate rotation matrix
-    M = gt.rotation_matrix2(-roll, -pitch, -yaw)
+    M = rotation_matrix2(-roll, -pitch, -yaw)
 
     return rotatetranslate!(body, M, translation; reset_fields=reset_fields)
+end
+
+function rotation_matrix2(roll::Number, pitch::Number, yaw::Number)
+    r = roll*pi/180
+    p = pitch*pi/180
+    y = yaw*pi/180
+    Rx = [1 0 0; 0 cos(r) -sin(r); 0 sin(r) cos(r)]
+    Ry = [cos(p) 0 sin(p); 0 1 0; -sin(p) 0 cos(p)]
+    Rz = [cos(y) -sin(y) 0; sin(y) cos(y) 0; 0 0 1]
+    return Rz * Ry * Rx
 end
 
 """
@@ -890,12 +825,42 @@ calc_normals(self::AbstractBody) = calc_normals(self.nodes, self.cells)
 
 const _calc_normals = calc_normals
 
+function _calc_panel_tangent!(out, nodes::AbstractMatrix, panel)
+    i1, i2 = panel[1], panel[2]
+    tx = nodes[1, i2] - nodes[1, i1]
+    ty = nodes[2, i2] - nodes[2, i1]
+    tz = nodes[3, i2] - nodes[3, i1]
+    len = sqrt(tx*tx + ty*ty + tz*tz)
+    out[1] = tx / len
+    out[2] = ty / len
+    out[3] = tz / len
+    return out
+end
+
+function _calc_panel_oblique!(out, nodes::AbstractMatrix, panel)
+    tangent = (nodes[1, panel[2]] - nodes[1, panel[1]],
+               nodes[2, panel[2]] - nodes[2, panel[1]],
+               nodes[3, panel[2]] - nodes[3, panel[1]])
+    edge2 = (nodes[1, panel[3]] - nodes[1, panel[1]],
+             nodes[2, panel[3]] - nodes[2, panel[1]],
+             nodes[3, panel[3]] - nodes[3, panel[1]])
+    nx = tangent[2]*edge2[3] - tangent[3]*edge2[2]
+    ny = tangent[3]*edge2[1] - tangent[1]*edge2[3]
+    nz = tangent[1]*edge2[2] - tangent[2]*edge2[1]
+    ox = ny*tangent[3] - nz*tangent[2]
+    oy = nz*tangent[1] - nx*tangent[3]
+    oz = nx*tangent[2] - ny*tangent[1]
+    len = sqrt(ox*ox + oy*oy + oz*oz)
+    out[1] = ox / len
+    out[2] = oy / len
+    out[3] = oz / len
+    return out
+end
+
 function _calc_tangents!(nodes::AbstractMatrix, cells::AbstractMatrix, tangents)
     for pi in axes(cells, 2)
         panel = cells[:, pi]
-        tangents[1, pi] = gt._calc_t1(nodes, panel)
-        tangents[2, pi] = gt._calc_t2(nodes, panel)
-        tangents[3, pi] = gt._calc_t3(nodes, panel)
+        _calc_panel_tangent!(view(tangents, :, pi), nodes, panel)
     end
 end
 function _calc_tangents(nodes::AbstractMatrix, cells::AbstractMatrix)
@@ -930,9 +895,7 @@ const calc_tangents = _calc_tangents
 function _calc_obliques!(nodes::AbstractMatrix, cells::AbstractMatrix, obliques)
     for pi in 1:size(cells, 2)
         panel = cells[:, pi]
-        obliques[1, pi] = gt._calc_o1(nodes, panel)
-        obliques[2, pi] = gt._calc_o2(nodes, panel)
-        obliques[3, pi] = gt._calc_o3(nodes, panel)
+        _calc_panel_oblique!(view(obliques, :, pi), nodes, panel)
     end
 end
 function _calc_obliques(nodes::AbstractMatrix, cells::AbstractMatrix)

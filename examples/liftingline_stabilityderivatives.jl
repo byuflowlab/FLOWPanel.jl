@@ -17,8 +17,8 @@ import ForwardDiff: Dual, Partials, value, partials
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import PyPlot as plt
-import PyPlot: @L_str
+import PythonPlot as plt
+import PythonPlot: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 import CSV

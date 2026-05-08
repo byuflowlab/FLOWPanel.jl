@@ -12,6 +12,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 import CSV
 import DataFrames: DataFrame
 
@@ -57,24 +59,17 @@ bodytype        = pnl.NonLiftingBody{kerneltype}    # Elements and wake model
 points = Matrix(contour_lewis[2:end-1, :])
 # points[1, 2] += holeradius
 
-grid = pnl.gt.surface_revolution(points, NDIVS_theta;
-                                    # Loop the azimuthal dimension to close the surface
-                                    loop_dim=2,
-                                    # Rotate the axis of rotation to align with x-axis
-                                    axis_angle=90
-                                )
-
-# Rotate the body of revolution to align centerline with x-axis
-Oaxis = pnl.gt.rotation_matrix2(0, 0, 90)          # Rotation matrix
-O = zeros(3)                                       # Translation of coordinate system
-pnl.gt.lintransform!(grid, Oaxis, O)
-
-# Triangular grid (splits quadrangular panels into triangular panels)
 split_dim = 1                               # Dimension to split into triangles
-trigrid = pnl.gt.GridTriangleSurface(grid, split_dim)
-
-# Generate body to be solved
-body = bodytype(trigrid)
+body = generate_revolution(bodytype, points, NDIVS_theta;
+                            # Loop the azimuthal dimension to close the surface
+                            loop_dim=2,
+                            # Rotate the axis of rotation to align with x-axis
+                            axis_angle=90,
+                            dimsplit=split_dim,
+                            # Rotate centerline to align with x-axis
+                            gridprocessing = grid -> gt.lintransform!(grid,
+                                                gt.rotation_matrix2(0, 0, 90), zeros(3))
+                          )
 # body2 = bodytype2(trigrid)
 pnl.apply_freestream!(body, Vinf) # apply freestream to body (for non-lifting bodies, this is just for post-processing purposes)
 
