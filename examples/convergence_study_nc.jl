@@ -209,13 +209,19 @@ te_16k_2 = [13, 562]
 
 # adaptive cell size (smaller toward LE and TE)
 msh_adapt_12k  = joinpath(read_path, "phantom_3_adaptive_12k.msh")
+msh_adapt_24k  = joinpath(read_path, "phantom_3_adaptive_24k.msh")
 
 te_a_12k_1 = [10, 398]
 te_a_12k_2 = [13, 994]
 
-rotor_adapt_2k = build_rotor(msh_adapt_12k, te_a_12k_1, te_a_12k_2)
+te_a_24k_1 = [10, 553]
+te_a_24k_2 = [13, 1396]
+
+rotor_adapt_12k = build_rotor(msh_adapt_12k, te_a_12k_1, te_a_12k_2)
+rotor_adapt_24k = build_rotor(msh_adapt_24k, te_a_24k_1, te_a_24k_2)
 
 # =========================================================
 # RUN SIMULATION
 # ==========================================================
-run_simulation(rotor_1k, "rotor_hover_1k"; Vinf=Vinf)
+run_simulation(rotor_adapt_12k, "rotor_hover_12k"; Vinf=Vinf)
+run_simulation(rotor_adapt_24k, "rotor_hover_24k"; Vinf=Vinf)
