@@ -71,3 +71,13 @@ Mesh.MeshSizeFromPoints = 0;
 // Mesh.MshFileVersion = 4.1;
 // Mesh.Binary = 0;
 
+//+
+Field[3].F = "0.6 + (2.2) * (3*(min(1, F1/4))^2 - 2*(min(1, F1/4))^3)";
+//+
+Field[3].F = "0.8 + (2.2) * (3*(min(1, F1/4))^2 - 2*(min(1, F1/4))^3)";
+//+
+Field[2].CurvesList = {13, 17};
+//+
+Field[1].CurvesList = {15, 16};
+//+
+Physical Surface("body", 21) = {11, 1, 5, 7, 9, 2, 3, 6, 4, 8, 10};

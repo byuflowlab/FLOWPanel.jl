@@ -10,28 +10,43 @@ import GeoIO
 using DelimitedFiles
 
 function build_rotor(msh_file, te_1, te_2, R=0.119; find_te=false, kerneloffset=R*0.001)
+    # ==========================================================
+    # Sensitivity parameters
+    # ==========================================================
+    CPoffset     = R * 1e-6
+    kernelcutoff = R * 1e-13
+    p_per_step   = 2
+    overlap      = 2.0
+    merge_r_factor = 0.02
+    merge_r_hash_factor = 0.04
+    init_Das_eta_kinematic = 0.2
+    p_correct_kuttacondition_flag = false
+    wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
 
     # MSH files
-    msh  = GeoIO.load(msh_file).geometry
-    mesh = pnl.gt.GridTriangleSurface(msh)
+    msh = GeoIO.load(msh_file).geometry
+    nodes, cells = pnl.meshes2nodes_cells(msh)
 
     # scale to proper radius
-    mesh._nodes .*= R / maximum(mesh._nodes[1, :])
+    nodes .*= R / maximum(nodes[1, :])
 
     # place-holder shedding
     shedding = pnl.noshedding
 
     # --- Construct RigidWakeBody ---
     kernel = Union{pnl.ConstantSource, pnl.VortexRing}
-    rotor = pnl.RigidWakeBody{kernel}(mesh, shedding;
-                CPoffset=1e-14,
-                kerneloffset=1e-2,
-                kernelcutoff=1e-14,
+    # kernel = pnl.VortexRing
+    DBC = kernel == pnl.VortexRing ? false : true
+    rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
+                CPoffset,
+                kerneloffset,
+                kernelcutoff,
                 semiinfinite_wake=false,
-                watertight=true)
+                watertight=true,
+                DBC)
 
     if find_te
-        pnl.write_vtk("rotor_hover", rotor)
+        pnl.write_vtk("rotor_hover_check", rotor)
         println("Find te indices in Paraview")
         return nothing
     end
@@ -44,13 +59,14 @@ function build_rotor(msh_file, te_1, te_2, R=0.119; find_te=false, kerneloffset=
     bbox2 = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
     shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_2[1], te_2[2]; bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
-    rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2],
-                            CPoffset=1e-6,
-                            kerneloffset=kerneloffset,
-                            kernelcutoff=1e-14,
-                            semiinfinite_wake=false,
-                            watertight=true,
-                            ensure_winding=true)
+    rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
+                        CPoffset,
+                        kerneloffset,
+                        kernelcutoff,
+                        semiinfinite_wake=false,
+                        watertight=true,
+                        ensure_winding=true,
+                        DBC)
 
     pnl.write_vtk("rotor_hover", rotor)
 
@@ -71,7 +87,7 @@ function run_simulation(rotor, run_name; R=0.119, Vinf=zeros(3), RPM=5400, nt=36
     p_per_step = 2
     overlap    = 2.0
     wake_rotor = pnl.PanelParticleWake(rotor;
-                    nwakerows=2,
+                    nwakerows=1,
                     max_particles=100000,
                     method_trailing=pnl.OverlapPPS(overlap, p_per_step),
                     method_unsteady=pnl.OverlapPPS(overlap, p_per_step),
@@ -166,12 +182,13 @@ nt      = 36        # Number of time steps per revolution
 # ROTOR GEOMETRY
 # ==========================================================
 read_path    = joinpath(pnl.examples_path, "data")
+R       = 0.119      # Rotor radius
+
+# ~uniform cell size
 msh_file_1k  = joinpath(read_path, "phantom_3_1k.msh")
 msh_file_4k  = joinpath(read_path, "phantom_3_4k.msh")
 msh_file_8k  = joinpath(read_path, "phantom_3_8k.msh")
 msh_file_16k  = joinpath(read_path, "phantom_3_16k.msh")
-
-R       = 0.119      # Rotor radius
 
 te_1k_1 = [10, 73]
 te_1k_2 = [13, 144]
@@ -185,10 +202,18 @@ te_8k_2 = [13, 406]
 te_16k_1 = [10, 268]
 te_16k_2 = [13, 562]
 
-rotor_1k  = build_rotor(msh_file_1k, te_1k_1, te_1k_2)
-rotor_4k  = build_rotor(msh_file_4k, te_4k_1, te_4k_2)
-rotor_8k  = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
-rotor_16k = build_rotor(msh_file_16k, te_16k_1, te_16k_2)
+# rotor_1k  = build_rotor(msh_file_1k, te_1k_1, te_1k_2)
+# rotor_4k  = build_rotor(msh_file_4k, te_4k_1, te_4k_2)
+# rotor_8k  = build_rotor(msh_file_8k, te_8k_1, te_8k_2)
+# rotor_16k = build_rotor(msh_file_16k, te_16k_1, te_16k_2)
+
+# adaptive cell size (smaller toward LE and TE)
+msh_adapt_12k  = joinpath(read_path, "phantom_3_adaptive_12k.msh")
+
+te_a_12k_1 = [10, 398]
+te_a_12k_2 = [13, 994]
+
+rotor_adapt_2k = build_rotor(msh_adapt_12k, te_a_12k_1, te_a_12k_2)
 
 # =========================================================
 # RUN SIMULATION
