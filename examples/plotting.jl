@@ -7,11 +7,20 @@ dir = @__DIR__
 data = readlines(joinpath(dir, "wing_aileron/coupled_timing_results.csv"))
 
 # Split sections
-idx_coupled = findfirst(contains("BackslashCoupled"), data)
-idx_iter = findfirst(contains("BackslashIterative"), data)
+# idx_coupled = findfirst(contains("BackslashCoupled"), data)
+# idx_iter = findfirst(contains("BackslashIterative"), data)
 
-coupled_lines = data[idx_coupled+1 : idx_iter-1]
-iter_lines    = data[idx_iter+1 : end]
+labels = findall(line -> occursin("Backslash", line), data)
+
+# Last two sections
+idx_iter = labels[end]
+idx_coupled = labels[end-1]
+
+coupled_lines    = data[idx_coupled+1 : idx_iter-1]
+iter_lines = data[idx_iter+1 : end]
+
+# coupled_lines = data[idx_coupled+1 : idx_iter-1]
+# iter_lines    = data[idx_iter+1 : end]
 
 # Parse into arrays
 function parse_block(lines)
@@ -58,12 +67,26 @@ aoa_exp = CL_exp[:,1]
 cl_exp  = CL_exp[:,2]
 
 # --- Plot ---
-plot(aoa_c, cl_c, label="Coupled", lw=2, grid=false)
-plot!(aoa_i, cl_i, label="Iterative", lw=2, ls=:dash)
-scatter!(aoa_exp, cl_exp, label="Experimental", ms=4)
+scatter(aoa_c, cl_c, label="Coupled", lw=2, grid=false, symbol=:diamond)
+scatter!(aoa_i, cl_i, label="Iterative", lw=2, ls=:dash, symbol=:circle)
+scatter!(aoa_exp, cl_exp, label="Experimental", ms=4, symbol=:triangle)
 
 xlabel!("AOA (deg)")
 ylabel!("CL")
-title!("AOA vs CL Comparison")
+# title!("AOA vs CL Comparison")
 
-savefig("second_check.png")
+savefig("webplot_check_2.png")
+
+# function rms_error(pred, exp)
+#     return sqrt(sum((pred .- exp).^2) / length(pred))
+# end
+
+# @show length(cl_c) length(cl_i) length(cl_exp)
+
+# rms_coupled = rms_error(cl_c, cl_exp)
+# rms_iterative = rms_error(cl_i, cl_exp)
+
+# # bar chart showing accuracy of solvers
+# bar(["BackslashCoupled", "BackslashIterative"], [rms_coupled, rms_iterative], label="RMS Error", color=[:blue :orange])
+# ylabel!("RMS Error")
+# savefig("rms_comparison.png")

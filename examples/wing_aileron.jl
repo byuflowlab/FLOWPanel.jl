@@ -12,7 +12,7 @@ function generate_body(
     meshfile::String,
     chord::Float64,
     span::Float64,
-    bodytype::Type{<:pnl.RigidWakeBody},
+    bodytype::Type{<:pnl.RigidWakeBody};
     translate::NTuple{3,Float64} = (0.0, 0.0, 0.0),
     scaling::Float64 = 1.0,
     flip::Int64 = 1,
@@ -188,7 +188,7 @@ Sref = b * (c_body1 + c_body2)
 scaling = m
 trs = [
     (0.0, 0.0, 0.0),
-    (10.15*m, 0.0, -0.2*m)
+    (9.8489*m, 0.0, -0.12*m)
 ]
 # ----------------- SOLVER SETTINGS -------------------------------------------
 
@@ -200,99 +200,98 @@ bodytype = pnl.RigidWakeBody{kernel}
 # Processing
 clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that are lower than this threshold
 paraview        = false
-#=
-for (i, AOA) in enumerate(AOAs)
-    Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
-    bodies = tuple([generate_body(file, chord, b, bodytype, tr, scaling, 1, Vinf, firstnode, secondnode)
-                    for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
+# for (i, AOA) in enumerate(AOAs)
+#     Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
-    #------------------- SOLVE BODY ----------------------------------------------
+#     bodies = tuple([generate_body(file, chord, b, bodytype; translate=tr, scaling=scaling, Vinf=Vinf, firstnode=firstnode, secondnode=secondnode)
+#                     for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
+
+#     #------------------- SOLVE BODY ----------------------------------------------
  
-    for body in bodies
-        body.velocity .= 0.0
-        pnl.apply_freestream!(body, Vinf)
-    end
+#     for body in bodies
+#         body.velocity .= 0.0
+#         pnl.apply_freestream!(body, Vinf)
+#     end
 
-    backend = pnl.DirectBackend()
-    solver = pnl.BackslashCoupled(bodies)
-    println("Solving body...")
+#     backend = pnl.DirectBackend()
+#     solver = pnl.BackslashCoupled(bodies)
+#     println("Solving body...")
 
-    nps = sum(b.ncells for b in bodies)
+#     nps = sum(b.ncells for b in bodies)
 
-    t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
+#     t_build, t_solve = pnl.solve!(bodies, solver; update_G=true)
 
-    CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
+#     CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
 
-    open(out_file, "a") do io
-        if i == 1
-            write(io, "BackslashCoupled\n")
-        end
-        write(io,
-            "$AOA,$CL,$CD,$(t_build),$(t_solve)\n"
-        )
-    end
+#     open(out_file, "a") do io
+#         if i == 1
+#             write(io, "BackslashCoupled\n")
+#         end
+#         write(io,
+#             "$AOA,$CL,$CD,$(t_build),$(t_solve)\n"
+#         )
+#     end
 
-    if i == 1 && paraview
-        filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
-        files1 = split(filestr1, ", ")
-        pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
+#     if i == 1 && paraview
+#         filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
+#         files1 = split(filestr1, ", ")
+#         pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
 
-        filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
-        files2 = split(filestr2, ", ")
-        pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
+#         filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
+#         files2 = split(filestr2, ", ")
+#         pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
 
-        run(`paraview $pvd1 $pvd2`, wait=false)
-    end
-end
+#         run(`paraview $pvd1 $pvd2`, wait=false)
+#     end
+# end
 
-=#
-for (i, AOA) in enumerate(AOAs)
-    Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
+# for (i, AOA) in enumerate(AOAs)
+#     Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
 
-    bodies = tuple([generate_body(file, chord, b, bodytype, tr, scaling, 1, Vinf, firstnode, secondnode)
-                    for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
+#     bodies = tuple([generate_body(file, chord, b, bodytype; translate=tr, scaling=scaling, Vinf=Vinf, firstnode=firstnode, secondnode=secondnode)
+#                     for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
 
-    for body in bodies
-        body.velocity .= 0.0
-        pnl.apply_freestream!(body, Vinf)
-    end
+#     for body in bodies
+#         body.velocity .= 0.0
+#         pnl.apply_freestream!(body, Vinf)
+#     end
 
-    solver2 = (pnl.Backslash(bodies[1]),pnl.Backslash(bodies[2]))
+#     solver2 = (pnl.Backslash(bodies[1]),pnl.Backslash(bodies[2]))
 
-    println("Solving bodies part 2...")
+#     println("Solving bodies part 2...")
 
-    t_build2, t_solve2 = pnl.solve!(bodies, solver2)
-    CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
+#     t_build2, t_solve2 = pnl.solve!(bodies, solver2)
+#     CL, CD = postprocess!(bodies, Vinf, rho, chords, b, scaling)
 
-    open(out_file, "a") do io
-        if i == 1
-            write(io, "BackslashIterative\n")
-        end
-        write(io,
-            "$AOA,$CL,$CD,$(t_build2),$(t_solve2)\n"
-        )
-    end
+#     open(out_file, "a") do io
+#         if i == 1
+#             write(io, "BackslashIterative\n")
+#         end
+#         write(io,
+#             "$AOA,$CL,$CD,$(t_build2),$(t_solve2)\n"
+#         )
+#     end
 
-    if i == 1 && paraview
-        filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
-        files1 = split(filestr1, ", ")
-        pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
+#     if i == 1 && paraview
+#         filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
+#         files1 = split(filestr1, ", ")
+#         pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
 
-        filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
-        files2 = split(filestr2, ", ")
-        pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
+#         filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
+#         files2 = split(filestr2, ", ")
+#         pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
 
-        run(`paraview $pvd1 $pvd2`, wait=false)
-    end
+#         run(`paraview $pvd1 $pvd2`, wait=false)
+#     end
 
-    println("Resetting bodies...")
-end
+#     println("Resetting bodies...")
+# end
 
 # for (i, AOA) in enumerate(AOAs)
 #     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-#     bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
-#                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+#     bodies = tuple([generate_body(file, chord, b, bodytype; translate=tr, scaling=scaling, Vinf=Vinf, firstnode=firstnode, secondnode=secondnode)
+#                     for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
 
 #     for body in bodies
 #         body.velocity .= 0.0
@@ -317,100 +316,28 @@ end
 #     println("Resetting bodies...")
 # end
 
-# for (i, AOA) in enumerate(AOAs)
-#     Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
-#     bodies = tuple([generate_body(file, chord, b, bodytype, 1.0, 1, Vinf, firstnode, secondnode)
-#                 for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
+for (i, AOA) in enumerate(AOAs)
+    Vinf = magVinf * [cosd(AOA), sind(AOA), 0.0]
+    bodies = tuple([generate_body(file, chord, b, bodytype; translate=tr, scaling=scaling, Vinf=Vinf, firstnode=firstnode, secondnode=secondnode)
+                    for (file, chord, tr, firstnode, secondnode) in zip(files, chords, trs, nodes1, nodes2)]...)
 
-#     for body in bodies
-#         body.velocity .= 0.0
-#         pnl.apply_freestream!(body, Vinf)
-#     end
+    for body in bodies
+        body.velocity .= 0.0
+        pnl.apply_freestream!(body, Vinf)
+    end
 
-#     solver4 = pnl.KrylovCoupled(bodies)
-#     CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
+    solver4 = pnl.KrylovCoupled(bodies)
+    t_build3, t_solve3 = pnl.solve!(bodies, solver4)
+    CL, CD = postprocess!(bodies, Vinf, rho, chords, b)
 
-#     open(out_file, "a") do io
-#         if i == 1
-#             write(io, "KrylovCoupled\n")
-#         end
-#         write(io,
-#             "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
-#         )
-#     end
+    open(out_file, "a") do io
+        if i == 1
+            write(io, "KrylovCoupled\n")
+        end
+        write(io,
+            "$AOA,$CL,$CD,$(t_build3),$(t_solve3)\n"
+        )
+    end
 
-#     println("Resetting bodies...")
-# end
-#=
-# write_header = !isfile(out_file) || filesize(out_file) == 0
-
-# open(out_file, "a") do io
-#     if write_header
-#         write(io, "solver,nps,t_build,t_solve,res,pot\n")
-#     end
-
-#     write(io,
-#         "BackslashCoupled,$(t_build),$(t_solve)\n"
-#     )
-# end
-println("Resetting bodies...")
-
-for body in bodies
-    body.velocity .= 0.0
-    pnl.apply_freestream!(body, Vinf)
+    println("Resetting bodies...")
 end
-
-solver2 = (pnl.Backslash(bodies[1]), pnl.Backslash(bodies[2]))
-
-println("Solving bodies part 2...")
-
-t_build2, t_solve2 = pnl.solve!(bodies, solver2; backend=backend2)
-
-open(out_file, "a") do io
-    write(io,
-        "BackslashIterate,$(t_build2),$(t_solve2)\n"
-    )
-end
-
-println("Resetting bodies...")
-
-for body in bodies
-    body.velocity .= 0.0
-    pnl.apply_freestream!(body, Vinf)
-end
-
-backend3 = fill(pnl.FastMultipoleBackend(), length(bodies))
-solver3 = (pnl.KrylovSolver(bodies[1]), pnl.KrylovSolver(bodies[2]))
-
-println("Solving bodies part 3...")
-
-t_build3, t_solve3 = pnl.solve!(bodies, solver3)
-
-open(out_file, "a") do io
-    write(io,
-        "Krylov,$(t_build3),$(t_solve3)\n"
-    )
-end
-
-println("Resetting bodies...")
-
-for body in bodies
-    body.velocity .= 0.0
-    pnl.apply_freestream!(body, Vinf)
-end
-
-solver4 = pnl.KrylovCoupled(bodies)
-
-println("Solving bodies part 4...")
-
-t_build4, t_solve4 = pnl.solve!(bodies, solver4)
-
-open(out_file, "a") do io
-    write(io,
-        "KrylovCoupled,$(t_build4),$(t_solve4)\n"
-    )
-end
-
-
-println("done")
-=#
