@@ -43,8 +43,8 @@ body = make_single_triangle_body()
 
 # set unit strength
 str = 1.0
-body.strength[1,1] = str
-# body.strength[1,2] = str
+# body.strength[1,1] = str
+body.strength[1,2] = str
 
 normals = pnl.calc_normals!(body)
 @show normals # outward facing

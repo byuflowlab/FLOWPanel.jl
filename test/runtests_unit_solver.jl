@@ -120,6 +120,9 @@ import GeoIO
         pnl.solve!(body, solver)
         @test any(abs.(body.strength[:, 2]) .> 0)
         @test body.potential == potential_before
+        # Single-body Dirichlet solves use `body.potential` as scratch workspace
+        # and target zero interior perturbation potential.
+        body.potential .= 0
         assert_boundary_residuals((body,); potential_atol=1e-6)
     end
 

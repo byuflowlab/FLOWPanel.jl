@@ -14,10 +14,9 @@ import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import GeometricTools as gt
 
-import PythonPlot as plt
 import CSV
 import DataFrames: DataFrame
-import PythonPlot: @L_str
+import GeometricTools: plt, @L_str
 
 save_path       = "temps/"                  # Where to save results
 file_name       = "sphere00"                # Prefix of output files

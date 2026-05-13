@@ -147,7 +147,7 @@ body_solvers = (solver_wing, solver_ground)
 
 println("\nBegin wing + ground simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     monitors=(tangency_monitor,),
     path="flat_ground", name="flat_ground"
 )

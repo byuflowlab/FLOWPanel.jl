@@ -57,7 +57,8 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Vector{TF}
     dphidt::Vector{TF}                   # Time derivative of perturbation potential (∂φ/∂t)
-    velocity::Array{TF, 2}              # velocity induced at control points
+    velocity::Array{TF, 2}              # Apparent fluid velocity at control points (body frame)
+    velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
@@ -89,6 +90,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 potential=zeros(TF, size(cells, 2)),
                                 dphidt=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
+                                velocity_kinematic=zeros(TF, 3, size(cells, 2)),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
@@ -185,6 +187,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                     potential,
                     dphidt,
                     velocity,
+                    velocity_kinematic,
                     controlpoints,
                     normals,
                     velocity_te,

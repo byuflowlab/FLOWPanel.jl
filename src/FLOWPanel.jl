@@ -19,6 +19,10 @@ export  solve, save, influence!,
         calc_areas!, calc_areas,
         calc_shedding, calc_shedding_from_seed, trace_trailing_edge,
         meshes2nodes_cells,
+        PressureBernoulli, PressureLaplace,
+        JacobiPressurePreconditioner, NoPressurePreconditioner,
+        IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
+        ForceMonitor, KuttaJoukowskiForce,
         WingNormalization, NoNormalization, RotorNormalization,
         simulate_warmstart!, initialize_Das!
 
@@ -27,6 +31,7 @@ import LinearAlgebra as LA
 import LinearAlgebra: I, lu!, ldiv!
 import Krylov
 import LinearOperators
+import SparseArrays
 import Requires: @require
 # import SimpleNonlinearSolve
 import FastMultipole

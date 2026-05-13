@@ -28,6 +28,9 @@ Implementations of AbstractBody are expected to have the following fields
 * `Oaxis::Matrix`                     : Coordinate system of body w.r.t global (3x3 matrix)
 * `O::Vector`                         : Origin of body w.r.t. global (3-dim vector)
 * `strength::Matrix`                  : Strength of each element of each type (ncells x N matrix)
+* `velocity::Matrix{TF}`              : 3xncells apparent fluid velocity at control points (body frame)
+* `velocity_kinematic::Matrix{TF}`    : 3xncells rigid-body kinematic velocity at control points (inertial frame)
+* `potential::Vector{TF}`             : Total scalar potential at control points
 * `CPoffset::Real`                    : Control point offset in normal direction
 * `characteristiclength::Function`    : Function for computing the characteristic
                                         length of each panel used to offset each
@@ -91,6 +94,7 @@ abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
+    body.velocity_kinematic .= 0.0
     body.potential .= 0.0
     body.P .= 0.0
     body.F .= 0.0
@@ -995,6 +999,11 @@ end
 
 function apply_freestream!(body::AbstractBody, uinf)
     eachcol(body.velocity) .+= Ref(uinf)
+    for i in axes(body.controlpoints, 2)
+        body.potential[i] += uinf[1] * body.controlpoints[1, i] +
+                             uinf[2] * body.controlpoints[2, i] +
+                             uinf[3] * body.controlpoints[3, i]
+    end
     extra_apply_freestream!(body, uinf)
 end
 

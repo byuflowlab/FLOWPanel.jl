@@ -279,9 +279,12 @@ function wake_v_monitor(systems, wakes, frames, uinf, i_step)
     push!(wake_v_log, (i_step, p_ndv_mean, p_v_mean, p_v_max, pa_ndv_mean, pa_v_mean, pa_v_max, omega_R_tip))
 end
 
-monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
+monitors = (pnl.PressureBernoulli(rho; unsteady=true,
+                    correct_kuttacondition=p_correct_kuttacondition_flag),
+            pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                     i_frame=-1,
                     normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                    correct_kuttacondition=p_correct_kuttacondition_flag,
                     # normalization=pnl.NoNormalization(),
                     verbose=false
                 ),
@@ -300,12 +303,11 @@ name = "rotor_hover"
     set_Das_eta_kinematic=NaN,
     # set_Das_eta_freestream=0.1,
     monitors,
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     path="rotor_hover_mudiag", name,
-    p_correct_kuttacondition=p_correct_kuttacondition_flag
 )
 
-println("Thrust Coefficient: ", monitors[1].force[2,:])
+println("Thrust Coefficient: ", monitors[2].force[2,:])
 println("\n|μ| evolution (step, max, mean):")
 for (i, mx, mn) in mu_log
     println("  step $i: max=$(round(mx, sigdigits=5))  mean=$(round(mn, sigdigits=5))")

@@ -19,7 +19,7 @@ include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 
-include(joinpath(pnl.examples_path, "duct_postprocessing.jl"))
+include(joinpath(pnl.examples_path, "duct_postprocessing_pyplot.jl"))
 
 run_name        = "duct-hill00"             # Name of this run
 

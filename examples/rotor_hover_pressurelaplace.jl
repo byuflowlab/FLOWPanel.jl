@@ -1,6 +1,8 @@
-## Plate, rotor, with no ground effect
-# Author: Timothy Harlow
-# Created: December 5, 2025
+## Rotor hover: compare CT from PressureLaplace vs. KuttaJoukowskiForce
+# Derived from rotor_hover.jl. The pressure-monitor swap replaces PressureBernoulli
+# with PressureLaplace (surface pressure Poisson solve). KuttaJoukowskiForce is
+# enabled as an independent cross-check that bypasses the pressure field entirely.
+# Both forces are normalized as rotor CT via RotorNormalization(rho, 2R, 1).
 
 import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
@@ -41,80 +43,38 @@ wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
 # ROTOR GEOMETRY
 # ==========================================================
 read_path   = joinpath(pnl.examples_path, "data")
-# stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
-
-# phantom_3_rebuild_r2.msh
 msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
 te_indices_1 = [9, 175, 127]
 te_indices_2 = [13, 286, 238]
 
-# # phantom_3_rebuild_r3.msh
-# msh_file  = joinpath(read_path, "phantom_3_rebuild_r3.msh")
-# te_indices_1 = [8, 523, 223] .+ 1
-# te_indices_2 = [12, 997, 697] .+ 1
-
-# # phantom_3_rebuild_r4.msh
-# msh_file  = joinpath(read_path, "phantom_3_rebuild_r4.msh")
-# te_indices_1 = [7, 952, 4] .+ 1
-# te_indices_2 = [3, 478, 0] .+ 1
-
-# STL file
-# mesh = VSPGeom.readSTL(stl_file)[1]
-# scale = 1/1000 # convert to meters
-# radius = 119.38 * scale
-# for point in mesh.points
-#     point .*= scale
-# end
-
-# MSH file
 msh = GeoIO.load(msh_file).geometry
 nodes, cells = pnl.meshes2nodes_cells(msh)
-
-# scale to proper radius
 nodes .*= R / maximum(nodes[1, :])
 
-# place-holder shedding
 shedding = pnl.noshedding
 
-# --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
-# kernel = pnl.VortexRing
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-            CPoffset,
-            kerneloffset,
-            kernelcutoff,
-            semiinfinite_wake=false,
-            watertight=true,
-            DBC)
+            CPoffset, kerneloffset, kernelcutoff,
+            semiinfinite_wake=false, watertight=true, DBC)
 
-pnl.write_vtk("rotor_hover_check", rotor)
-
-# update shedding
-bbox = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
-bbox = nothing
-shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2]; bbox, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-bbox = (pnl.SVector{3}(R*0.1, -1.0, -1.0), pnl.SVector{3}(R*1.2, 1.0, 1.0))
-bbox = nothing
-shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2]; bbox, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
+                bbox=nothing, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
+                bbox=nothing, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-                        CPoffset,
-                        kerneloffset,
-                        kernelcutoff,
-                        semiinfinite_wake=false,
-                        watertight=true,
-                        ensure_winding=true,
-                        DBC)
+                        CPoffset, kerneloffset, kernelcutoff,
+                        semiinfinite_wake=false, watertight=true,
+                        ensure_winding=true, DBC)
 
-pnl.write_vtk("rotor_hover", rotor)
-
+pnl.write_vtk("rotor_hover_pressurelaplace", rotor)
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
 ## =========================================================
 # WAKE SETUP
 # ==========================================================
-
 wake_rotor = pnl.PanelParticleWake(rotor;
                 nwakerows=1,
                 core_size=wake_core_size,
@@ -136,12 +96,11 @@ wake_rotor = pnl.PanelParticleWake(rotor;
 # ==========================================================
 Uinf(t) = Vinf
 
-# Reference frame
 frames = pnl.ReferenceFrame(rotor;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
     ω_axis = SVector{3}(0.0, 1.0, 0.0),
-    ω = 2*pi * RPM/60, # rad/s
+    ω = 2*pi * RPM/60,
     R = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
     name = "vehicle",
     child_index = Int[],
@@ -151,56 +110,63 @@ frames = pnl.ReferenceFrame(rotor;
 pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
     set_Das_eta_kinematic=init_Das_eta_kinematic)
 
-# solver_rotor = pnl.FGSSolver(rotor;
-#             max_iterations=500,
-#             tolerance=1.0e-6,
-#             rlx=1.0,
-#             expansion_order=10,
-#             multipole_acceptance=0.4,
-#             leaf_size=150,
-#             shrink=true,
-#             recenter=false,
-#             inner_iterations=20,
-#             reverse_pass=false,
-#             verbose=false
-#         )
 solver_rotor = pnl.Backslash(rotor)
-
 backend = pnl.FastMultipoleBackend()
-
-# Maneuver
 maneuver!(frames, systems, wakes, t) = nothing
 
 ## =========================================================
-# RUN SIMULATION
+# MONITORS — PressureLaplace vs. Kutta–Joukowski cross-check
 # ==========================================================
 systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
-monitors = (pnl.PressureBernoulli(rho; unsteady=true,
-                    correct_kuttacondition=p_correct_kuttacondition_flag),
-            pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
-                    i_frame=-1,
-                    normalization=pnl.RotorNormalization(rho, 2*R, 1),
-                    correct_kuttacondition=p_correct_kuttacondition_flag,
-                    # normalization=pnl.NoNormalization(),
-                    verbose=false
-                ),
-            # pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
-            #         rho, backend,
-            #         normalization=pnl.RotorNormalization(rho, 2*R, 1)
-            #     )
-            )
 
-println("\nBegin rotor hover simulation ($(n_steps) steps)...")
-name = "rotor_hover"
+# PressureLaplace populates body.P each step; ForceMonitor then integrates body.F
+# from body.P. KuttaJoukowskiForce is independent of body.P entirely — it sums
+# ρ Σ γ (Δs × V) at panel edges using a FastMultipole.ProbeSystem.
+pressure_laplace = pnl.PressureLaplace(rotor, rho; verbose=false)
+force_monitor    = pnl.ForceMonitor(length(t_range), 1;
+                        i_frame=-1,
+                        normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                        correct_kuttacondition=p_correct_kuttacondition_flag,
+                        verbose=false)
+kj_monitor       = pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
+                        rho, backend,
+                        normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                        verbose=false)
+monitors = (pressure_laplace, force_monitor, kj_monitor)
+
+## =========================================================
+# RUN SIMULATION
+# ==========================================================
+println("\nBegin rotor hover simulation ($(length(t_range)) steps)...")
+name = "rotor_hover_pressurelaplace"
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
-    # Das was initialized before constructing the matrixful solver.
     set_Das_eta_kinematic=NaN,
-    # set_Das_eta_freestream=0.1,
     monitors,
     body_solvers, backend, verbose=true,
-    path="rotor_hover", name,
+    path="rotor_hover_pressurelaplace", name,
 )
 
-println("Thrust Coefficient: ", monitors[2].force[2,:])
+## =========================================================
+# COMPARE CT
+# ==========================================================
+# Rotor axis is +y (ω_axis = [0,1,0]); thrust is the y-component of force.
+CT_pressure = force_monitor.force[2, :]
+CT_kj       = kj_monitor.force[2, :]
+
+println("\n========== CT comparison ==========")
+println("step | CT (PressureLaplace+ForceMonitor) | CT (Kutta–Joukowski) | abs diff | rel diff")
+for k in 1:length(t_range)
+    cp = CT_pressure[k]
+    ck = CT_kj[k]
+    ad = abs(cp - ck)
+    rd = abs(ck) > 0 ? ad / abs(ck) : NaN
+    println("  $k  |  $(round(cp, sigdigits=6))  |  $(round(ck, sigdigits=6))  |  $(round(ad, sigdigits=4))  |  $(round(rd, sigdigits=4))")
+end
+
+println("\nFull force arrays (3 × nt) printed for inspection:")
+println("  PressureLaplace+ForceMonitor force:")
+display(force_monitor.force)
+println("  Kutta–Joukowski force:")
+display(kj_monitor.force)
