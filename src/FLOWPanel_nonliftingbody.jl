@@ -45,7 +45,8 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Array{TF,1}              # Potential at control points
-    velocity::Array{TF,2}               # Velocity at control points
+    velocity::Array{TF,2}               # Apparent fluid velocity at control points (body frame)
+    velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     CPoffset::Float64                   # Control point offset in normal direction
@@ -67,6 +68,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
+                velocity_kinematic=zeros(TF, 3, size(cells, 2)),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
@@ -95,6 +97,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength,
                 potential,
                 velocity,
+                velocity_kinematic,
                 controlpoints,
                 normals,
                 CPoffset,

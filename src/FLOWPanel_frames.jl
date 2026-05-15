@@ -325,6 +325,7 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
         # unpack containers
         body = systems[isurf]
         Vcp = body.velocity
+        Vkin = body.velocity_kinematic
         CPs = body.controlpoints
 
         # velocity at the control points
@@ -332,10 +333,17 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
 
             # extract control point
             cp = FastMultipole.SVector{3}(CPs[1, i], CPs[2, i], CPs[3, i])
-            
-            # vcp is actually total evaluated velocity, so subtracting kinematic velocity means rigid body motion opposes the freestream
+
+            # rigid body velocity of this control point in the inertial frame
             dv = v_global + cross(ω_global, (cp - origin_global))
-            Vcp[:, i] .-= dv
+
+            # accumulate kinematic velocity, subtract from apparent fluid velocity
+            Vkin[1, i] += dv[1]
+            Vkin[2, i] += dv[2]
+            Vkin[3, i] += dv[3]
+            Vcp[1, i] -= dv[1]
+            Vcp[2, i] -= dv[2]
+            Vcp[3, i] -= dv[3]
         end
 
         # trailing edges (only for lifting bodies)

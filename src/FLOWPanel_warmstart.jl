@@ -310,10 +310,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         backend_wake=backend,
         backend_solve=backend,
         backend_system=backend,
-        rho=1.225,
         monitors=(),
-        p_correct_kuttacondition=true,
-        p_clip=nothing,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         verbose=false,
@@ -324,6 +321,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     _validate_influence_backend(:backend_wake, backend_wake)
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
+    audit_monitors(monitors)
 
     rpath = isnothing(restart_path) ? path : restart_path
     rname = isnothing(restart_name) ? name : restart_name
@@ -422,10 +420,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         backend_wake=backend_wake,
         backend_solve=backend_solve,
         backend_system=backend_system,
-        rho=rho,
         monitors=monitors,
-        p_correct_kuttacondition=p_correct_kuttacondition,
-        p_clip=p_clip,
         set_Das_eta_kinematic=set_Das_eta_kinematic,
         set_Das_eta_freestream=set_Das_eta_freestream,
         start_step=restart_step + 1,

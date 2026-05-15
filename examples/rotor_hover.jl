@@ -177,9 +177,12 @@ maneuver!(frames, systems, wakes, t) = nothing
 systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
-monitors = (pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
+monitors = (pnl.PressureBernoulli(rho; unsteady=true,
+                    correct_kuttacondition=p_correct_kuttacondition_flag),
+            pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                     i_frame=-1,
                     normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                    correct_kuttacondition=p_correct_kuttacondition_flag,
                     # normalization=pnl.NoNormalization(),
                     verbose=false
                 ),
@@ -196,9 +199,8 @@ name = "rotor_hover"
     set_Das_eta_kinematic=NaN,
     # set_Das_eta_freestream=0.1,
     monitors,
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     path="rotor_hover", name,
-    p_correct_kuttacondition=p_correct_kuttacondition_flag
 )
 
-println("Thrust Coefficient: ", monitors[1].force[2,:])
+println("Thrust Coefficient: ", monitors[2].force[2,:])

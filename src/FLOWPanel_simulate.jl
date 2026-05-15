@@ -3,11 +3,27 @@
 _store_neg_potential!(sys::AbstractLiftingBody) = (sys.dphidt .= .-sys.potential)
 _store_neg_potential!(::AbstractBody) = nothing
 
-_compute_dphidt!(sys::AbstractLiftingBody, dt) = (sys.dphidt .= (sys.dphidt .+ sys.potential) ./ dt)
-_compute_dphidt!(::AbstractBody, dt) = nothing
+# Eulerian ∂φ/∂t at body-fixed control points.
+#
+# `(φ_new − φ_old)/dt` is the body-following (material) derivative because
+# the control points move with the rigid body. Subtract V_kin · ∇φ to
+# recover the inertial-frame partial-time derivative needed by unsteady
+# Bernoulli. ∇φ is reconstructed from the apparent fluid velocity stored in
+# body.velocity plus the kinematic velocity stored in body.velocity_kinematic.
+function _compute_dphidt!(sys::AbstractLiftingBody, dt)
+    Vkin = sys.velocity_kinematic
+    V = sys.velocity
+    for i in eachindex(sys.dphidt)
+        Dphi_Dt = (sys.dphidt[i] + sys.potential[i]) / dt
+        vk1, vk2, vk3 = Vkin[1, i], Vkin[2, i], Vkin[3, i]
+        gx = V[1, i] + vk1
+        gy = V[2, i] + vk2
+        gz = V[3, i] + vk3
+        sys.dphidt[i] = Dphi_Dt - (vk1 * gx + vk2 * gy + vk3 * gz)
+    end
+end
 
-_get_dphidt(sys::AbstractLiftingBody) = sys.dphidt
-_get_dphidt(::AbstractBody) = nothing
+_compute_dphidt!(::AbstractBody, dt) = nothing
 
 #--- Das initialization helpers ---#
 
@@ -110,6 +126,20 @@ end
 _collect_wake_sources(wake::AbstractFreeWake) = _collect_wake_sources((wake,))
 _collect_wake_sources(::Nothing) = ()
 
+# Wake sources that have a well-defined scalar potential. Excludes vortex
+# particle fields (which carry only a vector potential).
+_scalar_potential_sources(w::PanelWake) = get_sources(w)
+_scalar_potential_sources(w::PanelParticleWake) = get_sources(w.panel_wake)
+_scalar_potential_sources(::Nothing) = ()
+
+function _collect_wake_scalar_sources(wakes::Tuple)
+    result = ()
+    for w in wakes
+        result = (result..., _scalar_potential_sources(w)...)
+    end
+    return result
+end
+
 function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN)
@@ -147,7 +177,7 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
 end
 
 """
-    simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), backend_wake=backend, backend_solve=backend, backend_system=backend, rho=1.225, monitors=(), ...)
+    simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), backend_wake=backend, backend_solve=backend, backend_system=backend, monitors=(), ...)
 
 Advance one or more coupled body-wake systems through `t_range`, solving the
 aerodynamics, updating wakes, optionally writing VTK output, and calling any
@@ -164,10 +194,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         backend_wake=backend,
         backend_solve=backend,
         backend_system=backend,
-        rho=1.225,
         monitors=(),
-        p_correct_kuttacondition=true,
-        p_clip=nothing,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         start_step::Int=0,
@@ -180,6 +207,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     _validate_influence_backend(:backend_wake, backend_wake)
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
+    audit_monitors(monitors)
 
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
@@ -268,15 +296,22 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         # system-on-all influence
         influence!(targets, systems_tuple, backend_system; precalc=false, scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
 
-        #--- forces and moments ---#
+        # wake-on-body scalar potential (non-particle wake sources only)
+        wake_phi_sources = _collect_wake_scalar_sources(wakes_tuple)
+        if length(wake_phi_sources) > 0
+            influence!(systems_tuple, wake_phi_sources, backend_wake;
+                precalc=false, scalar_potential=true, gradient=false,
+                hessian=Tuple(false for _ in systems_tuple))
+        end
 
-        # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt
+        #--- bookkeeping for downstream monitors ---#
+
+        # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt.
+        # Kept in the loop because it requires _store_neg_potential! to have
+        # run before the per-step reset.
         for sys in systems_tuple
             _compute_dphidt!(sys, dt)
         end
-
-        calcfield_P!(systems_tuple, norm(uinf), rho; dphidt=Tuple(_get_dphidt(s) for s in systems_tuple), correct_kuttacondition=fill(p_correct_kuttacondition, length(systems_tuple)), clip=p_clip)
-        calcfield_F!(systems_tuple; correct_kuttacondition=fill(p_correct_kuttacondition, length(systems_tuple)))
 
         #------- other solvers -------#
 
@@ -284,6 +319,15 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         #------- update state -------#
 
+
+        #------- monitors -------#
+
+        # Run monitors before VTK write so monitor-populated fields
+        # (e.g. PressureBernoulli → body.P, ForceMonitor → body.F) land in
+        # the output files.
+        for monitor in monitors
+            monitor(systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
+        end
 
         #------- save state -------#
 
@@ -302,10 +346,6 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # frame-state companion file for simulate_warmstart!
             _write_frame_state_toml(path, name, frames, i_step, t; truncate=(i_step==0))
-        end
-
-        for monitor in monitors
-            monitor(systems_tuple, wakes_tuple, frames, uinf, i_step)
         end
 
         #------- propagate system -------#

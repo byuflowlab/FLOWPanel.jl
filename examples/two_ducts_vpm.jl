@@ -203,7 +203,7 @@ body_solvers = (solver1, solver2)
 
 println("\nBegin two-duct simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     path="two_ducts_vpm", name="two_ducts"
 )
 

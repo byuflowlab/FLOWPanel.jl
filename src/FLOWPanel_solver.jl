@@ -243,11 +243,14 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
 
     try
         set_strengths!(body)
+        # For single-body Dirichlet solves, `body.potential` is workspace for
+        # the interior self/source potential and the solve is homogeneous unless
+        # external influences have already been assembled into that workspace.
         body.potential .= zero(eltype(body.potential))
         influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
-        body.potential .+= potential_old
         _solve!(body, solver; backend, optargs...)
     finally
+        # body.potential .= potential_old
         body.CPoffset = CPoffset_old
         body.potential .= potential_old
     end

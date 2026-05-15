@@ -148,7 +148,7 @@ body_solvers = (solver_wing, solver_sphere)
 
 println("\nBegin wing+sphere simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     path="wing_sphere", name="wing_sphere"
 )
 
