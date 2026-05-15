@@ -115,7 +115,7 @@ Normalization callables `(CF, CM, systems, frames, uinf) -> (CF_norm, CM_norm)`:
 - Sparse FV surface Laplacian `L` assembled from shared-edge weights `w_ij = ℓ_ij / d_ij`; gauge-fixed by pinning one reference panel to `reference_pressure`
 - RHS built from edge-integrated tangential material acceleration: `b_i -= ρ ℓ_ij (a_t,j - a_t,i)·ê_ij`
 - Unsteady term `∂u/∂t` approximated by finite difference of successive monitor calls (stored in `velocity_dot` as negative previous velocity)
-- Surface gradient of velocity needed for convective term computed per-panel via weighted least-squares over neighbors, with normal-direction penalty
+- Velocity gradient `∇u` needed for convective term obtained analytically: `∇u_induced` is the FastMultipole Hessian populated into `body.velocity_gradient` during the per-step `influence!` calls (gated by `monitor_requires_body_hessian(::PressureLaplace) = true` flipping `body.needs_velocity_gradient[]` in `simulate!`); the kinematic part `[Ω]_×` is reconstructed from `body.angular_velocity` accumulated in `kinematic_velocity!`
 - Body count checked at call time against `length(m.b)`; no identity (`objectid`) check — caller is trusted to provide compatible bodies
 - Geometry signature cached; `L` and preconditioner only rebuilt when mesh geometry changes (controlled by `cache` flag)
 - Preconditioners: `JacobiPressurePreconditioner` (default, O(N)), `NoPressurePreconditioner`; `IncompleteCholeskyPressurePreconditioner` and `AMGPressurePreconditioner` reserved but not implemented
