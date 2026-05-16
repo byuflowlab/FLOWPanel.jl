@@ -5,6 +5,7 @@ using WriteVTK
 include("test_helpers.jl")
 
 include("runtests_unit_fmm.jl")
+include("runtests_unit_kernel_gradient.jl")
 include("runtests_unit_body.jl")
 include("runtests_unit_solver.jl")
 include("runtests_unit_liftingbody.jl")

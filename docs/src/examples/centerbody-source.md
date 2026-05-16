@@ -27,6 +27,8 @@ accurate for non-lifting bodies.
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 import CSV
 import DataFrames: DataFrame
 
@@ -67,24 +69,17 @@ bodytype        = pnl.NonLiftingBody{pnl.ConstantSource}    # Elements and wake 
 points = Matrix(contour_lewis[2:end-1, :])
 # points[1, 2] += holeradius
 
-grid = pnl.gt.surface_revolution(points, NDIVS_theta;
-                                    # Loop the azimuthal dimension to close the surface
-                                    loop_dim=2,
-                                    # Rotate the axis of rotation to align with x-axis
-                                    axis_angle=90
-                                )
-
-# Rotate the body of revolution to align centerline with x-axis
-Oaxis = pnl.gt.rotation_matrix2(0, 0, 90)          # Rotation matrix
-O = zeros(3)                                       # Translation of coordinate system
-pnl.gt.lintransform!(grid, Oaxis, O)
-
-# Triangular grid (splits quadrangular panels into triangular panels)
-split_dim = 1                               # Dimension to split into triangles
-trigrid = pnl.gt.GridTriangleSurface(grid, split_dim)
-
-# Generate body to be solved
-body = bodytype(trigrid)
+body = generate_revolution(bodytype, points, NDIVS_theta;
+                            # Loop the azimuthal dimension to close the surface
+                            loop_dim=2,
+                            # Rotate the axis of rotation to align with x-axis
+                            axis_angle=90,
+                            # Split quadrangular panels into triangles along dimension 1
+                            dimsplit=1,
+                            # Rotate centerline to align with x-axis
+                            gridprocessing = grid -> gt.lintransform!(grid,
+                                                gt.rotation_matrix2(0, 0, 90), zeros(3))
+                          )
 
 println("Number of panels:\t$(body.ncells)")
 
@@ -92,35 +87,46 @@ println("Number of panels:\t$(body.ncells)")
 # ----------------- CALL SOLVER ------------------------------------------------
 println("Solving body...")
 
-# Freestream at every control point
-Uinfs = repeat(Vinf, 1, body.ncells)
+@time begin
+    solver = pnl.FGSSolver(body;
+        leaf_size=10000,
+        expansion_order=10,
+        multipole_acceptance=0.4,
+        max_iterations=500,
+        inner_iterations=20,
+        tolerance=1e-6,
+        rlx=1.0,
+        shrink=true,
+        reverse_pass=false,
+        verbose=false
+    )
+    backend = pnl.FastMultipoleBackend(
+        expansion_order=7,
+        multipole_acceptance=0.4,
+        leaf_size=10,
+    )
 
-# Solve body (panel strengths) giving `Uinfs` as boundary conditions
-@time pnl.solve(body, Uinfs)
+    pnl.solve!(body, solver; backend)
+end
 
 
 # ----------------- POST PROCESSING --------------------------------------------
 println("Post processing...")
 
 # Calculate surface velocity on the body
-@time Us = pnl.calcfield_U(body, body)
+@time pnl.calcfield_U!(body; backend)
 
-# Calculate pressure coefficient
-@time Cps = pnl.calcfield_Cp(body, magVinf)
+# Calculate gauge pressure
+eachcol(body.velocity) .+= Ref(Vinf)
+@time pnl.calcfield_P!(body, magVinf, rho)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body, magVinf, rho)
+@time pnl.calcfield_F!(body)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------
 if paraview
-    str = save_path*"/"
-
-    # Save body as a VTK
-    str *= pnl.save(body, run_name; path=save_path, debug=true)
-
-    # Call Paraview
-    run(`paraview --data=$(str)`)
+    pnl.write_vtk(joinpath(save_path, "centerbody"), body, 0, 0)
 end
 
 

@@ -17,17 +17,18 @@ const RUN_NAME = "dji9443_medium"
 const plane_idx = Int[338480, 346889, 355054, 317232, 314981, 322126, 326943] .+ 1
 const radial_idx = 5894 + 1
 
-const NSLICES = 12
-const SLICE_MIN_POINTS = 120
+const NSLICES = 1
+const SLICE_MIN_POINTS = 400
 const SLICE_DISTANCE_ATOL = 0.0
-const N_RFL_SECS = 40
+const N_RFL_SECS = 100
 const USE_COSINE_RFL_BINS = true
 const HUB_TOP_FRACTION = 0.75
 const CST_NCOEFFS = 8
 const CST_RECONSTRUCTION_POINTS = 201
+const SHARP_TE_BLEND_START = 0.8
 
 """
-    MeshSlice
+    MeshSlice 344, 21, 343
 
 2-D blade section at radial coordinate `r`.
 
@@ -60,6 +61,8 @@ struct Airfoil
     r::Float64
     twist::Float64
     chord::Float64
+    axial::Float64
+    tangential::Float64
     x_u::Vector{Float64}
     y_u::Vector{Float64}
     x_l::Vector{Float64}
@@ -311,7 +314,37 @@ function Airfoil(ms::AnchoredMeshSlice)
     xl = collect(xselig[le_idx:end])
     yl = collect(yselig[le_idx:end])
 
-    return Airfoil(ms.r, twist, chord, xu, yu, xl, yl)
+    sharpen_trailing_edge!(xu, yu, xl, yl)
+
+    te_point = 0.5 .* (ms.nodes[:, ms.upper_te_idx] .+ ms.nodes[:, ms.lower_te_idx])
+    le_point = ms.nodes[:, ms.le_idx]
+    chord_center = 0.5 .* (le_point .+ te_point)
+    tangential = -chord_center[1]
+    axial = -chord_center[2]
+
+    return Airfoil(ms.r, twist, chord, axial, tangential, xu, yu, xl, yl)
+end
+
+function sharpen_trailing_edge!(xu, yu, xl, yl;
+                                blend_start::Float64=SHARP_TE_BLEND_START)
+    0.0 <= blend_start < 1.0 || error("`blend_start` must be in [0, 1).")
+    y_te_mid = 0.5 * (yu[end] + yl[end])
+    delta_upper = y_te_mid - yu[end]
+    delta_lower = y_te_mid - yl[end]
+    blend_range = 1.0 - blend_start
+    for i in eachindex(xu)
+        if xu[i] >= blend_start
+            t = (xu[i] - blend_start) / blend_range
+            yu[i] += t * delta_upper
+        end
+    end
+    for i in eachindex(xl)
+        if xl[i] >= blend_start
+            t = (xl[i] - blend_start) / blend_range
+            yl[i] += t * delta_lower
+        end
+    end
+    return xu, yu, xl, yl
 end
 
 function selig_coordinates(af::Airfoil)
@@ -327,6 +360,15 @@ function write_dat(path, ms::MeshSlice)
         println(io, "# axial thickness")
         for i in axes(ms.nodes, 2)
             @printf(io, "%.16e %.16e\n", ms.nodes[1, i], ms.nodes[2, i])
+        end
+    end
+end
+
+function write_xy_dat(path, x, y)
+    open(path, "w") do io
+        println(io, "# x_over_c y_over_c")
+        for i in eachindex(x)
+            @printf(io, "%.16e %.16e\n", x[i], y[i])
         end
     end
 end
@@ -365,7 +407,7 @@ function select_airfoil_anchors(ms::MeshSlice, index::Int)
 
     fig, ax = PythonPlot.subplots()
     ax.plot(ms.nodes[1, :], ms.nodes[2, :], "o"; markersize=2.5)
-    if size(ms.nodes, 2) <= 300
+    if size(ms.nodes, 2) <= 400
         for i in axes(ms.nodes, 2)
             ax.text(ms.nodes[1, i], ms.nodes[2, i], string(i); fontsize=6)
         end
@@ -390,14 +432,47 @@ function select_airfoil_anchors(ms::MeshSlice, index::Int)
     return AnchoredMeshSlice(ms.r, ms.nodes, upper_te_idx, le_idx, lower_te_idx)
 end
 
+function count_upstream_of_le(ms::AnchoredMeshSlice)
+    te_point = 0.5 .* (ms.nodes[:, ms.upper_te_idx] .+ ms.nodes[:, ms.lower_te_idx])
+    le_point = ms.nodes[:, ms.le_idx]
+    chord_vec = te_point - le_point
+    chord = norm(chord_vec)
+    chord > 0.0 || error("Slice at r=$(ms.r) has zero chord.")
+    twist = atan(chord_vec[2], chord_vec[1])
+    c = cos(-twist)
+    s = sin(-twist)
+    x_shift = ms.nodes[1, :] .- le_point[1]
+    y_shift = ms.nodes[2, :] .- le_point[2]
+    x = (c .* x_shift .- s .* y_shift) ./ chord
+    return count(x .< 0.0)
+end
+
+function select_airfoil_anchors_validated(ms::MeshSlice, index::Int)
+    current = select_airfoil_anchors(ms, index)
+    while true
+        n_upstream = count_upstream_of_le(current)
+        n_upstream == 0 && return current
+        println("$(n_upstream) point(s) lie upstream of the leading edge (x < 0 after rotation).")
+        println("CST fitting requires all points to have x >= 0.")
+        print("[r]emove those points and continue, or [c]hoose a different leading edge? ")
+        answer = lowercase(strip(readline(stdin)))
+        if answer in ("r", "remove")
+            return current
+        elseif answer in ("c", "choose")
+            current = select_airfoil_anchors(ms, index)
+        else
+            println("Please answer r or c.")
+        end
+    end
+end
+
 function approve_airfoil(ms::MeshSlice, index::Int)
     mkpath(joinpath(OUTPUT_DIR, "airfoils"))
     editable_path = joinpath(OUTPUT_DIR, "airfoils", @sprintf("section_%02d.dat", index))
 
-    current_slice = select_airfoil_anchors(ms, index)
+    current_slice = select_airfoil_anchors_validated(ms, index)
     while true
         af = Airfoil(current_slice)
-        selig_slice = selig_ordered_slice(current_slice)
         xselig, yselig = selig_coordinates(af)
         fig, ax = PythonPlot.subplots()
         ax.plot(xselig, yselig,
@@ -416,14 +491,14 @@ function approve_airfoil(ms::MeshSlice, index::Int)
         print("Approve section $(index)? [y/n]: ")
         answer = lowercase(strip(readline(stdin)))
         if answer in ("y", "yes")
-            write_dat(editable_path, selig_slice)
+            write_xy_dat(editable_path, xselig, yselig)
             return af
         elseif answer in ("n", "no")
-            write_dat(editable_path, selig_slice)
+            write_xy_dat(editable_path, xselig, yselig)
             println("Wrote editable coordinates to $editable_path")
             println("Edit the file, then press Enter to reload it.")
             readline(stdin)
-            current_slice = select_airfoil_anchors(read_dat(editable_path, current_slice.r), index)
+            current_slice = select_airfoil_anchors_validated(read_dat(editable_path, current_slice.r), index)
         else
             println("Please answer y or n.")
         end
@@ -450,8 +525,9 @@ function cst_coordinates(p; N::Int=CST_RECONSTRUCTION_POINTS)
     pl = p[(np + 1):(2 * np)]
     leading_edge_weight = p[end - 1]
     dz = p[end]
-    xu = collect(range(0.0, 1.0; length=N))
-    xl = collect(range(0.0, 1.0; length=N))
+    θ = range(0.0, π; length=N)
+    xu = @. 0.5 * (1.0 - cos(θ))
+    xl = copy(xu)
     yu = half_cst(pu, xu, dz / 2.0, leading_edge_weight)
     yl = half_cst(pl, xl, -dz / 2.0, leading_edge_weight)
     return vcat(reverse(xu), xl[2:end]), vcat(reverse(yu), yl[2:end])
@@ -490,17 +566,52 @@ function airfoil_to_cst(af::Airfoil; n_coeffs=CST_NCOEFFS)
     return coords_to_cst(x, y; n_coeffs)
 end
 
-function write_cst_table(path, airfoils)
-    header = ["r", "twist_rad", "chord"]
+function approve_cst(index, r, editable_path; n_coeffs=CST_NCOEFFS,
+                     N=CST_RECONSTRUCTION_POINTS)
+    while true
+        raw = readdlm(editable_path, comments=true, comment_char='#')
+        size(raw, 2) >= 2 || error("Expected at least two columns in $editable_path.")
+        xaf = Float64.(raw[:, 1])
+        yaf = Float64.(raw[:, 2])
+        params = coords_to_cst(xaf, yaf; n_coeffs=n_coeffs)
+        x_cst, y_cst = cst_coordinates(params; N=N)
+
+        fig, ax = PythonPlot.subplots()
+        ax.plot(xaf, yaf, "o"; markersize=2.5, label="airfoil")
+        ax.plot(x_cst, y_cst, "-"; linewidth=1.5, label="CST fit")
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x/c")
+        ax.set_ylabel("y/c")
+        ax.set_title(@sprintf("Section %02d CST fit, r = %.6e", index, r))
+        ax.grid(true)
+        ax.legend()
+        fig.tight_layout()
+        PythonPlot.show()
+        plt.close(fig)
+
+        print("Approve CST fit for section $(index)? [y/n]: ")
+        answer = lowercase(strip(readline(stdin)))
+        if answer in ("y", "yes")
+            return params
+        elseif answer in ("n", "no")
+            println("Edit $editable_path, then press Enter to reload and refit.")
+            readline(stdin)
+        else
+            println("Please answer y or n.")
+        end
+    end
+end
+
+function write_cst_table(path, airfoils, all_params)
+    header = ["r", "twist_rad", "chord", "axial", "tangential"]
     append!(header, ["wu$(i)" for i in 1:CST_NCOEFFS])
     append!(header, ["wl$(i)" for i in 1:CST_NCOEFFS])
     append!(header, ["leading_edge_weight", "dz"])
 
     open(path, "w") do io
         println(io, join(header, ","))
-        for af in airfoils
-            params = airfoil_to_cst(af)
-            row = vcat([af.r, af.twist, af.chord], params)
+        for (af, params) in zip(airfoils, all_params)
+            row = vcat([af.r, af.twist, af.chord, af.axial, af.tangential], params)
             println(io, join((@sprintf("%.16e", value) for value in row), ","))
         end
     end
@@ -525,12 +636,16 @@ function main()
 
     slices = generate_slices(aligned_nodes)
     airfoils = Airfoil[]
+    all_params = Vector{Float64}[]
     for (i, slice) in enumerate(slices)
-        push!(airfoils, approve_airfoil(slice, i))
+        af = approve_airfoil(slice, i)
+        push!(airfoils, af)
+        editable_path = joinpath(OUTPUT_DIR, "airfoils", @sprintf("section_%02d.dat", i))
+        push!(all_params, approve_cst(i, slice.r, editable_path))
     end
 
     cst_path = joinpath(OUTPUT_DIR, RUN_NAME * "_cst.csv")
-    write_cst_table(cst_path, airfoils)
+    write_cst_table(cst_path, airfoils, all_params)
     println("Wrote CST table: $cst_path")
 end
 

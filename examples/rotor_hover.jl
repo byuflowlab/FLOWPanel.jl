@@ -21,7 +21,7 @@ nrevs   = 1        # Number of revolutions
 nt      = 36        # Number of time steps per revolution
 dt      = 60 / RPM / nt
 n_steps = nt * nrevs
-t_range = range(0.0, step=dt, length=n_steps)[1:3]
+t_range = range(0.0, step=dt, length=n_steps)# [1:3]
 
 # ==========================================================
 # Sensitivity parameters
@@ -43,10 +43,15 @@ wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
 read_path   = joinpath(pnl.examples_path, "data")
 # stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
 
-# phantom_3_rebuild_r2.msh
-msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
-te_indices_1 = [9, 175, 127]
-te_indices_2 = [13, 286, 238]
+# dji9443_50_57.msh
+msh_file  = joinpath(read_path, "dji9443_40_40.msh")
+te_indices_1 = [3420, 3380, 1833] .+ 1
+te_indices_2 = [1624, 1584, 36] .+ 1
+
+# # phantom_3_rebuild_r2.msh
+# msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
+# te_indices_1 = [9, 175, 127]
+# te_indices_2 = [13, 286, 238]
 
 # # phantom_3_rebuild_r3.msh
 # msh_file  = joinpath(read_path, "phantom_3_rebuild_r3.msh")
@@ -71,7 +76,9 @@ msh = GeoIO.load(msh_file).geometry
 nodes, cells = pnl.meshes2nodes_cells(msh)
 
 # scale to proper radius
-nodes .*= R / maximum(nodes[1, :])
+println("Scaling y-component of geometry to radius R = $R m")
+# nodes .*= R / maximum(nodes[1, :])
+nodes .*= R / maximum(nodes[2, :])
 
 # place-holder shedding
 shedding = pnl.noshedding
@@ -140,9 +147,9 @@ Uinf(t) = Vinf
 frames = pnl.ReferenceFrame(rotor;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
-    ω_axis = SVector{3}(0.0, 1.0, 0.0),
+    ω_axis = SVector{3}(-1.0, 0.0, 0.0),
     ω = 2*pi * RPM/60, # rad/s
-    R = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+    R = SMatrix{3,3}(-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0),
     name = "vehicle",
     child_index = Int[],
     dependent_index = [1]
@@ -177,20 +184,36 @@ maneuver!(frames, systems, wakes, t) = nothing
 systems      = (rotor,)
 wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
-monitors = (pnl.PressureBernoulli(rho; unsteady=true,
-                    correct_kuttacondition=p_correct_kuttacondition_flag),
-            pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
-                    i_frame=-1,
-                    normalization=pnl.RotorNormalization(rho, 2*R, 1),
-                    correct_kuttacondition=p_correct_kuttacondition_flag,
-                    # normalization=pnl.NoNormalization(),
-                    verbose=false
-                ),
-            # pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
-            #         rho, backend,
-            #         normalization=pnl.RotorNormalization(rho, 2*R, 1)
-            #     )
+pressure_bernoulli = pnl.PressureBernoulli(rho;
+                        unsteady=true,
+                        correct_kuttacondition=p_correct_kuttacondition_flag)
+force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;
+                            i_frame=1,
+                            normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                            correct_kuttacondition=p_correct_kuttacondition_flag,
+                            verbose=true
+                        )
+pressure_laplace = pnl.PressureLaplace(rotor, rho; verbose=false)
+force_monitor_laplace = pnl.ForceMonitor(length(t_range), 1;
+                            i_frame=1,
+                            normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                            correct_kuttacondition=p_correct_kuttacondition_flag,
+                            verbose=true
+                        )
+# Circulation-based cross-check against the pressure-integrated force history.
+kj_monitor = pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
+                rho, backend,
+                i_frame=1,
+                normalization=pnl.RotorNormalization(rho, 2*R, 1),
+                verbose=true
             )
+monitors = (
+    pressure_laplace,
+    force_monitor_laplace,
+    pressure_bernoulli,
+    force_monitor_bernoulli,
+    kj_monitor,
+)
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
 name = "rotor_hover"
@@ -203,4 +226,6 @@ name = "rotor_hover"
     path="rotor_hover", name,
 )
 
-println("Thrust Coefficient: ", monitors[2].force[2,:])
+println("Thrust Coefficient (PressureBernoulli + ForceMonitor): ", force_monitor_bernoulli.force[1, :])
+println("Thrust Coefficient (PressureLaplace + ForceMonitor): ", force_monitor_laplace.force[1, :])
+println("Thrust Coefficient (KuttaJoukowskiForce): ", kj_monitor.force[1, :])

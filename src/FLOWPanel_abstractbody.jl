@@ -94,7 +94,9 @@ abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
+    body.velocity_gradient .= 0.0
     body.velocity_kinematic .= 0.0
+    body.angular_velocity .= 0.0
     body.potential .= 0.0
     body.P .= 0.0
     body.F .= 0.0
@@ -1132,6 +1134,15 @@ function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, ::Fa
         target_buffer[6, i_buffer] = vy
         target_buffer[7, i_buffer] = vz
     end
+
+    # Seed the per-pass Hessian accumulator with the body's current
+    # velocity_gradient so successive influence! calls (wake-on-body, then
+    # body-on-body) accumulate into the same field rather than overwriting.
+    if GS
+        @inbounds for j in 1:3, i in 1:3
+            target_buffer[7 + (j-1)*3 + i, i_buffer] = target_system.velocity_gradient[i, j, i_target]
+        end
+    end
 end
 
 function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}
@@ -1140,15 +1151,19 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
                   target_system[2, i_target],
                   target_system[3, i_target])
-        
+
         phi_out = zero(eltype(target_system))
         U_out = @SVector zeros(eltype(target_system), 3)
+        H_out = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 
         for i_source in source_index # loop over sources
             # evaluate influence due to this source
-            phi, U, _ = induced(target, source_system, source_buffer, i_source, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch; kerneloffset=source_system.kerneloffset)
             phi_out += phi
             U_out += U
+            if HS
+                H_out += H
+            end
         end
 
         # store results
@@ -1159,6 +1174,12 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
             target_system[5, i_target] += U_out[1]
             target_system[6, i_target] += U_out[2]
             target_system[7, i_target] += U_out[3]
+        end
+        if HS
+            # column-major SMatrix → buffer rows 8..16 per FastMultipole.get_hessian
+            @inbounds for j in 1:3, i in 1:3
+                target_system[7 + (j-1)*3 + i, i_target] += H_out[i, j]
+            end
         end
     end
 end

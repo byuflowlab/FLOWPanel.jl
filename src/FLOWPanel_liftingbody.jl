@@ -56,9 +56,10 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Vector{TF}
-    dphidt::Vector{TF}                   # Time derivative of perturbation potential (∂φ/∂t)
     velocity::Array{TF, 2}              # Apparent fluid velocity at control points (body frame)
+    velocity_gradient::Array{TF, 3}     # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
     velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
+    angular_velocity::Vector{TF}        # Net angular velocity (global frame); populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
@@ -70,6 +71,8 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
 
     # wake properties
     semiinfinite_wake::Bool
+
+    needs_velocity_gradient::Base.RefValue{Bool}  # Set by simulate! when a monitor requires ∇u
 end
 
 _normalize_shedding(shedding::AbstractMatrix{Int}) = Matrix{Int}[Matrix{Int}(shedding)]
@@ -88,9 +91,10 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 Das::Vector{Array{TF,2}} = Array{TF,2}[],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
-                                dphidt=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
+                                velocity_gradient=zeros(TF, 3, 3, size(cells, 2)),
                                 velocity_kinematic=zeros(TF, 3, size(cells, 2)),
+                                angular_velocity=zeros(TF, 3),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
@@ -100,6 +104,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 characteristiclength=characteristiclength_sqrtarea,
                                 check_mesh=true, watertight=true,
                                 semiinfinite_wake=true,
+                                needs_velocity_gradient=Ref(false),
                                 ensure_winding::Bool=true,
                                 flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
@@ -185,9 +190,10 @@ function RigidWakeBody{E, N, TF, DBC}(
                     P, F,
                     strength,
                     potential,
-                    dphidt,
                     velocity,
+                    velocity_gradient,
                     velocity_kinematic,
+                    angular_velocity,
                     controlpoints,
                     normals,
                     velocity_te,
@@ -196,7 +202,8 @@ function RigidWakeBody{E, N, TF, DBC}(
                     kernelcutoff,
                     characteristiclength,
                     watertight,
-                    semiinfinite_wake
+                    semiinfinite_wake,
+                    needs_velocity_gradient
                 )
 end
 
@@ -208,8 +215,7 @@ function RigidWakeBody{E, N, TF}(
     return RigidWakeBody{E, N, TF, DBC}(nodes, cells, shedding; optargs...)
 end
 
-_write_vtk_body_fields!(vtk, body::RigidWakeBody) =
-    (vtk["dphidt", WriteVTK.VTKCellData()] = body.dphidt)
+_write_vtk_body_fields!(vtk, body::RigidWakeBody) = nothing
 
 function RigidWakeBody{E, N, TF, DBC}(
                                 mesh::VSPGeom.TriMesh, shedding;
@@ -995,6 +1001,14 @@ function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_
         target_system.velocity[1, i_target] += vx
         target_system.velocity[2, i_target] += vy
         target_system.velocity[3, i_target] += vz
+    end
+
+    # Accumulate 3x3 velocity gradient from rows 8..16 (column-major
+    # SMatrix layout per FastMultipole.get_hessian).
+    if GS
+        @inbounds for j in 1:3, i in 1:3
+            target_system.velocity_gradient[i, j, i_target] += target_buffer[7 + (j-1)*3 + i, i_buffer]
+        end
     end
 end
 

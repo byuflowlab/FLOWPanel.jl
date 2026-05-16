@@ -216,21 +216,21 @@ end
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_P!(out, body, Us, Uinf, rho, dphidt; correct_kuttacondition=true, clip=nothing)
+    calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=true, clip=nothing)
     calcfield_P!(body, Uinf, rho; optargs...)
     calcfield_P!(bodies, Uinf, rho; correct_kuttacondition=..., optargs...)
 
 Compute and store the dimensional gauge pressure field using the Bernoulli
 equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
 
-`dphidt` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass a zero
-vector for the steady form. The field is calculated in-place and added to
-`out` (hence, make sure that `out` starts with all zeroes).
+`phi_dot` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass
+`nothing` to ignore the unsteady term. The field is calculated in-place and
+added to `out` (hence, make sure that `out` starts with all zeroes).
 """
 function calcfield_P!(out::Arr1,
                        body::Union{NonLiftingBody, AbstractLiftingBody},
                        Us::Arr2, Uinf::Number, rho::Number,
-                       dphidt::AbstractVector;
+                       phi_dot::Union{Nothing, AbstractVector};
                        correct_kuttacondition=true,
                        clip::Union{Nothing, Function}=nothing,
                        ) where {Arr1<:AbstractArray{<:Number,1},
@@ -244,9 +244,11 @@ function calcfield_P!(out::Arr1,
         out[i] += half_rho * (Uinf2 - norm(U)^2)
     end
 
-    # Unsteady Bernoulli term: -rho * dphidt
-    for i in eachindex(out)
-        out[i] -= rho * dphidt[i]
+    if !isnothing(phi_dot)
+        # Unsteady Bernoulli term: -rho * ∂φ/∂t
+        for i in eachindex(out)
+            out[i] -= rho * phi_dot[i]
+        end
     end
 
     # Kutta-condition correction bringing the pressure on both sides of the TE
@@ -276,11 +278,12 @@ function calcfield_P!(out::Arr1,
     return out
 end
 
-calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) = calcfield_P!(body.P, body, body.velocity, Uinf, rho, body.dphidt; optargs...)
+calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) =
+    calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; optargs...)
 
 function calcfield_P!(bodies::Tuple, Uinf, rho; correct_kuttacondition=fill(true, length(bodies)), optargs...)
     for (i, body) in enumerate(bodies)
-        calcfield_P!(body.P, body, body.velocity, Uinf, rho, body.dphidt; correct_kuttacondition=correct_kuttacondition[i], optargs...)
+        calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; correct_kuttacondition=correct_kuttacondition[i], optargs...)
     end
 end
 
