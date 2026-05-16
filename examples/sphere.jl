@@ -11,11 +11,12 @@
 
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 
-import PyPlot as plt
 import CSV
 import DataFrames: DataFrame
-import PyPlot: @L_str
+import GeometricTools: plt, @L_str
 
 save_path       = "temps/"                  # Where to save results
 file_name       = "sphere00"                # Prefix of output files
@@ -38,20 +39,20 @@ NDIVS           = 2*[20, 40, 0]             # Number of divisions (cells) of (th
 loop_dim        = 2                         # Loop this coordinate dimension (1==theta, 2==phi)
 
 # Generates parametric (theta, phi) grid
-grid = pnl.gt.Grid(P_min, P_max, NDIVS, loop_dim)
+grid = gt.Grid(P_min, P_max, NDIVS, loop_dim)
 
 # Transforms the grid into a spherical cartesian space
-my_transform(X) = pnl.gt.spherical3D(vcat(R, X[1:2]))
-pnl.gt.transform!(grid, my_transform)
+my_transform(X) = gt.spherical3D(vcat(R, X[1:2]))
+gt.transform!(grid, my_transform)
 
 # Translate sphere away from the origin and rotate it
 O = R*[0.25, 0.5, 1.0]
-Oaxis = pnl.gt.rotation_matrix2(45, 0, 0)
-pnl.gt.lintransform!(grid, Oaxis, O)
+Oaxis = gt.rotation_matrix2(45, 0, 0)
+gt.lintransform!(grid, Oaxis, O)
 
 # Splits the quad cells into triangular cells
 dimsplit = 1
-triang_grid = pnl.gt.GridTriangleSurface(grid, dimsplit)
+triang_grid = gt.GridTriangleSurface(grid, dimsplit)
 
 # Creates non lifting body
 body = pnl.NonLiftingBody{ElementTypes}(triang_grid)

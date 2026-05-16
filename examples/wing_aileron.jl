@@ -1,3 +1,5 @@
+import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import FLOWPanel: norm, dot, cross
 import Meshes
 import GeoIO
@@ -83,10 +85,14 @@ function postprocess!(bodies, Vinf, rho, chords, span, scaling::Float64=1.0)
     for chord in chords
         Sref += chord * span * scaling * scaling
     end
-    
-    pnl.calcfield_U!(bodies, Vinf)
-    pnl.calcfield_P!(bodies, magVinf, rho)
-    pnl.calcfield_F!(bodies)
+
+    pnl.calcfield_U!(bodies, Vinf; backend)
+    pnl.apply_freestream!(bodies, Vinf)
+    pnl.calcfield_P!(bodies, magVinf, rho; correct_kuttacondition=fill(true, length(bodies)))
+    for body in bodies
+        pnl.calcfield_Cp(body, magVinf, rho)
+    end
+    pnl.calcfield_F!(bodies, magVinf, rho)
     LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
     # Force coefficients
@@ -97,51 +103,10 @@ function postprocess!(bodies, Vinf, rho, chords, span, scaling::Float64=1.0)
     return CL, CD
 end
 
-# """
-# Assumes freestream has already been applied.
-# """
-# function flow_tangency_residuals(bodies::Tuple)
-#     for body in bodies
-#         pnl.calc_normals!(body)
-#         pnl.calc_controlpoints!(body; off=1e-10)
-#     end
-
-#     pnl.influence!(bodies, bodies; scalar_potential=false, velocity=true)
-
-#     res = zeros(length(bodies))
-#     for (i, body) in enumerate(bodies)
-#         r = 0.0
-#         for (vel, normal) in zip(eachcol(body.velocity), eachcol(body.normals))
-#             vx, vy, vz = vel
-#             nx, ny, nz = normal
-#             r1 = vx * nx + vy * ny + vz * nz
-#             r += r1 * r1
-#         end
-#         res[i] = r / size(body.normals, 2)
-#     end
-
-#     return res
-# end
-
-# function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
-#     for body in bodies
-#         pnl.calc_normals!(body)
-#         pnl.calc_controlpoints!(body; off=cp_off)
-#         body.potential .= 0.0
-#     end
-
-#     pnl.influence!(bodies, bodies; scalar_potential=true, velocity=false)
-#     res = zeros(length(bodies))
-#     for (i, body) in enumerate(bodies)
-#         r = 0.0
-#         for potential in body.potential
-#             r += potential * potential
-#         end
-#         res[i] = r / length(body.potential)
-#     end
-
-#     return res
-# end
+# Extract nodes and cells from Meshes object
+nodes, cells = pnl.meshes2nodes_cells(msh)
+# 6enerate the paneled body
+body = bodytype(nodes, cells; CPoffset = (-1)^flip * 1e-14)
 
 run_names       = ["wing.msh", "surface.msh"]
 file_path       = "examples"
@@ -213,6 +178,22 @@ trs = [
     (9.8489*m, 0.0, -0.12*m)
 ]
 # ----------------- SOLVER SETTINGS -------------------------------------------
+    # # Extract nodes and cells from Meshes object
+    # nodes, cells = pnl.meshes2nodes_cells(msh)
+
+    # # Create trailing edge line
+    # offset = minimum(nodes[1, :])
+    # nte = 200
+    # trailingedge = zeros(3, nte)
+    # trailingedge[1, :] .= chord + offset
+    # trailingedge[2, :] .= range(-span/2, stop=span/2, length=nte)
+    # trailingedge[3, :] .= 0.0
+
+    # # Generate the paneled body
+    # shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance = 0.001 * span)
+    # body = bodytype(nodes, cells, [shedding];
+    #                 CPoffset = (-1)^flip * 1e-14,
+    #                 ensure_winding=false)
 
 # Body and wake model
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use

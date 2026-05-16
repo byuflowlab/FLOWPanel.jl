@@ -38,8 +38,14 @@ direction).
 Both angles must be in degrees.
 """
 function direction(; alpha::Number=0, beta::Number=0, gamma::Number=0)
-    M = gt.rotation_matrix2(gamma, -alpha, beta)
-    return M[:, 1]
+    roll = gamma
+    pitch = -alpha
+    yaw = beta
+    a, b, g = yaw*pi/180, pitch*pi/180, roll*pi/180
+    Rz = [cos(a) -sin(a) 0; sin(a) cos(a) 0; 0 0 1]
+    Ry = [cos(b) 0 sin(b); 0 1 0; -sin(b) 0 cos(b)]
+    Rx = [1 0 0; 0 cos(g) -sin(g); 0 sin(g) cos(g)]
+    return (Rz * Ry * Rx)[:, 1]
 end
 
 """
@@ -67,75 +73,7 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                       b_low=-1.0, b_up=1.0,
                       opt_args...
                       )
-
-    # ----------------- GEOMETRY DESCRIPTION -----------------------------------
-    c_tip = b/ar                        # Tip chord
-    c_root = c_tip/tr                   # Root chord
-    semispan = b/2                      # (m) semi-span length
-
-    y_tip = b/2
-    x_tip = y_tip*tan(lambda*pi/180)
-    z_tip = y_tip*tan(gamma*pi/180)
-
-    chords = [0.00 c_root/semispan;     # (semi-span position, chord c/semib)
-              1.00 c_tip/semispan]
-
-    twists = [0.0 twist_root;           # (semi-span position, twist (deg))
-              1.0 twist_tip]
-
-    x_pos = [0.00 0;                    # (semi-span position, LE x-position x/semib)
-              1.00 x_tip/semispan]
-
-    z_pos = [0.00 0;                    # (semi-span position, LE z-position x/semib)
-              1.00 z_tip/semispan]
-
-    airfoil_files = [(0.0, airfoil_root), # (semi-span position, airfoil file)
-                     (1.0, airfoil_tip)]
-
-    # ----------------- DISCRETIZATION 0000-------------------------------------
-
-    # Defines divisions
-    if span_NDIVS==nothing
-        b_NDIVS = [(1.0, 35, 20.0, true)]  # Span cell sections
-    else
-        b_NDIVS = span_NDIVS
-    end
-
-    if rfl_NDIVS==nothing
-        urfl_NDIVS = [(0.25, 7,   10.0, false),   # Cells on upper side of airfoils
-                      (0.50,  5,    1.0, true),
-                      (0.25,  6, 1/10.0, false)]
-    else
-        urfl_NDIVS = rfl_NDIVS
-    end
-
-    lrfl_NDIVS = urfl_NDIVS             # Cells on lower side of airfoils
-
-
-    # ----------------- LOFTING PARAMETERS -------------------------------------
-    # b_low = -1.0                        # Lower bound of span lofting
-    # b_up = 1.0                          # Upper bound of span lofting
-    symmetric = true                    # Lofting symmetric about b=0
-    spl_k = 1                           # Spline order of distributions along span
-    # spl_s = 0.0000001                 # Spline smoothing of distribution along span
-    # rflspl_s = 0.00000001             # Spline smoothing of airfoil cross sections.
-    # verify_spline = false             # Plots the splined distributions
-    # verify_rflspline = true           # Plots the splined airfoil cross sections
-
-    stuff = generate_loft_liftbody(bodytype, airfoil_files, airfoil_path,
-                                        urfl_NDIVS, lrfl_NDIVS,
-                                        semispan, b_low, b_up, b_NDIVS,
-                                        chords, twists, x_pos, z_pos;
-                                        loop_dim=1, dimsplit=1,
-                                        symmetric=symmetric,
-                                        spl_k=spl_k, spl_s=spl_s,
-                                        verify_spline=verify_spline,
-                                        verify_rflspline=verify_rflspline,
-                                        rflspl_s=rflspl_s,
-                                        opt_args...
-                                    )
-    @show typeof(stuff)
-    return stuff
+    error("simplewing has moved to examples/helper_functions.jl because it depends on GeometricTools. Include that helper file and call simplewing from the example namespace.")
 end
 
 direction(dir; X0=zeros(3)) = X -> dot(X - X0, dir)
@@ -143,6 +81,28 @@ loop(; Oaxis=Matrix(1.0I, 3, 3), X0=zeros(3)) = X -> -atand(dot(X - X0, Oaxis[:,
 nojunction(X) = Inf
 
 noprocessmsh(name, msh, options) = msh
+
+"""
+    meshes2nodes_cells(mesh::Meshes.SimpleMesh) -> (nodes, cells)
+
+Extract node and cell matrices from a `Meshes.SimpleMesh`.
+
+Returns `nodes` (3×N Float64 matrix of vertex coordinates) and `cells`
+(3×M Int matrix of triangle connectivity, 1-based vertex indices).
+"""
+function meshes2nodes_cells(mesh::Meshes.SimpleMesh)
+    nnodes = length(mesh.vertices)
+    ncells = length(mesh.topology.connec)
+    nodes = zeros(Float64, 3, nnodes)
+    cells = zeros(Int, 3, ncells)
+    for (i, v) in enumerate(mesh.vertices)
+        nodes[:, i] .= v.coords
+    end
+    for (i, c) in enumerate(mesh.topology.connec)
+        cells[:, i] .= c.indices
+    end
+    return nodes, cells
+end
 
 
 function distancetoline(line::Matrix; symmetry=nothing)
@@ -499,8 +459,12 @@ function calcfield_winding(body::Union{NonLiftingBody, AbstractLiftingBody};
     normals = _calc_normals(body)
     controlpoints = _calc_controlpoints(body, normals)
 
+    vertices = [Meshes.Point(nodes...) for nodes in eachcol(body.nodes)]
+    triangles = [Meshes.connect(Tuple(body.cells[:, i])) for i in axes(body.cells, 2)]
+    mesh = Meshes.SimpleMesh(vertices, triangles)
+
     # Calculate winding number associated to control points
-    windings = calcfield_winding(body.grid.orggrid, controlpoints)
+    windings = calcfield_winding(mesh, controlpoints)
 
     # Save field in body
     if addfield
@@ -510,10 +474,10 @@ function calcfield_winding(body::Union{NonLiftingBody, AbstractLiftingBody};
     return windings
 end
 
-function calcfield_winding(mesh::gt.Meshes.Mesh, controlpoints::AbstractMatrix)
+function calcfield_winding(mesh::Meshes.Mesh, controlpoints::AbstractMatrix)
 
-    points = ( gt.Meshes.Point(gt.Meshes.Vec(p...)) for p in eachcol(controlpoints) )
-    windings = gt.Meshes.winding(points, mesh)
+    points = ( Meshes.Point(Meshes.Vec(p...)) for p in eachcol(controlpoints) )
+    windings = Meshes.winding(points, mesh)
 
     return windings
 end

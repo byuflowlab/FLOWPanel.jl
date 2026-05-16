@@ -14,7 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
-import PyPlot as plt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import PythonPlot as plt
 
 save_path       = "."                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
@@ -78,31 +79,31 @@ println("Generating wing...")
         sides into a MultiBody that represents the wing.
 =#
 
-# Arguments for lofting the left side of the wing
+# Arguments for lofting the left side of the wing.
+# DBC=false selects the Neumann formulation (impermeability BC u·n = 0).
+# CPoffset is positive so control points sit just outside the surface.
 bodyoptargs_l = (;
-                    CPoffset=1e-14,                 # Offset control points slightly in the positive normal direction
+                    CPoffset=1e-6,
+                    kerneloffset=1e-6,
+                    kernelcutoff=1e-12,
+                    semiinfinite_wake=true,
+                    DBC=false,
                 )
 
-# Loft left side of the wing from left to right
-# kernel = pnl.ConstantSource                     # Kernel type to use
-kernel = pnl.ConstantDoublet                     # Kernel type to use
-# kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}                     # Kernel type to use
+# Kernel type to use (single ConstantDoublet or VortexRing for Neumann RigidWakeBody)
+kernel = pnl.ConstantDoublet
+kernel = pnl.VortexRing
 
-run_name = ""
-if kernel <: pnl.ConstantSource
-    run_name = "simplewing_source"
-elseif kernel <: pnl.ConstantDoublet
-    run_name = "simplewing_doublet"
+run_name = if kernel <: pnl.ConstantDoublet
+    "simplewing_doublet"
 elseif kernel <: pnl.VortexRing
-    run_name = "simplewing_vortexring"
-elseif kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet}
-    run_name = "simplewing_source_doublet"
+    "simplewing_vortexring"
 else
-    error("Unknown kernel type!")
+    error("Neumann RigidWakeBody supports only ConstantDoublet or VortexRing kernels; got $(kernel)")
 end
 
-bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
-@time wing = pnl.simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
+bodytype = pnl.RigidWakeBody{kernel}    # Lifting body with rigid semi-infinite wake
+@time wing = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                             bodytype=bodytype, bodyoptargs=bodyoptargs_l,
                             airfoil_root=airfoil, airfoil_tip=airfoil,
                             airfoil_path=airfoil_path,
@@ -115,8 +116,11 @@ bodytype = pnl.NonLiftingBody{kernel}    # Elements and wake model
                            )
 @show typeof(wing)
 
-if typeof(wing) <: Union{pnl.MultiBody, pnl.AbstractLiftingBody}
-    wing.Das .= repeat(Vinf ./ magVinf, 1, wing.nsheddings+1)
+if wing isa pnl.AbstractLiftingBody
+    Das = repeat(Vinf ./ magVinf, 1, wing.nsheddings+1)
+    for i in eachindex(wing.Das)
+        wing.Das[i] .= Das
+    end
 end
 
 # Freestream at every control point
@@ -153,7 +157,7 @@ println("Solving body...")
 # pnl.solve!(wing, solver; elprescribe=Tuple{Int,Float64}[])
 
 wing.velocity .= Uinfs
-solver = pnl.Backslash(wing; least_squares=false)
+solver = pnl.Backslash(wing)
 pnl.solve!(wing, solver)
 
 
@@ -167,35 +171,20 @@ println("Post processing...")
 #                                 leaf_size=10
 #                             )
 backend = pnl.DirectBackend()
-@time Us = pnl.calcfield_U(wing, wing; backend)
+@time pnl.calcfield_U!(wing, Vinf; backend)
 
-# NOTE: Since the boundary integral equation of the potential flow has a
-#       discontinuity at the boundary, we need to add the gradient of the
-#       doublet strength to get an accurate surface velocity
-
-# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-if kernel <: Union{pnl.ConstantDoublet, pnl.VortexRing}
-    UDeltaGamma = pnl.calcfield_Ugradmu(wing; force_cellTE=false)
-    
-    # Add both velocities together
-    pnl.addfields(wing, "Ugradmu", "U")
-end
-
-Us = pnl.get_field(wing, "U")["field_data"] # save for comparison/verification
-Us_matrix = zeros(3, length(Us))
-for i in 1:length(Us)
-    Us_matrix[:, i] = Us[i]
-end
-Us = Us_matrix
+# `calcfield_U!` already includes the doublet-gradient correction by default.
+Us = wing.velocity
 Us_doublet = deepcopy(Us) # save for comparison/verification
 
 
 
 # Calculate gauge pressure
-@time Ps = pnl.calcfield_P(wing, magVinf, rho)
+@time pnl.calcfield_P!(wing, magVinf, rho; correct_kuttacondition=true)
 
 # Calculate the force of each panel
-@time Fs = pnl.calcfield_F(wing)
+@time pnl.calcfield_F!(wing)
+Fs = wing.F
 
 Ftot = sum(Fs, dims=2)
 @show Ftot
@@ -211,35 +200,36 @@ if paraview
     str = save_path*"/"
 
     # Save wing as a VTK
-    str *= pnl.save(wing, run_name; path=save_path)
+    str *= pnl.write_vtk(joinpath(save_path, run_name), wing, 0, 0.0; overwrite=true)
 
     # Call Paraview
     # run(`paraview --data=$(str)`)
 end
 
-function plot_Cp(wing, spanposs, b, c; clearme=true)
+function plot_Cp(wing, spanposs, b, c, rho, magVinf; clearme=true)
 
-    # slice wing
-    spandirection = [0, 1, 0]
+    slicetol = 0.03 * b
+    qinf = 0.5 * rho * magVinf^2
 
     figname = "simplewing"
     fig = plt.figure(figname, figsize=(8,6))
     if clearme
         plt.clf()
-        fig.add_subplot(111, xlabel="x/c", ylabel="Cp")
+        ax = fig.add_subplot(111, xlabel="x/c", ylabel="Cp")
+    else
+        axs = fig.get_axes()
+        ax = length(axs) > 0 ? axs[0] : fig.add_subplot(111, xlabel="x/c", ylabel="Cp")
     end
-    axs = fig.get_axes()
 
     stls = ["-", "--", "-.", ":"]
 
-    normals = pnl._calc_normals(wing)
-    controlpoints = pnl.calc_controlpoints(wing, normals)
     for (i, spanpos) in enumerate(spanposs)
-        points, Cps = pnl.slicefield(wing, controlpoints, "Cp", spanpos*b/2, spandirection, false)
-        axs[1].plot(points[1, :] ./ c, Cps, label="2y/b=$(round(spanpos, digits=2))", stls[i])
+        points, slicePs = pnl.slice_scalarfield(wing, :P, 2, -spanpos * b / 2, slicetol)
+        Cps = slicePs ./ qinf
+        ax.plot(points[1, :] ./ c, Cps, label="2y/b=$(round(spanpos, digits=2))", stls[i])
     end
 
-    axs[1].legend()
+    ax.legend()
 end
 
-plot_Cp(wing, [0.5, 0.8, 0.9, 1.0], b, c; clearme=true)
+plot_Cp(wing, [0.5, 0.8, 0.9, 1.0], b, c, rho, magVinf; clearme=true)

@@ -1,6 +1,5 @@
 using Test
 import FLOWPanel as pnl
-import GeometricTools as gt
 
 function shared_edge_direction(cells::AbstractMatrix{Int}, ci::Int, a::Int, b::Int)
     n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
@@ -72,14 +71,12 @@ const CELLS_NONMANIFOLD = Int[
         @test pnl.iswatertight(NODES_NONMANIFOLD, CELLS_NONMANIFOLD) == (false, Int[])
         @test pnl.iswatertight(NODES_NONMANIFOLD, CELLS_NONMANIFOLD; return_open_cells=true) == (false, [1, 2, 3])
 
-        open_grid = make_basic_triangle_surface()
-        open_grid_raw = pnl.iswatertight(open_grid._nodes, pnl.grid2cells(open_grid); return_open_cells=true)
-        @test pnl.iswatertight(open_grid; return_open_cells=true) == open_grid_raw
+        open_nodes, open_cells = make_basic_triangle_surface()
+        @test pnl.iswatertight(open_nodes, open_cells; return_open_cells=true) == (false, [1, 2])
 
-        closed_grid = make_octa_triangle_surface()
-        closed_grid_raw = pnl.iswatertight(closed_grid._nodes, pnl.grid2cells(closed_grid); return_open_cells=true)
+        closed_nodes, closed_cells = make_octa_triangle_surface()
+        closed_grid_raw = pnl.iswatertight(closed_nodes, closed_cells; return_open_cells=true)
         @test closed_grid_raw == (true, Int[])
-        @test pnl.iswatertight(closed_grid; return_open_cells=true) == closed_grid_raw
 
         open_body = make_nonlifting(pnl.ConstantSource)
         open_body_raw = pnl.iswatertight(open_body.nodes, open_body.cells; return_open_cells=true)
@@ -150,6 +147,23 @@ const CELLS_NONMANIFOLD = Int[
         cps_bbox = zeros(3, 1)
         pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps_bbox, normals; off=0.5, characteristiclength=pnl.characteristiclength_bbox)
         @test isapprox(norm(cps_bbox[:, 1] - centroid), 0.5 * sqrt(2); atol=1e-12)
+
+        body_default = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                              CPoffset=0.25)
+        pnl.calc_normals!(body_default)
+        pnl.calc_controlpoints!(body_default)
+        @test body_default.characteristiclength === pnl.characteristiclength_sqrtarea
+        @test isapprox(body_default.controlpoints[:, 1] - centroid,
+                       0.25 * sqrt(0.5) .* body_default.normals[:, 1]; atol=1e-12)
+
+        body_unitary = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                              CPoffset=0.25,
+                                                              characteristiclength=pnl.characteristiclength_unitary)
+        pnl.calc_normals!(body_unitary)
+        pnl.calc_controlpoints!(body_unitary)
+        @test body_unitary.characteristiclength === pnl.characteristiclength_unitary
+        @test isapprox(body_unitary.controlpoints[:, 1] - centroid,
+                       0.25 .* body_unitary.normals[:, 1]; atol=1e-12)
     end
 
     @testset "characteristic lengths" begin
@@ -180,13 +194,13 @@ const CELLS_NONMANIFOLD = Int[
         @test obliques == obliques2
     end
 
-    @testset "rotate! reset! get_cell grid2cells" begin
+    @testset "rotate! reset! get_cell no grid2cells" begin
         body = make_nonlifting(pnl.ConstantSource)
         original_nodes = copy(body.nodes)
         pnl.rotate!(body, 0, 0, 90)
-        expected = gt.rotation_matrix2(0, 0, -90) * original_nodes
+        expected = [0 1 0; -1 0 0; 0 0 1] * original_nodes
         @test isapprox(body.nodes, expected; atol=1e-10)
-        @test isapprox(body.Oaxis, gt.rotation_matrix2(0, 0, -90); atol=1e-10)
+        @test isapprox(body.Oaxis, [0 1 0; -1 0 0; 0 0 1]; atol=1e-10)
 
         body2 = make_nonlifting(pnl.ConstantSource)
         pnl.rotate!(body2, 0, 0, 0; translation=[1.0, 0.0, 0.0])
@@ -211,12 +225,7 @@ const CELLS_NONMANIFOLD = Int[
 
         @test pnl.get_cell(body4, 1) == (CELLS_2TRI[1, 1], CELLS_2TRI[2, 1], CELLS_2TRI[3, 1])
 
-        tri_grid = make_basic_triangle_surface()
-        grid_cells = pnl.grid2cells(tri_grid)
-        @test size(grid_cells, 1) == 3
-        @test size(grid_cells, 2) == tri_grid.ncells
-        @test minimum(grid_cells) >= 1
-        @test maximum(grid_cells) <= size(tri_grid._nodes, 2)
+        @test !isdefined(pnl, :grid2cells)
     end
 
     @testset "NonLiftingBody construction" begin
@@ -237,15 +246,15 @@ const CELLS_NONMANIFOLD = Int[
         @test pnl.has_dirichlet_bc(make_nonlifting(pnl.ConstantSource; DBC=true)) == true
         @test pnl.has_dirichlet_bc(make_nonlifting(pnl.ConstantSource)) == false
 
-        tri_grid = make_basic_triangle_surface()
-        grid_body = pnl.NonLiftingBody{pnl.ConstantSource}(tri_grid)
-        @test size(grid_body.neighbor) == (3, grid_body.ncells)
-        @test grid_body.nnodes == size(tri_grid._nodes, 2)
-        @test grid_body.ncells == tri_grid.ncells
-        @test grid_body.watertight == false
+        tri_nodes, tri_cells = make_basic_triangle_surface()
+        grid_constructor_body = pnl.NonLiftingBody{pnl.ConstantSource}(tri_nodes, tri_cells)
+        @test size(grid_constructor_body.neighbor) == (3, grid_constructor_body.ncells)
+        @test grid_constructor_body.nnodes == size(tri_nodes, 2)
+        @test grid_constructor_body.ncells == size(tri_cells, 2)
+        @test grid_constructor_body.watertight == false
 
-        closed_grid = make_octa_triangle_surface()
-        closed_grid_body = pnl.NonLiftingBody{pnl.ConstantSource}(closed_grid)
+        closed_nodes, closed_cells = make_octa_triangle_surface()
+        closed_grid_body = pnl.NonLiftingBody{pnl.ConstantSource}(closed_nodes, closed_cells; watertight=true)
         @test closed_grid_body.watertight == true
 
         flipped_cells = copy(CELLS_TET)
@@ -260,5 +269,21 @@ const CELLS_NONMANIFOLD = Int[
 
         raw_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_TET), flipped_cells; watertight=true, ensure_winding=false)
         @test raw_body.cells == flipped_cells
+    end
+
+    @testset "calcfield_Cp" begin
+        body = make_nonlifting(pnl.ConstantSource, NODES_1TRI, CELLS_1TRI)
+        rho = 1.0
+        uinf = 10.0
+        qinf = 0.5 * rho * uinf^2
+
+        body.P[1] = qinf
+        @test pnl.calcfield_Cp(body, uinf, rho) == [1.0]
+
+        body.P[1] = 0.0
+        @test pnl.calcfield_Cp(body, uinf, rho) == [0.0]
+
+        body.P[1] = -3.0 * qinf
+        @test pnl.calcfield_Cp(body, uinf, rho) == [-3.0]
     end
 end

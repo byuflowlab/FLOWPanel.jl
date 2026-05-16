@@ -2,8 +2,8 @@
 # Vertices: [0,0,0], [1,0,0], [0,1,0]
 
 using FLOWPanel
-using FLOWPanel.gt.Meshes
-import FLOWPanel.PyPlot as plt
+using Meshes
+import PythonPlot as plt
 
 function make_single_triangle_body()
     pnl = FLOWPanel
@@ -27,7 +27,7 @@ function make_single_triangle_body()
     mesh = SimpleMesh(vertices, triangles)
 
     # Wrap it as a GridTriangleSurface
-    grid = FLOWPanel.gt.GridTriangleSurface(mesh)
+    grid = gt.GridTriangleSurface(mesh)
 
     # Construct NonLiftingBody passing `cells` explicitly to avoid calling gt-based grid2cells
     body = pnl.NonLiftingBody{pnl.ConstantSource}(grid)

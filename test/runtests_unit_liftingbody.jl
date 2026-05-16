@@ -1,7 +1,6 @@
 using Test
 import FLOWPanel as pnl
-import GeometricTools as gt
-using StaticArrays: SVector
+using StaticArrays: SVector, SMatrix
 
 @testset verbose=true "RigidWakeBody" begin
     @testset "construction" begin
@@ -34,12 +33,12 @@ using StaticArrays: SVector
         @test body_flipped.normals[3, 1] < 0
         @test body_flipped.normals[3, 2] < 0
 
-        open_grid = make_basic_triangle_surface()
-        open_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(open_grid, zeros(Int, 6, 0))
+        open_nodes, open_cells = make_basic_triangle_surface()
+        open_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(open_nodes, open_cells, zeros(Int, 6, 0); watertight=false)
         @test open_grid_body.watertight == false
 
-        closed_grid = make_octa_triangle_surface()
-        closed_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(closed_grid, zeros(Int, 6, 0))
+        closed_nodes, closed_cells = make_octa_triangle_surface()
+        closed_grid_body = pnl.RigidWakeBody{pnl.VortexRing}(closed_nodes, closed_cells, zeros(Int, 6, 0); watertight=true)
         @test closed_grid_body.watertight == true
     end
 
@@ -59,6 +58,64 @@ using StaticArrays: SVector
         end
         pnl.reset!(body)
         @test all(all(vte .== 0) for vte in body.velocity_te)
+    end
+
+    @testset "initialize_Das! matches simulate inline logic" begin
+        body_helper = make_plate_vortex_body()
+        body_inline = make_plate_vortex_body()
+        systems_helper = (body_helper,)
+        systems_inline = (body_inline,)
+        frames_helper = pnl.ReferenceFrame(body_helper;
+            origin=SVector{3}(0.0, 0.0, 0.0),
+            v=SVector{3}(0.0, 0.0, 0.0),
+            ω_axis=SVector{3}(0.0, 0.0, 1.0),
+            ω=2.0,
+            R=SMatrix{3,3}(1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0),
+            name="test",
+            child_index=Int[],
+            dependent_index=[1])
+        frames_inline = pnl.ReferenceFrame(body_inline;
+            origin=SVector{3}(0.0, 0.0, 0.0),
+            v=SVector{3}(0.0, 0.0, 0.0),
+            ω_axis=SVector{3}(0.0, 0.0, 1.0),
+            ω=2.0,
+            R=SMatrix{3,3}(1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0),
+            name="test",
+            child_index=Int[],
+            dependent_index=[1])
+        Uinf(t) = SVector{3}(1.0, 0.25, -0.1)
+        t0 = 0.0
+        dt0 = 0.05
+        eta_freestream = 0.3
+        eta_kinematic = 0.2
+
+        pnl.initialize_Das!(systems_helper, frames_helper, Uinf, t0, dt0;
+            set_Das_eta_freestream=eta_freestream,
+            set_Das_eta_kinematic=eta_kinematic)
+
+        uinf0 = Uinf(t0)
+        for sys in systems_inline
+            pnl.extra_reset!(sys)
+            pnl.extra_apply_freestream!(sys, uinf0)
+            pnl._accumulate_Das!(sys, dt0 * eta_freestream)
+        end
+        for sys in systems_inline
+            pnl.extra_reset!(sys)
+        end
+        pnl.kinematic_velocity!(systems_inline, frames_inline)
+        for sys in systems_inline
+            pnl._accumulate_Das!(sys, dt0 * eta_kinematic)
+        end
+        for sys in systems_inline
+            pnl.reset!(sys)
+        end
+
+        @test length(body_helper.Das) == length(body_inline.Das)
+        @test all(body_helper.Das[i] == body_inline.Das[i] for i in eachindex(body_helper.Das))
     end
 
     @testset "seeded shedding trace" begin

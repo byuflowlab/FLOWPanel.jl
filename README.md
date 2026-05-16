@@ -21,7 +21,7 @@
 
 ### Capabilities
 
-  > **Structured mesh generation:**
+  > **Structured mesh generation (optional examples helper with GeometricTools.jl):**
   > *Lofts*
   > *• Bodies of revolution*
   > *• User-defined space transformations*

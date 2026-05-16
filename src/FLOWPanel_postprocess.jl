@@ -3,8 +3,8 @@
     Definition of methods for post-processing solver results.
 
 # AUTHORSHIP
-  * Created by  : Eduardo J. Alvarez
-  * Email       : Edo.AlvarezR@gmail.com
+  * Created by  : Eduardo J. Alvarez and Ryan Anderson
+  * Email       : Edo.AlvarezR@gmail.com; rymanderson@gmail.com
   * Date        : Oct 2022
   * License     : MIT License
 =###############################################################################
@@ -40,11 +40,6 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
         calc_controlpoints!(body; off=abs(body.CPoffset))
     end
 
-    # apply freestream at control points
-    for body in bodies
-        apply_freestream!(body, uinf)
-    end
-
     # add wake-induced velocity at control points
     wakes = Tuple(w for w in wakes if !isnothing(w))
     length(wakes) > 0 && influence!(bodies, wakes, backend; scalar_potential=false, velocity=true)
@@ -62,23 +57,30 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
                 view(body.shedding_full, 1:2, :), scale=0.5)
             
             # alternatively, comment out the above function and:
-            # targetbody.velocity .*= 2.0
+            # body.velocity .*= 2.0 # (only works if self-induced velocity is the only one applied)
+            # influence!(body, body, backend; scalar_potential=false, velocity=true)
+        
 
             # alternatively, comment out the above and:
-            # targetbody.velocity .= zero(eltype(targetbody.velocity))
-            # compute_mu_gradient!(targetbody.velocity, targetbody.controlpoints, targetbody.normals,
-                # targetbody.cells,
-                # targetbody.neighbor,
-                # view(targetbody.strength, :, get_Gammai(targetbody)),
-                # view(targetbody.shedding_full, 1:2, :), 
-                # scale=1.0)
+            # body.velocity .= zero(eltype(body.velocity))
+            # compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
+            #     body.cells,
+            #     body.neighbor,
+            #     view(body.strength, :, get_Gammai(body)),
+            #     view(body.shedding_full, 1:2, :), 
+            #     scale=1.0)
         end
+    end
+
+    # apply freestream at control points
+    for body in bodies
+        apply_freestream!(body, uinf)
     end
 
     return nothing
 end
 
-calcfield_U!(targetbody; optargs...) = calcfield_U!((targetbody,); optargs...)
+calcfield_U!(targetbody, args...; optargs...) = calcfield_U!((targetbody,), args...; optargs...)
 
 ################################################################################
 # GRADIENT COMPUTATION
@@ -201,6 +203,7 @@ function compute_mu_gradient!(grad_mu,
 
         # 6. Solve the 3x3 local system
         g = ATA \ ATb
+
         grad_mu[1, i] -= g[1] * scale
         grad_mu[2, i] -= g[2] * scale
         grad_mu[3, i] -= g[3] * scale
@@ -213,20 +216,21 @@ end
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_P!(out, body, Us, Uinf, rho; dphidt=nothing, correct_kuttacondition=true, clip=nothing)
-    calcfield_P!(body, Uinf, rho; dphidt=nothing, optargs...)
-    calcfield_P!(bodies, Uinf, rho; dphidt=..., correct_kuttacondition=..., optargs...)
+    calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=true, clip=nothing)
+    calcfield_P!(body, Uinf, rho; optargs...)
+    calcfield_P!(bodies, Uinf, rho; correct_kuttacondition=..., optargs...)
 
 Compute and store the dimensional gauge pressure field using the Bernoulli
 equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
 
-The field is calculated in-place and added to `out` (hence, make sure that `out`
-starts with all zeroes).
+`phi_dot` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass
+`nothing` to ignore the unsteady term. The field is calculated in-place and
+added to `out` (hence, make sure that `out` starts with all zeroes).
 """
 function calcfield_P!(out::Arr1,
                        body::Union{NonLiftingBody, AbstractLiftingBody},
-                       Us::Arr2, Uinf::Number, rho::Number;
-                       dphidt::Union{Nothing, AbstractVector}=nothing,
+                       Us::Arr2, Uinf::Number, rho::Number,
+                       phi_dot::Union{Nothing, AbstractVector};
                        correct_kuttacondition=true,
                        clip::Union{Nothing, Function}=nothing,
                        ) where {Arr1<:AbstractArray{<:Number,1},
@@ -240,10 +244,10 @@ function calcfield_P!(out::Arr1,
         out[i] += half_rho * (Uinf2 - norm(U)^2)
     end
 
-    # Unsteady Bernoulli term: -rho * dphidt
-    if !isnothing(dphidt)
+    if !isnothing(phi_dot)
+        # Unsteady Bernoulli term: -rho * ∂φ/∂t
         for i in eachindex(out)
-            out[i] -= rho * dphidt[i]
+            out[i] -= rho * phi_dot[i]
         end
     end
 
@@ -274,12 +278,24 @@ function calcfield_P!(out::Arr1,
     return out
 end
 
-calcfield_P!(body::AbstractBody, Uinf, rho; dphidt=nothing, optargs...) = calcfield_P!(body.P, body, body.velocity, Uinf, rho; dphidt, optargs...)
+calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) =
+    calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; optargs...)
 
-function calcfield_P!(bodies::Tuple, Uinf, rho; dphidt=fill(nothing, length(bodies)), correct_kuttacondition=fill(true, length(bodies)), optargs...)
+function calcfield_P!(bodies::Tuple, Uinf, rho; correct_kuttacondition=fill(true, length(bodies)), optargs...)
     for (i, body) in enumerate(bodies)
-        calcfield_P!(body.P, body, body.velocity, Uinf, rho; dphidt=dphidt[i], correct_kuttacondition=correct_kuttacondition[i], optargs...)
+        calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; correct_kuttacondition=correct_kuttacondition[i], optargs...)
     end
+end
+
+"""
+    calcfield_Cp(body::AbstractBody, uinf, rho)
+
+Compute and return the pressure coefficient field from the dimensional gauge
+pressure stored in `body.P`.
+"""
+function calcfield_Cp(body::AbstractBody, uinf::Number, rho::Number)
+    qinf = 0.5 * rho * uinf^2
+    return body.P ./ qinf
 end
 
 ################################################################################

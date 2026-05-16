@@ -11,11 +11,12 @@
 
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 
-import PyPlot as plt
 import CSV
 import DataFrames: DataFrame
-import PyPlot: @L_str
+import GeometricTools: plt, @L_str
 import GeoIO
 
 save_path       = "temps/"                  # Where to save results
@@ -40,7 +41,7 @@ meshfile = "sphere_r1.msh"
 msh = GeoIO.load(meshfile).geometry
 
 # Generates grid
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 
 # Creates non lifting body
 body = pnl.NonLiftingBody{kernel}(grid)

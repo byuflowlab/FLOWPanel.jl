@@ -11,6 +11,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 import FLOWPanel: norm, dot, cross
 
 import Meshes
@@ -76,7 +78,7 @@ msh = msh.geometry
 msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
 
 # Wrap Meshes object into a Grid object from GeometricTools
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 body_preview = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
 
 # Read all trailing edges
@@ -92,7 +94,7 @@ for (trailingedgefile, spandir) in trailingedges
     TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
 
     # Convert TE Meshes object into a matrix of points used to identify the trailing edge
-    trailingedge = pnl.gt.vertices2nodes(TEmsh.vertices)
+    trailingedge = gt.vertices2nodes(TEmsh.vertices)
 
     # Sort TE points from "left" to "right" according to span direction
     trailingedge = sortslices(trailingedge; dims=2, by = X -> pnl.dot(X, spandir))

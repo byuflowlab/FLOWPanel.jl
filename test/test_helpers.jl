@@ -1,8 +1,9 @@
 using Test
 using LinearAlgebra: norm, dot, I
 import FLOWPanel as pnl
-import GeometricTools as gt
 import FastMultipole
+import GeoIO
+import Meshes
 using StaticArrays: SVector
 
 const NODES_1TRI = Float64[
@@ -81,6 +82,7 @@ function make_plate_vortex_body()
     ]
     shedding = [pnl.calc_shedding_from_seed(nodes, cells, 1, 3)]
     body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false)
+    body.Das[1] .= repeat([1.0, 0.0, 0.0], 1, size(body.Das[1], 2))
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= 1.0
@@ -94,13 +96,29 @@ const EXTERNAL_TARGETS = Float64[
 ]
 
 function make_sphere_source_body(; radius=1.0, ntheta=24, nphi=48, theta_pad=0.15)
-    p_min = [theta_pad, 0.0, 0.0]
-    p_max = [pi - theta_pad, 2pi, 0.0]
-    ndivs = [ntheta, nphi, 0]
-    grid = gt.Grid(p_min, p_max, ndivs; loop_dim=2)
-    gt.transform!(grid, X -> gt.spherical3D(vcat(radius, X[1:2])))
-    tri = gt.GridTriangleSurface(grid, 1)
-    return pnl.NonLiftingBody{pnl.ConstantSource}(tri)
+    theta = collect(range(theta_pad, pi - theta_pad; length=ntheta + 1))
+    phi = collect(range(0, 2pi; length=nphi + 1))[1:end-1]
+    nodes = zeros(Float64, 3, length(theta) * length(phi))
+    lin = LinearIndices((length(theta), length(phi)))
+    for ti in eachindex(theta), pi_i in eachindex(phi)
+        th = theta[ti]
+        ph = phi[pi_i]
+        nodes[:, lin[ti, pi_i]] .= radius .* [sin(th)*cos(ph), sin(th)*sin(ph), cos(th)]
+    end
+
+    cells = zeros(Int, 3, 2 * ntheta * nphi)
+    ci = 0
+    for ti in 1:ntheta, pi_i in 1:nphi
+        pn = pi_i == nphi ? 1 : pi_i + 1
+        n11 = lin[ti, pi_i]
+        n12 = lin[ti, pn]
+        n21 = lin[ti + 1, pi_i]
+        n22 = lin[ti + 1, pn]
+        cells[:, ci += 1] .= (n11, n21, n22)
+        cells[:, ci += 1] .= (n11, n22, n12)
+    end
+
+    return pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells; watertight=true)
 end
 
 function solve_source_body!(body; uinf=[1.0, 0.0, 0.0], rho=1.0, backend=pnl.DirectBackend())
@@ -147,23 +165,15 @@ function evaluate_velocity_and_potential(target_body, source_body, backend)
     return copy(target_body.velocity), copy(target_body.potential)
 end
 
-function make_basic_triangle_surface()
-    vertices = [
-        gt.Meshes.Point(0.0, 0.0, 0.0),
-        gt.Meshes.Point(1.0, 0.0, 0.0),
-        gt.Meshes.Point(1.0, 0.0, 1.0),
-        gt.Meshes.Point(0.0, 0.0, 1.0),
-    ]
-    triangles = [gt.Meshes.connect((1, 2, 3)), gt.Meshes.connect((1, 3, 4))]
-    mesh = gt.Meshes.SimpleMesh(vertices, triangles)
-    return gt.GridTriangleSurface(mesh)
-end
+make_basic_triangle_surface() = (copy(NODES_2TRI), copy(CELLS_2TRI))
+make_octa_triangle_surface() = (copy(NODES_OCT), copy(CELLS_OCT))
 
-function make_octa_triangle_surface()
-    vertices = [gt.Meshes.Point(NODES_OCT[1, i], NODES_OCT[2, i], NODES_OCT[3, i]) for i in axes(NODES_OCT, 2)]
-    triangles = [gt.Meshes.connect(Tuple(CELLS_OCT[:, i])) for i in axes(CELLS_OCT, 2)]
-    mesh = gt.Meshes.SimpleMesh(vertices, triangles)
-    return gt.GridTriangleSurface(mesh)
+function meshes_to_nodes_cells(mesh)
+    vertices = collect(Meshes.vertices(mesh))
+    nodes = reduce(hcat, (collect(Meshes.coordinates(v)) for v in vertices))
+    connec = getfield(Meshes.topology(mesh), :connec)
+    cells = reduce(hcat, (collect(getfield(c, :indices)) for c in connec))
+    return Float64.(nodes), Int.(cells)
 end
 
 function translate_nodes!(nodes, vector=SVector(0.0, 0.0, 0.0))
@@ -190,15 +200,14 @@ function generate_body(
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
 
-    # Wrap into Grid object
-    grid = pnl.gt.GridTriangleSurface(msh)
+    nodes, cells = meshes_to_nodes_cells(msh)
 
     # Generate TE shedding matrix
     shedding = zeros(Int, 6, 0)
 
     # Generate the paneled body
     CPoffset = 1e-6
-    body = bodytype(grid, [shedding]; CPoffset, flip_normals=false)
+    body = bodytype(nodes, cells, [shedding]; CPoffset, flip_normals=false, watertight=true)
     # pnl.write_vtk("spaced_nasa", body)
 
     # Recompute shedding from the finalized cell winding used by `body`.
@@ -269,7 +278,10 @@ function postprocess!(bodies, Vinf, rho, backend, chords, span)
 
     pnl.calcfield_U!(bodies, Vinf; backend)
     pnl.apply_freestream!(bodies, Vinf)
-    pnl.calcfield_Cp!(bodies, magVinf; correct_kuttacondition=fill(true, length(bodies)))
+    pnl.calcfield_P!(bodies, magVinf, rho; correct_kuttacondition=fill(true, length(bodies)))
+    for body in bodies
+        pnl.calcfield_Cp(body, magVinf, rho)
+    end
     pnl.calcfield_F!(bodies, magVinf, rho)
     LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
 
@@ -387,7 +399,7 @@ function interior_potential_max_residuals(bodies::Tuple; backend=pnl.DirectBacke
 
     pnl.influence!(bodies, bodies, backend; scalar_potential=true, velocity=false)
 
-    res = [maximum(abs.(body.potential)) for body in bodies]
+    res = [maximum(abs.(body.potential .+ potential)) for (body, potential) in zip(bodies, phi_ext)]
 
     for (body, potential) in zip(bodies, phi_ext)
         body.potential .= potential

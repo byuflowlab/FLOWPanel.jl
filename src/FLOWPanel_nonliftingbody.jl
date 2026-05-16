@@ -17,13 +17,12 @@
 
 """
     NonLiftingBody{E, N}
-    NonLiftingBody{E}(grid; DBC=false, optargs...)
     NonLiftingBody{E}(mesh; DBC=false, optargs...)
     NonLiftingBody{E}(nodes, cells; DBC=false, optargs...)
 
 Concrete body type for non-lifting surfaces discretized with source, doublet,
-or vortex-ring panels. Constructors accept a triangulated grid, a `VSPGeom`
-mesh, or raw node/cell arrays.
+or vortex-ring panels. Constructors accept a `VSPGeom` mesh or raw node/cell
+arrays.
 """
 mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
 
@@ -46,7 +45,10 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Array{TF,1}              # Potential at control points
-    velocity::Array{TF,2}               # Velocity at control points
+    velocity::Array{TF,2}               # Apparent fluid velocity at control points (body frame)
+    velocity_gradient::Array{TF,3}      # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
+    velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
+    angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     CPoffset::Float64                   # Control point offset in normal direction
@@ -55,6 +57,7 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
     inside_offset::Float64               # Offset to compute inside control points
+    needs_velocity_gradient::Base.RefValue{Bool}  # Set by simulate! when a monitor requires ∇u
 end
 
 function NonLiftingBody{E, N, TF, DBC}(
@@ -68,14 +71,18 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
+                velocity_gradient=zeros(TF, 3, 3, size(cells, 2)),
+                velocity_kinematic=zeros(TF, 3, size(cells, 2)),
+                angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
                 kernelcutoff=1e-14,
-                characteristiclength=characteristiclength_unitary,
+                characteristiclength=characteristiclength_sqrtarea,
                 watertight=false,
                 inside_offset=1e-6,
+                needs_velocity_gradient=Ref(false),
                 ensure_winding::Bool=true,
                 flip_normals::Bool=false
               ) where {E, N, TF, DBC}
@@ -96,6 +103,9 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength,
                 potential,
                 velocity,
+                velocity_gradient,
+                velocity_kinematic,
+                angular_velocity,
                 controlpoints,
                 normals,
                 CPoffset,
@@ -103,7 +113,8 @@ function NonLiftingBody{E, N, TF, DBC}(
                 kernelcutoff,
                 characteristiclength,
                 watertight,
-                inside_offset
+                inside_offset,
+                needs_velocity_gradient
               )
 end
 
@@ -113,30 +124,6 @@ function NonLiftingBody{E, N, TF}(
                 optargs...
               ) where {E, N, TF}
     return NonLiftingBody{E, N, TF, DBC}(nodes, cells; optargs...)
-end
-
-function NonLiftingBody{E, N, TF, DBC}(
-                grid::gt.GridTriangleSurface;
-                optargs...
-              ) where {E, N, TF, DBC}
-    
-    nodes = grid._nodes
-    cells = grid2cells(grid)
-    
-    watertight_guess, _ = iswatertight(nodes, cells)
-    
-    return NonLiftingBody{E, N, TF, DBC}(
-                nodes, cells;
-                watertight=watertight_guess, optargs...
-              )
-end
-
-function NonLiftingBody{E, N, TF}(
-                grid::gt.GridTriangleSurface;
-                DBC::Bool=false,
-                optargs...
-              ) where {E, N, TF}
-    return NonLiftingBody{E, N, TF, DBC}(grid; optargs...)
 end
 
 function NonLiftingBody{E, N, TF, DBC}(
@@ -161,14 +148,6 @@ _count(::Type{VortexRing}) = 1
 _count(::Type{Union{ConstantSource, ConstantDoublet}}) = 2
 _count(::Type{Union{ConstantSource, VortexRing}}) = 2
 _count(::Type{<:Any}) = error("Unsupported kernel type for NonLiftingBody.")
-
-function (NonLiftingBody{E})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E}
-    return NonLiftingBody{E, _count(E), eltype(grid._nodes), DBC}(grid; optargs...)
-end
-
-function (NonLiftingBody{E, N})(grid::gt.GridTriangleSurface; DBC::Bool=false, optargs...) where {E, N}
-    return NonLiftingBody{E, N, eltype(grid._nodes), DBC}(grid; optargs...)
-end
 
 function (NonLiftingBody{E})(mesh::VSPGeom.TriMesh; DBC::Bool=false, optargs...) where {E}
     nodes, _ = trimesh2cells(mesh)
@@ -282,82 +261,20 @@ function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i
         target_system.velocity[2, i_target] += vy
         target_system.velocity[3, i_target] += vz
     end
+
+    # Accumulate the 3x3 velocity gradient from rows 8..16 (column-major
+    # SMatrix layout per FastMultipole.get_hessian).
+    if GS
+        @inbounds for j in 1:3, i in 1:3
+            target_system.velocity_gradient[i, j, i_target] += target_buffer[7 + (j-1)*3 + i, i_buffer]
+        end
+    end
 end
 ################################################################################
 # COMMON FUNCTIONS
 ################################################################################
-"""
-    generate_loft(bodytype, args...; bodyoptargs=(), dimsplit=2, optargs...)
-
-Generate a lofted non-lifting body from `GeometricTools.generate_loft`.
-"""
-function generate_loft(bodytype::Type{B}, args...; bodyoptargs=(),
-                        dimsplit::Int64=2, optargs...) where {B<:NonLiftingBody}
-    # Loft the surface geometry
-    grid = gt.generate_loft(args...; optargs...)
-
-    # Split the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    return bodytype(triang_grid; bodyoptargs...)
-end
-
-"""
-    generate_revolution(bodytype, args...; bodyoptargs=(), dimsplit=2, loop_dim=2, optargs...)
-
-Generate a non-lifting body of revolution from `GeometricTools.surface_revolution`.
-"""
-function generate_revolution(bodytype::Type{B}, args...; bodyoptargs=(),
-                             dimsplit::Int64=2, loop_dim::Int64=2,
-                             optargs...)  where {B<:NonLiftingBody}
-    # Revolve the geometry
-    grid = _surface_revolution_compat(args...; loop_dim=loop_dim, optargs...)
-
-    # Split the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    return bodytype(triang_grid; bodyoptargs...)
-end
 
 ##### END OF COMMON FUNTIONS ###################################################
-
-"""
-    generate_revolution_liftbody(bodytype, args...; bodyoptargs=(), optargs...)
-
-Backward-compatible wrapper that constructs a revolved geometry and returns the
-requested non-lifting body type.
-"""
-function generate_revolution_liftbody(bodytype::Type{B}, args...; bodyoptargs=(),
-                                                  gridprocessing=nothing,
-                                                  dimsplit::Int=1,
-                                                  # loop_dim::Int=1,
-                                                  loop_dim::Int=2,
-                                                  axis_angle=270,
-                                                  optargs...) where {B<:NonLiftingBody}
-    # Revolves the geometry
-    grid = _surface_revolution_compat(args...; loop_dim=loop_dim,
-                                              axis_angle=axis_angle, optargs...)
-
-    # Intermediate processing of grid: rotate to align centerline with x-axis
-    if gridprocessing==nothing
-        Oaxis = gt.rotation_matrix2(0, 0, 90)
-        O = zeros(3)
-        gt.lintransform!(grid, Oaxis, O)
-
-    # User-defined intermediate processing of grid
-    else
-        gridprocessing(grid)
-    end
-
-    # Splits the quadrialateral panels into triangles
-    # dimsplit = 2              # Dimension along which to split
-    triang_grid = gt.GridTriangleSurface(grid, dimsplit)
-
-    # construct body
-    return bodytype(triang_grid; bodyoptargs...)
-end
 
 """
     FlatGround(center, normal, radius; panel_length=radius/5, bodyoptargs...)

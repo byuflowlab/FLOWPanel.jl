@@ -57,6 +57,27 @@ function calc_noseposition(ll::LiftingLine)
     end
 end
 
+function _write_liftingline_planar_vtk(self::LiftingLine, filename::AbstractString; path=nothing, num=nothing, optargs...)
+    cells = [
+        WriteVTK.MeshCell(
+            WriteVTK.VTKCellTypes.VTK_QUAD,
+            [self.linearindices[ei, 1],
+             self.linearindices[ei + 1, 1],
+             self.linearindices[ei + 1, 2],
+             self.linearindices[ei, 2]]
+        )
+        for ei in 1:self.nelements
+    ]
+
+    stem = _vtk_stem(filename; path, num)
+    vtk = WriteVTK.vtk_grid(stem * ".vtu", self.grid.nodes, cells)
+    for (name, field) in self.grid.fields
+        location = field.location == "node" ? WriteVTK.VTKPointData() : WriteVTK.VTKCellData()
+        vtk[name, location] = field.data
+    end
+    return join(WriteVTK.vtk_save(vtk), ", ")
+end
+
 
 function save(self::LiftingLine{R}, filename::AbstractString; 
                     format="vtk", 
@@ -135,7 +156,7 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                     "field_data"  => value(self.claeros))
                         ]
 
-    str *= gt.generateVTK(filename*horseshoe_suffix, horseshoes; cells=lines,
+    str *= _write_vtk_points_or_lines(filename*horseshoe_suffix, horseshoes; cells=lines,
                                 cell_data=horseshoes_data, num=debug ? 0 : nothing,
                                 override_cell_type=4, optargs...)
 
@@ -180,7 +201,7 @@ function save(self::LiftingLine{R}, filename::AbstractString;
             # Format the points as a vector of vectors 
             horseshoes = eachcol(value(horseshoes))
 
-            this_str = gt.generateVTK(filename*horseshoe_suffix, horseshoes; 
+            this_str = _write_vtk_points_or_lines(filename*horseshoe_suffix, horseshoes; 
                                         cells=lines, num=ei,
                                         override_cell_type=4, optargs...)
 
@@ -225,7 +246,7 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                             "field_data"  => [value(self.Us[:, ei])])
                                 ]
 
-            this_str = gt.generateVTK(filename*midpoint_suffix, midpoints;
+            this_str = _write_vtk_points_or_lines(filename*midpoint_suffix, midpoints;
                                         num=ei, 
                                         point_data=midpoints_data, optargs...)
 
@@ -275,7 +296,7 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                     "field_data"  => eachcol(value(self.Us)))
                         ]
 
-    str *= gt.generateVTK(filename*midpoint_suffix, midpoints; 
+    str *= _write_vtk_points_or_lines(filename*midpoint_suffix, midpoints; 
                                 num = debug ? 0 : nothing,
                                 point_data=midpoints_data, optargs...)
 
@@ -292,12 +313,12 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                     "field_data"  => value(self.aoas))
                         ]
 
-    str *= gt.generateVTK(filename*controlpoint_suffix, controlpoints; 
+    str *= _write_vtk_points_or_lines(filename*controlpoint_suffix, controlpoints; 
                                 point_data=controlpoints_data, optargs...)
 
     #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
     if !(R <: FD.Dual)
-        str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
+        str *= _write_liftingline_planar_vtk(self, filename*planar_suffix; optargs...)
     end
 
     return str

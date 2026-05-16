@@ -13,6 +13,25 @@
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################
+mutable struct LiftingLineGrid{R<:Number}
+    nodes::Matrix{R}
+    _ndivsnodes::Tuple{Int,Int,Int}
+    fields::Dict{String,Any}
+end
+
+function LiftingLineGrid(nspan::Int, nchord::Int; numtype::Type{R}=Float64) where {R<:Number}
+    return LiftingLineGrid{R}(zeros(R, 3, nspan*nchord), (nspan, nchord, 1), Dict{String,Any}())
+end
+
+function _add_field!(grid::LiftingLineGrid, name::AbstractString, field_type::AbstractString,
+                     data, location::AbstractString; raise_warn=false)
+    if haskey(grid.fields, name) && raise_warn
+        @warn "Replacing existing lifting-line grid field `$name`."
+    end
+    grid.fields[String(name)] = (; field_type=String(field_type), data, location=String(location))
+    return grid
+end
+
 struct LiftingLine{ R<:Number, 
                     S<:StripwiseElement, N,
                     DBC,
@@ -23,7 +42,7 @@ struct LiftingLine{ R<:Number,
                     LI<:LinearIndices} <: AbstractBody{S, N, R, DBC}
 
     # Internal properties
-    grid::gt.Grid                               # Flat-geometry grid
+    grid::LiftingLineGrid{R}                    # Flat-geometry grid
     linearindices::LI                           # Linear indices of grid.nodes where linearindices[i, j] 
                                                 # is TE (j==1) or LE (j==2) of the i-th row of nodes
     fields::Vector{String}                      # Available fields (solutions)
@@ -122,13 +141,7 @@ struct LiftingLine{ R<:Number,
         symmetric) = _discretize_wing_parameterization(args...; plots, optargs...)
 
         # ------------------ PREALLOCATE GRID MEMORY ---------------------------
-        P_min = [0, 0, 0]               # Lower boundary span, chord, dummy
-        P_max = [1, 1, 0]               # Upper boundary span, chord, dummy
-
-        NDIVS = [length(ypositions)-1, 1, 0]   # Divisions of span, chord, and dummy collapsed dimension (flat surface)
-
-        # Generate parametric grid
-        grid = gt.Grid(P_min, P_max, NDIVS; numtype=R)
+        grid = LiftingLineGrid(length(ypositions), 2; numtype=R)
 
         # Linear indices of grid
         linearindices = LinearIndices(grid._ndivsnodes)
@@ -1435,6 +1448,45 @@ end
 
 
 ##### INTERNAL FUNCTIONS #######################################################
+function _geometric_widths(n::Integer, expansion::Real, central::Bool)
+    n <= 0 && return Float64[]
+    n == 1 && return [1.0]
+    if isapprox(expansion, 1.0; atol=eps(Float64), rtol=eps(Float64))
+        return fill(1.0 / n, n)
+    end
+
+    if central
+        half = cld(n, 2)
+        r = expansion^(1 / max(half - 1, 1))
+        side = [r^(i - 1) for i in 1:half]
+        widths = iseven(n) ? vcat(reverse(side), side) : vcat(reverse(side[2:end]), side)
+    else
+        r = expansion^(1 / (n - 1))
+        widths = [r^(i - 1) for i in 1:n]
+    end
+    return widths ./ sum(widths)
+end
+
+function _multidiscretize(f, lo::Number, up::Number, discretization)
+    if discretization isa Integer
+        return f.(collect(range(lo, up; length=discretization + 1)))
+    end
+
+    span = up - lo
+    out = Float64[float(lo)]
+    cursor = float(lo)
+    for (fraction, ndivs, expansion, central) in discretization
+        seglen = span * fraction
+        widths = _geometric_widths(ndivs, expansion, central)
+        for w in widths
+            cursor += seglen * w
+            push!(out, cursor)
+        end
+    end
+    out[end] = float(up)
+    return f.(out)
+end
+
 "Discretize a parametric wing into segments"
 function _discretize_wing_parameterization(;
                         # -------- Geometry parameters -------------------------
@@ -1461,7 +1513,7 @@ function _discretize_wing_parameterization(;
     # ------------------ DISCRETIZE WING ---------------------------------------
 
     # Discretize the wing span
-    ypositions = gt.multidiscretize(identity, ypos_lo, ypos_up, discretization)
+    ypositions = _multidiscretize(identity, ypos_lo, ypos_up, discretization)
 
     # Convert ypos from Vector{Any} to Vector{Float} for type stability
     ypositions = Float64.(ypositions)

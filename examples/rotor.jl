@@ -1,7 +1,9 @@
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 import FLOWPanel: norm, dot, cross
 
-import FLOWPanel.GeometricTools.Meshes
+import Meshes
 import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
@@ -60,7 +62,7 @@ msh = msh |> Meshes.Scale(scaling)
 # msh = msh |> Meshes.TaubinSmoothing(10)
 
 # Wrap Meshes object into a Grid object from GeometricTools
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 
 # get trailing edge line
 nte = 10000

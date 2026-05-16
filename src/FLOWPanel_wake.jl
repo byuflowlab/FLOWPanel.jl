@@ -59,7 +59,7 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     return nothing
 end
 
-requires_hessian(::AbstractBody) = false # default behavior
+requires_hessian(b::AbstractBody) = b.needs_velocity_gradient[]
 requires_hessian(::AbstractFreeWake) = false # default behavior
 requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
@@ -123,8 +123,8 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, core_size, overflowed)
 end
 
-PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100) where {TK,NK,TF} =
-    PanelWake(body.shedding, kernel, TF; nwakerows)
+PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100, kwargs...) where {TK,NK,TF} =
+    PanelWake(body.shedding, kernel, TF; nwakerows, kwargs...)
 
 function reset!(wake::PanelWake)
     for vel in wake.velocity
@@ -401,15 +401,19 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
                   target_system[2, i_target],
                   target_system[3, i_target])
-        
+
         phi_out = zero(eltype(target_system))
         U_out = @SVector zeros(eltype(target_system), 3)
+        H_out = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 
         for i_source in source_index # loop over sources
             # evaluate influence due to this source
             phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch)
             phi_out += phi
             U_out += U
+            if HS
+                H_out += H
+            end
         end
 
         # store results
@@ -420,6 +424,11 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
             target_system[5, i_target] += U_out[1]
             target_system[6, i_target] += U_out[2]
             target_system[7, i_target] += U_out[3]
+        end
+        if HS
+            @inbounds for j in 1:3, i in 1:3
+                target_system[7 + (j-1)*3 + i, i_target] += H_out[i, j]
+            end
         end
         if HS
             # @warn "Hessian output not currently implemented for PanelWake targets"

@@ -1,5 +1,5 @@
-ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "Agg")
-import PyPlot as plt
+ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "TkAgg")
+import PythonPlot as plt
 import LaTeXStrings: @L_str
 import LinearAlgebra: norm
 include(joinpath(pnl.examples_path, "plotformat.jl"))
@@ -52,7 +52,6 @@ sliceUs = [
 
 perm = sortperm(view(slicepoints, 1, :))
 slicepoints = slicepoints[:, perm]
-sliceCps = sliceCps[perm]
 sliceUs = sliceUs[perm]
 
 # Plot experimental surface velocity distribution (figure 4.6 in Lewis 1991)
@@ -85,8 +84,8 @@ ax.set_ylim(ylims)
 ax.set_yticks(0:0.5:1.5)
 
 ax2.set_aspect(1.0)
-ax2.set_ylim([-0.62, 1])
-ax2.set_yticks([])
+# ax2.set_ylim([-0.62, 1])
+ax2.set_yticks(Float64[])
 ax2.plot(xlims, zeros(2), ":k", alpha=0.25, linewidth=1)
 
 ax.set_xlabel(L"$x$-position (m)")
@@ -99,3 +98,4 @@ for a in [ax, ax2]
 end
 
 fig.tight_layout()
+plt.show()

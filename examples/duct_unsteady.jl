@@ -14,6 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
@@ -85,7 +87,7 @@ bodytype = pnl.RigidWakeBody{kernel} # Elements and wake model
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Re-discretize the contour of the body of revolution according to NDIVS
-xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                         NDIVS_rfl_up, NDIVS_rfl_lo;
                                         verify_spline=false)
 
@@ -104,7 +106,7 @@ ys .+= d/2
 points = hcat(xs, ys)
 
 # Generate body of revolution
-body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
                                                         CPoffset=1e-12,
                                                         kerneloffset=1e-8,
@@ -144,7 +146,7 @@ AOA = AOAs[i]
 
     # select backend for N-body interactions
     leaf_size = 20
-    expansion_order = 10
+    expansion_order = 12
     multipole_acceptance = 0.4
     backend = pnl.FastMultipoleBackend(;
                                     expansion_order,
@@ -171,7 +173,7 @@ AOA = AOAs[i]
         max_iterations=50,         # Maximum number of iterations
         inner_iterations=20,       # Maximum number of inner iterations
         reverse_pass=false,        # Whether to do reverse sweeps or not
-        tolerance=1.0e-5,            # Convergence tolerance
+        tolerance=1.0e-7,            # Convergence tolerance
         rlx=1.0,                  # Relaxation factor
         expansion_order,
         multipole_acceptance,
@@ -180,7 +182,7 @@ AOA = AOAs[i]
         recenter=false,
         solution_history_length=3,      # 0 disables history & projection
         project_solution=false,        # warm-start next solve via polynomial extrapolation
-        project_solution_order=1,
+        project_solution_order=2,
         verbose=true
     )
     # body_solver = pnl.Backslash(body)
@@ -202,7 +204,7 @@ AOA = AOAs[i]
 
     println("\nBegin simulation...")
     @time begin
-        pnl.simulate!((body,), (wake,), frames, maneuver, Uinf, t_range;
-            body_solvers=(body_solver,), backend, verbose=true, name=run_name, path=save_path,
+        pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
+            body_solvers=body_solver, backend, verbose=true, name=run_name, path=save_path,
         )
     end

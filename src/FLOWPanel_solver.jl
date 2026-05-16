@@ -239,13 +239,23 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
+<<<<<<< HEAD
+=======
+    potential_old = copy(body.potential)
+
+>>>>>>> fastmultipole
     try
         set_strengths!(body)
+        # For single-body Dirichlet solves, `body.potential` is workspace for
+        # the interior self/source potential and the solve is homogeneous unless
+        # external influences have already been assembled into that workspace.
         body.potential .= zero(eltype(body.potential))
         ti = @elapsed influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
         tb, ts = _solve!(body, solver; backend, optargs...)
     finally
+        # body.potential .= potential_old
         body.CPoffset = CPoffset_old
+        body.potential .= potential_old
     end
 
     return ti, tb, ts
@@ -255,6 +265,13 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
         backend=DirectBackend(),
         update_cps_normals::Bool=true,
         optargs...)
+
+    if body isa RigidWakeBody && body.watertight
+        @warn "Solving a watertight RigidWakeBody with the Neumann formulation " *
+              "(DBC=false) gives a rank-deficient influence matrix; results " *
+              "will be unreliable. Use DBC=true (Dirichlet) for closed " *
+              "surfaces, or remove a cap to make the surface non-watertight." maxlog=1
+    end
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try

@@ -14,6 +14,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+import GeometricTools as gt
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import CSV
 import DataFrames: DataFrame
 import LinearAlgebra: norm
@@ -47,7 +49,7 @@ function make_duct(;
     )
     bodytype = bodytype{kernel}
 
-    xs, ys = pnl.gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
+    xs, ys = gt.rediscretize_airfoil(contour[:, 1], contour[:, 2],
                                           NDIVS_rfl_up, NDIVS_rfl_lo;
                                           verify_spline=false)
     ys[end] = ys[1]
@@ -56,7 +58,7 @@ function make_duct(;
     ys .+= d/2
     points = hcat(xs, ys)
 
-    body = pnl.generate_revolution_liftbody(bodytype, points, NDIVS_theta;
+    body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                 bodyoptargs = (
                     CPoffset=1e-12,
                     kerneloffset=1e-2,

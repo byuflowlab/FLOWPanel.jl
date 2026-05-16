@@ -11,6 +11,8 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 import FLOWPanel: norm, dot, cross
 
 import Meshes
@@ -79,17 +81,17 @@ TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshe
 
 # Mirror the original mesh to obtain a symmetric mesh of the airframe
 if !isnothing(symcoordinate)
-    msh = pnl.gt.mirror(msh, symcoordinate)
+    msh = gt.mirror(msh, symcoordinate)
 end
 
 # Uncomment this to do 10 smoothing iterations on the mesh
 # msh = msh |> Meshes.TaubinSmoothing(10)
 
 # Wrap Meshes object into a Grid object from GeometricTools
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 
 # Convert TE Meshes object into a matrix of points used to identify the trailing edge
-trailingedge = pnl.gt.vertices2nodes(TEmsh.vertices)
+trailingedge = gt.vertices2nodes(TEmsh.vertices)
 
 # Sort TE points from left to right
 trailingedge = sortslices(trailingedge; dims=2, by = X -> pnl.dot(X, spandir))

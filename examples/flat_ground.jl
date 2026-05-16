@@ -11,9 +11,11 @@
 =###############################################################################
 
 import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+import GeometricTools as gt
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm, I
-import FLOWPanel.GeometricTools.Meshes
+import Meshes
 import GeoIO
 
 # =============================================================================
@@ -35,7 +37,7 @@ meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")
 
 msh = GeoIO.load(meshfile).geometry
 msh = msh |> Meshes.Scale(1.0)
-grid = pnl.gt.GridTriangleSurface(msh)
+grid = gt.GridTriangleSurface(msh)
 
 nte = 10000
 trailingedge = zeros(3, nte)
@@ -145,7 +147,7 @@ body_solvers = (solver_wing, solver_ground)
 
 println("\nBegin wing + ground simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
-    body_solvers, backend, rho, verbose=true,
+    body_solvers, backend, verbose=true,
     monitors=(tangency_monitor,),
     path="flat_ground", name="flat_ground"
 )
