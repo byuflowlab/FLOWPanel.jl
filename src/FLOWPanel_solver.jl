@@ -239,18 +239,16 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
-    ts = 0.0
-    tb = 0.0
     try
         set_strengths!(body)
         body.potential .= zero(eltype(body.potential))
-        tb += @elapsed influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
-        ts += @elapsed _solve!(body, solver; backend, optargs...)
+        ti = @elapsed influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        tb, ts = _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return tb, ts
+    return ti, tb, ts
 end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
@@ -258,15 +256,14 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
         update_cps_normals::Bool=true,
         optargs...)
 
-    ts = 0.0
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try
-        ts += @elapsed _solve!(body, solver; backend, optargs...)
+        tb, ts = @elapsed _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return ts
+    return tb, ts
 end
 
 function numtype(self::AbstractBody)
@@ -577,6 +574,7 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
     fixed_sources = Vector{Any}(undef, length(bodies))
     tb = 0.0
     ts = 0.0
+    ti = 0.0
 
     try
         for (i, body) in enumerate(bodies)
@@ -589,7 +587,7 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
 
         scalar_potential = [has_dirichlet_bc(body) for body in bodies]
         velocity = [!has_dirichlet_bc(body) for body in bodies]
-        influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
+        ti += @elapsed influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
         for (i, body) in enumerate(bodies)
             if has_dirichlet_bc(body)
                 body.potential .+= potential_old[i]
@@ -622,7 +620,7 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
     end
 
-    return tb, ts
+    return ti, tb, ts
 end
 
 ###############################################################################
@@ -890,18 +888,21 @@ function solve!(bodies::Tuple, solvers::Tuple;
     converged = false
     t_solve = 0.0
     t_build = 0.0
+    t_inf = 0.0
     for iter in 1:max_outer_iterations
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
 
             sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
             if !isempty(sources)
-                influence!((body,), sources, backends[i];
+                ti = @elapsed influence!((body,), sources, backends[i];
                     scalar_potential=false,
                     velocity=true,
                     optargs...)
+                t_inf += ti
             end
-            tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false)
+            ti2, tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false)
+            t_inf += ti2
             t_build += tb
             t_solve += ts
         end
@@ -939,7 +940,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
         end
     end
 
-    return t_build, t_solve
+    return t_inf, t_build, t_solve
 end
 
 
@@ -1128,7 +1129,7 @@ function set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, false})
     body.strength[:, 1] .= 0.0
 end
 
-function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=false, optargs...)
+function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=true, optargs...)
 
     println("BackslashCoupled")
     # Sizes
@@ -1160,7 +1161,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         body.potential .= zero(eltype(body.potential))
     end
 
-    influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+    ti = @elapsed influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
 
     for (bi, body) in enumerate(bodies)
         if has_dirichlet_bc(body)
@@ -1189,9 +1190,11 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
                 end
             end
         # Factorize G matrix and cache it in solver
-        solver.Glu = lu!(solver.G)
+            solver.Glu = lu!(solver.G)
         end
     end
+
+    update_G=false
 
     # solve with cached LU
     sol = similar(solver.rhs)
@@ -1207,7 +1210,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views b.potential .= solver.phi_ext[r]
     end
 
-    return t_build, t_solve
+    return ti, t_build, t_solve
 end
 
 
