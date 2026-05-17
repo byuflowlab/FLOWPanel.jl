@@ -29,6 +29,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
                         plot_exp=true, lbl_exp="Experimental",
                         plot_vsp=true, lbl_vsp="VSPAERO",
                         slicetol=0.02*b, dim_span=2,
+                        xLE_fn=y -> 0.0,   # local LE x at spanwise coord y
                         out=[])
 
     npos = length(spanposs)
@@ -85,17 +86,40 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
         # Slice the pressure field at the requested spanwise station using the
         # unstructured-mesh-compatible primitive (filters cells by coord-tol).
-        points, Ps = pnl.slice_scalarfield(body, :P, dim_span, spanpos*b/2, slicetol)
-        Cps = Ps ./ (0.5 * rho * magVinf^2)
+        # Also restrict to the same side of the symmetry plane as `spanpos`.
+        # We do the slicing inline (instead of via `slice_scalarfield`) so we
+        # can capture panel indices and use `body.normals` to classify
+        # upper/lower by normal orientation — z-based classification fails
+        # on thin sections where adjacent triangles' centroids straddle the
+        # camber line.
+        cps_b = body.controlpoints
+        nrm_b = body.normals
+        target_sign = sign(spanpos)
+        target_y = spanpos*b/2
+        in_band = falses(body.ncells)
+        for p in 1:body.ncells
+            if abs(cps_b[dim_span, p] - target_y) <= slicetol
+                if target_sign == 0 || cps_b[dim_span, p] == 0 ||
+                   sign(cps_b[dim_span, p]) == target_sign
+                    in_band[p] = true
+                end
+            end
+        end
+        idx = findall(in_band)
+        isempty(idx) && error("No panels found within tolerance $slicetol of spanwise $target_y")
 
-        # Split into upper/lower by z (panel center) and sort each by x so the
-        # line plot follows the airfoil contour cleanly.
+        points = cps_b[:, idx]
+        Cps = body.P[idx] ./ (0.5 * rho * magVinf^2)
+
+        # Per-panel sweep-aware chord normalization.
         xs = points[1, :]
-        xmin = minimum(xs)
-        chordposs = (xs .- xmin) .* xscaling
-        zs = points[3, :]
-        z_mid = (maximum(zs) + minimum(zs)) / 2
-        upper = zs .>= z_mid
+        ys = points[2, :]
+        chordposs = (xs .- xLE_fn.(ys)) .* xscaling
+
+        # Classify upper/lower by panel normal z-component (robust on thin
+        # airfoils where z-of-centroid straddles the camber line).
+        nz = nrm_b[3, idx]
+        upper = nz .>= 0
         lower = .!upper
         ord_u = sortperm(chordposs[upper])
         ord_l = sortperm(chordposs[lower])

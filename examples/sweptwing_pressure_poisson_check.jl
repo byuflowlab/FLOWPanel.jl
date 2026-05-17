@@ -83,6 +83,56 @@ function rhs_from_acceleration(pl, body, acceleration)
     b = zeros(body.ncells)
     @inbounds for k in axes(pl.edges[1], 2)
         edge_a, edge_b, i, j = pl.edges[1][:, k]
+        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+        aedge_dot_r = 0.5 * (
+            (acceleration[1, i] + acceleration[1, j]) * r1 +
+            (acceleration[2, i] + acceleration[2, j]) * r2 +
+            (acceleration[3, i] + acceleration[3, j]) * r3)
+        flux = pl.rho * w * aedge_dot_r
+        b[i] += flux
+        b[j] -= flux
+    end
+    b[pl.reference_panel] = pl.reference_pressure
+    return b
+end
+
+function rhs_from_edge_material_derivative(pl, body, velocity_dot)
+    b = zeros(body.ncells)
+    @inbounds for k in axes(pl.edges[1], 2)
+        edge_a, edge_b, i, j = pl.edges[1][:, k]
+        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+        udot_edge_dot_r = 0.5 * (
+            (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
+            (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
+            (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
+
+        ni = view(body.normals, :, i)
+        nj = view(body.normals, :, j)
+        ui = view(body.velocity, :, i)
+        uj = view(body.velocity, :, j)
+        urel_i = ui .- _dot(ui, ni) .* ni
+        urel_j = uj .- _dot(uj, nj) .* nj
+        du = view(body.velocity, :, j) .- view(body.velocity, :, i)
+        convective_edge_dot_r = _dot(0.5 .* (urel_i .+ urel_j), du)
+
+        flux = pl.rho * w * (udot_edge_dot_r + convective_edge_dot_r)
+        b[i] += flux
+        b[j] -= flux
+    end
+    b[pl.reference_panel] = pl.reference_pressure
+    return b
+end
+
+function rhs_from_conormal_acceleration(pl, body, acceleration)
+    b = zeros(body.ncells)
+    @inbounds for k in axes(pl.edges[1], 2)
+        edge_a, edge_b, i, j = pl.edges[1][:, k]
         w, ell, nu1, nu2, nu3, n1, n2, n3 =
             pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)
         ai_n = acceleration[1, i] * n1 + acceleration[2, i] * n2 + acceleration[3, i] * n3
@@ -177,7 +227,7 @@ function build_sweptwing()
     return body, Vinf, magVinf, rho, b^2 / ar, b / ar
 end
 
-function run_laplace_case(body, Vinf, rho, Sref, c_ref, mode::Symbol)
+function run_laplace_case(body, Vinf, rho, Sref, c_ref, mode::Symbol; unsteady::Bool=false)
     backend = pnl.DirectBackend()
     body_l = deepcopy(body)
     body_l.needs_velocity_gradient[] = true
@@ -193,16 +243,15 @@ function run_laplace_case(body, Vinf, rho, Sref, c_ref, mode::Symbol)
         reference_panel=1,
         reference_pressure=0.0,
         verbose=false,
-        gradient_mode=mode)
+        gradient_mode=mode,
+        unsteady=unsteady)
     fm = pnl.ForceMonitor(1, 1;
         i_frame=-1,
         normalization=pnl.WingNormalization(rho, Sref, c_ref),
         correct_kuttacondition=false,
         verbose=false)
 
-    # Keep the zero history used by one-shot examples.  PressureLaplace defaults
-    # to unsteady=false, so this buffer is updated but not included in the RHS.
-    pl.velocity_dot[1] .= 0.0
+    pl.velocity_dot[1] .= unsteady ? 0.0 : -tangent_velocity(body_l)
     pl((body_l,), (nothing,), pnl.ReferenceFrame(body_l), Vinf, 0, 1.0)
     fm((body_l,), (nothing,), pnl.ReferenceFrame(body_l), Vinf, 0, 1.0)
 
@@ -251,18 +300,20 @@ function main()
     println("\n#===== setup =====#")
     @printf "panels=%d  boundary panels=%d  interior panels=%d\n" body.ncells sum(boundary_mask) sum(.!boundary_mask)
     @printf "Vinf=(%+.6f,%+.6f,%+.6f)  rho=%.4f  Sref=%.6f  cref=%.6f\n" Vinf[1] Vinf[2] Vinf[3] rho Sref c_ref
-    @printf "PressureLaplace unsteady=false; velocity_dot uses zero-history one-shot initialization\n"
+    @printf "PressureLaplace primary runs use unsteady=false; velocity_dot still updates after each call\n"
 
     println("\n#===== Bernoulli baseline, no Kutta pressure averaging =====#")
     @printf "Bernoulli force:          CL=%+11.5f  CD=%+11.5f\n" CL_b CD_b
     print_pressure_range("Bernoulli pressure", p_b)
 
-    body_sv, pl_sv, F_sv = run_laplace_case(body, Vinf, rho, Sref, c_ref, :surface_velocity)
+    body_sv, pl_sv, F_sv = run_laplace_case(body, Vinf, rho, Sref, c_ref, :surface_velocity; unsteady=false)
     body_raw, pl_raw, F_raw = run_laplace_case(body, Vinf, rho, Sref, c_ref, :raw_hessian)
+    body_sv_u, pl_sv_u, F_sv_u = run_laplace_case(body, Vinf, rho, Sref, c_ref, :surface_velocity; unsteady=true)
 
     @printf "\n#===== monitor forces =====#\n"
     @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "surface_velocity" _dot(F_sv, Lhat) _dot(F_sv, Dhat)
     @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "raw_hessian" _dot(F_raw, Lhat) _dot(F_raw, Dhat)
+    @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "surface_velocity u" _dot(F_sv_u, Lhat) _dot(F_sv_u, Dhat)
 
     lp_b_sv, residual_sv = summarize_operator("surface_velocity RHS", body_sv, pl_sv, p_b_shift, Lhat, Dhat, rho, magVinf, Sref, boundary_mask)
     summarize_operator("raw_hessian RHS", body_raw, pl_raw, p_b_shift, Lhat, Dhat, rho, magVinf, Sref, boundary_mask)
@@ -274,12 +325,16 @@ function main()
     @printf "%-22s median=%11.4e  p90=%11.4e  p99=%11.4e  max=%11.4e\n" "surface_velocity" median(f_sv) quantile(f_sv, 0.90) quantile(f_sv, 0.99) maximum(f_sv)
     @printf "%-22s median=%11.4e\n" "surface/raw ratio" (median(f_sv) / max(median(f_raw), eps()))
 
+    b_edge = rhs_from_edge_material_derivative(pl_sv, body_sv, zeros(size(body_sv.velocity)))
     b_gu = rhs_from_acceleration(pl_sv, body_sv, convective_acceleration(body_sv, zeros(size(body_sv.velocity)), pl_sv.surface_velocity_gradient[1]; transpose_gradient=false))
     b_gtu = rhs_from_acceleration(pl_sv, body_sv, convective_acceleration(body_sv, zeros(size(body_sv.velocity)), pl_sv.surface_velocity_gradient[1]; transpose_gradient=true))
-    println("\n#===== convective variant RHS residuals, surface_velocity gradient only =====#")
+    b_conormal = rhs_from_conormal_acceleration(pl_sv, body_sv, pl_sv.acceleration[1])
+    println("\n#===== acceleration RHS residuals, surface_velocity gradient only =====#")
+    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "edge material" (_norm(lp_b_sv .- b_edge) / max(_norm(b_edge), eps()))
     @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "G*u" (_norm(lp_b_sv .- b_gu) / max(_norm(b_gu), eps()))
     @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "transpose(G)*u" (_norm(lp_b_sv .- b_gtu) / max(_norm(b_gtu), eps()))
-    @printf "%-24s rel ||current rhs - G*u|| = %9.3e\n" "current vs G*u" (_norm(pl_sv.b[1] .- b_gu) / max(_norm(pl_sv.b[1]), eps()))
+    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "old conormal flux" (_norm(lp_b_sv .- b_conormal) / max(_norm(b_conormal), eps()))
+    @printf "%-24s rel ||current rhs - edge|| = %9.3e\n" "current vs edge" (_norm(pl_sv.b[1] .- b_edge) / max(_norm(pl_sv.b[1]), eps()))
 
     b_mimetic = rhs_from_bernoulli_edge_flux(pl_sv, body_sv, p_b_shift)
     p_mimetic = pl_sv.L[1] \ b_mimetic
@@ -291,8 +346,8 @@ function main()
     @printf "mimetic force:            CL=%+11.5f  CD=%+11.5f\n" CL_mim CD_mim
 
     println("\n#===== conclusion cue =====#")
-    @printf "The current PressureLaplace RHS now matches the mimetic Bernoulli edge-flux RHS for steady pressure.\n"
-    @printf "The G*u and transpose(G)*u variants remain non-mimetic diagnostics and are not used by the default steady RHS.\n"
+    @printf "The current PressureLaplace RHS uses material acceleration with the same two-point edge weights as L.\n"
+    @printf "The old conormal-flux and kinetic-pressure RHS values are diagnostic references only.\n"
     @printf "surface_velocity residual mean abs=%11.4e, median abs=%11.4e\n" mean(abs.(residual_sv)) median(abs.(residual_sv))
 end
 

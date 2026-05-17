@@ -232,25 +232,20 @@ end
                     cache=true, verbose=false, gradient_mode=:raw_hessian)
 
 Monitor that populates `body.P` by solving a sparse panel-centered surface
-pressure Poisson equation. When `unsteady=true`, the monitor uses `velocity_dot` as a rolling
+pressure Poisson equation. The monitor uses `velocity_dot` as a rolling
 time-difference buffer of the tangent-projected **inertial** fluid velocity
 `u_inertial = tangent(body.velocity) + body.velocity_kinematic`: between calls it
 stores `-u_inertial_old`, then during the call it becomes
 `(u_inertial_new - u_inertial_old) / dt`, which is the panel-following rate
-`d/dt[u(x_p(t), t)]`. The steady convective RHS is assembled mimetically from
-edge differences of the kinetic pressure head `-0.5ρ|body.velocity|²`, using
-the same weights as the panel-centered Laplacian. This makes the steady solve
-consistent with Bernoulli pressure under the current discrete operator. The
-full material acceleration is still computed into `acceleration` for diagnostics
-and future unsteady models.
-When `unsteady=false` (the default), this rolling buffer is still updated for
-continuity between calls, but the finite-difference term is not included in the
-pressure RHS.
+`d/dt[u(x_p(t), t)]`. With `unsteady=true`, this finite-difference term is
+included in the RHS. With `unsteady=false` (default), the rolling buffer is
+still updated but the RHS uses only the convective part of
+`Du/Dt = ∂u/∂t + (u_rel · ∇)u`.
 `velocity_dot` is initialized to zero, so on the first call the unsteady term
 is `u_inertial / dt` rather than a true finite difference; if this warm-up
 transient matters, pre-populate
 `monitor.velocity_dot[i]` with `-(tangent(body.velocity) .+ body.velocity_kinematic)`
-before the first call or keep `unsteady=false` for steady post-processing.
+before the first call.
 
 The diagnostic material-acceleration reconstruction has two gradient modes. The
 default `gradient_mode=:raw_hessian` uses the analytic spatial Jacobian
@@ -286,7 +281,7 @@ stored in the monitor.
 - `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body)
 - `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
 - `L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}` — sparse FV surface Laplacian per body, gauge-fixed at `reference_panel`
-- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from kinetic-pressure edge differences plus optional unsteady flux
+- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the material acceleration
 - `p::Vector{Vector{Float64}}` — solution vector per body (length ncells); written to `body.P` after each solve
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
@@ -660,51 +655,54 @@ function _pressure_apply_gauge(L, reference_panel::Int)
 end
 
 function _pressure_rhs!(m::PressureLaplace, body::AbstractBody, i_body::Int)
-    b = m.b[i_body]
-    acceleration = m.acceleration[i_body]
-    velocity_dot = m.velocity_dot[i_body]
+    # Refresh velocity_dot/u_inertial and diagnostic material-acceleration caches.
+    _pressure_material_acceleration!(m, body, i_body)
+    return _pressure_rhs_from_edge_material_derivative!(m.b[i_body], m, body, i_body,
+        m.unsteady ? m.velocity_dot[i_body] : nothing)
+end
+
+function _pressure_rhs_from_edge_material_derivative!(b::AbstractVector, m::PressureLaplace,
+                                                      body::AbstractBody, i_body::Int,
+                                                      velocity_dot::Union{Nothing,AbstractMatrix})
     edges = m.edges[i_body]
     rho = m.rho
     reference_panel = m.reference_panel
     reference_pressure = m.reference_pressure
     fill!(b, 0.0)
 
-    # Step 1: refresh velocity_dot/u_inertial/diagnostic gradient caches.  The
-    # convective contribution is accumulated below from kinetic-energy edge
-    # differences, using the same two-point weights as L; only velocity_dot is
-    # used as an acceleration flux here.
-    _pressure_material_acceleration!(m, body, i_body)
-
-    # Step 2: accumulate edge-integrated sources into b.  For the steady
-    # convective part, potential-flow Bernoulli gives
-    #   ∇p_conv = -ρ ∇(0.5 |u|²),
-    # so the FV-consistent edge flux is the same graph difference used by L:
-    #   w_ij (p_conv,i - p_conv,j).
-    # This avoids coupling a least-squares point acceleration to a two-point FV
-    # Laplacian.  The rolling finite-difference term remains an acceleration
-    # flux because it is not generally expressible as a local kinetic head.
+    # Accumulate a two-point material-derivative flux compatible with the FV
+    # Laplacian. When enabled, the unsteady part uses midpoint velocity_dot; the
+    # convective part approximates [(u_rel · ∇)u]·r by the edge directional
+    # difference u_rel,edge · (body.velocity_j - body.velocity_i). This keeps
+    # the RHS in the ∂t u + (u·∇)u form without coupling panel-center gradients
+    # to a two-point pressure operator.
     @inbounds for k in axes(edges, 2)
         edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
-        w, ell, nu1, nu2, nu3, n1, n2, n3 = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)
-
-        speed2_i = body.velocity[1, i]^2 + body.velocity[2, i]^2 + body.velocity[3, i]^2
-        speed2_j = body.velocity[1, j]^2 + body.velocity[2, j]^2 + body.velocity[3, j]^2
-        convective_flux = -0.5 * rho * w * (speed2_i - speed2_j)
-
-        unsteady_flux = 0.0
-        if m.unsteady
-            ai_n = velocity_dot[1, i] * n1 + velocity_dot[2, i] * n2 + velocity_dot[3, i] * n3
-            aj_n = velocity_dot[1, j] * n1 + velocity_dot[2, j] * n2 + velocity_dot[3, j] * n3
-            ai = (velocity_dot[1, i] - ai_n * n1) * nu1 +
-                 (velocity_dot[2, i] - ai_n * n2) * nu2 +
-                 (velocity_dot[3, i] - ai_n * n3) * nu3
-            aj = (velocity_dot[1, j] - aj_n * n1) * nu1 +
-                 (velocity_dot[2, j] - aj_n * n2) * nu2 +
-                 (velocity_dot[3, j] - aj_n * n3) * nu3
-            unsteady_flux = rho * ell * 0.5 * (ai + aj)
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+        udot_edge_dot_r = 0.0
+        if velocity_dot !== nothing
+            udot_edge_dot_r = 0.5 * (
+                (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
+                (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
+                (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
         end
 
-        flux = convective_flux + unsteady_flux
+        nx_i, ny_i, nz_i = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        nx_j, ny_j, nz_j = body.normals[1, j], body.normals[2, j], body.normals[3, j]
+        ui_n = body.velocity[1, i] * nx_i + body.velocity[2, i] * ny_i + body.velocity[3, i] * nz_i
+        uj_n = body.velocity[1, j] * nx_j + body.velocity[2, j] * ny_j + body.velocity[3, j] * nz_j
+        urel1 = 0.5 * (body.velocity[1, i] - ui_n * nx_i + body.velocity[1, j] - uj_n * nx_j)
+        urel2 = 0.5 * (body.velocity[2, i] - ui_n * ny_i + body.velocity[2, j] - uj_n * ny_j)
+        urel3 = 0.5 * (body.velocity[3, i] - ui_n * nz_i + body.velocity[3, j] - uj_n * nz_j)
+        du1 = body.velocity[1, j] - body.velocity[1, i]
+        du2 = body.velocity[2, j] - body.velocity[2, i]
+        du3 = body.velocity[3, j] - body.velocity[3, i]
+        convective_edge_dot_r = urel1 * du1 + urel2 * du2 + urel3 * du3
+
+        flux = rho * w * (udot_edge_dot_r + convective_edge_dot_r)
         b[i] += flux
         b[j] -= flux
         # When reference_pressure ≠ 0 the gauge column removal shifts the RHS.
@@ -715,6 +713,38 @@ function _pressure_rhs!(m::PressureLaplace, body::AbstractBody, i_body::Int)
     end
 
     # Step 3: enforce the gauge constraint b[reference_panel] = reference_pressure.
+    b[reference_panel] = reference_pressure
+    return b
+end
+
+function _pressure_rhs_from_acceleration!(b::AbstractVector, m::PressureLaplace,
+                                          body::AbstractBody, i_body::Int,
+                                          acceleration::AbstractMatrix)
+    edges = m.edges[i_body]
+    rho = m.rho
+    reference_panel = m.reference_panel
+    reference_pressure = m.reference_pressure
+    fill!(b, 0.0)
+
+    @inbounds for k in axes(edges, 2)
+        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+        aedge_dot_r = 0.5 * (
+            (acceleration[1, i] + acceleration[1, j]) * r1 +
+            (acceleration[2, i] + acceleration[2, j]) * r2 +
+            (acceleration[3, i] + acceleration[3, j]) * r3)
+        flux = rho * w * aedge_dot_r
+        b[i] += flux
+        b[j] -= flux
+        if !iszero(reference_pressure)
+            i == reference_panel && (b[j] += w * reference_pressure)
+            j == reference_panel && (b[i] += w * reference_pressure)
+        end
+    end
+
     b[reference_panel] = reference_pressure
     return b
 end

@@ -113,6 +113,7 @@ end
         monitor = pnl.PressureLaplace((body,), 1.2; reference_panel=1, reference_pressure=0.0)
 
         @test pnl.monitor_provides(monitor) == (:P,)
+        @test !monitor.unsteady
         @test pnl.monitor_requires_body_hessian(monitor)
         @test pnl.audit_monitors((monitor, pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()))) !== nothing
         @test_throws ArgumentError pnl.PressureLaplace(1.0)
@@ -260,25 +261,59 @@ end
         @test isapprox(p_l, p_b; atol=1e-10)
     end
 
-    @testset "PressureLaplace Bernoulli kinetic-energy RHS comparison" begin
-        body_b = make_octa_source_body()
-        body_l = make_octa_source_body()
-        for p in 1:body_b.ncells
-            body_b.velocity[1, p] = 0.1 * p
-            body_b.velocity[2, p] = -0.05 * p^2
-            body_b.velocity[3, p] = 0.2 - 0.03 * p
+    @testset "PressureLaplace acceleration RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
+        acceleration = zeros(3, body.ncells)
+        p_exact = [0.0, 2.0]
+        edge_a, edge_b, i, j = laplace.edges[1][:, 1]
+        r = body.controlpoints[:, j] .- body.controlpoints[:, i]
+        acceleration[:, i] .= ((p_exact[i] - p_exact[j]) / laplace.rho) .* r ./ dot(r, r)
+        acceleration[:, j] .= acceleration[:, i]
+
+        pnl._pressure_rhs_from_acceleration!(laplace.b[1], laplace, body, 1, acceleration)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+    end
+
+    @testset "PressureLaplace edge material derivative RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
+        velocity_dot = zeros(3, body.ncells)
+        p_exact = [0.0, 2.0]
+        edge_a, edge_b, i, j = laplace.edges[1][:, 1]
+        r = body.controlpoints[:, j] .- body.controlpoints[:, i]
+        velocity_dot[:, i] .= ((p_exact[i] - p_exact[j]) / laplace.rho) .* r ./ dot(r, r)
+        velocity_dot[:, j] .= velocity_dot[:, i]
+
+        pnl._pressure_rhs_from_edge_material_derivative!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        pnl._pressure_rhs_from_edge_material_derivative!(laplace.b[1], laplace, body, 1, velocity_dot)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+    end
+
+    @testset "PressureLaplace unsteady toggle" begin
+        body_steady = make_skewed_two_panel_body()
+        body_unsteady = make_skewed_two_panel_body()
+        for p in 1:body_steady.ncells
+            body_steady.velocity[:, p] .= [0.2 + 0.1p, -0.05p, 0.03]
         end
-        body_l.velocity .= body_b.velocity
+        body_unsteady.velocity .= body_steady.velocity
 
-        laplace = pnl.PressureLaplace((body_l,), 1.2; reference_panel=1)
-        pnl.calcfield_P!(body_b.P, body_b, body_b.velocity, 2.0, 1.2, zeros(body_b.ncells);
-            correct_kuttacondition=false)
-        laplace((body_l,), (nothing,), pnl.ReferenceFrame(body_l), [2.0, 0.0, 0.0], 0, 0.1)
+        steady = pnl.PressureLaplace((body_steady,), 1.0; reference_panel=1)
+        unsteady = pnl.PressureLaplace((body_unsteady,), 1.0; reference_panel=1,
+            unsteady=true)
+        steady.velocity_dot[1] .= 0.0
+        unsteady.velocity_dot[1] .= 0.0
 
-        p_b = body_b.P .- body_b.P[1]
-        p_l = body_l.P .- body_l.P[1]
-        @test isapprox(laplace.b[1], laplace.L[1] * p_b; atol=1e-10)
-        @test isapprox(p_l, p_b; atol=1e-8)
+        steady((body_steady,), (nothing,), pnl.ReferenceFrame(body_steady), zeros(3), 0, 0.25)
+        unsteady((body_unsteady,), (nothing,), pnl.ReferenceFrame(body_unsteady), zeros(3), 0, 0.25)
+
+        @test isapprox(steady.velocity_dot[1], expected_negative_tangent_velocity(body_steady); atol=1e-12)
+        @test isapprox(unsteady.velocity_dot[1], expected_negative_tangent_velocity(body_unsteady); atol=1e-12)
+        @test !isapprox(steady.b[1], unsteady.b[1]; atol=1e-12)
     end
 
     @testset "compute_mu_gradient! interior recovery" begin

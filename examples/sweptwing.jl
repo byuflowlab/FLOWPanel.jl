@@ -52,8 +52,12 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
               (0.25, n_rfl, 1/10.0, false)]
 
 # ----- Spanwise discretization (full span, single loft)
-n_span_full     = 30                            # Number of spanwise panels across full span
-NDIVS_span      = [(1.0, n_span_full, 20.0, true)]
+# Uniform distribution: with `central=true, expansion=20` the *root* panels
+# end up coarsest and the tips finest, which makes the inner Cp slice
+# (2y/b ≈ 0.04) too under-resolved to plot cleanly. Uniform spacing keeps
+# panel size constant across the span.
+n_span_full     = 40                            # Number of spanwise panels across full span
+NDIVS_span      = [(1.0, n_span_full, 1.0, true)]
 
 
 # ----------------- GENERATE BODY ----------------------------------------------
@@ -138,11 +142,12 @@ normalization = pnl.WingNormalization(rho, Sref, c_ref)
 frames_l = pnl.ReferenceFrame(body_l)
 pressure_laplace = pnl.PressureLaplace((body_l,), rho;
     reference_panel=1, reference_pressure=0.0, verbose=false,
+    unsteady=false,
     gradient_mode=:surface_velocity)
 force_laplace = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
     correct_kuttacondition=false, verbose=false)
 
-pressure_laplace.velocity_dot[1] .= 0.0    # steady single-shot
+pressure_laplace.velocity_dot[1] .= 0.0
 @time pressure_laplace((body_l,), (nothing,), frames_l, Vinf, 0, 1.0)
 @time force_laplace((body_l,), (nothing,), frames_l, Vinf, 0, 1.0)
 
@@ -185,16 +190,20 @@ CDexp = CDs_web[2]
 println("\n#===== INTEGRATED CL/CD =====#")
 @show CL_bernoulli CL_laplace CLexp
 @show CD_bernoulli CD_laplace CDexp
+println("Bernoulli vs Laplace CL diff: $(round(abs(CL_laplace-CL_bernoulli), sigdigits=4))")
+println("Bernoulli vs Laplace CD diff: $(round(abs(CD_laplace-CD_bernoulli), sigdigits=4))")
 println("Bernoulli CL error: $(round(abs(CL_bernoulli-CLexp)/CLexp*100, digits=2))%")
 println("Laplace   CL error: $(round(abs(CL_laplace-CLexp)/CLexp*100, digits=2))%")
 
 if make_plots_cps
     side = 1
     spanposs_cps = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
+    # 45° sweep: LE x at spanwise position y is |y|*tan(λ).
+    xLE_fn = y -> abs(y) * tan(lambda * pi / 180)
     fig1, axs = plot_Cps(body, spanposs_cps, b, rho, magVinf;
                                 xscaling=ar/b, AOA=AOA,
                                 xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
-                                slicetol=0.05*b)
+                                slicetol=0.013*b, xLE_fn=xLE_fn)
     fig1.tight_layout()
     fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps.png"), dpi=150)
     println("Saved Cp plot to sweptwing_Cps.png")
