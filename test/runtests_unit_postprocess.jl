@@ -113,8 +113,10 @@ end
         monitor = pnl.PressureLaplace((body,), 1.2; reference_panel=1, reference_pressure=0.0)
 
         @test pnl.monitor_provides(monitor) == (:P,)
+        @test pnl.monitor_requires_body_hessian(monitor)
         @test pnl.audit_monitors((monitor, pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()))) !== nothing
         @test_throws ArgumentError pnl.PressureLaplace(1.0)
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; gradient_mode=:unknown)
 
         body.velocity .= 0.0
         body.velocity[1, :] .= 1.0
@@ -126,6 +128,27 @@ end
         body.velocity[2, :] .-= 0.25
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 1, 0.25)
         @test isapprox(monitor.velocity_dot[1], expected_negative_tangent_velocity(body); atol=1e-12)
+    end
+
+    @testset "PressureLaplace surface velocity gradient mode" begin
+        body = make_octa_source_body()
+        monitor = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            gradient_mode=:surface_velocity)
+
+        @test !pnl.monitor_requires_body_hessian(monitor)
+
+        body.velocity .= 0.0
+        body.velocity[1, :] .= 0.3
+        body.velocity[2, :] .= -0.1
+        body.velocity_gradient .= NaN
+        monitor.velocity_dot[1] .= expected_negative_tangent_velocity(body)
+
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
+
+        @test all(isfinite, body.P)
+        @test all(isfinite, monitor.acceleration[1])
+        @test all(isfinite, monitor.surface_velocity_gradient[1])
     end
 
     @testset "PressureLaplace sparse matrix and solve" begin
@@ -237,6 +260,27 @@ end
         @test isapprox(p_l, p_b; atol=1e-10)
     end
 
+    @testset "PressureLaplace Bernoulli kinetic-energy RHS comparison" begin
+        body_b = make_octa_source_body()
+        body_l = make_octa_source_body()
+        for p in 1:body_b.ncells
+            body_b.velocity[1, p] = 0.1 * p
+            body_b.velocity[2, p] = -0.05 * p^2
+            body_b.velocity[3, p] = 0.2 - 0.03 * p
+        end
+        body_l.velocity .= body_b.velocity
+
+        laplace = pnl.PressureLaplace((body_l,), 1.2; reference_panel=1)
+        pnl.calcfield_P!(body_b.P, body_b, body_b.velocity, 2.0, 1.2, zeros(body_b.ncells);
+            correct_kuttacondition=false)
+        laplace((body_l,), (nothing,), pnl.ReferenceFrame(body_l), [2.0, 0.0, 0.0], 0, 0.1)
+
+        p_b = body_b.P .- body_b.P[1]
+        p_l = body_l.P .- body_l.P[1]
+        @test isapprox(laplace.b[1], laplace.L[1] * p_b; atol=1e-10)
+        @test isapprox(p_l, p_b; atol=1e-8)
+    end
+
     @testset "compute_mu_gradient! interior recovery" begin
         nodes, cells = make_planar_gradient_mesh()
         body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
@@ -272,6 +316,37 @@ end
 
         for i in exact_panels
             @test isapprox(grad_half[:, i], 0.5 .* grad_mu[:, i]; atol=1e-10)
+        end
+    end
+
+    @testset "compute_surface_velocity_gradient! interior recovery" begin
+        nodes, cells = make_planar_gradient_mesh()
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+            watertight=false,
+            ensure_winding=false)
+
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=0.0)
+
+        u = zeros(3, body.ncells)
+        u[1, :] .= vec(body.controlpoints[1, :] .+ 2 .* body.controlpoints[2, :])
+        u[2, :] .= vec(-3 .* body.controlpoints[1, :] .+ 0.5 .* body.controlpoints[2, :])
+        u[3, :] .= 2.0
+        grad_u = zeros(3, 3, body.ncells)
+        te_info = zeros(Int, 2, body.ncells)
+
+        pnl.compute_surface_velocity_gradient!(grad_u, u, body.controlpoints,
+            body.normals, body.cells, body.neighbor, te_info)
+
+        exact_panels = (1, 2, 4, 5, 7, 8)
+        for i in exact_panels
+            @test isapprox(grad_u[1, :, i], [1.0, 2.0, 0.0]; atol=1e-9)
+            @test isapprox(grad_u[2, :, i], [-3.0, 0.5, 0.0]; atol=1e-9)
+            @test isapprox(grad_u[3, :, i], [0.0, 0.0, 0.0]; atol=1e-9)
+        end
+
+        for i in 1:body.ncells, k in 1:3
+            @test abs(dot(grad_u[k, :, i], body.normals[:, i])) ≤ 1e-10
         end
     end
 

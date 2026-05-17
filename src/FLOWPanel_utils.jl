@@ -402,7 +402,7 @@ function slicefield(body::AbstractBody, controlpoints::Arr,
                     ) where {Arr<:AbstractArray{<:Number,2}}
 
     # Fetch field
-    field = getfield(body, fieldname)
+    field = getfield(body, Symbol(fieldname))
 
     # Find index of row or column slicing the field
     gdim = row ? 1 : 2                          # Dimension to slice

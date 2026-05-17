@@ -3,8 +3,8 @@
     45deg swept-back wing at an angle of attack of 4.2deg. This wing has an
     aspect ratio of 5.0, a RAE 101 airfoil section with 12% thickness, and no
     dihedral, twist, nor taper. This test case matches the experimental setup
-    of Weber, J., and Brebner, G., “Low-Speed Tests on 45-deg Swept-Back Wings,
-    Part I,” Tech. rep., 1951.
+    of Weber, J., and Brebner, G., "Low-Speed Tests on 45-deg Swept-Back Wings,
+    Part I," Tech. rep., 1951.
 
 # AUTHORSHIP
   * Author    : Eduardo J. Alvarez
@@ -15,14 +15,18 @@
 
 import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
-import PythonPlot as plt
+using GeometricTools: PyPlot as plt
+import LinearAlgebra
+const _norm  = LinearAlgebra.norm
+const _dot   = LinearAlgebra.dot
+const _cross = LinearAlgebra.cross
 
 run_name        = "sweptwing000"                # Name of this run
 
 save_path       = run_name                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
-paraview        = true                          # Whether to visualize with Paraview
+paraview        = true                         # Whether to visualize with Paraview
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
 AOA             = 4.2                           # (deg) angle of attack
@@ -42,85 +46,36 @@ gamma           = 0                             # (deg) dihedral
 airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 
 # ----- Chordwise discretization
-
-# NOTE: NDIVS is the number of divisions (panels) in each dimension. This an be
-#       either an integer, or an array of tuples as shown below
-
 n_rfl           = 8                             # Control number of chordwise panels
-# n_rfl         = 16                            # <-- uncomment this for finer discretization
-
-#           # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
-            # 0.25 to 0.75 of the airfoil has `n_rfl` panels evenly spaced
               (0.50, n_rfl,    1.0, true),
-            # 0.75 to 1.00 of the airfoil has `n_rfl` panels at a geometric expansion of 0.1 that is not central
               (0.25, n_rfl, 1/10.0, false)]
 
-# NOTE: A geometric expansion of 10 that is not central means that the last
-#       panel is 10 times larger than the first panel. If central, the
-#       middle panel is 10 times larger than the peripheral panels.
-
-# ----- Spanwise discretization
-n_span          = 15                            # Number of spanwise panels on each side of the wing
-# n_span        = 60                            # <-- uncomment this for finer discretization
-
-NDIVS_span_l    = [(1.0, n_span, 10.0, false)]  # Discretization of left side
-NDIVS_span_r    = [(1.0, n_span, 10.0, false)]  # Discretization of right side
+# ----- Spanwise discretization (full span, single loft)
+n_span_full     = 30                            # Number of spanwise panels across full span
+NDIVS_span      = [(1.0, n_span_full, 20.0, true)]
 
 
 # ----------------- GENERATE BODY ----------------------------------------------
 println("Generating body...")
 
-#= NOTE: Here we loft each side of the wing independently. One could also loft
-        the entire wing at once from left tip to right tip, but the sweep of the
-        wing would lead to an asymmetric discretization with the panels of left
-        side side would have a higher aspect ratio than those of the right side.
-        To avoid that, instead we loft the left side from left to right, then we
-        loft to right side from right to left, and we combine left and right
-        sides into a MultiBody that represents the wing.
-=#
+bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
 
-bodytype = pnl.RigidWakeBody{pnl.VortexRing}    # Elements and wake model
+bodyoptargs = (; CPoffset=1e-14)
 
-# Arguments for lofting the left side of the wing
-bodyoptargs_l = (;
-                    CPoffset=1e-14,                 # Offset control points slightly in the positive normal direction
-                )
-
-# Same arguments but negative CPoffset since the normals are flipped
-bodyoptargs_r = (;
-                    CPoffset=-1e-14
-                )
-
-# Loft left side of the wing from left to right
-@time wing_left = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
-                            bodytype=bodytype, bodyoptargs=bodyoptargs_l,
-                            airfoil_root=airfoil, airfoil_tip=airfoil,
-                            airfoil_path=airfoil_path,
-                            rfl_NDIVS=NDIVS_rfl,
-                            delim=",",
-                            span_NDIVS=NDIVS_span_l,
-                            b_low=-1.0, b_up=0.0
-                           )
-wing_left.Das .= repeat(Vinf ./ magVinf, 1, wing_left.nsheddings+1)
-
-# Loft right side of the wing from right to left
-@time wing_right = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
-                            bodytype=bodytype, bodyoptargs=bodyoptargs_r,
-                            airfoil_root=airfoil, airfoil_tip=airfoil,
-                            airfoil_path=airfoil_path,
-                            rfl_NDIVS=NDIVS_rfl,
-                            delim=",",
-                            span_NDIVS=NDIVS_span_r,
-                            b_low=1.0, b_up=0.0,
-                           )
-wing_right.Das .= repeat(Vinf ./ magVinf, 1, wing_right.nsheddings+1)
-
-# Put both sides together to make a wing with symmetric discretization
-bodies = [wing_left, wing_right]
-names = ["L", "R"]
-
-@time body = pnl.MultiBody(bodies, names)
+@time body = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
+                        bodytype=bodytype, bodyoptargs=bodyoptargs,
+                        airfoil_root=airfoil, airfoil_tip=airfoil,
+                        airfoil_path=airfoil_path,
+                        rfl_NDIVS=NDIVS_rfl,
+                        delim=",",
+                        span_NDIVS=NDIVS_span,
+                        b_low=-1.0, b_up=1.0,
+                       )
+wake_direction = reshape(Vinf ./ magVinf, :, 1)
+for i in eachindex(body.Das)
+    body.Das[i] .= repeat(wake_direction, 1, size(body.Das[i], 2))
+end
 
 # Freestream at every control point
 Uinfs = repeat(Vinf, 1, body.ncells)
@@ -131,195 +86,116 @@ println("Number of panels:\t$(body.ncells)")
 # ----------------- CALL SOLVER ------------------------------------------------
 println("Solving body...")
 
-# Solve body (panel strengths) giving `Uinfs` as boundary conditions and
-# `Das` as trailing edge rigid wake direction
+backend = pnl.DirectBackend()
 
-# # uncomment to use original (unabstracted) solver
-# Das = repeat(Vinf ./ magVinf, 1, body.nsheddings+1)
-# @time pnl.solve(body, Uinfs, Das)
-
-solver = pnl.Backslash(body; least_squares=false)
-# elprescribe = Tuple{Int,Float64}[] # [(1, 0.0)]   # Prescribe strength of first panel to be zero
-# solver = pnl.KrylovSolver(body;
-#             method=:gmres,
-#             itmax=20,
-#             atol=1e-4,
-#             rtol=1e-4,
-#             elprescribe,
-#             backend=pnl.FastMultipoleBackend(
-#                         expansion_order=7,
-#                         multipole_acceptance=0.4,
-#                         leaf_size=10
-#                     )
-#         )
-body.velocity .= Uinfs
-pnl.solve!(body, solver; elprescribe)
+pnl.apply_freestream!(body, Vinf)
+solver = pnl.Backslash(body)
+@time pnl.solve!(body, solver; backend)
 
 
-# ----------------- POST PROCESSING --------------------------------------------
-println("Post processing...")
+# ----------------- POST PROCESSING: BERNOULLI ---------------------------------
+println("Post processing (Bernoulli)...")
 
-# Calculate surface velocity induced by the body on itself
-backend = pnl.FastMultipoleBackend(
-                                expansion_order=7,
-                                multipole_acceptance=0.4,
-                                leaf_size=10
-                            )
-# backend = pnl.DirectBackend()
-@time Us = pnl.calcfield_U(body, body; backend)
+@time pnl.calcfield_U!(body, Vinf; backend)
 
-# NOTE: Since the boundary integral equation of the potential flow has a
-#       discontinuity at the boundary, we need to add the gradient of the
-#       doublet strength to get an accurate surface velocity
+# Bernoulli pressure (`calcfield_P!` evaluates 0.5 ρ (|U∞|² − |u|²); the
+# ∇_s µ correction is already folded into body.velocity by calcfield_U!)
+@time pnl.calcfield_P!(body, magVinf, rho)
 
-# Calculate surface velocity U_∇μ due to the gradient of the doublet strength
-UDeltaGamma = pnl.calcfield_Ugradmu(body)
+# Per-panel force from Bernoulli pressure
+@time pnl.calcfield_F!(body)
 
-# Add both velocities together
-pnl.addfields(body, "Ugradmu", "U")
 
-# Calculate gauge pressure
-@time Ps = pnl.calcfield_P(body, magVinf, rho)
+# ----------------- INTEGRATED FORCES: BERNOULLI -------------------------------
+Dhat = Vinf/_norm(Vinf)        # Drag direction
+Shat = [0, 1, 0]               # Span direction
+Lhat = _cross(Dhat, Shat)      # Lift direction
 
-# Calculate the force of each panel
-@time Fs = pnl.calcfield_F(body)
+LDS_bernoulli = pnl.calcfield_LDS(body, Lhat, Dhat)
+L_b = LDS_bernoulli[:, 1]
+D_b = LDS_bernoulli[:, 2]
+
+nondim = 0.5*rho*magVinf^2*b^2/ar   # Normalization factor (Sref = b^2/ar)
+CL_bernoulli = sign(_dot(L_b, Lhat)) * _norm(L_b) / nondim
+CD_bernoulli = sign(_dot(D_b, Dhat)) * _norm(D_b) / nondim
+
+
+# ----------------- POST PROCESSING: LAPLACE -----------------------------------
+println("Post processing (Laplace)...")
+
+body_l = deepcopy(body)
+body_l.needs_velocity_gradient[] = true
+body_l.velocity .= 0.0
+body_l.velocity_gradient .= 0.0
+pnl.calcfield_U!(body_l, Vinf; backend)
+pnl.influence!((body_l,), (body_l,), backend;
+    scalar_potential=false, velocity=false, velocity_gradient=true)
+
+Sref = b^2 / ar
+c_ref = b / ar
+normalization = pnl.WingNormalization(rho, Sref, c_ref)
+
+frames_l = pnl.ReferenceFrame(body_l)
+pressure_laplace = pnl.PressureLaplace((body_l,), rho;
+    reference_panel=1, reference_pressure=0.0, verbose=false,
+    gradient_mode=:surface_velocity)
+force_laplace = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
+    correct_kuttacondition=false, verbose=false)
+
+pressure_laplace.velocity_dot[1] .= 0.0    # steady single-shot
+@time pressure_laplace((body_l,), (nothing,), frames_l, Vinf, 0, 1.0)
+@time force_laplace((body_l,), (nothing,), frames_l, Vinf, 0, 1.0)
+
+# `WingNormalization` already divides by 0.5 ρ |Vinf|² Sref, so force_laplace.force
+# is in coefficient form. Project onto Lhat/Dhat to recover CL/CD.
+F_lap = force_laplace.force[:, 1]
+CL_laplace = _dot(F_lap, Lhat)
+CD_laplace = _dot(F_lap, Dhat)
 
 
 # ----------------- VISUALIZATION ----------------------------------------------
 if paraview
-    str = save_path*"/"
-
-    # Save body as a VTK
-    str *= pnl.save(body, "wing"; path=save_path)
-
-    # Call Paraview
-    run(`paraview --data=$(str)`)
+    mkpath(save_path)
+    pnl.write_vtk(joinpath(save_path, run_name*"_bernoulli_AOA$(AOA)"),
+                  body, 0, 0.0; overwrite=true)
+    pnl.write_vtk(joinpath(save_path, run_name*"_laplace_AOA$(AOA)"),
+                  body_l, 0, 0.0; overwrite=true)
+    println("Wrote VTK files to $(save_path)/")
 end
-
-
 
 
 # ----------------- COMPARISON TO EXPERIMENTAL DATA ----------------------------
 include(joinpath(pnl.examples_path, "sweptwing_postprocessing.jl"))
 
-save_outputs = false                        # Whether to save outputs or not
+save_outputs = false
 
-# Where to save figures (default to re-generating the figures that are used
-# in the docs)
 fig_path = joinpath(pnl.examples_path, "..", "docs", "resources", "images")
 outdata_path = joinpath(pnl.examples_path, "..", "docs", "resources", "data")
 
-# --------- Chordwise pressure distribution
-side = [-1, 1][2]               # Side of wing to plot, -1==left, 1==right
-wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
-spanposs = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
+# `plot_Cps` uses the unstructured-mesh-compatible `slice_scalarfield` primitive
+# and works on this body. `plot_deltaCps` / `plot_loading` still depend on
+# structured-grid helpers (`slicefield` / `calcfield_sectionalforce`) and remain
+# disabled until those are ported.
+make_plots_cps = true
 
-fig1, axs = plot_Cps(wingside, spanposs, b, rho, magVinf;
-                            xscaling=ar/b, AOA=AOA,
-                            xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-")
-fig1.tight_layout()
-
-
-# --------- Chordwise pressure difference
-side = [-1, 1][2]
-wingside = [wing_left, wing_right][side==-1 ? 1 : 2]
-spanposs = side*[0, 0.04, 0.08, 0.16, 0.24, 0.51, 0.65, 0.9, 0.95]
-
-fig2, axs = plot_deltaCps(wingside, spanposs, b, rho, magVinf;
-                            xscaling=ar/b, AOA=AOA,
-                            xlims=[-0.1, 1.1], ylims=[0, -1.0], stl="-")
-fig2.tight_layout()
-
-
-# --------- Spanwise loading
-Dhat = Vinf/norm(Vinf)        # Drag direction
-Shat = [0, 1, 0]              # Span direction
-Lhat = cross(Dhat, Shat)      # Lift direction
-
-nondim = 0.5*rho*magVinf^2*b/ar   # Normalization factor
-
-fig3, axs = plot_loading(body, Lhat, Dhat, b;
-                        spandirection=Shat, AOA=AOA,
-                        to_plot=[1, 2], yscalings=(1/nondim)*ones(3),
-                        ylims=[[0, 0.4, 0.1], [-0.02, 0.06, 0.02]],
-                        plots_optargs=[ (label="FLOWPanel", color="steelblue",),
-                                        (label="", color="steelblue")]
-                        )
-
-axs[1].set_ylabel(L"Sectional lift $c_\ell$")
-axs[2].set_ylabel(L"Sectional drag $c_d$")
-for ax in axs
-    ax.set_xticks(-1:0.5:1)
-end
-
-fig3.tight_layout()
-
-# --------- Save figures
-if save_outputs
-    fig1.savefig(joinpath(fig_path, "$(run_name)-chordpressure.png"),
-                                                dpi=300, transparent=true)
-    fig2.savefig(joinpath(fig_path, "$(run_name)-deltapressure.png"),
-                                                dpi=300, transparent=true)
-    fig3.savefig(joinpath(fig_path, "$(run_name)-loading.png"),
-                                                dpi=300, transparent=true)
-end
-
-# --------- Integrated forces: lift and induced drag
-
-# Calculate total force of the vehicle decomposed as lift, drag, and sideslip
-Dhat = Vinf/norm(Vinf)        # Drag direction
-Shat = [0, 1, 0]              # Span direction
-Lhat = cross(Dhat, Shat)      # Lift direction
-
-LDS = pnl.calcfield_LDS(body, Lhat, Dhat)
-
-L = LDS[:, 1]
-D = LDS[:, 2]
-
-# Force coefficients
-nondim = 0.5*rho*magVinf^2*b^2/ar   # Normalization factor
-CL = sign(dot(L, Lhat)) * norm(L) / nondim
-CD = sign(dot(D, Dhat)) * norm(D) / nondim
-
+# --------- Summary (printed before plotting so we get numbers even if plots fail)
 CLexp = CLs_web[2]
 CDexp = CDs_web[2]
 
-@show CL
-@show CD
+println("\n#===== INTEGRATED CL/CD =====#")
+@show CL_bernoulli CL_laplace CLexp
+@show CD_bernoulli CD_laplace CDexp
+println("Bernoulli CL error: $(round(abs(CL_bernoulli-CLexp)/CLexp*100, digits=2))%")
+println("Laplace   CL error: $(round(abs(CL_laplace-CLexp)/CLexp*100, digits=2))%")
 
-@show CLexp
-@show CDexp
-
-println("CL error:\t$(round(abs(CL-CLexp)/CLexp*100, digits=2))%")
-println("CD error:\t$(round(abs(CD-CDexp)/CDexp*100, digits=2))%")
-
-if save_outputs
-    str = """
-    |           | Experimental  | FLOWPanel                 | Error | `VSPAERO` |
-    | --------: | :-----------: | :-----------------------: | :---- |  :----:   |
-    | \$C_L\$   | 0.238         | $(round(CL, digits=3))    | $(round(abs(CL-CLexp)/CLexp*100, digits=1))% | *`0.257`* |
-    | \$C_D\$   | 0.005         | $(round(CD, digits=5))    | $(round(abs(CD-CDexp)/CDexp*100, digits=1))% | *`0.0033`* |
-    """
-
-    open(joinpath(outdata_path, run_name*"-CLCD.md"), "w") do f
-        println(f, str)
-    end
-end
-
-
-
-# ----------------- ANGLE OF ATTACK SWEEP --------------------------------------
-sweep_aoa = false                       # Whether to run AOA sweep
-
-if sweep_aoa
-    println("Running AOA sweep...")
-    include(joinpath(pnl.examples_path, "sweptwing_aoasweep.jl"))
-end
-
-# ----------------- SOLVER BENCHMARK -------------------------------------------
-solver_benchmark = false                # Whether to run solver benchmark
-
-if solver_benchmark
-    println("Running solver benchmark...")
-    include(joinpath(pnl.examples_path, "sweptwing_solverbenchmark.jl"))
+if make_plots_cps
+    side = 1
+    spanposs_cps = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
+    fig1, axs = plot_Cps(body, spanposs_cps, b, rho, magVinf;
+                                xscaling=ar/b, AOA=AOA,
+                                xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
+                                slicetol=0.05*b)
+    fig1.tight_layout()
+    fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps.png"), dpi=150)
+    println("Saved Cp plot to sweptwing_Cps.png")
 end

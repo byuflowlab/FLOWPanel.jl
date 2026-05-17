@@ -3,16 +3,15 @@
     Postprocessing functions of swept wing example and experimental data
 =###############################################################################
 
-import PythonPlot as plt
+using GeometricTools: PyPlot as plt
 import CSV
 import DataFrames: DataFrame
 import OrderedCollections: OrderedDict
-import PythonPlot: @L_str
+using LaTeXStrings: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 expdata_path = joinpath(pnl.examples_path, "data")
 
-dot(A, B) = sum(a*b for (a,b) in zip(A, B))
 norm(A) = sqrt(mapreduce(x->x^2, +, A))
 function cross!(out, A, B)
     out[1] = A[2]*B[3] - A[3]*B[2]
@@ -29,6 +28,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
                         plot_optargs=(label="FLOWPanel",),
                         plot_exp=true, lbl_exp="Experimental",
                         plot_vsp=true, lbl_vsp="VSPAERO",
+                        slicetol=0.02*b, dim_span=2,
                         out=[])
 
     npos = length(spanposs)
@@ -58,8 +58,6 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         end
 
 
-            println(spanpos)
-
         # Plot VSPAERO
         if plot_vsp && AOA == 4.2
 
@@ -85,15 +83,26 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
             end
         end
 
-        # Position of grid columns that are the closest to target
-        points, Ps = pnl.slicefield(body, controlpoints, "P", spanpos*b/2, spandirection, false)
+        # Slice the pressure field at the requested spanwise station using the
+        # unstructured-mesh-compatible primitive (filters cells by coord-tol).
+        points, Ps = pnl.slice_scalarfield(body, :P, dim_span, spanpos*b/2, slicetol)
         Cps = Ps ./ (0.5 * rho * magVinf^2)
 
-        chordposs = points[1, :]
-        chordposs .-= minimum(chordposs)
+        # Split into upper/lower by z (panel center) and sort each by x so the
+        # line plot follows the airfoil contour cleanly.
+        xs = points[1, :]
+        xmin = minimum(xs)
+        chordposs = (xs .- xmin) .* xscaling
+        zs = points[3, :]
+        z_mid = (maximum(zs) + minimum(zs)) / 2
+        upper = zs .>= z_mid
+        lower = .!upper
+        ord_u = sortperm(chordposs[upper])
+        ord_l = sortperm(chordposs[lower])
 
-        # Plot FLOWPanel
-        ax.plot(chordposs*xscaling, Cps, stl; clip_on=false, plot_optargs...)
+        plot_optargs_lower = merge(NamedTuple(plot_optargs), (label="_nolegend_",))
+        ax.plot(chordposs[upper][ord_u], Cps[upper][ord_u], stl; clip_on=false, plot_optargs...)
+        ax.plot(chordposs[lower][ord_l], Cps[lower][ord_l], stl; clip_on=false, plot_optargs_lower...)
 
         if xlims!=nothing; ax.set_xlim(xlims); end;
         if ylims!=nothing; ax.set_ylim(ylims); end;
@@ -115,7 +124,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         ax.spines["right"].set_visible(false)
         ax.spines["top"].set_visible(false)
 
-        push!(out, [spanpos, chordposs*xscaling, Cps])
+        push!(out, [spanpos, chordposs, Cps])
     end
 
     return fig, axs
@@ -309,23 +318,9 @@ function plot_loading(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, 
 
 end
 
-function plot_loading(multibody::pnl.MultiBody, args...; _fig=nothing, _axs=nothing,
-                        plots_optargs=[(label="FLOWPanel",) for i in 1:10],
-                        plot_exp=true, plot_vsp=true,
-                        optargs...)
-
-    fig, axs = _fig, _axs
-
-    for (bi, body) in enumerate(multibody.bodies)
-
-        fig, axs = plot_loading(body, args...; optargs..., _fig=fig, _axs=axs,
-                                    plot_optargs=plots_optargs[bi],
-                                    plot_exp=plot_exp*(bi==1), plot_vsp=plot_vsp*(bi==1))
-    end
-
-    return fig, axs
-
-end
+# `MultiBody` dispatch removed — `MultiBody` is no longer in FLOWPanel src.
+# The single-body `plot_loading` above handles both single bodies and the
+# full-span single-loft path used by the modernized sweptwing.jl.
 
 
 function calc_id(val, nd, f)

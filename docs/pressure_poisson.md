@@ -406,10 +406,29 @@ unchanged. If the mesh deforms, the weights must be updated.
 
 ## Right-Hand Side Formation
 
-The implemented monitor builds the right-hand side as a conservative
-edge-integrated source rather than explicitly computing a panel-centered
-divergence and multiplying by panel area. The acceleration is computed from the
-available panel velocity data,
+The implemented steady monitor builds the convective right-hand side
+mimetically from kinetic-pressure edge differences. For potential flow,
+Bernoulli gives the steady convective pressure head
+
+```math
+p_{\mathrm{conv},i}
+=
+-\frac{1}{2}\rho \lVert \mathbf{u}_i \rVert^2
+```
+
+up to an additive constant. The edge contribution therefore uses the same
+two-point weight as the pressure operator,
+
+```math
+b_i \mathrel{+}= w_{ij}(p_{\mathrm{conv},i} - p_{\mathrm{conv},j}),
+\qquad
+b_j \mathrel{-}= w_{ij}(p_{\mathrm{conv},i} - p_{\mathrm{conv},j}).
+```
+
+This makes the steady RHS exactly consistent with the assembled `L`: applying
+`L` to the Bernoulli pressure field produces the same edge fluxes. The
+acceleration is still computed from the available panel velocity data for
+diagnostics and for optional unsteady finite-difference contributions,
 
 ```math
 \mathbf{a}_i
@@ -420,8 +439,8 @@ available panel velocity data,
 ```
 
 where the unsteady term is obtained by finite differencing the current and
-previous monitor-call velocities. This acceleration is then projected into the
-local tangent plane,
+previous monitor-call velocities. When `PressureLaplace(unsteady=true)`, this
+finite-difference term is projected into the local tangent plane,
 
 ```math
 \mathbf{a}_{t,i}
@@ -430,8 +449,8 @@ local tangent plane,
 \mathbf{a}_i .
 ```
 
-This RHS is a finite-volume divergence, not a pointwise divergence evaluated at
-the panel center. For panel `i`,
+The unsteady RHS is a finite-volume divergence, not a pointwise divergence
+evaluated at the panel center. For panel `i`,
 
 ```math
 \int_{A_i} \nabla_s \cdot \mathbf{a}_t \, dA
@@ -450,7 +469,7 @@ co-normal with the center-to-center direction. This removes the orthogonal-dual
 mesh assumption from the original TPFA form while keeping the pressure field
 panel-centered.
 
-The edge contribution is
+The unsteady edge contribution is
 
 ```math
 f_{ij}
@@ -484,14 +503,9 @@ b_i \mathrel{+}= \rho f_{ij},
 b_j \mathrel{-}= \rho f_{ij}.
 ```
 
-This accumulates an edge-integrated approximation to
+This optional term accumulates an edge-integrated approximation to
 `\rho \nabla_s \cdot \mathbf{a}_t` directly into `b`, matching the `-\Delta_s`
-sign convention of `L`. The midpoint acceleration is the face value of
-`\mathbf{a}_t`; using the difference
-`\mathbf{a}_{t,j} - \mathbf{a}_{t,i}` would instead apply a graph derivative to
-the acceleration and would not represent the finite-volume flux of
-`\mathbf{a}_t`. Panel areas are not used in this v1 RHS. This keeps the
-implementation simple and conservative across shared edges. Future
+sign convention of `L`. Panel areas are not used in this v1 RHS. Future
 implementations can add explicit dual-cell areas or a vertex-based cotangent
 formulation, but that would be a separate pressure discretization rather than a
 drop-in replacement for the current panel-centered unknowns.
