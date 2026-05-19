@@ -239,11 +239,8 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
-<<<<<<< HEAD
-=======
     potential_old = copy(body.potential)
 
->>>>>>> fastmultipole
     try
         set_strengths!(body)
         # For single-body Dirichlet solves, `body.potential` is workspace for
