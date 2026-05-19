@@ -105,7 +105,9 @@ function scatter_Cp(wing, spanposs, b, c, rho, magVinf;
     return plot_data
 end
 
-function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="")
+function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="",
+        kernel = Union{pnl.ConstantSource, pnl.VortexRing}
+    )
 
     println("\n#===== SIMPLE WING SIMULATION =====#\n")
     println("\tAOA: $(AOA) degrees")
@@ -150,7 +152,7 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="")
     # kernel = pnl.ConstantSource               # Kernel type to use
     # kernel = pnl.ConstantDoublet               # Kernel type to use
     # kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}               # Kernel type to use
-    kernel = Union{pnl.ConstantSource, pnl.VortexRing}               # Kernel type to use
+    # kernel = Union{pnl.ConstantSource, pnl.VortexRing}               # Kernel type to use
     # kernel = pnl.VortexRing               # Kernel type to use
 
     # body type
@@ -189,6 +191,7 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="")
     println("\tGenerating body...")
     nodes, cells = pnl.meshes2nodes_cells(msh)
     nodes[2, :] .*= stretch # stretch aspect ratio
+    # cells = hcat(cells[:, 1:2044], cells[:, 2046:end]) # remove 1 panel for Neumann BC
     
     if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
         body = bodytype(nodes, cells; CPoffset=(-1)^flip * 1e-14)
@@ -251,11 +254,11 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="")
         # )
 
         # single body solve
-        # bodies = body
-        # solvers = pnl.Backslash(body)
+        bodies = body
+        solvers = pnl.Backslash(body)
 
         # endplate solve
-        bodies = (left_plate, right_plate, body)
+        # bodies = (left_plate, right_plate, body)
         pnl.apply_freestream!(bodies, Vinf)
         if endplates
             solvers = (pnl.FlatGroundSolver(left_plate), pnl.FlatGroundSolver(right_plate), pnl.Backslash(body))
@@ -317,7 +320,8 @@ end
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 # meshfile        = joinpath(read_path, "wing_ar4_naca0016_refined.msh")    # Gmsh file to read
 # meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")    # Gmsh file to read
-meshfile        = joinpath(read_path, "naca0012_nc133.msh")    # Gmsh file to read
+# meshfile        = joinpath(read_path, "naca0012_nc133.msh")    # Gmsh file to read
+meshfile        = joinpath(read_path, "naca0012_nc101_nw26_refined.msh")    # Gmsh file to read
 # shedding_points = [1972, 1900, 0] .+ 1 # Nodes from which to seed shedding (1-based indexing)
 # meshfile        = joinpath(read_path, "naca0012_a.msh")    # Gmsh file to read
 # meshfile        = joinpath(read_path, "naca0012_nc70_nocaps.msh")    # Gmsh file to read
@@ -326,8 +330,11 @@ meshfile        = joinpath(read_path, "naca0012_nc133.msh")    # Gmsh file to re
 # meshfile        = joinpath(read_path, "naca0012_nc70_refineLTE.msh")    # Gmsh file to read
 # meshfile        = joinpath(read_path, "naca0012_nc70_refineLE.msh")    # Gmsh file to read
 
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}
+
 # CL0, _ = run(;AOA=0.0)
-CL6, _, bodies, b, c, rho, magVinf = run(;AOA=5.88, meshfile)
+CL6, _, bodies, b, c, rho, magVinf = run(;AOA=7.0, meshfile, kernel)
+# CL6, _, bodies, b, c, rho, magVinf = run(;AOA=5.88, meshfile)
 # CL10, _ = run(;AOA=10.0)
 
 # slope = (CL10 - CL0) / (10.0 - 0.0) * 180.0 / π
@@ -386,15 +393,15 @@ x_cp_lower = [
 #     clearme=true, x_cp_lower=[x_cp_lower], x_cp_upper=[x_cp_upper],
 #     slicetol=0.02*b)
 
-data_str = scatter_Cp(bodies[3], [0.5], b, c, rho, magVinf; 
-    clearme=false, 
-    # spanpos_offset=0.0, 
-    colormap = plt.get_cmap("RdBu",15),
-    colormap_indices=[11],#[2, 5, 8, 11],
-    x_cp_upper = [nothing],
-    x_cp_lower = [nothing],
-    slicetol = 0.02 * b,
-    # labels = ["2y/b=$(round(spanpos, digits=2))" for spanpos in spanposs]
-    labels = ["structured"],
-    ss = [20], mrks = ["x"]
-)
+# data_str = scatter_Cp(bodies[3], [0.5], b, c, rho, magVinf; 
+#     clearme=false, 
+#     # spanpos_offset=0.0, 
+#     colormap = plt.get_cmap("RdBu",15),
+#     colormap_indices=[11],#[2, 5, 8, 11],
+#     x_cp_upper = [nothing],
+#     x_cp_lower = [nothing],
+#     slicetol = 0.02 * b,
+#     # labels = ["2y/b=$(round(spanpos, digits=2))" for spanpos in spanposs]
+#     labels = ["structured"],
+#     ss = [20], mrks = ["x"]
+# )

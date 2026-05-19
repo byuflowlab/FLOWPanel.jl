@@ -406,10 +406,8 @@ unchanged. If the mesh deforms, the weights must be updated.
 
 ## Right-Hand Side Formation
 
-The implemented monitor builds the right-hand side as a conservative
-edge-integrated source rather than explicitly computing a panel-centered
-divergence and multiplying by panel area. The acceleration is computed from the
-available panel velocity data,
+The monitor computes material acceleration from the available panel velocity
+data,
 
 ```math
 \mathbf{a}_i
@@ -420,81 +418,65 @@ available panel velocity data,
 ```
 
 where the unsteady term is obtained by finite differencing the current and
-previous monitor-call velocities. This acceleration is then projected into the
-local tangent plane,
+previous monitor-call velocities. `PressureLaplace(unsteady=false)` is the
+default and omits this finite-difference term from the RHS while still updating
+the rolling history buffer; `unsteady=true` includes it. The RHS is then
+assembled with the same two-point edge weight as the pressure operator. Since
 
 ```math
-\mathbf{a}_{t,i}
-=
-\left( I - \mathbf{n}_i \mathbf{n}_i^T \right)
-\mathbf{a}_i .
+\nabla p = -\rho\mathbf{a},
 ```
 
-This RHS is a finite-volume divergence, not a pointwise divergence evaluated at
-the panel center. For panel `i`,
+the pressure jump across edge `i → j` satisfies
 
 ```math
-\int_{A_i} \nabla_s \cdot \mathbf{a}_t \, dA
-=
-\oint_{\partial A_i} \mathbf{a}_t \cdot \boldsymbol{\nu}_i \, d\ell
+p_i - p_j
 \approx
-\sum_{e \in \partial i}
-\ell_e \, \mathbf{a}_{t,e} \cdot \boldsymbol{\nu}_{i,e},
-```
-
-where `\boldsymbol{\nu}_{i,e}` is the outward surface co-normal across edge
-`e`: tangent to the surface, perpendicular to the shared edge, and pointing out
-of panel `i`. The implemented metric uses the same averaged-normal co-normal
-`\boldsymbol{\nu}_{ij}` as the sparse operator, rather than approximating the
-co-normal with the center-to-center direction. This removes the orthogonal-dual
-mesh assumption from the original TPFA form while keeping the pressure field
-panel-centered.
-
-The edge contribution is
-
-```math
-f_{ij}
-=
-\ell_{ij}
+\rho
 \left[
-\frac{\mathbf{a}_{t,ij,i} + \mathbf{a}_{t,ij,j}}{2}
-\right]
-\cdot
-\boldsymbol{\nu}_{ij}.
+\dot{\mathbf{u}}_{ij}\cdot(\mathbf{x}_j-\mathbf{x}_i)
++
+\mathbf{u}_{\mathrm{rel},ij}\cdot
+(\mathbf{u}_{\mathrm{body},j}-\mathbf{u}_{\mathrm{body},i})
+\right],
 ```
 
-Here each side is projected with the averaged edge normal,
+where
 
 ```math
-\mathbf{a}_{t,ij,i}
+\dot{\mathbf{u}}_{ij}
 =
-\left(I - \bar{\mathbf{n}}_{ij}\bar{\mathbf{n}}_{ij}^T\right)\mathbf{a}_i,
+\frac{\dot{\mathbf{u}}_i+\dot{\mathbf{u}}_j}{2},
 \qquad
-\mathbf{a}_{t,ij,j}
+\mathbf{u}_{\mathrm{rel},ij}
 =
-\left(I - \bar{\mathbf{n}}_{ij}\bar{\mathbf{n}}_{ij}^T\right)\mathbf{a}_j.
+\frac{\mathbf{u}_{\mathrm{rel},i}+\mathbf{u}_{\mathrm{rel},j}}{2}.
 ```
 
 The RHS is accumulated with equal and opposite updates on the two adjacent
 panels,
 
 ```math
-b_i \mathrel{+}= \rho f_{ij},
+b_i
+\mathrel{+}=
+w_{ij}(p_i-p_j),
 \qquad
-b_j \mathrel{-}= \rho f_{ij}.
+b_j
+\mathrel{-}=
+w_{ij}(p_i-p_j).
 ```
 
-This accumulates an edge-integrated approximation to
-`\rho \nabla_s \cdot \mathbf{a}_t` directly into `b`, matching the `-\Delta_s`
-sign convention of `L`. The midpoint acceleration is the face value of
-`\mathbf{a}_t`; using the difference
-`\mathbf{a}_{t,j} - \mathbf{a}_{t,i}` would instead apply a graph derivative to
-the acceleration and would not represent the finite-volume flux of
-`\mathbf{a}_t`. Panel areas are not used in this v1 RHS. This keeps the
-implementation simple and conservative across shared edges. Future
-implementations can add explicit dual-cell areas or a vertex-based cotangent
-formulation, but that would be a separate pressure discretization rather than a
-drop-in replacement for the current panel-centered unknowns.
+This is a two-point edge form of
+`\partial_t\mathbf{u}+(\mathbf{u}\cdot\nabla)\mathbf{u}`: the unsteady term is
+projected onto the panel-center edge vector, and the convective term uses the
+edge directional difference of the sampled body-frame velocity. Using
+`body.velocity` for this difference preserves constant-field behavior; tangent
+projection is still used for the relative slip velocity. It does not require a
+scalar potential or a Bernoulli pressure head. Panel areas are not used in this
+v1 RHS. Future implementations can add explicit dual-cell areas, a vertex-based
+cotangent formulation, or a Lamb-vector split, but those would be separate
+pressure discretizations rather than drop-in replacements for the current
+panel-centered unknowns.
 
 The first implementation should separate operator assembly from RHS assembly:
 the Laplacian depends only on geometry, while the RHS changes with the flow
