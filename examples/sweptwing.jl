@@ -23,7 +23,7 @@ const _cross = LinearAlgebra.cross
 
 run_name        = "sweptwing000"                # Name of this run
 
-save_path       = run_name                      # Where to save outputs
+save_path       = joinpath("data", run_name)    # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
 paraview        = true                         # Whether to visualize with Paraview

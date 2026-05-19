@@ -18,6 +18,9 @@ import LinearAlgebra: norm, I
 import Meshes
 import GeoIO
 
+run_name = "flat_ground"
+save_path = joinpath("data", run_name)
+
 # =============================================================================
 # SIMULATION PARAMETERS
 # =============================================================================
@@ -149,7 +152,7 @@ println("\nBegin wing + ground simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     body_solvers, backend, verbose=true,
     monitors=(tangency_monitor,),
-    path="flat_ground", name="flat_ground"
+    path=save_path, name=run_name
 )
 
 # =============================================================================

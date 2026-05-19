@@ -20,6 +20,10 @@ monitor_requires(::Any) = ()
 # simulate! can flip body.needs_velocity_gradient[] before the time loop.
 monitor_requires_body_hessian(::Any) = false
 
+# Monitors that need volumetric induced vorticity at body control points return
+# true here so simulate! can request FastMultipole extra_outputs=3.
+monitor_requires_induced_vorticity(::Any) = false
+
 """
     audit_monitors(monitors)
 
@@ -229,7 +233,8 @@ end
     PressureLaplace(bodies, rho; unsteady=false, atol=1e-8, rtol=1e-8, itmax=1000,
                     preconditioner=JacobiPressurePreconditioner(),
                     reference_panel=1, reference_pressure=0.0,
-                    cache=true, verbose=false, gradient_mode=:raw_hessian)
+                    cache=true, verbose=false, gradient_mode=:raw_hessian,
+                    acceleration_form=:material_derivative)
 
 Monitor that populates `body.P` by solving a sparse panel-centered surface
 pressure Poisson equation. The monitor uses `velocity_dot` as a rolling
@@ -256,6 +261,14 @@ is the multipole Hessian populated by FastMultipole during per-step
 for Dirichlet lifting bodies whose `body.velocity` includes a postprocessed
 `∇ₛμ` contribution that is not represented in the raw panel Hessian.
 
+The pressure RHS has two velocity-only acceleration forms. The default
+`acceleration_form=:material_derivative` uses the direct
+`∂t u + (u · ∇)u` edge form. `acceleration_form=:lamb_vector` uses the Lamb
+decomposition `(u · ∇)u = ∇(|u|²/2) + ω × u`, where `ω` is the volumetric
+induced vorticity accumulated in `body.induced_vorticity` by FastMultipole
+`extra_outputs=3`. Both forms use only velocity and its derivatives; neither
+requires a scalar potential.
+
 `bodies` must match the bodies later passed to `simulate!`, in the same order,
 so the monitor can preallocate one velocity-difference matrix, sparse operator,
 preconditioner, Krylov workspace, and scratch arrays per body. Shared panel
@@ -277,11 +290,12 @@ stored in the monitor.
 - `cache::Bool` — when `true`, the sparse operator and preconditioner are reused if the geometry signature is unchanged
 - `verbose::Bool` — when `true`, prints per-step rebuild status and panel count to stdout
 - `gradient_mode::Symbol` — `:raw_hessian` for the current Hessian path or `:surface_velocity` for a surface reconstruction of the final velocity field
+- `acceleration_form::Symbol` — `:material_derivative` for the direct acceleration edge form or `:lamb_vector` for the Lamb-vector decomposition
 - `velocity_dot::Vector{Matrix{Float64}}` — rolling buffer; initialized to zero, then between calls holds `-u_inertial_old` with `u_inertial = tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body); during a call becomes `(u_inertial_new - u_inertial_old) / dt`
 - `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body)
 - `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
 - `L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}` — sparse FV surface Laplacian per body, gauge-fixed at `reference_panel`
-- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the material acceleration
+- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the selected acceleration form
 - `p::Vector{Vector{Float64}}` — solution vector per body (length ncells); written to `body.P` after each solve
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
@@ -301,6 +315,7 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     cache::Bool
     verbose::Bool
     gradient_mode::Symbol
+    acceleration_form::Symbol
     velocity_dot::Vector{Matrix{Float64}}
     L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}
     b::Vector{Vector{Float64}}
@@ -315,7 +330,9 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
 end
 
 monitor_provides(::PressureLaplace) = (:P,)
-monitor_requires_body_hessian(m::PressureLaplace) = m.gradient_mode == :raw_hessian
+monitor_requires_body_hessian(m::PressureLaplace) =
+    m.gradient_mode == :raw_hessian && m.acceleration_form == :material_derivative
+monitor_requires_induced_vorticity(m::PressureLaplace) = m.acceleration_form == :lamb_vector
 
 function PressureLaplace(bodies, rho::Real;
                          unsteady::Bool=false,
@@ -327,10 +344,13 @@ function PressureLaplace(bodies, rho::Real;
                          reference_pressure::Real=0.0,
                          cache::Bool=true,
                          verbose::Bool=false,
-                         gradient_mode::Symbol=:raw_hessian)
+                         gradient_mode::Symbol=:raw_hessian,
+                         acceleration_form::Symbol=:material_derivative)
     reference_panel >= 1 || throw(ArgumentError("reference_panel must be at least 1; got $(reference_panel)."))
     gradient_mode in (:raw_hessian, :surface_velocity) || throw(ArgumentError(
         "gradient_mode must be :raw_hessian or :surface_velocity; got $(gradient_mode)."))
+    acceleration_form in (:material_derivative, :lamb_vector) || throw(ArgumentError(
+        "acceleration_form must be :material_derivative or :lamb_vector; got $(acceleration_form)."))
     systems_tuple = _systems_tuple(bodies)
     isempty(systems_tuple) && throw(ArgumentError("PressureLaplace requires at least one body."))
     nbodies = length(systems_tuple)
@@ -383,7 +403,7 @@ function PressureLaplace(bodies, rho::Real;
     return PressureLaplace{typeof(preconditioner)}(
         Float64(rho), unsteady, Float64(atol), Float64(rtol), Int(itmax),
         preconditioner, Int(reference_panel), Float64(reference_pressure),
-        cache, verbose, gradient_mode, velocity_dot, Ls, bs, ps,
+        cache, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
         acceleration, tangential,
         edges, workspace, signatures, u_inertial, surface_velocity_gradient)
 end
@@ -657,8 +677,27 @@ end
 function _pressure_rhs!(m::PressureLaplace, body::AbstractBody, i_body::Int)
     # Refresh velocity_dot/u_inertial and diagnostic material-acceleration caches.
     _pressure_material_acceleration!(m, body, i_body)
-    return _pressure_rhs_from_edge_material_derivative!(m.b[i_body], m, body, i_body,
-        m.unsteady ? m.velocity_dot[i_body] : nothing)
+    velocity_dot = m.unsteady ? m.velocity_dot[i_body] : nothing
+    if m.acceleration_form == :material_derivative
+        return _pressure_rhs_from_edge_material_derivative!(m.b[i_body], m, body, i_body,
+            velocity_dot)
+    elseif m.acceleration_form == :lamb_vector
+        return _pressure_rhs_from_lamb_vector!(m.b[i_body], m, body, i_body,
+            velocity_dot)
+    else
+        throw(ArgumentError("Unknown PressureLaplace acceleration_form $(m.acceleration_form)."))
+    end
+end
+
+function _pressure_apply_reference_pressure_rhs!(b::AbstractVector,
+                                                 reference_panel::Int,
+                                                 reference_pressure::Real,
+                                                 w::Real, i::Int, j::Int)
+    if !iszero(reference_pressure)
+        i == reference_panel && (b[j] += w * reference_pressure)
+        j == reference_panel && (b[i] += w * reference_pressure)
+    end
+    return b
 end
 
 function _pressure_rhs_from_edge_material_derivative!(b::AbstractVector, m::PressureLaplace,
@@ -705,14 +744,68 @@ function _pressure_rhs_from_edge_material_derivative!(b::AbstractVector, m::Pres
         flux = rho * w * (udot_edge_dot_r + convective_edge_dot_r)
         b[i] += flux
         b[j] -= flux
-        # When reference_pressure ≠ 0 the gauge column removal shifts the RHS.
-        if !iszero(reference_pressure)
-            i == reference_panel && (b[j] += w * reference_pressure)
-            j == reference_panel && (b[i] += w * reference_pressure)
-        end
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
     end
 
     # Step 3: enforce the gauge constraint b[reference_panel] = reference_pressure.
+    b[reference_panel] = reference_pressure
+    return b
+end
+
+function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
+                                         body::AbstractBody, i_body::Int,
+                                         velocity_dot::Union{Nothing,AbstractMatrix})
+    edges = m.edges[i_body]
+    rho = m.rho
+    reference_panel = m.reference_panel
+    reference_pressure = m.reference_pressure
+    u_inertial = m.u_inertial[i_body]
+    fill!(b, 0.0)
+
+    @inbounds for k in axes(edges, 2)
+        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+
+        udot_edge_dot_r = 0.0
+        if velocity_dot !== nothing
+            udot_edge_dot_r = 0.5 * (
+                (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
+                (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
+                (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
+        end
+
+        qi = 0.5 * (u_inertial[1, i]^2 + u_inertial[2, i]^2 + u_inertial[3, i]^2)
+        qj = 0.5 * (u_inertial[1, j]^2 + u_inertial[2, j]^2 + u_inertial[3, j]^2)
+        kinetic_jump = qj - qi
+
+        wx_i, wy_i, wz_i = body.induced_vorticity[1, i], body.induced_vorticity[2, i], body.induced_vorticity[3, i]
+        wx_j, wy_j, wz_j = body.induced_vorticity[1, j], body.induced_vorticity[2, j], body.induced_vorticity[3, j]
+        wx = 0.5 * (wx_i + wx_j)
+        wy = 0.5 * (wy_i + wy_j)
+        wz = 0.5 * (wz_i + wz_j)
+
+        nx_i, ny_i, nz_i = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        nx_j, ny_j, nz_j = body.normals[1, j], body.normals[2, j], body.normals[3, j]
+        ui_n = body.velocity[1, i] * nx_i + body.velocity[2, i] * ny_i + body.velocity[3, i] * nz_i
+        uj_n = body.velocity[1, j] * nx_j + body.velocity[2, j] * ny_j + body.velocity[3, j] * nz_j
+        urel1 = 0.5 * (body.velocity[1, i] - ui_n * nx_i + body.velocity[1, j] - uj_n * nx_j)
+        urel2 = 0.5 * (body.velocity[2, i] - ui_n * ny_i + body.velocity[2, j] - uj_n * ny_j)
+        urel3 = 0.5 * (body.velocity[3, i] - ui_n * nz_i + body.velocity[3, j] - uj_n * nz_j)
+
+        lamb1 = wy * urel3 - wz * urel2
+        lamb2 = wz * urel1 - wx * urel3
+        lamb3 = wx * urel2 - wy * urel1
+        lamb_edge_dot_r = lamb1 * r1 + lamb2 * r2 + lamb3 * r3
+
+        flux = rho * w * (udot_edge_dot_r + kinetic_jump + lamb_edge_dot_r)
+        b[i] += flux
+        b[j] -= flux
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
+    end
+
     b[reference_panel] = reference_pressure
     return b
 end
@@ -739,10 +832,7 @@ function _pressure_rhs_from_acceleration!(b::AbstractVector, m::PressureLaplace,
         flux = rho * w * aedge_dot_r
         b[i] += flux
         b[j] -= flux
-        if !iszero(reference_pressure)
-            i == reference_panel && (b[j] += w * reference_pressure)
-            j == reference_panel && (b[i] += w * reference_pressure)
-        end
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
     end
 
     b[reference_panel] = reference_pressure

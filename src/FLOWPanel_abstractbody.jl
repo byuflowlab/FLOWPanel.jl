@@ -95,6 +95,7 @@ abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
     body.velocity_gradient .= 0.0
+    body.induced_vorticity .= 0.0
     body.velocity_kinematic .= 0.0
     body.angular_velocity .= 0.0
     body.potential .= 0.0
@@ -1119,33 +1120,42 @@ FastMultipole.strength_dims(system::AbstractBody) = size(system.strength, 2)
 
 FastMultipole.get_n_bodies(system::AbstractBody) = system.ncells
 
-function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
 end
 
-function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_system::AbstractBody, i_target) where {PS,VS,GS}
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_system::AbstractBody, i_target) where {PS,VS,GS,NO,NM}
     if PS
-        target_buffer[4, i_buffer] = target_system.potential[i_target]
+        target_buffer[FastMultipole.scalar_potential_index(switch), i_buffer] = target_system.potential[i_target]
     end
 
     if VS
         vx, vy, vz = target_system.velocity[1, i_target], target_system.velocity[2, i_target], target_system.velocity[3, i_target]
-        target_buffer[5, i_buffer] = vx
-        target_buffer[6, i_buffer] = vy
-        target_buffer[7, i_buffer] = vz
+        r = FastMultipole.gradient_range(switch)
+        target_buffer[r[1], i_buffer] = vx
+        target_buffer[r[2], i_buffer] = vy
+        target_buffer[r[3], i_buffer] = vz
     end
 
     # Seed the per-pass Hessian accumulator with the body's current
     # velocity_gradient so successive influence! calls (wake-on-body, then
     # body-on-body) accumulate into the same field rather than overwriting.
     if GS
+        r = FastMultipole.hessian_range(switch)
         @inbounds for j in 1:3, i in 1:3
-            target_buffer[7 + (j-1)*3 + i, i_buffer] = target_system.velocity_gradient[i, j, i_target]
+            target_buffer[r[(j-1)*3 + i], i_buffer] = target_system.velocity_gradient[i, j, i_target]
+        end
+    end
+
+    if NO == 3
+        r = FastMultipole.extra_output_range(switch)
+        for j in 1:3
+            target_buffer[r[j], i_buffer] = target_system.induced_vorticity[j, i_target]
         end
     end
 end
 
-function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS,NO,NM}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
@@ -1168,18 +1178,13 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
 
         # store results
         if PS
-            target_system[4, i_target] += phi_out
+            FastMultipole.set_scalar_potential!(target_system, derivatives_switch, i_target, phi_out)
         end
         if GS
-            target_system[5, i_target] += U_out[1]
-            target_system[6, i_target] += U_out[2]
-            target_system[7, i_target] += U_out[3]
+            FastMultipole.set_gradient!(target_system, derivatives_switch, i_target, U_out)
         end
         if HS
-            # column-major SMatrix → buffer rows 8..16 per FastMultipole.get_hessian
-            @inbounds for j in 1:3, i in 1:3
-                target_system[7 + (j-1)*3 + i, i_target] += H_out[i, j]
-            end
+            FastMultipole.set_hessian!(target_system, derivatives_switch, i_target, H_out)
         end
     end
 end

@@ -39,6 +39,9 @@ function _wakes_tuple(system::AbstractBody, wake)
     return (wake,)
 end
 
+_induced_vorticity_extra_outputs(targets::Tuple, enabled::Bool) =
+    Tuple(enabled && target isa AbstractBody ? 3 : 0 for target in targets)
+
 function _validate_body_solvers(systems::Tuple, body_solvers)
     if body_solvers isa Tuple
         length(body_solvers) == length(systems) || throw(ArgumentError("Number of body_solvers ($(length(body_solvers))) must match number of systems ($(length(systems)))"))
@@ -157,7 +160,7 @@ aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
 function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
-        name="default_sim", path="./default_simulation",
+        name="default_sim", path=joinpath("data", "default_simulation"),
         body_solvers,
         backend=FastMultipoleBackend(;
                 expansion_order=10,
@@ -187,6 +190,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     # influence! calls. Done once before the time loop; bodies are mutable
     # so the Ref persists across steps.
     needs_grad = any(monitor_requires_body_hessian, monitors)
+    needs_induced_vorticity = any(monitor_requires_induced_vorticity, monitors)
     for sys in systems_tuple
         sys.needs_velocity_gradient[] = needs_grad
     end
@@ -255,7 +259,11 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         # apply wake velocity to body surface
         if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend_wake; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend_wake; precalc=true,
+                scalar_potential=false,
+                velocity=true,
+                velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+                extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
         end
 
         # solve systems with cross-body coupling
@@ -271,7 +279,11 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         end
 
         # system-on-all influence
-        influence!(targets, systems_tuple, backend_system; precalc=false, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+        influence!(targets, systems_tuple, backend_system; precalc=false,
+            scalar_potential=false,
+            velocity=true,
+            velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
 
         #------- other solvers -------#
 

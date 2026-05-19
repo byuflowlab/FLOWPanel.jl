@@ -26,7 +26,7 @@ import DataFrames: DataFrame
 
 run_name        = "ll-a50k27"                   # Name of this run
 
-save_path       = run_name                      # Where to save outputs
+save_path       = joinpath("data", run_name)    # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find 2D polars
 
 paraview        = true                          # Whether to visualize with Paraview

@@ -9,6 +9,9 @@ using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
+run_name = "rotor_hover"
+save_path = joinpath("data", run_name)
+
 ## =========================================================
 # SIMULATION PARAMETERS
 # ==========================================================
@@ -92,7 +95,7 @@ rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
             watertight=true,
             DBC)
 
-pnl.write_vtk("rotor_hover_check", rotor)
+pnl.write_vtk(joinpath(save_path, "rotor_hover_check"), rotor)
 
 # update shedding
 bbox = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
@@ -111,7 +114,7 @@ rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding
                         ensure_winding=true,
                         DBC)
 
-pnl.write_vtk("rotor_hover", rotor)
+pnl.write_vtk(joinpath(save_path, run_name), rotor)
 
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
@@ -203,14 +206,14 @@ monitors = (
 )
 
 println("\nBegin rotor hover simulation ($(n_steps) steps)...")
-name = "rotor_hover"
+name = run_name
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     # Das was initialized before constructing the matrixful solver.
     set_Das_eta_kinematic=NaN,
     # set_Das_eta_freestream=0.1,
     monitors,
     body_solvers, backend, verbose=true,
-    path="rotor_hover", name,
+    path=save_path, name,
 )
 
 println("Thrust Coefficient (PressureBernoulli + ForceMonitor): ", force_monitor_bernoulli.force[2, :])

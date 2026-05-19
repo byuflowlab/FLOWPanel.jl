@@ -8,6 +8,9 @@ using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
+run_name = "rotor_hover_pressure_comparison"
+save_path = joinpath("data", run_name)
+
 magVinf = 0.0001
 AOA = 0.0
 rho = 1.225
@@ -115,12 +118,12 @@ monitors = (
 )
 
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
-name = "rotor_hover_pressure_comparison"
+name = run_name
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=NaN,
     monitors,
     body_solvers, backend, verbose=true,
-    path=name, name,
+    path=save_path, name,
 )
 
 CT_bernoulli = force_monitor_bernoulli.force[1, :]

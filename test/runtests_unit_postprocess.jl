@@ -114,10 +114,18 @@ end
 
         @test pnl.monitor_provides(monitor) == (:P,)
         @test !monitor.unsteady
+        @test monitor.acceleration_form == :material_derivative
         @test pnl.monitor_requires_body_hessian(monitor)
         @test pnl.audit_monitors((monitor, pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()))) !== nothing
         @test_throws ArgumentError pnl.PressureLaplace(1.0)
         @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; gradient_mode=:unknown)
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; acceleration_form=:unknown)
+
+        lamb = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            acceleration_form=:lamb_vector)
+        @test lamb.acceleration_form == :lamb_vector
+        @test !pnl.monitor_requires_body_hessian(lamb)
+        @test pnl.monitor_requires_induced_vorticity(lamb)
 
         body.velocity .= 0.0
         body.velocity[1, :] .= 1.0
@@ -150,6 +158,16 @@ end
         @test all(isfinite, body.P)
         @test all(isfinite, monitor.acceleration[1])
         @test all(isfinite, monitor.surface_velocity_gradient[1])
+
+        lamb = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            gradient_mode=:surface_velocity,
+            acceleration_form=:lamb_vector)
+        body.velocity_gradient .= NaN
+        lamb.velocity_dot[1] .= expected_negative_tangent_velocity(body)
+        lamb((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
+        @test all(isfinite, body.P)
+        @test all(isfinite, lamb.surface_velocity_gradient[1])
     end
 
     @testset "PressureLaplace sparse matrix and solve" begin
@@ -292,6 +310,41 @@ end
         pnl._pressure_rhs_from_edge_material_derivative!(laplace.b[1], laplace, body, 1, velocity_dot)
 
         @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+    end
+
+    @testset "PressureLaplace Lamb vector RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            acceleration_form=:lamb_vector)
+        p_exact = [0.0, -2.0]
+        q = -p_exact ./ laplace.rho
+        laplace.u_inertial[1] .= 0.0
+        for p in 1:body.ncells
+            laplace.u_inertial[1][1, p] = sqrt(2.0 * q[p])
+        end
+        body.velocity .= 0.0
+        body.velocity_gradient .= 0.0
+        body.angular_velocity .= 0.0
+
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+
+        fill!(laplace.u_inertial[1], 0.4)
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        laplace.u_inertial[1] .= 0.0
+        body.velocity .= 0.0
+        body.velocity[2, :] .= 1.0
+        body.velocity_gradient .= NaN
+        body.induced_vorticity .= 0.0
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        body.induced_vorticity[3, :] .= 1.0
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test !isapprox(laplace.b[1], zeros(2); atol=1e-12)
     end
 
     @testset "PressureLaplace unsteady toggle" begin

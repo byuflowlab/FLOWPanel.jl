@@ -115,7 +115,7 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="",
 
     run_name        = "wing_capped"             # Name of this run
 
-    save_path       = run_name                  # Where to save outputs
+    save_path       = joinpath("data", run_name) # Where to save outputs
     paraview        = true                      # Whether to visualize with Paraview
 
     # ----------------- SIMULATION PARAMETERS --------------------------------------

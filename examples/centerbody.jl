@@ -19,7 +19,7 @@ import DataFrames: DataFrame
 
 run_name        = "centerbody-lewis00"      # Name of this run
 
-save_path       = ""                        # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 paraview        = true                      # Whether to visualize with Paraview
 
 
@@ -160,7 +160,7 @@ if paraview
 
     # Save body as a VTK
     # str *= pnl.save(body, run_name; path=save_path, debug=true)
-    pnl.write_vtk(joinpath(save_path, "centerbody"), body, 0, 0)
+    pnl.write_vtk(joinpath(save_path, run_name), body, 0, 0)
 
     # # Call Paraview
     # run(`paraview --data=$(str)`)

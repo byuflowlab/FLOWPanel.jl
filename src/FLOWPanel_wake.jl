@@ -41,7 +41,9 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     wake_probes = get_probes(wake)
 
     # wake-on-all velocity
-    influence!((body, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (wake,), backend;
+        velocity=true,
+        velocity_gradient=(requires_hessian(body), requires_hessian(wake)))
 
     # freestream
     apply_freestream!(body, uinf)
@@ -54,7 +56,9 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     solve!(body, body_solver; backend)
 
     # body-on-all influence
-    influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (body,), backend;
+        velocity=true,
+        velocity_gradient=(requires_hessian(body), requires_hessian(wake)))
 
     return nothing
 end
@@ -307,7 +311,7 @@ FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 3)
 
 FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
 
-function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     # get surface index of global `i_target` index
     isurf, irow, icol = global_to_matrix_index(target_system, i_target)
 
@@ -318,9 +322,10 @@ function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:Pa
 
     # save velocity
     if VS
-        target_system.system.velocity[isurf][1, irow, icol] += target_buffer[5, i_buffer]
-        target_system.system.velocity[isurf][2, irow, icol] += target_buffer[6, i_buffer]
-        target_system.system.velocity[isurf][3, irow, icol] += target_buffer[7, i_buffer]
+        vx, vy, vz = FastMultipole.get_gradient(target_buffer, switch, i_buffer)
+        target_system.system.velocity[isurf][1, irow, icol] += vx
+        target_system.system.velocity[isurf][2, irow, icol] += vy
+        target_system.system.velocity[isurf][3, irow, icol] += vz
     end
 
     # save Hessian (not currently used for PanelWake)
@@ -395,7 +400,7 @@ function induced(target::AbstractVector{TF}, source_system::PanelWake{TK,NK,<:An
     return potential+potential2, velocity+velocity2, velocity_gradient+velocity_gradient2
 end
 
-function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::PanelWake, source_buffer, source_index) where {PS,GS,HS}
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::PanelWake, source_buffer, source_index) where {PS,GS,HS,NO,NM}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
@@ -418,17 +423,13 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
 
         # store results
         if PS
-            target_system[4, i_target] += phi_out
+            FastMultipole.set_scalar_potential!(target_system, derivatives_switch, i_target, phi_out)
         end
         if GS
-            target_system[5, i_target] += U_out[1]
-            target_system[6, i_target] += U_out[2]
-            target_system[7, i_target] += U_out[3]
+            FastMultipole.set_gradient!(target_system, derivatives_switch, i_target, U_out)
         end
         if HS
-            @inbounds for j in 1:3, i in 1:3
-                target_system[7 + (j-1)*3 + i, i_target] += H_out[i, j]
-            end
+            FastMultipole.set_hessian!(target_system, derivatives_switch, i_target, H_out)
         end
         if HS
             # @warn "Hessian output not currently implemented for PanelWake targets"
@@ -1023,12 +1024,13 @@ function FastMultipole.body_to_multipole!(filaments::FilamentWrapper{<:PanelWake
     end
 end
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::FilamentWrapper, source_buffer, source_index) where {PS,VS,GS}
+function FastMultipole.direct!(target_system, target_index, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, source_system::FilamentWrapper, source_buffer, source_index) where {PS,VS,GS,NO,NM}
     TF = FastMultipole.numtype(source_system)
     @inbounds for j_target in target_index
         target = FastMultipole.get_position(target_system, j_target)
         v = SVector{3,TF}(0.0, 0.0, 0.0)
         g = zero(SMatrix{3,3,TF,9})
+        w = SVector{3,TF}(0.0, 0.0, 0.0)
         @inbounds for i_source in source_index
             v1 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 1)
             v2 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 2)
@@ -1040,12 +1042,23 @@ function FastMultipole.direct!(target_system, target_index, ::FastMultipole.Deri
             if GS
                 g += _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
             end
+            if NO == 3
+                gf = _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
+                w += SVector{3,TF}(gf[3, 2] - gf[2, 3],
+                                   gf[1, 3] - gf[3, 1],
+                                   gf[2, 1] - gf[1, 2])
+            end
         end
-        VS && FastMultipole.set_gradient!(target_system, j_target, v)
-        GS && FastMultipole.set_hessian!(target_system, j_target, g)
+        VS && FastMultipole.set_gradient!(target_system, switch, j_target, v)
+        GS && FastMultipole.set_hessian!(target_system, switch, j_target, g)
+        if NO == 3
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 1, w[1])
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 2, w[2])
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 3, w[3])
+        end
     end
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::FilamentWrapper, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::FilamentWrapper, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     @warn "A `::FilamentWrapper` object should not be used as a target in an FMM call."
 end

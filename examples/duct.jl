@@ -23,7 +23,7 @@ include(joinpath(pnl.examples_path, "duct_postprocessing_pyplot.jl"))
 
 run_name        = "duct-hill00"             # Name of this run
 
-save_path       = run_name                  # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 fluiddomain     = false                     # Whether to generate fluid domain
 paraview        = true                      # Whether to visualize with Paraview
 call_paraview   = false                     # Whether to call Paraview at the end
@@ -251,7 +251,7 @@ AOA = AOAs[i]
         name *= kernel == pnl.VortexRing ? "_vortexring" :
                 kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
                 ""
-        global vtks *= pnl.write_vtk(name, body, i, 0.0; overwrite=true)
+        global vtks *= pnl.write_vtk(joinpath(save_path, name), body, i, 0.0; overwrite=true)
     end
 
 # end

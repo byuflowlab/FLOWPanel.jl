@@ -466,17 +466,42 @@ b_j
 w_{ij}(p_i-p_j).
 ```
 
-This is a two-point edge form of
-`\partial_t\mathbf{u}+(\mathbf{u}\cdot\nabla)\mathbf{u}`: the unsteady term is
-projected onto the panel-center edge vector, and the convective term uses the
-edge directional difference of the sampled body-frame velocity. Using
+This is the default `acceleration_form=:material_derivative`, a two-point edge
+form of `\partial_t\mathbf{u}+(\mathbf{u}\cdot\nabla)\mathbf{u}`: the unsteady
+term is projected onto the panel-center edge vector, and the convective term
+uses the edge directional difference of the sampled body-frame velocity. Using
 `body.velocity` for this difference preserves constant-field behavior; tangent
-projection is still used for the relative slip velocity. It does not require a
-scalar potential or a Bernoulli pressure head. Panel areas are not used in this
-v1 RHS. Future implementations can add explicit dual-cell areas, a vertex-based
-cotangent formulation, or a Lamb-vector split, but those would be separate
-pressure discretizations rather than drop-in replacements for the current
-panel-centered unknowns.
+projection is still used for the relative slip velocity.
+
+The alternative `acceleration_form=:lamb_vector` uses the identity
+
+```math
+(\mathbf{u}\cdot\nabla)\mathbf{u}
+=
+\nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
+\;+\;
+\boldsymbol{\omega}\times\mathbf{u},
+\qquad
+\boldsymbol{\omega}=\nabla\times\mathbf{u}.
+```
+
+Its edge pressure jump is assembled from the optional same unsteady projection,
+the kinetic-energy difference
+`|\mathbf{u}_j|^2/2 - |\mathbf{u}_i|^2/2`, and the midpoint Lamb-vector
+projection. `\boldsymbol{\omega}` is the volumetric induced vorticity stored in
+`body.induced_vorticity`. `simulate!` requests this channel from FastMultipole
+with `extra_outputs=3` when any monitor uses `acceleration_form=:lamb_vector`.
+Panel source/doublet sheets do not add vorticity to this channel; supported
+vortex-volume and regularized filament sources add their direct nearfield
+vorticity contribution.
+
+Both acceleration forms solve the Euler pressure Poisson equation from velocity
+and velocity derivatives only. Neither requires a scalar potential, which is
+important for vortex-element wakes where a single scalar potential is not
+defined. Panel areas are not used in this v1 RHS. Future implementations can
+add explicit dual-cell areas or a vertex-based cotangent formulation, but those
+would be separate pressure discretizations rather than drop-in replacements for
+the current panel-centered unknowns.
 
 The first implementation should separate operator assembly from RHS assembly:
 the Laplacian depends only on geometry, while the RHS changes with the flow

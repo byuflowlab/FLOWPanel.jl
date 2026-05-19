@@ -298,7 +298,7 @@ on the final step of a run), then forwards to `simulate!` with
 TOML output.
 """
 function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
-        name="default_sim", path="./default_simulation",
+        name="default_sim", path=joinpath("data", "default_simulation"),
         restart_path=nothing, restart_name=nothing,
         restart_step::Int=-1,
         body_solvers,

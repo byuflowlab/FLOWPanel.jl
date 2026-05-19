@@ -17,7 +17,6 @@ import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import PythonPlot as plt
 
-save_path       = "."                      # Where to save outputs
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
 paraview        = true                          # Whether to visualize with Paraview
@@ -101,6 +100,7 @@ elseif kernel <: pnl.VortexRing
 else
     error("Neumann RigidWakeBody supports only ConstantDoublet or VortexRing kernels; got $(kernel)")
 end
+save_path = joinpath("data", run_name)
 
 bodytype = pnl.RigidWakeBody{kernel}    # Lifting body with rigid semi-infinite wake
 @time wing = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;

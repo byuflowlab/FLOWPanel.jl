@@ -38,6 +38,7 @@ function compare_pressure_models(;
     backend=pnl.DirectBackend(),
     dt=1.0,
     laplace_gradient_mode=:surface_velocity,
+    acceleration_form=:material_derivative,
 )
     body_ref, Vinf = build_simple_wing_capped_dirichlet(; meshfile, AOA, magVinf)
     solve_simple_wing_capped_dirichlet!(body_ref, :backslash; backend)
@@ -65,6 +66,7 @@ function compare_pressure_models(;
         reference_panel=1,
         reference_pressure=0.0,
         gradient_mode=laplace_gradient_mode,
+        acceleration_form,
         verbose=false)
     force_bernoulli = pnl.ForceMonitor(1, 1;
         i_frame=-1,
@@ -114,17 +116,14 @@ function compare_pressure_models(;
         bernoulli_kj_rel=bernoulli_kj_rel,
         npanels=body_ref.ncells,
         laplace_gradient_mode=laplace_gradient_mode,
+        acceleration_form=acceleration_form,
     )
 end
 
-function main()
-    println()
-    println("#===== SIMPLE WING CAPPED PRESSURE COMPARISON =====#")
-
-    result = compare_pressure_models()
-
+function print_pressure_result(result)
     println("Panels: $(result.npanels)")
     println("PressureLaplace gradient mode: $(result.laplace_gradient_mode)")
+    println("PressureLaplace acceleration form: $(result.acceleration_form)")
     println("PressureBernoulli vs PressureLaplace:")
     println("\tmax |Δp| = $(result.pressure_abs_diff)")
     println("\trel ||Δp|| = $(result.pressure_rel_diff)")
@@ -137,6 +136,18 @@ function main()
     println("Relative force differences:")
     println("\tBernoulli vs Laplace: $(result.bernoulli_laplace_rel)")
     println("\tBernoulli vs KuttaJoukowski: $(result.bernoulli_kj_rel)")
+end
+
+function main()
+    println()
+    println("#===== SIMPLE WING CAPPED PRESSURE COMPARISON =====#")
+
+    material = compare_pressure_models(; acceleration_form=:material_derivative)
+    print_pressure_result(material)
+
+    println()
+    lamb = compare_pressure_models(; acceleration_form=:lamb_vector)
+    print_pressure_result(lamb)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

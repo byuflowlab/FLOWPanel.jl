@@ -19,6 +19,8 @@ const _cross = LinearAlgebra.cross
 using Statistics: quantile, mean
 using Printf
 
+const RESULTS_DIR = joinpath(@__DIR__, "results", "sweptwing_debug")
+
 # ----- geometry / freestream (copy of sweptwing.jl) -----
 AOA = 4.2
 magVinf = 30.0
@@ -126,13 +128,13 @@ show_top_offenders("Laplace (raw_hessian)",     r_raw.P_L, r_raw.body)
 show_top_offenders("Laplace (surface_velocity)", r_sv.P_L,  r_sv.body)
 
 # ----- VTK dumps for ParaView -----
-mkpath("sweptwing_debug")
+mkpath(RESULTS_DIR)
 body_vtk = deepcopy(body)
 body_vtk.P .= P_B
-pnl.write_vtk(joinpath("sweptwing_debug", "wing_bernoulli"), body_vtk, 0, 0.0; overwrite=true)
-pnl.write_vtk(joinpath("sweptwing_debug", "wing_laplace_raw"), r_raw.body, 0, 0.0; overwrite=true)
-pnl.write_vtk(joinpath("sweptwing_debug", "wing_laplace_sv"),  r_sv.body,  0, 0.0; overwrite=true)
-println("\nWrote VTK files to sweptwing_debug/")
+pnl.write_vtk(joinpath(RESULTS_DIR, "wing_bernoulli"), body_vtk, 0, 0.0; overwrite=true)
+pnl.write_vtk(joinpath(RESULTS_DIR, "wing_laplace_raw"), r_raw.body, 0, 0.0; overwrite=true)
+pnl.write_vtk(joinpath(RESULTS_DIR, "wing_laplace_sv"),  r_sv.body,  0, 0.0; overwrite=true)
+println("\nWrote VTK files to $(RESULTS_DIR)/")
 
 # ----- y-position distribution of top offenders -----
 println("\n#===== Edge-of-wing concentration check =====#")

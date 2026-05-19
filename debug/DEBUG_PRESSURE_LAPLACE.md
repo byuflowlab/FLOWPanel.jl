@@ -308,7 +308,7 @@ surface velocity that Kutta-Joukowski effectively validates.
   `gradient_robust=true` for diagnostics.
 
 - 2026-05-16: Bernoulli vs Laplace under Neumann — the pending follow-up.
-  Harness: `debug_bc_comparison.jl`. Mesh: `naca0012_nc101_nw26.msh` (refined).
+  Harness: `debug/debug_bc_comparison.jl`. Mesh: `naca0012_nc101_nw26.msh` (refined).
   Three cases: pure Dirichlet, Dirichlet+AR=3 mask, pure Neumann (kernel
   = `pnl.VortexRing`, one mid-mesh panel dropped to break watertightness
   and resolve rank deficiency per `simple_wing_capped.jl:194`).
@@ -390,7 +390,7 @@ surface velocity that Kutta-Joukowski effectively validates.
     `(u·∇)u` near the wake.
 
 - 2026-05-16: Sweptwing Laplace diagnostic — `gradient_mode` A/B + spatial
-  localization. Harness: `debug_sweptwing_laplace.jl`. Same open swept
+  localization. Harness: `debug/debug_sweptwing_laplace.jl`. Same open swept
   wing (2880 panels, no caps, AOA=4.2°).
 
   | mode                | CL_L     | median \|P_L\| | max \|P_L\| | rel_resid |
@@ -449,7 +449,7 @@ surface velocity that Kutta-Joukowski effectively validates.
     body types). The `:raw_hessian` default is correct only when
     `body.velocity` *is* the raw influence-evaluated velocity, i.e.
     non-lifting / no `∇ₛµ` correction path.
-  - VTK files written to `sweptwing_debug/{wing_bernoulli,
+  - VTK files written to `debug/results/sweptwing_debug/{wing_bernoulli,
     wing_laplace_raw, wing_laplace_sv}.vtu` for ParaView inspection
     of the spatial pressure field.
 
