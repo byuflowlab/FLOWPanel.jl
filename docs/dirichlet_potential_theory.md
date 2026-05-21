@@ -172,6 +172,65 @@ up to the small displacement of the interior control points. This keeps the
 required `+½I` body jump while preserving wake-panel influence on trailing-edge
 columns.
 
+## Why Exterior Collocation Is Rank Deficient
+
+A closed constant-strength doublet sheet has a constant-mode ambiguity. Let
+`1` denote the vector with the same doublet strength on every body panel. From
+the exterior of a closed surface, this constant doublet shell produces no
+observable potential field, so the exterior doublet influence matrix satisfies
+
+```math
+G_\mathrm{exterior}\mathbf{1} \approx \mathbf{0}.
+```
+
+Thus raw exterior collocation leaves the constant vector in the nullspace. This
+is why an exterior matrix such as `G_exterior`, or equivalently `-G_exterior`,
+is not full rank for a closed body.
+
+Another way to see this is to remember that a doublet sheet represents a jump
+in potential. If a closed body has a constant doublet distribution on its
+surface, then the potential trace immediately on the interior side is constant.
+The induced potential satisfies Laplace's equation away from the sheet, so a
+constant boundary value on the closed interior domain implies a constant
+potential everywhere inside. The exterior domain has an additional boundary
+condition at infinity: the perturbation potential must decay to zero. A constant
+exterior boundary trace together with zero potential at infinity therefore
+forces the exterior potential to be zero everywhere. The same constant doublet
+mode is therefore visible as a constant interior potential but invisible from
+the exterior.
+
+The interior limiting operator is different because a double-layer potential is
+discontinuous across the surface. Crossing the sheet changes the potential by
+the doublet strength, with the sign set by the kernel and normal conventions.
+With FLOWPanel's convention, the two limiting matrices satisfy
+
+```math
+G_\mathrm{interior} \approx G_\mathrm{exterior} + I.
+```
+
+Applying both sides to the constant mode gives
+
+```math
+G_\mathrm{interior}\mathbf{1}
+\approx
+G_\mathrm{exterior}\mathbf{1} + I\mathbf{1}
+\approx
+\mathbf{1}.
+```
+
+So the jump term converts the exterior null vector into an interior eigenvector
+with eigenvalue approximately one. In other words, raw interior collocation
+sees the potential jump of the constant doublet sheet, while raw exterior
+collocation does not. That is why the raw interior matrix can be full rank even
+when the raw exterior matrix is rank deficient.
+
+This does not contradict the exterior Green identity. The exterior representation
+still determines potential only up to an additive constant, so matrices like
+`-G_exterior` and the exterior-equivalent interior operator
+`I - G_interior` retain the same constant-mode nullspace. The raw interior
+matrix `G_interior` is full rank because it includes the double-layer jump
+rather than subtracting it away.
+
 Here `phi_source` is not just `U_wake dot n`; it is the scalar potential induced
 by source panels whose strengths are set from the wake-induced normal velocity:
 
@@ -199,8 +258,9 @@ The test performs this twice:
 
 - Exterior control points use the unmodified assembled diagonal, since
   `G[i,i] ≈ −½`.
-- Interior control points replace the assembled diagonal with `−½` before
-  forming `−G`, since raw interior assembly gives `G[i,i] ≈ +½`.
+- Interior control points subtract one from the assembled diagonal, or
+  equivalently use `I - G_interior`, since raw interior assembly gives
+  `G[i,i] ≈ +½`.
 
 Because normal-derivative data determines potential only up to an additive
 constant, the test compares both potentials after subtracting their means.

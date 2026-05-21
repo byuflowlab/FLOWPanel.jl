@@ -321,12 +321,18 @@ function kinematic_velocity!(systems::Tuple, frames::AbstractVector{ReferenceFra
     
     # update the kinematic velocity of each dependent surface
     for isurf in frame.dependent_index
-        
+
         # unpack containers
         body = systems[isurf]
         Vcp = body.velocity
         Vkin = body.velocity_kinematic
         CPs = body.controlpoints
+
+        # accumulate this frame's angular velocity (in global frame) into the
+        # body's net Ω so that ∇u_kinematic = [Ω]_× is available downstream.
+        body.angular_velocity[1] += ω_global[1]
+        body.angular_velocity[2] += ω_global[2]
+        body.angular_velocity[3] += ω_global[3]
 
         # velocity at the control points
         for i in axes(Vcp, 2)

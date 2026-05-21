@@ -16,6 +16,14 @@ abstract type AbstractMonitor end
 monitor_provides(::Any) = ()
 monitor_requires(::Any) = ()
 
+# Monitors that need ∇u at body control points return true here so
+# simulate! can flip body.needs_velocity_gradient[] before the time loop.
+monitor_requires_body_hessian(::Any) = false
+
+# Monitors that need volumetric induced vorticity at body control points return
+# true here so simulate! can request FastMultipole extra_outputs=3.
+monitor_requires_induced_vorticity(::Any) = false
+
 """
     audit_monitors(monitors)
 
@@ -45,34 +53,47 @@ function audit_monitors(monitors)
 end
 
 """
-    PressureBernoulli(rho; unsteady=false, correct_kuttacondition=true, clip=nothing)
+    PressureBernoulli(rho; unsteady=false, correct_kuttacondition=true, clip=nothing,
+                      backend=FastMultipoleBackend(expansion_order=10,
+                                                   multipole_acceptance=0.4,
+                                                   leaf_size=100))
 
 Monitor that populates `body.P` on every body in the simulation by evaluating
 the Bernoulli equation each step. With `unsteady=false` (default) the steady
 form ``P = \\tfrac{1}{2} \\rho (U_\\infty^2 - U^2)`` is used; with
-`unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is added,
-using `body.dphidt` populated by `simulate!`.
+`unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is added.
+The monitor evaluates scalar potential at the body control points, finite
+differences it between calls, and subtracts the control-point convective term.
+Only source systems with a scalar potential are included in that potential
+evaluation.
 
 `correct_kuttacondition` and `clip` are forwarded to `calcfield_P!`.
 
 Pressure-dependent monitors (e.g. `ForceMonitor`) must appear *after* this
 monitor in the `monitors` tuple passed to `simulate!`.
 """
-struct PressureBernoulli{TF, TC} <: AbstractMonitor
+mutable struct PressureBernoulli{TF, TC, TB} <: AbstractMonitor
     rho::TF
     unsteady::Bool
     correct_kuttacondition::Bool
     clip::TC
+    backend::TB
+    phi_dot::Vector{Vector{Float64}}
+    potential_history::Vector{Vector{Float64}}
+    probes::Vector{FastMultipole.ProbeSystem{Float64}}
 end
 
 monitor_provides(::PressureBernoulli) = (:P,)
 
 function PressureBernoulli(rho::Real; unsteady::Bool=false,
                           correct_kuttacondition::Bool=true,
-                          clip=nothing)
-    return PressureBernoulli{typeof(rho), typeof(clip)}(rho, unsteady,
-                                                       correct_kuttacondition,
-                                                       clip)
+                          clip=nothing,
+                          backend=FastMultipoleBackend(expansion_order=10,
+                                                       multipole_acceptance=0.4,
+                                                       leaf_size=100))
+    return PressureBernoulli{typeof(rho), typeof(clip), typeof(backend)}(
+        rho, unsteady, correct_kuttacondition, clip, backend,
+        Vector{Float64}[], Vector{Float64}[], FastMultipole.ProbeSystem{Float64}[])
 end
 
 function (m::PressureBernoulli)(systems, wakes,
@@ -80,13 +101,108 @@ function (m::PressureBernoulli)(systems, wakes,
                                uinf, i_step::Int, dt::Real)
     systems_tuple = _systems_tuple(systems)
     Uinf_mag = norm(uinf)
-    for body in systems_tuple
+    scalar_sources = m.unsteady ? _bernoulli_scalar_sources(systems_tuple, wakes) : ()
+    m.unsteady && _pressure_bernoulli_ensure_storage!(m, systems_tuple)
+    for (i_body, body) in enumerate(systems_tuple)
         fill!(body.P, zero(eltype(body.P)))
-        dphidt = m.unsteady ? body.dphidt : zero(body.dphidt)
-        calcfield_P!(body.P, body, body.velocity, Uinf_mag, m.rho, dphidt;
+        phi_dot = m.unsteady ?
+            _pressure_bernoulli_phi_dot!(m, body, i_body, scalar_sources, uinf, dt) :
+            nothing
+        calcfield_P!(body.P, body, body.velocity, Uinf_mag, m.rho, phi_dot;
                      correct_kuttacondition=m.correct_kuttacondition,
                      clip=m.clip)
     end
+end
+
+function _pressure_bernoulli_ensure_storage!(m::PressureBernoulli, systems_tuple::Tuple)
+    nbodies = length(systems_tuple)
+    if length(m.phi_dot) != nbodies ||
+       length(m.potential_history) != nbodies ||
+       length(m.probes) != nbodies
+        m.phi_dot = Vector{Float64}[]
+        m.potential_history = Vector{Float64}[]
+        m.probes = FastMultipole.ProbeSystem{Float64}[]
+        sizehint!(m.phi_dot, nbodies)
+        sizehint!(m.potential_history, nbodies)
+        sizehint!(m.probes, nbodies)
+        for body in systems_tuple
+            push!(m.phi_dot, zeros(Float64, body.ncells))
+            push!(m.potential_history, zeros(Float64, body.ncells))
+            push!(m.probes, FastMultipole.ProbeSystem(body.ncells, Float64))
+        end
+        return nothing
+    end
+
+    for (i, body) in enumerate(systems_tuple)
+        if length(m.phi_dot[i]) != body.ncells ||
+           length(m.potential_history[i]) != body.ncells ||
+           length(m.probes[i].scalar_potential) != body.ncells
+            m.phi_dot[i] = zeros(Float64, body.ncells)
+            m.potential_history[i] = zeros(Float64, body.ncells)
+            m.probes[i] = FastMultipole.ProbeSystem(body.ncells, Float64)
+        end
+    end
+
+    return nothing
+end
+
+function _bernoulli_scalar_sources(systems_tuple::Tuple, wakes)
+    wake_sources = _collect_wake_scalar_sources(wakes)
+    return _filter_scalar_potential_sources((systems_tuple..., wake_sources...))
+end
+
+function _filter_scalar_potential_sources(sources::Tuple)
+    result = ()
+    for source in sources
+        if !FastMultipole.has_vector_potential(source)
+            result = (result..., source)
+        end
+    end
+    return result
+end
+
+function _pressure_bernoulli_phi_dot!(m::PressureBernoulli, body::AbstractBody,
+                                      i_body::Int, scalar_sources::Tuple,
+                                      uinf, dt::Real)
+    dt > 0 || throw(ArgumentError("PressureBernoulli(unsteady=true) requires a positive runtime dt; got $(dt)."))
+
+    probes = m.probes[i_body]
+    history = m.potential_history[i_body]
+    phi_dot = m.phi_dot[i_body]
+    inv_dt = inv(Float64(dt))
+
+    @inbounds for p in 1:body.ncells
+        probes.position[p] = SVector{3, Float64}(
+            body.controlpoints[1, p],
+            body.controlpoints[2, p],
+            body.controlpoints[3, p],
+        )
+        probes.scalar_potential[p] = 0.0
+    end
+
+    if length(scalar_sources) > 0
+        influence!((probes,), scalar_sources, m.backend;
+            precalc=false, scalar_potential=true, gradient=false,
+            hessian=(false,))
+    end
+
+    @inbounds for p in 1:body.ncells
+        phi = probes.scalar_potential[p] +
+              uinf[1] * body.controlpoints[1, p] +
+              uinf[2] * body.controlpoints[2, p] +
+              uinf[3] * body.controlpoints[3, p]
+        Dphi_Dt = (history[p] + phi) * inv_dt
+        vk1 = body.velocity_kinematic[1, p]
+        vk2 = body.velocity_kinematic[2, p]
+        vk3 = body.velocity_kinematic[3, p]
+        grad_phi_1 = body.velocity[1, p] + vk1
+        grad_phi_2 = body.velocity[2, p] + vk2
+        grad_phi_3 = body.velocity[3, p] + vk3
+        phi_dot[p] = Dphi_Dt - (vk1 * grad_phi_1 + vk2 * grad_phi_2 + vk3 * grad_phi_3)
+        history[p] = -phi
+    end
+
+    return phi_dot
 end
 
 abstract type AbstractPressurePreconditioner end
@@ -114,26 +230,44 @@ function LA.ldiv!(y::AbstractVector, M::PressureJacobiState, x::AbstractVector)
 end
 
 """
-    PressureLaplace(bodies, rho; atol=1e-8, rtol=1e-8, itmax=200,
+    PressureLaplace(bodies, rho; unsteady=false, atol=1e-8, rtol=1e-8, itmax=1000,
                     preconditioner=JacobiPressurePreconditioner(),
                     reference_panel=1, reference_pressure=0.0,
-                    cache=true, verbose=false)
+                    rebuild_every_step=false, verbose=false, gradient_mode=:raw_hessian,
+                    acceleration_form=:material_derivative)
 
 Monitor that populates `body.P` by solving a sparse panel-centered surface
 pressure Poisson equation. The monitor uses `velocity_dot` as a rolling
-time-difference buffer of the **inertial** fluid velocity
-`u_inertial = body.velocity + body.velocity_kinematic`: between calls it
+time-difference buffer of the tangent-projected **inertial** fluid velocity
+`u_inertial = tangent(body.velocity) + body.velocity_kinematic`: between calls it
 stores `-u_inertial_old`, then during the call it becomes
 `(u_inertial_new - u_inertial_old) / dt`, which is the panel-following rate
-`d/dt[u(x_p(t), t)]`. The material derivative used in the RHS is then
-`Du/Dt = d/dt[u(x_p,t)] + (u_rel · ∇) u_inertial`, where
-`u_rel = body.velocity` is the body-relative slip velocity (on an impermeable
-surface `u_rel · n = 0` in the continuous limit).
+`d/dt[u(x_p(t), t)]`. With `unsteady=true`, this finite-difference term is
+included in the RHS. With `unsteady=false` (default), the rolling buffer is
+still updated but the RHS uses only the convective part of
+`Du/Dt = ∂u/∂t + (u_rel · ∇)u`.
 `velocity_dot` is initialized to zero, so on the first call the unsteady term
 is `u_inertial / dt` rather than a true finite difference; if this warm-up
 transient matters, pre-populate
-`monitor.velocity_dot[i] .= -(body.velocity .+ body.velocity_kinematic)`
+`monitor.velocity_dot[i]` with `-(tangent(body.velocity) .+ body.velocity_kinematic)`
 before the first call.
+
+The diagnostic material-acceleration reconstruction has two gradient modes. The
+default `gradient_mode=:raw_hessian` uses the analytic spatial Jacobian
+`∇u_inertial = body.velocity_gradient + [Ω]_×`, where `body.velocity_gradient`
+is the multipole Hessian populated by FastMultipole during per-step
+`influence!` calls. The opt-in `gradient_mode=:surface_velocity` reconstructs
+`∇ₛu_inertial` directly from the final surface velocity field; this is useful
+for Dirichlet lifting bodies whose `body.velocity` includes a postprocessed
+`∇ₛμ` contribution that is not represented in the raw panel Hessian.
+
+The pressure RHS has two velocity-only acceleration forms. The default
+`acceleration_form=:material_derivative` uses the direct
+`∂t u + (u · ∇)u` edge form. `acceleration_form=:lamb_vector` uses the Lamb
+decomposition `(u · ∇)u = ∇(|u|²/2) + ω × u`, where `ω` is the volumetric
+induced vorticity accumulated in `body.induced_vorticity` by FastMultipole
+`extra_outputs=3`. Both forms use only velocity and its derivatives; neither
+requires a scalar potential.
 
 `bodies` must match the bodies later passed to `simulate!`, in the same order,
 so the monitor can preallocate one velocity-difference matrix, sparse operator,
@@ -146,69 +280,75 @@ stored in the monitor.
 
 # Fields
 - `rho::Float64` — fluid density used to scale the pressure RHS and output
+- `unsteady::Bool` — include the rolling finite-difference velocity term in the RHS
 - `atol::Float64` — absolute residual tolerance for the CG solve
 - `rtol::Float64` — relative residual tolerance for the CG solve
 - `itmax::Int` — maximum CG iterations per call
 - `preconditioner::TP` — preconditioner applied during the CG solve (e.g. `JacobiPressurePreconditioner`)
 - `reference_panel::Int` — index of the panel whose pressure is pinned to `reference_pressure` (gauge condition)
 - `reference_pressure::Float64` — pressure value assigned to the reference panel
-- `cache::Bool` — when `true`, the sparse operator and preconditioner are reused if the geometry signature is unchanged
+- `rebuild_every_step::Bool` — when `true`, rebuild the sparse operator, preconditioner, and CG workspace on every call; by default they are reused
 - `verbose::Bool` — when `true`, prints per-step rebuild status and panel count to stdout
-- `velocity_dot::Vector{Matrix{Float64}}` — rolling buffer; initialized to zero, then between calls holds `-u_inertial_old` (3 × ncells per body); during a call becomes `(u_inertial_new - u_inertial_old) / dt`
-- `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `body.velocity + body.velocity_kinematic` (3 × ncells per body); used as the scalar field for the surface gradient computation
+- `gradient_mode::Symbol` — `:raw_hessian` for the current Hessian path or `:surface_velocity` for a surface reconstruction of the final velocity field
+- `acceleration_form::Symbol` — `:material_derivative` for the direct acceleration edge form or `:lamb_vector` for the Lamb-vector decomposition
+- `velocity_dot::Vector{Matrix{Float64}}` — rolling buffer; initialized to zero, then between calls holds `-u_inertial_old` with `u_inertial = tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body); during a call becomes `(u_inertial_new - u_inertial_old) / dt`
+- `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body)
+- `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
 - `L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}` — sparse FV surface Laplacian per body, gauge-fixed at `reference_panel`
-- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the tangential material acceleration
+- `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the selected acceleration form
 - `p::Vector{Vector{Float64}}` — solution vector per body (length ncells); written to `body.P` after each solve
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
-- `grad::Vector{Array{Float64, 3}}` — surface gradient of each velocity component (3 × 3 × ncells per body; first index is velocity component, second is gradient direction)
-- `grad_comp::Vector{Matrix{Float64}}` — scratch buffer for one velocity-component gradient (3 × ncells per body)
-- `ATA::Vector{Matrix{Float64}}` — 3 × 3 normal-equation accumulator for the per-panel least-squares gradient solve
-- `ATb::Vector{Vector{Float64}}` — length-3 RHS accumulator for the per-panel least-squares gradient solve
-- `stencil::Vector{Vector{Int}}` — reusable neighbor-index scratch list for the gradient stencil of the current panel
 - `edges::Vector{Matrix{Int}}` — shared interior edges per body (4 × nedges); rows are `(node_a, node_b, panel_i, panel_j)`
 - `workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}` — preallocated Krylov CG workspace per body
-- `geometry_signature::Vector{UInt64}` — hash of panel count, connectivity, edge lengths, and control-point distances per body; triggers a rebuild when changed
 """
 mutable struct PressureLaplace{TP} <: AbstractMonitor
     rho::Float64
+    unsteady::Bool
     atol::Float64
     rtol::Float64
     itmax::Int
     preconditioner::TP
     reference_panel::Int
     reference_pressure::Float64
-    cache::Bool
+    rebuild_every_step::Bool
     verbose::Bool
+    gradient_mode::Symbol
+    acceleration_form::Symbol
     velocity_dot::Vector{Matrix{Float64}}
     L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}
     b::Vector{Vector{Float64}}
     p::Vector{Vector{Float64}}
     acceleration::Vector{Matrix{Float64}}
     tangential::Vector{Matrix{Float64}}
-    grad::Vector{Array{Float64, 3}}
-    grad_comp::Vector{Matrix{Float64}}
-    ATA::Vector{Matrix{Float64}}
-    ATb::Vector{Vector{Float64}}
-    stencil::Vector{Vector{Int}}
     edges::Vector{Matrix{Int}}
     workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}
-    geometry_signature::Vector{UInt64}
     u_inertial::Vector{Matrix{Float64}}
+    surface_velocity_gradient::Vector{Array{Float64,3}}
 end
 
 monitor_provides(::PressureLaplace) = (:P,)
+monitor_requires_body_hessian(m::PressureLaplace) =
+    m.gradient_mode == :raw_hessian && m.acceleration_form == :material_derivative
+monitor_requires_induced_vorticity(m::PressureLaplace) = m.acceleration_form == :lamb_vector
 
 function PressureLaplace(bodies, rho::Real;
+                         unsteady::Bool=false,
                          atol::Real=1e-8,
                          rtol::Real=1e-8,
-                         itmax::Integer=200,
+                         itmax::Integer=1000,
                          preconditioner::AbstractPressurePreconditioner=JacobiPressurePreconditioner(),
                          reference_panel::Integer=1,
                          reference_pressure::Real=0.0,
-                         cache::Bool=true,
-                         verbose::Bool=false)
+                         rebuild_every_step::Bool=false,
+                         verbose::Bool=false,
+                         gradient_mode::Symbol=:raw_hessian,
+                         acceleration_form::Symbol=:material_derivative)
     reference_panel >= 1 || throw(ArgumentError("reference_panel must be at least 1; got $(reference_panel)."))
+    gradient_mode in (:raw_hessian, :surface_velocity) || throw(ArgumentError(
+        "gradient_mode must be :raw_hessian or :surface_velocity; got $(gradient_mode)."))
+    acceleration_form in (:material_derivative, :lamb_vector) || throw(ArgumentError(
+        "acceleration_form must be :material_derivative or :lamb_vector; got $(acceleration_form)."))
     systems_tuple = _systems_tuple(bodies)
     isempty(systems_tuple) && throw(ArgumentError("PressureLaplace requires at least one body."))
     nbodies = length(systems_tuple)
@@ -218,30 +358,20 @@ function PressureLaplace(bodies, rho::Real;
     ps = Vector{Float64}[]
     acceleration = Matrix{Float64}[]
     tangential = Matrix{Float64}[]
-    grad = Array{Float64, 3}[]
-    grad_comp = Matrix{Float64}[]
-    ATA = Matrix{Float64}[]
-    ATb = Vector{Float64}[]
-    stencil = Vector{Int}[]
     edges = Matrix{Int}[]
     workspace = Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}[]
-    signatures = UInt64[]
     u_inertial = Matrix{Float64}[]
+    surface_velocity_gradient = Array{Float64,3}[]
     sizehint!(velocity_dot, nbodies)
     sizehint!(Ls, nbodies)
     sizehint!(bs, nbodies)
     sizehint!(ps, nbodies)
     sizehint!(acceleration, nbodies)
     sizehint!(tangential, nbodies)
-    sizehint!(grad, nbodies)
-    sizehint!(grad_comp, nbodies)
-    sizehint!(ATA, nbodies)
-    sizehint!(ATb, nbodies)
-    sizehint!(stencil, nbodies)
     sizehint!(edges, nbodies)
     sizehint!(workspace, nbodies)
-    sizehint!(signatures, nbodies)
     sizehint!(u_inertial, nbodies)
+    sizehint!(surface_velocity_gradient, nbodies)
 
     for body in systems_tuple
         body.ncells > 0 || throw(ArgumentError("PressureLaplace requires bodies with at least one panel."))
@@ -258,26 +388,19 @@ function PressureLaplace(bodies, rho::Real;
         push!(ps, zeros(Float64, body.ncells))
         push!(acceleration, zeros(Float64, 3, body.ncells))
         push!(tangential, zeros(Float64, 3, body.ncells))
-        push!(grad, zeros(Float64, 3, 3, body.ncells))
-        push!(grad_comp, zeros(Float64, 3, body.ncells))
-        push!(ATA, zeros(Float64, 3, 3))
-        push!(ATb, zeros(Float64, 3))
-        st = Int[]
-        sizehint!(st, 10)
-        push!(stencil, st)
         push!(edges, body_edges)
         push!(workspace, Krylov.krylov_workspace(Val(:cg), L, b))
-        push!(signatures, _pressure_geometry_signature(body, Int(reference_panel), body_edges))
         push!(u_inertial, zeros(Float64, size(body.velocity)))
+        push!(surface_velocity_gradient, zeros(Float64, 3, 3, body.ncells))
     end
     preconditioner = build_pressure_preconditioner(preconditioner, Ls)
 
     return PressureLaplace{typeof(preconditioner)}(
-        Float64(rho), Float64(atol), Float64(rtol), Int(itmax),
+        Float64(rho), unsteady, Float64(atol), Float64(rtol), Int(itmax),
         preconditioner, Int(reference_panel), Float64(reference_pressure),
-        cache, verbose, velocity_dot, Ls, bs, ps,
-        acceleration, tangential, grad, grad_comp, ATA, ATb, stencil,
-        edges, workspace, signatures, u_inertial)
+        rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
+        acceleration, tangential,
+        edges, workspace, u_inertial, surface_velocity_gradient)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -338,9 +461,6 @@ function build_pressure_preconditioner(::JacobiPressurePreconditioner, L::Sparse
     return PressureJacobiState(invdiag)
 end
 
-build_pressure_preconditioner(pc::AbstractPressurePreconditioner, L, cache) =
-    build_pressure_preconditioner(pc, L)
-
 function rebuild_pressure_preconditioner!(pc::NoPressurePreconditioner,
                                           L::SparseArrays.SparseMatrixCSC{Float64, Int}, i_body::Int)
     return pc
@@ -373,19 +493,17 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     # Panel count changes would invalidate all preallocated arrays.
     topology_changed = body.ncells != length(m.b[i_body]) ||
                        size(m.velocity_dot[i_body]) != size(body.velocity) ||
-                       size(m.u_inertial[i_body]) != size(body.velocity)
+                       size(m.u_inertial[i_body]) != size(body.velocity) ||
+                       size(m.surface_velocity_gradient[i_body], 3) != body.ncells
     topology_changed && throw(ArgumentError(
         "PressureLaplace does not support panel-count changes after construction. Reconstruct the monitor for the new body sizes."))
 
-    # Recompute L only when geometry has changed (rigid motion leaves L unchanged).
-    sig = _pressure_geometry_signature(body, m.reference_panel, m.edges[i_body])
-    rebuild = !m.cache || m.geometry_signature[i_body] != sig
+    rebuild = m.rebuild_every_step
 
     if rebuild
         m.L[i_body] = _assemble_pressure_laplacian(body, m.reference_panel, m.edges[i_body])
         rebuild_pressure_preconditioner!(m.preconditioner, m.L[i_body], i_body)
         m.workspace[i_body] = Krylov.krylov_workspace(Val(:cg), m.L[i_body], m.b[i_body])
-        m.geometry_signature[i_body] = sig
     end
 
     # velocity_dot currently holds -u_old; this call turns it into (u_new - u_old)/dt.
@@ -397,7 +515,8 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     _pressure_store_negative_velocity!(m, body, i_body)
 
     if m.verbose
-        println("\t\tPressureLaplace[step=$(i_step+1)]: rebuild=$(rebuild), panels=$(body.ncells)")
+        ws = m.workspace[i_body]
+        println("\t\tPressureLaplace($(m.acceleration_form))[step=$(i_step+1)]: rebuild=$(rebuild), panels=$(body.ncells), CG iters=$(ws.stats.niter), solved=$(ws.stats.solved)")
     end
 
     return body.P
@@ -406,8 +525,9 @@ end
 function _pressure_velocity_dot!(m::PressureLaplace, body::AbstractBody, i_body::Int, dt::Real)
     # On entry velocity_dot holds -u_inertial_old (written by the previous call to
     # _pressure_store_negative_velocity!, or zero on the very first call).
-    # Adding u_inertial_new = body.velocity + body.velocity_kinematic and dividing
-    # by dt gives the panel-following rate d/dt[u(x_p,t)] ≈ (u_new - u_old)/dt.
+    # Adding u_inertial_new = tangent(body.velocity) + body.velocity_kinematic
+    # and dividing by dt gives the panel-following rate
+    # d/dt[u(x_p,t)] ≈ (u_new - u_old)/dt.
     vdot = m.velocity_dot[i_body]
     u    = body.velocity
     uk   = body.velocity_kinematic
@@ -473,22 +593,6 @@ function _pressure_panel_edges(body::AbstractBody)
     return edges
 end
 
-function _pressure_geometry_signature(body::AbstractBody, reference_panel::Int,
-                                      edges::Matrix{Int})
-    # Hash everything that affects the Laplacian weights: topology (ncells, cells, neighbor),
-    # the gauge choice (reference_panel), and the per-edge metric quantities ℓ and d.
-    # Rigid translation/rotation changes control-point positions and node positions equally,
-    # so ℓ and d are unchanged and the signature stays the same — no rebuild needed.
-    sig = hash((body.ncells, size(body.cells), body.cells, size(body.neighbor), body.neighbor, reference_panel))
-    @inbounds for k in axes(edges, 2)
-        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
-        ell = _pressure_edge_length(body.nodes, edge_a, edge_b)
-        d = _pressure_controlpoint_distance(body.controlpoints, i, j)
-        sig = hash((ell, d), sig)
-    end
-    return sig
-end
-
 function _assemble_pressure_laplacian(body::AbstractBody, reference_panel::Int)
     return _assemble_pressure_laplacian(body, reference_panel, _pressure_panel_edges(body))
 end
@@ -503,15 +607,14 @@ function _assemble_pressure_laplacian(body::AbstractBody, reference_panel::Int,
     sizehint!(cols, 4n)
     sizehint!(vals, 4n)
 
-    # For each shared interior edge between panels i and j, the FV weight is
-    # w = ℓ/d (edge length / control-point distance).  Each edge contributes
+    # For each shared interior edge between panels i and j, the panel-centered
+    # FV weight is w = ℓ (ν_ij · r_ij) / |r_ij|², where ν_ij is the averaged-normal
+    # surface co-normal oriented from panel i to panel j. Each edge contributes
     # four symmetric entries: +w on both diagonals, -w on both off-diagonals.
     @inbounds for k in axes(edges, 2)
         edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
         i == j && continue
-        d = _pressure_controlpoint_distance(body.controlpoints, i, j)
-        d > 0 || continue
-        w = _pressure_edge_length(body.nodes, edge_a, edge_b) / d
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
         append!(rows, (i, j, i, j))
         append!(cols, (i, j, j, i))
         append!(vals, (w, w, -w, -w))
@@ -547,73 +650,227 @@ function _pressure_apply_gauge(L, reference_panel::Int)
 end
 
 function _pressure_rhs!(m::PressureLaplace, body::AbstractBody, i_body::Int)
-    b = m.b[i_body]
-    tangential = m.tangential[i_body]
-    acceleration = m.acceleration[i_body]
+    # Refresh velocity_dot/u_inertial and diagnostic material-acceleration caches.
+    _pressure_material_acceleration!(m, body, i_body)
+    velocity_dot = m.unsteady ? m.velocity_dot[i_body] : nothing
+    if m.acceleration_form == :material_derivative
+        return _pressure_rhs_from_edge_material_derivative!(m.b[i_body], m, body, i_body,
+            velocity_dot)
+    elseif m.acceleration_form == :lamb_vector
+        return _pressure_rhs_from_lamb_vector!(m.b[i_body], m, body, i_body,
+            velocity_dot)
+    else
+        throw(ArgumentError("Unknown PressureLaplace acceleration_form $(m.acceleration_form)."))
+    end
+end
+
+function _pressure_apply_reference_pressure_rhs!(b::AbstractVector,
+                                                 reference_panel::Int,
+                                                 reference_pressure::Real,
+                                                 w::Real, i::Int, j::Int)
+    if !iszero(reference_pressure)
+        i == reference_panel && (b[j] += w * reference_pressure)
+        j == reference_panel && (b[i] += w * reference_pressure)
+    end
+    return b
+end
+
+function _pressure_rhs_from_edge_material_derivative!(b::AbstractVector, m::PressureLaplace,
+                                                      body::AbstractBody, i_body::Int,
+                                                      velocity_dot::Union{Nothing,AbstractMatrix})
     edges = m.edges[i_body]
     rho = m.rho
     reference_panel = m.reference_panel
     reference_pressure = m.reference_pressure
     fill!(b, 0.0)
 
-    # Step 1: compute Du/Dt = ∂u/∂t + (u_t·∇_s)u at every panel control point.
-    _pressure_material_acceleration!(m, body, i_body)
-
-    # Step 2: project acceleration onto the local tangent plane (remove normal component).
-    # The surface Poisson equation only involves the tangential divergence.
-    @inbounds for i in 1:body.ncells
-        nx, ny, nz = body.normals[1, i], body.normals[2, i], body.normals[3, i]
-        an = acceleration[1, i] * nx + acceleration[2, i] * ny + acceleration[3, i] * nz
-        tangential[1, i] = acceleration[1, i] - an * nx
-        tangential[2, i] = acceleration[2, i] - an * ny
-        tangential[3, i] = acceleration[3, i] - an * nz
-    end
-
-    # Step 3: accumulate the edge-integrated source ρ ∮ a_t·n̂ dℓ into b, matching
-    # the SPD -∇² FV Laplacian assembled in L (diag +w, off-diag -w, w = ℓ/d).
-    # The continuous identity ∫_i ∇²p = ∮_{∂i} ∇p·n̂ dℓ discretizes to a midpoint-
-    # average edge flux f = ℓ · ((a_t,i + a_t,j)/2)·ê_ij with outward-from-i = +ê_ij
-    # and outward-from-j = -ê_ij, so b[i] += ρ f and b[j] -= ρ f.
+    # Accumulate a two-point material-derivative flux compatible with the FV
+    # Laplacian. When enabled, the unsteady part uses midpoint velocity_dot; the
+    # convective part approximates [(u_rel · ∇)u]·r by the edge directional
+    # difference u_rel,edge · (body.velocity_j - body.velocity_i). This keeps
+    # the RHS in the ∂t u + (u·∇)u form without coupling panel-center gradients
+    # to a two-point pressure operator.
     @inbounds for k in axes(edges, 2)
         edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
         r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
         r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
         r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
-        d = sqrt(r1*r1 + r2*r2 + r3*r3)
-        d > 0 || continue
-        ell = _pressure_edge_length(body.nodes, edge_a, edge_b)
-        e1, e2, e3 = r1 / d, r2 / d, r3 / d          # unit vector i→j
-        ai = tangential[1, i] * e1 + tangential[2, i] * e2 + tangential[3, i] * e3
-        aj = tangential[1, j] * e1 + tangential[2, j] * e2 + tangential[3, j] * e3
-        flux = ell * 0.5 * (ai + aj)
-        b[i] += rho * flux
-        b[j] -= rho * flux
-        # When reference_pressure ≠ 0 the gauge column removal shifts the RHS.
-        if !iszero(reference_pressure)
-            w = ell / d
-            i == reference_panel && (b[j] += w * reference_pressure)
-            j == reference_panel && (b[i] += w * reference_pressure)
+        udot_edge_dot_r = 0.0
+        if velocity_dot !== nothing
+            udot_edge_dot_r = 0.5 * (
+                (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
+                (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
+                (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
         end
+
+        nx_i, ny_i, nz_i = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        nx_j, ny_j, nz_j = body.normals[1, j], body.normals[2, j], body.normals[3, j]
+        ui_n = body.velocity[1, i] * nx_i + body.velocity[2, i] * ny_i + body.velocity[3, i] * nz_i
+        uj_n = body.velocity[1, j] * nx_j + body.velocity[2, j] * ny_j + body.velocity[3, j] * nz_j
+        urel1 = 0.5 * (body.velocity[1, i] - ui_n * nx_i + body.velocity[1, j] - uj_n * nx_j)
+        urel2 = 0.5 * (body.velocity[2, i] - ui_n * ny_i + body.velocity[2, j] - uj_n * ny_j)
+        urel3 = 0.5 * (body.velocity[3, i] - ui_n * nz_i + body.velocity[3, j] - uj_n * nz_j)
+        du1 = body.velocity[1, j] - body.velocity[1, i]
+        du2 = body.velocity[2, j] - body.velocity[2, i]
+        du3 = body.velocity[3, j] - body.velocity[3, i]
+        convective_edge_dot_r = urel1 * du1 + urel2 * du2 + urel3 * du3
+
+        flux = rho * w * (udot_edge_dot_r + convective_edge_dot_r)
+        b[i] += flux
+        b[j] -= flux
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
     end
 
-    # Step 4: enforce the gauge constraint b[reference_panel] = reference_pressure.
+    # Step 3: enforce the gauge constraint b[reference_panel] = reference_pressure.
     b[reference_panel] = reference_pressure
     return b
+end
+
+function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
+                                         body::AbstractBody, i_body::Int,
+                                         velocity_dot::Union{Nothing,AbstractMatrix})
+    edges = m.edges[i_body]
+    rho = m.rho
+    reference_panel = m.reference_panel
+    reference_pressure = m.reference_pressure
+    u_inertial = m.u_inertial[i_body]
+    fill!(b, 0.0)
+
+    @inbounds for k in axes(edges, 2)
+        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+
+        udot_edge_dot_r = 0.0
+        if velocity_dot !== nothing
+            udot_edge_dot_r = 0.5 * (
+                (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
+                (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
+                (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
+        end
+
+        qi = 0.5 * (u_inertial[1, i]^2 + u_inertial[2, i]^2 + u_inertial[3, i]^2)
+        qj = 0.5 * (u_inertial[1, j]^2 + u_inertial[2, j]^2 + u_inertial[3, j]^2)
+        kinetic_jump = qj - qi
+
+        wx_i, wy_i, wz_i = body.induced_vorticity[1, i], body.induced_vorticity[2, i], body.induced_vorticity[3, i]
+        wx_j, wy_j, wz_j = body.induced_vorticity[1, j], body.induced_vorticity[2, j], body.induced_vorticity[3, j]
+        wx = 0.5 * (wx_i + wx_j)
+        wy = 0.5 * (wy_i + wy_j)
+        wz = 0.5 * (wz_i + wz_j)
+
+        nx_i, ny_i, nz_i = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        nx_j, ny_j, nz_j = body.normals[1, j], body.normals[2, j], body.normals[3, j]
+        ui_n = body.velocity[1, i] * nx_i + body.velocity[2, i] * ny_i + body.velocity[3, i] * nz_i
+        uj_n = body.velocity[1, j] * nx_j + body.velocity[2, j] * ny_j + body.velocity[3, j] * nz_j
+        urel1 = 0.5 * (body.velocity[1, i] - ui_n * nx_i + body.velocity[1, j] - uj_n * nx_j)
+        urel2 = 0.5 * (body.velocity[2, i] - ui_n * ny_i + body.velocity[2, j] - uj_n * ny_j)
+        urel3 = 0.5 * (body.velocity[3, i] - ui_n * nz_i + body.velocity[3, j] - uj_n * nz_j)
+
+        lamb1 = wy * urel3 - wz * urel2
+        lamb2 = wz * urel1 - wx * urel3
+        lamb3 = wx * urel2 - wy * urel1
+        lamb_edge_dot_r = lamb1 * r1 + lamb2 * r2 + lamb3 * r3
+
+        flux = rho * w * (udot_edge_dot_r + kinetic_jump + lamb_edge_dot_r)
+        b[i] += flux
+        b[j] -= flux
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
+    end
+
+    b[reference_panel] = reference_pressure
+    return b
+end
+
+function _pressure_rhs_from_acceleration!(b::AbstractVector, m::PressureLaplace,
+                                          body::AbstractBody, i_body::Int,
+                                          acceleration::AbstractMatrix)
+    edges = m.edges[i_body]
+    rho = m.rho
+    reference_panel = m.reference_panel
+    reference_pressure = m.reference_pressure
+    fill!(b, 0.0)
+
+    @inbounds for k in axes(edges, 2)
+        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+        aedge_dot_r = 0.5 * (
+            (acceleration[1, i] + acceleration[1, j]) * r1 +
+            (acceleration[2, i] + acceleration[2, j]) * r2 +
+            (acceleration[3, i] + acceleration[3, j]) * r3)
+        flux = rho * w * aedge_dot_r
+        b[i] += flux
+        b[j] -= flux
+        _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
+    end
+
+    b[reference_panel] = reference_pressure
+    return b
+end
+
+function _pressure_edge_conormal_weight(body::AbstractBody, edge_a::Int, edge_b::Int,
+                                        i::Int, j::Int)
+    r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
+    r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
+    r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
+    r2norm = r1*r1 + r2*r2 + r3*r3
+    r2norm > eps(Float64) || throw(ArgumentError(
+        "PressureLaplace found coincident control points for panels $(i) and $(j)."))
+
+    e1 = body.nodes[1, edge_b] - body.nodes[1, edge_a]
+    e2 = body.nodes[2, edge_b] - body.nodes[2, edge_a]
+    e3 = body.nodes[3, edge_b] - body.nodes[3, edge_a]
+    ell = sqrt(e1*e1 + e2*e2 + e3*e3)
+    ell > eps(Float64) || throw(ArgumentError(
+        "PressureLaplace found a degenerate shared edge ($(edge_a), $(edge_b))."))
+    t1, t2, t3 = e1 / ell, e2 / ell, e3 / ell
+
+    n1 = body.normals[1, i] + body.normals[1, j]
+    n2 = body.normals[2, i] + body.normals[2, j]
+    n3 = body.normals[3, i] + body.normals[3, j]
+    nmag = sqrt(n1*n1 + n2*n2 + n3*n3)
+    nmag > eps(Float64) || throw(ArgumentError(
+        "PressureLaplace found opposing panel normals across edge ($(edge_a), $(edge_b))."))
+    n1, n2, n3 = n1 / nmag, n2 / nmag, n3 / nmag
+
+    # ν = t_edge × n_avg is tangent to the averaged surface and perpendicular
+    # to the shared edge. Orient it from panel i toward panel j.
+    nu1 = t2 * n3 - t3 * n2
+    nu2 = t3 * n1 - t1 * n3
+    nu3 = t1 * n2 - t2 * n1
+    numag = sqrt(nu1*nu1 + nu2*nu2 + nu3*nu3)
+    numag > eps(Float64) || throw(ArgumentError(
+        "PressureLaplace found an edge tangent parallel to the averaged normal across edge ($(edge_a), $(edge_b))."))
+    nu1, nu2, nu3 = nu1 / numag, nu2 / numag, nu3 / numag
+
+    proj = nu1*r1 + nu2*r2 + nu3*r3
+    if proj < 0
+        nu1, nu2, nu3 = -nu1, -nu2, -nu3
+        proj = -proj
+    end
+    proj > sqrt(eps(Float64)) * sqrt(r2norm) || throw(ArgumentError(
+        "PressureLaplace found a non-orthogonal panel pair with nonpositive co-normal distance between panels $(i) and $(j)."))
+
+    w = ell * proj / r2norm
+    return w, ell, nu1, nu2, nu3, n1, n2, n3
 end
 
 function _pressure_material_acceleration!(m::PressureLaplace, body::AbstractBody, i_body::Int)
     n = body.ncells
     acceleration = m.acceleration[i_body]
     velocity_dot = m.velocity_dot[i_body]
-    grad = m.grad[i_body]
-    grad_comp = m.grad_comp[i_body]
     u_inertial = m.u_inertial[i_body]
 
-    # Form u_inertial = tangent(body.velocity) + body.velocity_kinematic.
-    # body.velocity is the body-relative slip velocity; in the continuous limit it is purely
-    # tangent, but the solver only enforces u·n = 0 to its tolerance. Stripping the normal
-    # residual here keeps it out of the panel-following finite difference and the surface
-    # gradient that feeds the convective term.
+    # Form u_inertial = tangent(body.velocity) + body.velocity_kinematic. The
+    # tangent projection strips the small numerical normal residual from the
+    # solver out of velocity_dot and (now obsolete) downstream uses; u_inertial
+    # is still maintained for documentation / debugging visibility.
     nrm = body.normals
     uk  = body.velocity_kinematic
     @inbounds for p in 1:n
@@ -627,139 +884,59 @@ function _pressure_material_acceleration!(m::PressureLaplace, body::AbstractBody
 
     # Start with the panel-following rate d/dt[u_inertial(x_p,t)] stored in velocity_dot.
     copyto!(acceleration, velocity_dot)
-    te_info = hasproperty(body, :shedding_full) ? view(body.shedding_full, 1:2, :) : nothing
 
-    # Compute the surface gradient of each inertial velocity component (u, v, w separately),
-    # then pack into grad[comp, direction, panel].
-    for comp in 1:3
-        scalar = view(u_inertial, comp, :)
-        fill!(grad_comp, 0.0)
-        _pressure_surface_gradient!(grad_comp, body.controlpoints, body.normals,
-            body.cells, body.neighbor, scalar, te_info,
-            m.ATA[i_body], m.ATb[i_body], m.stencil[i_body])
-        @inbounds for i in 1:n, k in 1:3
-            grad[comp, k, i] = grad_comp[k, i]
-        end
+    G_surf = nothing
+    if m.gradient_mode == :surface_velocity
+        G_surf = m.surface_velocity_gradient[i_body]
+        bad_panel_mask = panel_aspect_ratio_mask(body.nodes, body.cells; threshold=10.0)
+        te_info = hasproperty(body, :shedding_full) ?
+                  view(body.shedding_full, 1:2, :) :
+                  zeros(Int, 2, body.ncells)
+        compute_surface_velocity_gradient!(G_surf, u_inertial, body.controlpoints,
+            body.normals, body.cells, body.neighbor, te_info;
+            bad_panel_mask=any(bad_panel_mask) ? bad_panel_mask : nothing)
     end
 
-    # Add the convective term (u_rel · ∇) u_inertial, using the body-relative slip
-    # velocity u_rel = body.velocity. On an impermeable surface u_rel · n = 0
-    # continuously; the explicit tangent projection here removes any small numerical
-    # normal component from the solver.
+    # In raw_hessian mode, ∇u_inertial = ∇u_induced + [Ω]_×. The induced part is
+    # the analytic multipole Hessian accumulated into body.velocity_gradient by
+    # FastMultipole. The kinematic part has spatial Jacobian [Ω]_× because
+    # u_kinematic(x) = U_O + Ω × (x - x_O) is rigid-body. In surface_velocity
+    # mode, ∇ₛu_inertial is reconstructed from the final surface velocity field,
+    # including postprocessed terms such as ∇ₛμ and the kinematic velocity, so no
+    # separate [Ω]_× term is added there.
+    ω = body.angular_velocity
+    ωx, ωy, ωz = ω[1], ω[2], ω[3]
+    G_ind = body.velocity_gradient
+
+    # (u_rel · ∇) u_inertial, with u_rel = body.velocity tangent-projected
+    # (impermeability is enforced exactly here so the convective term has no
+    # spurious normal component from solver residuals).
     @inbounds for i in 1:n
         ur1, ur2, ur3 = body.velocity[1, i], body.velocity[2, i], body.velocity[3, i]
-        un = ur1 * body.normals[1, i] + ur2 * body.normals[2, i] + ur3 * body.normals[3, i]
-        ut1 = ur1 - un * body.normals[1, i]
-        ut2 = ur2 - un * body.normals[2, i]
-        ut3 = ur3 - un * body.normals[3, i]
-        for comp in 1:3
-            acceleration[comp, i] += ut1 * grad[comp, 1, i] +
-                                     ut2 * grad[comp, 2, i] +
-                                     ut3 * grad[comp, 3, i]
+        nx, ny, nz = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        un = ur1 * nx + ur2 * ny + ur3 * nz
+        ut1 = ur1 - un * nx
+        ut2 = ur2 - un * ny
+        ut3 = ur3 - un * nz
+
+        # In raw_hessian mode, add ([Ω]_× · u_t)_k = (Ω × u_t)_k directly to
+        # avoid materializing the skew matrix.
+        cross_x = ωy * ut3 - ωz * ut2
+        cross_y = ωz * ut1 - ωx * ut3
+        cross_z = ωx * ut2 - ωy * ut1
+
+        if G_surf === nothing
+            acceleration[1, i] += ut1 * G_ind[1, 1, i] + ut2 * G_ind[1, 2, i] + ut3 * G_ind[1, 3, i] + cross_x
+            acceleration[2, i] += ut1 * G_ind[2, 1, i] + ut2 * G_ind[2, 2, i] + ut3 * G_ind[2, 3, i] + cross_y
+            acceleration[3, i] += ut1 * G_ind[3, 1, i] + ut2 * G_ind[3, 2, i] + ut3 * G_ind[3, 3, i] + cross_z
+        else
+            acceleration[1, i] += ut1 * G_surf[1, 1, i] + ut2 * G_surf[1, 2, i] + ut3 * G_surf[1, 3, i]
+            acceleration[2, i] += ut1 * G_surf[2, 1, i] + ut2 * G_surf[2, 2, i] + ut3 * G_surf[2, 3, i]
+            acceleration[3, i] += ut1 * G_surf[3, 1, i] + ut2 * G_surf[3, 2, i] + ut3 * G_surf[3, 3, i]
         end
     end
 
     return acceleration
-end
-
-function _pressure_surface_gradient!(grad_out, controlpoints, normals, cells,
-                                     neighbors, scalar, te_info,
-                                     ATA::Matrix{Float64},
-                                     ATb::Vector{Float64},
-                                     stencil::Vector{Int})
-    # Per-panel weighted least-squares gradient estimate in 3D.
-    # For each panel i, solve min ‖A g - b‖ where A rows are displacement vectors
-    # to neighbors and b entries are scalar differences.  The normal-direction
-    # penalty (large weight on n·g = 0) constrains the gradient to lie in the
-    # tangent plane, and a small Tikhonov term regularizes isolated panels.
-    n = size(cells, 2)
-    @inbounds for i in 1:n
-        empty!(stencil)
-
-        # At a trailing edge, exclude the neighbor that shares the TE edge to
-        # avoid mixing pressure across the discontinuity.
-        is_te = te_info !== nothing && te_info[1, i] > 0 && te_info[2, i] > 0
-        te_v1 = is_te ? cells[te_info[1, i], i] : -1
-        te_v2 = is_te ? cells[te_info[2, i], i] : -1
-        for k in 1:3
-            j = neighbors[k, i]
-            j <= 0 && continue
-            if is_te
-                has_v1 = cells[1, j] == te_v1 || cells[2, j] == te_v1 || cells[3, j] == te_v1
-                has_v2 = cells[1, j] == te_v2 || cells[2, j] == te_v2 || cells[3, j] == te_v2
-                has_v1 && has_v2 && continue
-            end
-            push!(stencil, j)
-        end
-
-        # Expand to a 2-ring stencil when the 1-ring is under-populated or at a TE,
-        # mirroring compute_mu_gradient! in postprocess.jl. With only 1-2 face
-        # neighbors, ATA is rank-deficient in-plane and the gradient is controlled
-        # by Tikhonov noise; pulling in neighbors-of-neighbors restores rank.
-        # Preserve TE-edge exclusion when growing across the second ring so we
-        # never cross a trailing edge.
-        if is_te || length(stencil) < 3
-            n_current = length(stencil)
-            for s in 1:n_current
-                s_idx = stencil[s]
-                for k in 1:3
-                    nn_idx = neighbors[k, s_idx]
-                    nn_idx <= 0 && continue
-                    nn_idx == i && continue
-                    nn_idx in stencil && continue
-                    if is_te
-                        has_v1 = cells[1, nn_idx] == te_v1 || cells[2, nn_idx] == te_v1 || cells[3, nn_idx] == te_v1
-                        has_v2 = cells[1, nn_idx] == te_v2 || cells[2, nn_idx] == te_v2 || cells[3, nn_idx] == te_v2
-                        has_v1 && has_v2 && continue
-                    end
-                    push!(stencil, nn_idx)
-                end
-            end
-        end
-
-        fill!(ATA, 0.0)
-        fill!(ATb, 0.0)
-        mean_sq_dist = 0.0
-        for j in stencil
-            dx = controlpoints[1, j] - controlpoints[1, i]
-            dy = controlpoints[2, j] - controlpoints[2, i]
-            dz = controlpoints[3, j] - controlpoints[3, i]
-            ds = scalar[j] - scalar[i]
-            ATA[1, 1] += dx * dx; ATA[1, 2] += dx * dy; ATA[1, 3] += dx * dz
-            ATA[2, 1] += dy * dx; ATA[2, 2] += dy * dy; ATA[2, 3] += dy * dz
-            ATA[3, 1] += dz * dx; ATA[3, 2] += dz * dy; ATA[3, 3] += dz * dz
-            ATb[1] += dx * ds
-            ATb[2] += dy * ds
-            ATb[3] += dz * ds
-            mean_sq_dist += dx^2 + dy^2 + dz^2
-        end
-        mean_sq_dist = isempty(stencil) ? 1.0 : mean_sq_dist / length(stencil)
-
-        # Penalty term: add penalty * (n ⊗ n) to ATA so that any gradient
-        # component along the normal is heavily penalized.  Scaled by mean_sq_dist
-        # so the penalty is dimensionally consistent with the geometry.
-        nx, ny, nz = normals[1, i], normals[2, i], normals[3, i]
-        penalty = 1e4 * mean_sq_dist
-        ATA[1, 1] += penalty * nx * nx; ATA[1, 2] += penalty * nx * ny; ATA[1, 3] += penalty * nx * nz
-        ATA[2, 1] += penalty * ny * nx; ATA[2, 2] += penalty * ny * ny; ATA[2, 3] += penalty * ny * nz
-        ATA[3, 1] += penalty * nz * nx; ATA[3, 2] += penalty * nz * ny; ATA[3, 3] += penalty * nz * nz
-
-        # Small Tikhonov regularization to handle panels with no neighbors.
-        reg = 1e-10 * mean_sq_dist
-        ATA[1, 1] += reg; ATA[2, 2] += reg; ATA[3, 3] += reg
-
-        A = SMatrix{3, 3, Float64, 9}(
-            ATA[1, 1], ATA[2, 1], ATA[3, 1],
-            ATA[1, 2], ATA[2, 2], ATA[3, 2],
-            ATA[1, 3], ATA[2, 3], ATA[3, 3],
-        )
-        rhs = SVector{3, Float64}(ATb[1], ATb[2], ATb[3])
-        g = A \ rhs
-        grad_out[1, i] = g[1]
-        grad_out[2, i] = g[2]
-        grad_out[3, i] = g[3]
-    end
-    return grad_out
 end
 
 function _pressure_edge_length(nodes, a::Int, b::Int)
@@ -870,7 +1047,8 @@ monitor_provides(::ForceMonitor) = (:F,)
 
 """
     KuttaJoukowskiForce(body, nt, i_system; rho=1.225, backend=DirectBackend(),
-                        TF=Float64, normalization=NoNormalization(), verbose=false)
+                        i_frame=-1, TF=Float64,
+                        normalization=NoNormalization(), verbose=false)
 
 Diagnostic force monitor that integrates the Kutta–Joukowski force on each panel
 edge and reports the **force on the body**:
@@ -886,12 +1064,17 @@ Provides an independent cross-check against the pressure-integral force
 returned by `ForceMonitor`/`calcfield_F!`. The body must use a `ConstantDoublet`
 or `VortexRing` kernel.
 
+If `i_frame < 0`, force is reported in global coordinates. Otherwise the summed
+force is rotated into the coordinate system of `frames[i_frame]`, matching
+`ForceMonitor`.
+
 If `verbose=true`, the normalized CF for each step is printed to stdout with a
 single `\\t` indent.
 """
 struct KuttaJoukowskiForce{TF, TB, TN} <: AbstractMonitor
     force::Matrix{TF}
     i_system::Int
+    i_frame::Int
     i_strength::Int
     rho::TF
     backend::TB
@@ -906,6 +1089,7 @@ end
 function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
                               rho::Real=1.225,
                               backend::AbstractBackend=DirectBackend(),
+                              i_frame::Int=-1,
                               TF=Float64,
                               normalization=NoNormalization(),
                               verbose::Bool=false)
@@ -941,7 +1125,7 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
     force = zeros(TF, 3, nt)
 
     return KuttaJoukowskiForce{TF, typeof(backend), typeof(normalization)}(
-        force, i_system, i_strength, TF(rho), backend, probes,
+        force, i_system, i_frame, i_strength, TF(rho), backend, probes,
         edge_node_a, edge_node_b, panel_of_probe, normalization, verbose)
 end
 
@@ -1000,13 +1184,18 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
         Fsum -= m.rho * γ * cross(Δs, V)
     end
 
+    if m.i_frame >= 0
+        _, R_f2g = frame_global_transform(frames, m.i_frame)
+        Fsum = transpose(R_f2g) * Fsum
+    end
+
     # 6. Optional normalization (moment is not computed; pass zero).
     Mzero = zero(SVector{3, TF})
     CF, _ = m.normalization(Fsum, Mzero, systems, frames, uinf)
     m.force[:, i_step + 1] .= CF
 
     if m.verbose
-        println("\t\tKuttaJoukowskiForce[i_system=$(m.i_system), step=$(i_step+1)]:")
+        println("\t\tKuttaJoukowskiForce[i_system=$(m.i_system), i_frame=$(m.i_frame), step=$(i_step+1)]:")
         println("\t\t\tCF = ($(round(CF[1], sigdigits=4)), $(round(CF[2], sigdigits=4)), $(round(CF[3], sigdigits=4)))")
     end
 end
@@ -1028,7 +1217,9 @@ function (monitor::ForceMonitor)(systems, wakes,
     systems_tuple = _systems_tuple(systems)
     body = systems_tuple[monitor.i_system]
 
-    # Populate body.F from body.P (set by a PressureBernoulli earlier in the chain).
+    # Populate body.F from body.P. Reset first so multiple ForceMonitors in the same
+    # chain each see only their own pressure, not accumulated values from earlier monitors.
+    fill!(body.F, zero(eltype(body.F)))
     calcfield_F!(body; correct_kuttacondition=monitor.correct_kuttacondition)
 
     # total force in global frame

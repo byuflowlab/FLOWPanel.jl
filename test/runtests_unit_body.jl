@@ -147,6 +147,23 @@ const CELLS_NONMANIFOLD = Int[
         cps_bbox = zeros(3, 1)
         pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps_bbox, normals; off=0.5, characteristiclength=pnl.characteristiclength_bbox)
         @test isapprox(norm(cps_bbox[:, 1] - centroid), 0.5 * sqrt(2); atol=1e-12)
+
+        body_default = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                              CPoffset=0.25)
+        pnl.calc_normals!(body_default)
+        pnl.calc_controlpoints!(body_default)
+        @test body_default.characteristiclength === pnl.characteristiclength_sqrtarea
+        @test isapprox(body_default.controlpoints[:, 1] - centroid,
+                       0.25 * sqrt(0.5) .* body_default.normals[:, 1]; atol=1e-12)
+
+        body_unitary = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                              CPoffset=0.25,
+                                                              characteristiclength=pnl.characteristiclength_unitary)
+        pnl.calc_normals!(body_unitary)
+        pnl.calc_controlpoints!(body_unitary)
+        @test body_unitary.characteristiclength === pnl.characteristiclength_unitary
+        @test isapprox(body_unitary.controlpoints[:, 1] - centroid,
+                       0.25 .* body_unitary.normals[:, 1]; atol=1e-12)
     end
 
     @testset "characteristic lengths" begin

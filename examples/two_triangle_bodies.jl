@@ -138,7 +138,7 @@ pnl.solve!(body, solver; backend)
 Us = pnl.calcfield_U(body, body; backend)
 
 # visualize results
-save_path="two_triangle_body"
+save_path=joinpath("data", "two_triangle_body")
 name="two_triangle_body"
 # normals = pnl.calc_normals(body)
 # add_field(body, "Uinf", "vector", collect(eachcol(Uinfs)), "cell")

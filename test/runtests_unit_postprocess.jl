@@ -1,7 +1,16 @@
 using Test
 import FLOWPanel as pnl
+import FastMultipole
 using LinearAlgebra: dot
 using SparseArrays
+using StaticArrays: SMatrix, SVector
+
+if !isdefined(@__MODULE__, :make_octa_source_body)
+    include("test_helpers.jl")
+end
+
+struct PostprocessVectorPotentialDummy end
+FastMultipole.has_vector_potential(::PostprocessVectorPotentialDummy) = true
 
 function make_planar_gradient_mesh()
     nodes = Float64[
@@ -31,29 +40,134 @@ function make_postprocess_seeded_te_mesh()
     return nodes, cells
 end
 
+function expected_negative_tangent_velocity(body)
+    expected = similar(body.velocity)
+    for p in 1:body.ncells
+        n = body.normals[:, p]
+        u = body.velocity[:, p]
+        expected[:, p] .= -(u .- dot(u, n) .* n .+ body.velocity_kinematic[:, p])
+    end
+    return expected
+end
+
+function make_skewed_two_panel_body()
+    nodes = Float64[
+        0.0 1.0 0.0 1.2;
+        0.0 0.0 1.0 1.1;
+        0.0 0.0 0.0 0.4;
+    ]
+    cells = Int[
+        1 2;
+        2 4;
+        3 3;
+    ]
+    body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+        watertight=false,
+        ensure_winding=false)
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body; off=0.0)
+    return body
+end
+
 @testset verbose=true "Postprocess" begin
+    @testset "PressureBernoulli unsteady monitor-owned phi_dot" begin
+        body = make_octa_source_body()
+        uinf_old = [1.0, 0.0, 0.0]
+        uinf_new = [1.2, -0.1, 0.05]
+        dt = 0.2
+        w = [0.3, -0.2, 0.1]
+        for p in 1:body.ncells
+            body.velocity_kinematic[:, p] .= w
+            body.velocity[:, p] .= uinf_new .- w
+        end
+
+        monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend=pnl.DirectBackend())
+        pnl._pressure_bernoulli_ensure_storage!(monitor, (body,))
+        for p in 1:body.ncells
+            monitor.potential_history[1][p] = -dot(uinf_old, body.controlpoints[:, p])
+        end
+
+        phi_dot = pnl._pressure_bernoulli_phi_dot!(monitor, body, 1, (), uinf_new, dt)
+        for p in 1:body.ncells
+            phi_old = dot(uinf_old, body.controlpoints[:, p])
+            phi_new = dot(uinf_new, body.controlpoints[:, p])
+            expected = (phi_new - phi_old) / dt - dot(w, uinf_new)
+            @test isapprox(phi_dot[p], expected; atol=1e-12)
+            @test isapprox(monitor.potential_history[1][p], -phi_new; atol=1e-12)
+        end
+
+        scalar_sources = pnl._filter_scalar_potential_sources((body, PostprocessVectorPotentialDummy()))
+        @test scalar_sources == (body,)
+
+        steady_from_nothing = zeros(body.ncells)
+        steady_from_zero = zeros(body.ncells)
+        pnl.calcfield_P!(steady_from_nothing, body, body.velocity, 1.0, 1.0, nothing;
+            correct_kuttacondition=false)
+        pnl.calcfield_P!(steady_from_zero, body, body.velocity, 1.0, 1.0, zeros(body.ncells);
+            correct_kuttacondition=false)
+        @test steady_from_nothing == steady_from_zero
+    end
+
     @testset "PressureLaplace monitor" begin
         body = make_octa_source_body()
         monitor = pnl.PressureLaplace((body,), 1.2; reference_panel=1, reference_pressure=0.0)
 
         @test pnl.monitor_provides(monitor) == (:P,)
+        @test !monitor.unsteady
+        @test monitor.acceleration_form == :material_derivative
+        @test pnl.monitor_requires_body_hessian(monitor)
         @test pnl.audit_monitors((monitor, pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()))) !== nothing
         @test_throws ArgumentError pnl.PressureLaplace(1.0)
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; gradient_mode=:unknown)
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; acceleration_form=:unknown)
+
+        lamb = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            acceleration_form=:lamb_vector)
+        @test lamb.acceleration_form == :lamb_vector
+        @test !pnl.monitor_requires_body_hessian(lamb)
+        @test pnl.monitor_requires_induced_vorticity(lamb)
 
         body.velocity .= 0.0
         body.velocity[1, :] .= 1.0
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
-        @test all(isapprox.(monitor.velocity_dot[1][1, :], -1.0; atol=1e-12))
-        @test all(isapprox.(monitor.velocity_dot[1][2, :], 0.0; atol=1e-12))
-        @test all(isapprox.(monitor.velocity_dot[1][3, :], 0.0; atol=1e-12))
+        @test isapprox(monitor.velocity_dot[1], expected_negative_tangent_velocity(body); atol=1e-12)
         @test all(isfinite, body.P)
 
         body.velocity[1, :] .+= 0.5
         body.velocity[2, :] .-= 0.25
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 1, 0.25)
-        @test all(isapprox.(monitor.velocity_dot[1][1, :], -1.5; atol=1e-12))
-        @test all(isapprox.(monitor.velocity_dot[1][2, :], 0.25; atol=1e-12))
-        @test all(isapprox.(monitor.velocity_dot[1][3, :], 0.0; atol=1e-12))
+        @test isapprox(monitor.velocity_dot[1], expected_negative_tangent_velocity(body); atol=1e-12)
+    end
+
+    @testset "PressureLaplace surface velocity gradient mode" begin
+        body = make_octa_source_body()
+        monitor = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            gradient_mode=:surface_velocity)
+
+        @test !pnl.monitor_requires_body_hessian(monitor)
+
+        body.velocity .= 0.0
+        body.velocity[1, :] .= 0.3
+        body.velocity[2, :] .= -0.1
+        body.velocity_gradient .= NaN
+        monitor.velocity_dot[1] .= expected_negative_tangent_velocity(body)
+
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
+
+        @test all(isfinite, body.P)
+        @test all(isfinite, monitor.acceleration[1])
+        @test all(isfinite, monitor.surface_velocity_gradient[1])
+
+        lamb = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            gradient_mode=:surface_velocity,
+            acceleration_form=:lamb_vector)
+        body.velocity_gradient .= NaN
+        lamb.velocity_dot[1] .= expected_negative_tangent_velocity(body)
+        lamb((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
+        @test all(isfinite, body.P)
+        @test all(isfinite, lamb.surface_velocity_gradient[1])
     end
 
     @testset "PressureLaplace sparse matrix and solve" begin
@@ -77,7 +191,27 @@ end
         @test isapprox(monitor.p[1], p_exact; atol=1e-8)
     end
 
-    @testset "PressureLaplace cache invalidation and force integration" begin
+    @testset "PressureLaplace co-normal metric" begin
+        body = make_skewed_two_panel_body()
+        edges = pnl._pressure_panel_edges(body)
+        @test size(edges, 2) == 1
+        edge_a, edge_b, i, j = edges[:, 1]
+        w, ell, nu1, nu2, nu3, n1, n2, n3 =
+            pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)
+        r = body.controlpoints[:, j] .- body.controlpoints[:, i]
+        d = sqrt(dot(r, r))
+        @test w > 0.0
+        @test !isapprox(w, ell / d; atol=1e-12)
+        @test dot([nu1, nu2, nu3], r) > 0.0
+        @test isapprox(dot([nu1, nu2, nu3], [n1, n2, n3]), 0.0; atol=1e-12)
+
+        L0 = pnl._assemble_pressure_laplacian(body, 0)
+        @test isapprox(Matrix(L0), [w -w; -w w]; atol=1e-12)
+        L = pnl._assemble_pressure_laplacian(body, 1)
+        @test isapprox(Matrix(L), [1.0 0.0; 0.0 w]; atol=1e-12)
+    end
+
+    @testset "PressureLaplace rebuild policy and force integration" begin
         body = make_octa_source_body()
         pressure = pnl.PressureLaplace((body,), 1.0; reference_panel=1)
         force = pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization())
@@ -89,15 +223,56 @@ end
         pressure((body,), (nothing,), frames, zeros(3), 1, 0.1)
         @test pressure.L[1] === first_L
 
+        body.nodes[1, :] .+= 0.2
+        body.nodes[2, :] .-= 0.1
+        pressure((body,), (nothing,), frames, zeros(3), 2, 0.1)
+        @test pressure.L[1] === first_L
+
         old = body.nodes[1, 1]
         body.nodes[1, 1] = old + 0.1
-        pressure((body,), (nothing,), frames, zeros(3), 2, 0.1)
-        @test pressure.L[1] !== first_L
+        pressure((body,), (nothing,), frames, zeros(3), 3, 0.1)
+        @test pressure.L[1] === first_L
+
+        rebuilding = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            rebuild_every_step=true)
+        body.velocity[1, :] .= 0.2 .* (1:body.ncells)
+        rebuilding((body,), (nothing,), frames, zeros(3), 4, 0.1)
+        rebuild_first_L = rebuilding.L[1]
+        rebuilding((body,), (nothing,), frames, zeros(3), 5, 0.1)
+        @test rebuilding.L[1] !== rebuild_first_L
 
         force((body,), (nothing,), frames, zeros(3), 0, 0.1)
         @test all(isfinite, body.P)
         @test all(isfinite, body.F)
         @test all(isfinite, force.force)
+    end
+
+    @testset "KuttaJoukowskiForce frame rotation" begin
+        body = make_plate_vortex_body()
+        body.strength[:, 1] .= [0.8, -0.35]
+        frames = pnl.ReferenceFrame(body;
+            ω_axis=SVector{3}(0.0, 0.0, 1.0),
+            R=SMatrix{3,3}(0.0, -1.0, 0.0,
+                           1.0,  0.0, 0.0,
+                           0.0,  0.0, 1.0))
+        uinf = zeros(3)
+
+        global_monitor = pnl.KuttaJoukowskiForce(body, 1, 1;
+            backend=pnl.DirectBackend(),
+            i_frame=-1,
+            normalization=pnl.NoNormalization())
+        frame_monitor = pnl.KuttaJoukowskiForce(body, 1, 1;
+            backend=pnl.DirectBackend(),
+            i_frame=1,
+            normalization=pnl.NoNormalization())
+
+        global_monitor((body,), (nothing,), frames, uinf, 0, 0.1)
+        frame_monitor((body,), (nothing,), frames, uinf, 0, 0.1)
+
+        _, R_f2g = pnl.frame_global_transform(frames, 1)
+        expected_frame_force = transpose(R_f2g) * SVector{3}(global_monitor.force[:, 1]...)
+        @test isapprox(frame_monitor.force[:, 1], collect(expected_frame_force); atol=1e-10)
     end
 
     @testset "PressureLaplace Bernoulli constant-field comparison" begin
@@ -108,7 +283,7 @@ end
         body_l.velocity .= body_b.velocity
 
         laplace = pnl.PressureLaplace((body_l,), 1.0; reference_panel=1)
-        laplace.velocity_dot[1] .= -body_l.velocity
+        laplace.velocity_dot[1] .= expected_negative_tangent_velocity(body_l)
         pnl.calcfield_P!(body_b.P, body_b, body_b.velocity, 1.0, 1.0, zeros(body_b.ncells);
             correct_kuttacondition=false)
         laplace((body_l,), (nothing,), pnl.ReferenceFrame(body_l), [1.0, 0.0, 0.0], 0, 0.1)
@@ -116,6 +291,96 @@ end
         p_b = body_b.P .- body_b.P[1]
         p_l = body_l.P .- body_l.P[1]
         @test isapprox(p_l, p_b; atol=1e-10)
+    end
+
+    @testset "PressureLaplace acceleration RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
+        acceleration = zeros(3, body.ncells)
+        p_exact = [0.0, 2.0]
+        edge_a, edge_b, i, j = laplace.edges[1][:, 1]
+        r = body.controlpoints[:, j] .- body.controlpoints[:, i]
+        acceleration[:, i] .= ((p_exact[i] - p_exact[j]) / laplace.rho) .* r ./ dot(r, r)
+        acceleration[:, j] .= acceleration[:, i]
+
+        pnl._pressure_rhs_from_acceleration!(laplace.b[1], laplace, body, 1, acceleration)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+    end
+
+    @testset "PressureLaplace edge material derivative RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
+        velocity_dot = zeros(3, body.ncells)
+        p_exact = [0.0, 2.0]
+        edge_a, edge_b, i, j = laplace.edges[1][:, 1]
+        r = body.controlpoints[:, j] .- body.controlpoints[:, i]
+        velocity_dot[:, i] .= ((p_exact[i] - p_exact[j]) / laplace.rho) .* r ./ dot(r, r)
+        velocity_dot[:, j] .= velocity_dot[:, i]
+
+        pnl._pressure_rhs_from_edge_material_derivative!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        pnl._pressure_rhs_from_edge_material_derivative!(laplace.b[1], laplace, body, 1, velocity_dot)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+    end
+
+    @testset "PressureLaplace Lamb vector RHS projection" begin
+        body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            acceleration_form=:lamb_vector)
+        p_exact = [0.0, -2.0]
+        q = -p_exact ./ laplace.rho
+        laplace.u_inertial[1] .= 0.0
+        for p in 1:body.ncells
+            laplace.u_inertial[1][1, p] = sqrt(2.0 * q[p])
+        end
+        body.velocity .= 0.0
+        body.velocity_gradient .= 0.0
+        body.angular_velocity .= 0.0
+
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+
+        @test isapprox(laplace.b[1], laplace.L[1] * p_exact; atol=1e-12)
+
+        fill!(laplace.u_inertial[1], 0.4)
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        laplace.u_inertial[1] .= 0.0
+        body.velocity .= 0.0
+        body.velocity[2, :] .= 1.0
+        body.velocity_gradient .= NaN
+        body.induced_vorticity .= 0.0
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test isapprox(laplace.b[1], zeros(2); atol=1e-12)
+
+        body.induced_vorticity[3, :] .= 1.0
+        pnl._pressure_rhs_from_lamb_vector!(laplace.b[1], laplace, body, 1, nothing)
+        @test !isapprox(laplace.b[1], zeros(2); atol=1e-12)
+    end
+
+    @testset "PressureLaplace unsteady toggle" begin
+        body_steady = make_skewed_two_panel_body()
+        body_unsteady = make_skewed_two_panel_body()
+        for p in 1:body_steady.ncells
+            body_steady.velocity[:, p] .= [0.2 + 0.1p, -0.05p, 0.03]
+        end
+        body_unsteady.velocity .= body_steady.velocity
+
+        steady = pnl.PressureLaplace((body_steady,), 1.0; reference_panel=1)
+        unsteady = pnl.PressureLaplace((body_unsteady,), 1.0; reference_panel=1,
+            unsteady=true)
+        steady.velocity_dot[1] .= 0.0
+        unsteady.velocity_dot[1] .= 0.0
+
+        steady((body_steady,), (nothing,), pnl.ReferenceFrame(body_steady), zeros(3), 0, 0.25)
+        unsteady((body_unsteady,), (nothing,), pnl.ReferenceFrame(body_unsteady), zeros(3), 0, 0.25)
+
+        @test isapprox(steady.velocity_dot[1], expected_negative_tangent_velocity(body_steady); atol=1e-12)
+        @test isapprox(unsteady.velocity_dot[1], expected_negative_tangent_velocity(body_unsteady); atol=1e-12)
+        @test !isapprox(steady.b[1], unsteady.b[1]; atol=1e-12)
     end
 
     @testset "compute_mu_gradient! interior recovery" begin
@@ -153,6 +418,37 @@ end
 
         for i in exact_panels
             @test isapprox(grad_half[:, i], 0.5 .* grad_mu[:, i]; atol=1e-10)
+        end
+    end
+
+    @testset "compute_surface_velocity_gradient! interior recovery" begin
+        nodes, cells = make_planar_gradient_mesh()
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+            watertight=false,
+            ensure_winding=false)
+
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body; off=0.0)
+
+        u = zeros(3, body.ncells)
+        u[1, :] .= vec(body.controlpoints[1, :] .+ 2 .* body.controlpoints[2, :])
+        u[2, :] .= vec(-3 .* body.controlpoints[1, :] .+ 0.5 .* body.controlpoints[2, :])
+        u[3, :] .= 2.0
+        grad_u = zeros(3, 3, body.ncells)
+        te_info = zeros(Int, 2, body.ncells)
+
+        pnl.compute_surface_velocity_gradient!(grad_u, u, body.controlpoints,
+            body.normals, body.cells, body.neighbor, te_info)
+
+        exact_panels = (1, 2, 4, 5, 7, 8)
+        for i in exact_panels
+            @test isapprox(grad_u[1, :, i], [1.0, 2.0, 0.0]; atol=1e-9)
+            @test isapprox(grad_u[2, :, i], [-3.0, 0.5, 0.0]; atol=1e-9)
+            @test isapprox(grad_u[3, :, i], [0.0, 0.0, 0.0]; atol=1e-9)
+        end
+
+        for i in 1:body.ncells, k in 1:3
+            @test abs(dot(grad_u[k, :, i], body.normals[:, i])) ≤ 1e-10
         end
     end
 

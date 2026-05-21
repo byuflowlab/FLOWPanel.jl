@@ -18,6 +18,9 @@ import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm
 
+run_name = "vpm"
+save_path = joinpath("data", run_name)
+
 # ----------------- GEOMETRY (shared) -----------------------------------------
 filename   = joinpath(pnl.examples_path, "data", "naca662015.csv")
 contour    = CSV.read(filename, DataFrame)
@@ -130,7 +133,7 @@ l = d * aspectratio
 dt = magVinf / l / (n_rfl * 500)
 # t_range2 = range(0.0, step=dt, length=11) 
 @time pnl.simulate!((body_B,), (wake_B,), frames_B, maneuver, Uinf, t_range;
-    body_solvers=(solver_B,), backend, verbose=true, path="vpm", name="fgs")
+    body_solvers=(solver_B,), backend, verbose=true, path=save_path, name="fgs")
 
 strength_B = copy(body_B.strength)
 

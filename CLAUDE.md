@@ -101,7 +101,7 @@ Monitors are callables `(systems, wakes, frames, uinf, i_step, dt) -> nothing` i
 
 Concrete monitors:
 - `PressureBernoulli(rho; unsteady, correct_kuttacondition, clip)` — populates `body.P` via steady or unsteady Bernoulli; provides `:P`
-- `PressureLaplace(bodies, rho; atol, rtol, itmax, preconditioner, reference_panel, reference_pressure, cache, verbose)` — populates `body.P` by solving a sparse panel-centered surface pressure Poisson equation (CG from Krylov.jl); provides `:P`. Must be constructed with the actual body objects for preallocation. Receives `dt` from `simulate!` at runtime; do **not** pass `dt` at construction.
+- `PressureLaplace(bodies, rho; atol, rtol, itmax, preconditioner, reference_panel, reference_pressure, rebuild_every_step, verbose)` — populates `body.P` by solving a sparse panel-centered surface pressure Poisson equation (CG from Krylov.jl); provides `:P`. Must be constructed with the actual body objects for preallocation. Receives `dt` from `simulate!` at runtime; do **not** pass `dt` at construction.
 - `ForceMonitor(nt, i_system; i_frame, normalization, correct_kuttacondition, verbose)` — populates `body.F`, integrates force/moment, stores histories in `.force` and `.moment` (3×nt); requires `:P`, provides `:F`
 - `KuttaJoukowskiForce(body, nt, i_system; rho, backend, normalization, verbose)` — independent Kutta–Joukowski cross-check; evaluates `ρ Σ γ (Δs × V)` at edge midpoints via a `FastMultipole.ProbeSystem`; stores history in `.force` (3×nt)
 
@@ -117,7 +117,7 @@ Normalization callables `(CF, CM, systems, frames, uinf) -> (CF_norm, CM_norm)`:
 - Unsteady term `∂u/∂t` approximated by finite difference of successive monitor calls (stored in `velocity_dot` as negative previous velocity)
 - Velocity gradient `∇u` needed for convective term obtained analytically: `∇u_induced` is the FastMultipole Hessian populated into `body.velocity_gradient` during the per-step `influence!` calls (gated by `monitor_requires_body_hessian(::PressureLaplace) = true` flipping `body.needs_velocity_gradient[]` in `simulate!`); the kinematic part `[Ω]_×` is reconstructed from `body.angular_velocity` accumulated in `kinematic_velocity!`
 - Body count checked at call time against `length(m.b)`; no identity (`objectid`) check — caller is trusted to provide compatible bodies
-- Geometry signature cached; `L` and preconditioner only rebuilt when mesh geometry changes (controlled by `cache` flag)
+- `L`, preconditioner, and CG workspace are reused by default; set `rebuild_every_step=true` for deforming geometry that needs a fresh pressure Laplacian each monitor call
 - Preconditioners: `JacobiPressurePreconditioner` (default, O(N)), `NoPressurePreconditioner`; `IncompleteCholeskyPressurePreconditioner` and `AMGPressurePreconditioner` reserved but not implemented
 
 ### Unsteady Simulation Flow

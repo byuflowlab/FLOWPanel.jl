@@ -1,45 +1,24 @@
-#--- dphidt dispatch helpers ---#
-
-_store_neg_potential!(sys::AbstractLiftingBody) = (sys.dphidt .= .-sys.potential)
-_store_neg_potential!(::AbstractBody) = nothing
-
-# Eulerian ∂φ/∂t at body-fixed control points.
-#
-# `(φ_new − φ_old)/dt` is the body-following (material) derivative because
-# the control points move with the rigid body. Subtract V_kin · ∇φ to
-# recover the inertial-frame partial-time derivative needed by unsteady
-# Bernoulli. ∇φ is reconstructed from the apparent fluid velocity stored in
-# body.velocity plus the kinematic velocity stored in body.velocity_kinematic.
-function _compute_dphidt!(sys::AbstractLiftingBody, dt)
-    Vkin = sys.velocity_kinematic
-    V = sys.velocity
-    for i in eachindex(sys.dphidt)
-        Dphi_Dt = (sys.dphidt[i] + sys.potential[i]) / dt
-        vk1, vk2, vk3 = Vkin[1, i], Vkin[2, i], Vkin[3, i]
-        gx = V[1, i] + vk1
-        gy = V[2, i] + vk2
-        gz = V[3, i] + vk3
-        sys.dphidt[i] = Dphi_Dt - (vk1 * gx + vk2 * gy + vk3 * gz)
-    end
-end
-
-_compute_dphidt!(::AbstractBody, dt) = nothing
-
 #--- Das initialization helpers ---#
 
-function _accumulate_Das!(sys::AbstractLiftingBody, eta)
+function _accumulate_Das!(sys::AbstractLiftingBody, eta; min_displacement=0.0)
     for ishedding in eachindex(sys.Das)
         Das = sys.Das[ishedding]
         Vte = sys.velocity_te[ishedding]
         for j in axes(Das, 2)
-            Das[1, j] += Vte[1, j] * eta
-            Das[2, j] += Vte[2, j] * eta
-            Das[3, j] += Vte[3, j] * eta
+            speed = sqrt(Vte[1, j]^2 + Vte[2, j]^2 + Vte[3, j]^2)
+            if speed > zero(speed)
+                displacement_length = max(abs(eta) * speed, min_displacement)
+                signed_length = eta < zero(eta) ? -displacement_length : displacement_length
+                scale = signed_length / speed
+                Das[1, j] += Vte[1, j] * scale
+                Das[2, j] += Vte[2, j] * scale
+                Das[3, j] += Vte[3, j] * scale
+            end
         end
     end
 end
 
-_accumulate_Das!(::AbstractBody, eta) = nothing
+_accumulate_Das!(::AbstractBody, eta; min_displacement=0.0) = nothing
 
 #--- wake tuple helpers ---#
 
@@ -65,6 +44,9 @@ function _wakes_tuple(system::AbstractBody, wake)
     (isnothing(wake) || wake isa AbstractFreeWake) || throw(ArgumentError("wake must be an AbstractFreeWake or nothing when systems is an AbstractBody, got $(typeof(wake))"))
     return (wake,)
 end
+
+_induced_vorticity_extra_outputs(targets::Tuple, enabled::Bool) =
+    Tuple(enabled && target isa AbstractBody ? 3 : 0 for target in targets)
 
 function _validate_body_solvers(systems::Tuple, body_solvers)
     if body_solvers isa Tuple
@@ -142,7 +124,8 @@ end
 
 function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         set_Das_eta_kinematic=NaN,
-        set_Das_eta_freestream=NaN)
+        set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0)
     if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic)
         return systems
     end
@@ -164,7 +147,8 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         end
         kinematic_velocity!(systems_tuple, frames)
         for sys in systems_tuple
-            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
+                min_displacement=set_Das_min_kinematic_displacement)
         end
     end
 
@@ -184,7 +168,7 @@ aerodynamics, updating wakes, optionally writing VTK output, and calling any
 registered monitors.
 """
 function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
-        name="default_sim", path="./default_simulation",
+        name="default_sim", path=joinpath("data", "default_simulation"),
         body_solvers,
         backend=FastMultipoleBackend(;
                 expansion_order=10,
@@ -197,6 +181,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         monitors=(),
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0,
         start_step::Int=0,
         verbose=false
     )
@@ -208,6 +193,16 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
     audit_monitors(monitors)
+
+    # Flip body.needs_velocity_gradient based on monitor contracts so that
+    # requires_hessian(body) propagates the right HS flag into the per-step
+    # influence! calls. Done once before the time loop; bodies are mutable
+    # so the Ref persists across steps.
+    needs_grad = any(monitor_requires_body_hessian, monitors)
+    needs_induced_vorticity = any(monitor_requires_induced_vorticity, monitors)
+    for sys in systems_tuple
+        sys.needs_velocity_gradient[] = needs_grad
+    end
 
     # create save path if it does not exist
     if !isnothing(path) && !isdir(path)
@@ -221,7 +216,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
         initialize_Das!(systems_tuple, frames, Uinf, t_range[1], t_range[2] - t_range[1];
-            set_Das_eta_kinematic, set_Das_eta_freestream)
+            set_Das_eta_kinematic, set_Das_eta_freestream,
+            set_Das_min_kinematic_displacement)
     end
 
     # begin simulation
@@ -239,11 +235,6 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         dynamics_toggle = maneuver!(frames, systems_tuple, wakes_tuple, t)
 
         #------- aerodynamics -------#
-
-        # store -φ_old for dφ/dt computation (before reset wipes potential)
-        for sys in systems_tuple
-            _store_neg_potential!(sys)
-        end
 
         # reset potential/velocity
         for w in wakes_tuple
@@ -278,7 +269,11 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         # apply wake velocity to body surface
         if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend_wake; precalc=true, scalar_potential=false, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
+            influence!(targets, wake_sources, backend_wake; precalc=true,
+                scalar_potential=false,
+                velocity=true,
+                velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+                extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
         end
 
         # solve systems with cross-body coupling
@@ -294,24 +289,11 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         end
 
         # system-on-all influence
-        influence!(targets, systems_tuple, backend_system; precalc=false, scalar_potential=true, gradient=true, hessian=Tuple(requires_hessian(sys) for sys in targets))
-
-        # wake-on-body scalar potential (non-particle wake sources only)
-        wake_phi_sources = _collect_wake_scalar_sources(wakes_tuple)
-        if length(wake_phi_sources) > 0
-            influence!(systems_tuple, wake_phi_sources, backend_wake;
-                precalc=false, scalar_potential=true, gradient=false,
-                hessian=Tuple(false for _ in systems_tuple))
-        end
-
-        #--- bookkeeping for downstream monitors ---#
-
-        # compute dφ/dt: dphidt holds -φ_old, add φ_new and divide by dt.
-        # Kept in the loop because it requires _store_neg_potential! to have
-        # run before the per-step reset.
-        for sys in systems_tuple
-            _compute_dphidt!(sys, dt)
-        end
+        influence!(targets, systems_tuple, backend_system; precalc=false,
+            scalar_potential=false,
+            velocity=true,
+            velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
 
         #------- other solvers -------#
 

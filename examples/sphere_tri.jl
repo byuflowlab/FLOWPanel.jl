@@ -19,7 +19,7 @@ import DataFrames: DataFrame
 import GeometricTools: plt, @L_str
 import GeoIO
 
-save_path       = "temps/"                  # Where to save results
+save_path       = joinpath("data", file_name) # Where to save results
 file_name       = "sphere00"                # Prefix of output files
 paraview        = true                      # Whether to visualize results in paraview
 

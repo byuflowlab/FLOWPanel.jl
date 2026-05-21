@@ -18,6 +18,9 @@ import LinearAlgebra: norm, I
 import Meshes
 import GeoIO
 
+run_name = "wing_sphere"
+save_path = joinpath("data", run_name)
+
 # =============================================================================
 # SIMULATION PARAMETERS
 # =============================================================================
@@ -149,7 +152,7 @@ body_solvers = (solver_wing, solver_sphere)
 println("\nBegin wing+sphere simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     body_solvers, backend, verbose=true,
-    path="wing_sphere", name="wing_sphere"
+    path=save_path, name=run_name
 )
 
 # =============================================================================

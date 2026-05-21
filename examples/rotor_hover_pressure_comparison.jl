@@ -1,0 +1,248 @@
+## Rotor hover: compare PressureBernoulli and PressureLaplace.
+## KuttaJoukowskiForce is available as an opt-in diagnostic with RUN_KJ=true.
+
+import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
+using FLOWPanel.FastMultipole.StaticArrays
+using VSPGeom
+import GeoIO
+using LinearAlgebra: norm
+
+run_name = "rotor_hover_pressure_comparison"
+save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
+
+magVinf = 0.0001 # + 10
+AOA = 0.0
+rho = 1.225
+RPM = 6000
+R = 0.119
+nrevs = 1
+nt = 36
+dt = 60 / RPM / nt
+spinup_revs = max(0.0, parse(Float64, get(ENV, "SPINUP_REVS", "3.0")))
+spinup_start_fraction = clamp(parse(Float64, get(ENV, "SPINUP_START_FRACTION", "0.05")), eps(), 1.0)
+spinup_duration = spinup_revs * 60 / RPM
+spinup_steps = ceil(Int, spinup_duration / dt)
+n_steps = nt * nrevs + spinup_steps
+t_range = range(0.0, step=dt, length=n_steps)
+
+CPoffset = R * 1e-6
+kerneloffset = R * 1e-3
+kernelcutoff = R * 1e-13
+p_per_step = 2
+overlap = 2.0
+merge_r_factor = 0.02
+merge_r_hash_factor = 0.04
+merge_sigma_relative = false
+merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
+init_Das_eta_kinematic = 0.2
+set_Das_min_kinematic_displacement = 0.01 * R
+p_correct_kuttacondition_flag = false
+wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
+run_kj = parse(Bool, get(ENV, "RUN_KJ", "false"))
+lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "true"))
+
+read_path = joinpath(pnl.examples_path, "data")
+# msh_file = joinpath(read_path, "phantom_3_rebuild_r2.msh")
+# te_indices_1 = [9, 175, 127]
+# te_indices_2 = [13, 286, 238]
+msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
+te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
+te_indices_2 = [3324, 3284, 1755] .+ 1 # (or 1755 instead of 1711) convert from 0-based to 1-based indexing
+
+axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is rotated compared to typical rotor convention
+radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
+
+Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [0.0, -cosd(AOA), sind(AOA)]
+Vinf = magVinf * Vinf_direction
+
+msh = GeoIO.load(msh_file).geometry
+nodes, cells = pnl.meshes2nodes_cells(msh)
+nodes .*= R / maximum(nodes[radial_dimension, :])
+
+shedding = pnl.noshedding
+kernel = Union{pnl.ConstantSource, pnl.VortexRing}
+DBC = kernel == pnl.VortexRing ? false : true
+rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
+    CPoffset, kerneloffset, kernelcutoff,
+    semiinfinite_wake=false, watertight=true, DBC)
+
+# save vtk file to inspect for shedding nodes
+# vtk_path = joinpath(save_path, "rotor_initial")
+# pnl.write_vtk(vtk_path, rotor)
+
+shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
+    bbox=nothing, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
+    bbox=nothing, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+
+rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
+    CPoffset, kerneloffset, kernelcutoff,
+    semiinfinite_wake=false, watertight=true,
+    ensure_winding=true, DBC)
+
+# wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
+wake_rotor = pnl.PanelParticleWake(rotor;
+    nwakerows=1, max_particles=150_000, core_size=wake_core_size,
+    method_trailing=pnl.SigmaOverlap(R*0.01, 1.5),
+    # method_trailing=pnl.OverlapPPS(1.3, 2),
+    method_unsteady=pnl.NoShed(),
+    # method_unsteady=pnl.OverlapPPS(1.3, 2),
+    shed_with_induced_velocity=false,
+    particle_maintenance=pnl.MergeParticles(;
+        every=merge_particles ? 1 : 0,
+        r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
+        r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
+        sigma_relative=merge_sigma_relative)
+    )
+
+ramp_t = 0.5 * 60 / RPM
+magVinf_start = 2.0
+ramp_magVinf(t) = t <= ramp_t ? magVinf_start + (magVinf - magVinf_start) * (t / ramp_t) : magVinf
+Uinf(t) = ramp_magVinf(t) * Vinf_direction
+# Uinf(t) = magVinf * Vinf_direction
+
+smoothstep(x) = x <= 0 ? zero(x) : x >= 1 ? one(x) : x * x * (3 - 2 * x)
+function spinup_fraction(t)
+    spinup_revs <= 0 && return 1.0
+    return spinup_start_fraction + (1 - spinup_start_fraction) * smoothstep(t / spinup_duration)
+end
+
+ω_full = 2 * pi * RPM / 60
+function set_frame_omega!(frames, i_frame, ω)
+    frame = frames[i_frame]
+    frames[i_frame] = typeof(frame)(
+        frame.x, frame.v, frame.ω_axis, ω, frame.R, frame.Rp2g,
+        frame.name, frame.parent_index, frame.child_index, frame.dependent_index,
+    )
+end
+
+frames = pnl.ReferenceFrame(rotor;
+    origin=SVector{3}(0.0, 0.0, 0.0),
+    v=SVector{3}(0.0, 0.0, 0.0),
+    ω_axis=occursin("dji9443", msh_file) ? SVector{3}(-1.0, 0.0, 0.0) : SVector{3}(0.0, 1.0, 0.0),
+    ω=ω_full * spinup_fraction(t_range[1]),
+    R=SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+    name="vehicle",
+    child_index=Int[],
+    dependent_index=[1]
+)
+
+pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+    set_Das_eta_kinematic=init_Das_eta_kinematic,
+    set_Das_min_kinematic_displacement)
+
+solver_rotor = pnl.Backslash(rotor)
+backend = pnl.FastMultipoleBackend(;
+    expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "8")),
+    multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
+    leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "20")),
+)
+kj_backend = pnl.FastMultipoleBackend(;
+    expansion_order=parse(Int, get(ENV, "KJ_FMM_EXPANSION_ORDER", "3")),
+    multipole_acceptance=parse(Float64, get(ENV, "KJ_FMM_ACCEPTANCE", "0.4")),
+    leaf_size=parse(Int, get(ENV, "KJ_FMM_LEAF_SIZE", "1000")),
+)
+function maneuver!(frames, systems, wakes, t)
+    set_frame_omega!(frames, 1, ω_full * spinup_fraction(t))
+    return nothing
+end
+
+systems = (rotor,)
+wakes = (wake_rotor,)
+body_solvers = (solver_rotor,)
+
+pressure_bernoulli = pnl.PressureBernoulli(rho;
+    unsteady=true,
+    correct_kuttacondition=p_correct_kuttacondition_flag,
+    backend=backend)
+force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;
+    i_frame=1,
+    normalization=pnl.RotorNormalization(rho, 2 * R, 1),
+    correct_kuttacondition=p_correct_kuttacondition_flag,
+    verbose=false)
+
+pressure_laplace_matderiv = pnl.PressureLaplace(rotor, rho;
+    acceleration_form=:material_derivative, verbose=true)
+force_monitor_laplace_matderiv = pnl.ForceMonitor(length(t_range), 1;
+    i_frame=1,
+    normalization=pnl.RotorNormalization(rho, 2 * R, 1),
+    correct_kuttacondition=p_correct_kuttacondition_flag,
+    verbose=false)
+
+pressure_laplace_lamb = pnl.PressureLaplace(rotor, rho;
+    acceleration_form=:lamb_vector, verbose=true)
+force_monitor_laplace_lamb = pnl.ForceMonitor(length(t_range), 1;
+    i_frame=1,
+    normalization=pnl.RotorNormalization(rho, 2 * R, 1),
+    correct_kuttacondition=p_correct_kuttacondition_flag,
+    verbose=false)
+
+kj_monitor = run_kj ? pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
+        rho, backend=kj_backend,
+        i_frame=1,
+        normalization=pnl.RotorNormalization(rho, 2 * R, 1),
+        verbose=false) : nothing
+
+monitors = run_kj ? (
+        pressure_laplace_matderiv,
+        force_monitor_laplace_matderiv,
+        pressure_laplace_lamb,
+        force_monitor_laplace_lamb,
+        pressure_bernoulli,
+        force_monitor_bernoulli,
+        kj_monitor,
+    ) : lamb_only ? (
+        pressure_laplace_lamb,
+        force_monitor_laplace_lamb,
+    ) : (
+        pressure_laplace_matderiv,
+        force_monitor_laplace_matderiv,
+        pressure_laplace_lamb,
+        force_monitor_laplace_lamb,
+        pressure_bernoulli,
+        force_monitor_bernoulli,
+    )
+
+if spinup_revs > 0
+    println("\nRotor spin-up enabled: $(spinup_revs) nominal revs from $(spinup_start_fraction)×RPM to full RPM")
+end
+println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
+name = run_name
+@time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
+    set_Das_eta_kinematic=NaN,
+    set_Das_min_kinematic_displacement,
+    monitors,
+    body_solvers, backend, verbose=true,
+    path=save_path, name,
+)
+
+CT_bernoulli   = lamb_only ? fill(NaN, length(t_range)) : force_monitor_bernoulli.force[axial_dimension, :]
+CT_laplace_md  = lamb_only ? fill(NaN, length(t_range)) : force_monitor_laplace_matderiv.force[axial_dimension, :]
+CT_laplace_lv  = force_monitor_laplace_lamb.force[axial_dimension, :]
+CT_kj          = run_kj ? kj_monitor.force[axial_dimension, :] : fill(NaN, length(t_range))
+
+function relative_difference(a, b)
+    denom = max(abs(b), eps())
+    return abs(a - b) / denom
+end
+
+println("\nstep | CT Bernoulli | CT Laplace(∇u) | CT Laplace(λ) | CT KJ | rel(B-∇u) | rel(B-λ) | rel(B-KJ)")
+for k in 1:length(t_range)
+    cb  = CT_bernoulli[k]
+    cmd = CT_laplace_md[k]
+    clv = CT_laplace_lv[k]
+    ck  = CT_kj[k]
+    println("  $k  |  $(round(cb, sigdigits=6))  |  $(round(cmd, sigdigits=6))  |  $(round(clv, sigdigits=6))  |  $(round(ck, sigdigits=6))  |  $(round(relative_difference(cb, cmd), sigdigits=4))  |  $(round(relative_difference(cb, clv), sigdigits=4))  |  $(round(relative_difference(cb, ck), sigdigits=4))")
+end
+
+bern_md_rel  = norm(CT_bernoulli - CT_laplace_md) / max(norm(CT_bernoulli), eps())
+bern_lv_rel  = norm(CT_bernoulli - CT_laplace_lv) / max(norm(CT_bernoulli), eps())
+bern_kj_rel  = norm(CT_bernoulli - CT_kj)         / max(norm(CT_bernoulli), eps())
+md_lv_rel    = norm(CT_laplace_md - CT_laplace_lv) / max(norm(CT_laplace_md), eps())
+
+println("\nRelative history differences (L2 norm):")
+println("  Bernoulli vs Laplace(∇u):  $(bern_md_rel)")
+println("  Bernoulli vs Laplace(λ):   $(bern_lv_rel)")
+println("  Bernoulli vs KJ:           $(bern_kj_rel)")
+println("  Laplace(∇u) vs Laplace(λ): $(md_lv_rel)")

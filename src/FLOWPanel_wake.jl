@@ -41,7 +41,9 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     wake_probes = get_probes(wake)
 
     # wake-on-all velocity
-    influence!((body, wake_probes), (wake,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (wake,), backend;
+        velocity=true,
+        velocity_gradient=(requires_hessian(body), requires_hessian(wake)))
 
     # freestream
     apply_freestream!(body, uinf)
@@ -54,31 +56,38 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     solve!(body, body_solver; backend)
 
     # body-on-all influence
-    influence!((body, wake_probes), (body,), backend; gradient=true, hessian=(requires_hessian(body), requires_hessian(wake)))
+    influence!((body, wake_probes), (body,), backend;
+        velocity=true,
+        velocity_gradient=(requires_hessian(body), requires_hessian(wake)))
 
     return nothing
 end
 
-requires_hessian(::AbstractBody) = false # default behavior
+requires_hessian(b::AbstractBody) = b.needs_velocity_gradient[]
 requires_hessian(::AbstractFreeWake) = false # default behavior
 requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
 #--- Panel Wake ---#
 
 """
-    PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100)
-    PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100)
+    PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100,
+        shed_with_induced_velocity=true)
+    PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100,
+        shed_with_induced_velocity=true)
 
 Wake model that stores a panelized wake sheet behind one or more shedding-edge
-chains.
+chains. Set `shed_with_induced_velocity=false` to convect the first wake row
+with freestream only when forming newly shed panels.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
     nodes::Vector{Array{TF, 3}}
     strength::Vector{Array{TF, 3}}
     velocity::Vector{Array{TF, 3}}
+    freestream::Vector{TF}
     core_size::Float64
     overflowed::Array{Bool, 0}
+    shed_with_induced_velocity::Bool
 end
 
 """
@@ -100,7 +109,7 @@ function get_sources(wake::PanelWake)
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
-        core_size=1e-3, nwakerows=100
+        core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
@@ -115,12 +124,18 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     
     # velocity
     velocity = [zeros(TF, size(n)) for n in nodes]
+
+    # latest freestream applied to this wake
+    freestream = zeros(TF, 3)
     
     # overflowed
     overflowed = Array{Bool,0}(undef)
     overflowed[] = false
 
-    return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, core_size, overflowed)
+    return PanelWake{kernel, dim, TF}(
+        nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
+        Bool(shed_with_induced_velocity),
+    )
 end
 
 PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100, kwargs...) where {TK,NK,TF} =
@@ -133,6 +148,7 @@ function reset!(wake::PanelWake)
 end
 
 function apply_freestream!(wake::PanelWake, uinf)
+    wake.freestream .= uinf
     for vel in wake.velocity
         for ns in axes(vel, 3)
             for nc in 1:wake.nwakes[]+1
@@ -307,7 +323,21 @@ FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 3)
 
 FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
 
-function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+FastMultipole.metadata_per_body(system::ProbeWrapper{<:PanelWake}) = 2
+FastMultipole.previous_potential_metadata_index(system::ProbeWrapper{<:PanelWake}) = 1
+FastMultipole.previous_gradient_metadata_index(system::ProbeWrapper{<:PanelWake}) = 2
+
+function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::ProbeWrapper{<:PanelWake}, i_body)
+    isurf, irow, icol = global_to_matrix_index(system, i_body)
+    vx = system.system.velocity[isurf][1, irow, icol]
+    vy = system.system.velocity[isurf][2, irow, icol]
+    vz = system.system.velocity[isurf][3, irow, icol]
+    buffer[FastMultipole.metadata_index(switch, 1), i_buffer] = zero(eltype(buffer))
+    buffer[FastMultipole.metadata_index(switch, 2), i_buffer] = sqrt(vx*vx + vy*vy + vz*vz)
+    return nothing
+end
+
+function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     # get surface index of global `i_target` index
     isurf, irow, icol = global_to_matrix_index(target_system, i_target)
 
@@ -318,9 +348,10 @@ function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:Pa
 
     # save velocity
     if VS
-        target_system.system.velocity[isurf][1, irow, icol] += target_buffer[5, i_buffer]
-        target_system.system.velocity[isurf][2, irow, icol] += target_buffer[6, i_buffer]
-        target_system.system.velocity[isurf][3, irow, icol] += target_buffer[7, i_buffer]
+        vx, vy, vz = FastMultipole.get_gradient(target_buffer, switch, i_buffer)
+        target_system.system.velocity[isurf][1, irow, icol] += vx
+        target_system.system.velocity[isurf][2, irow, icol] += vy
+        target_system.system.velocity[isurf][3, irow, icol] += vz
     end
 
     # save Hessian (not currently used for PanelWake)
@@ -395,31 +426,36 @@ function induced(target::AbstractVector{TF}, source_system::PanelWake{TK,NK,<:An
     return potential+potential2, velocity+velocity2, velocity_gradient+velocity_gradient2
 end
 
-function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::PanelWake, source_buffer, source_index) where {PS,GS,HS}
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::PanelWake, source_buffer, source_index) where {PS,GS,HS,NO,NM}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
                   target_system[2, i_target],
                   target_system[3, i_target])
-        
+
         phi_out = zero(eltype(target_system))
         U_out = @SVector zeros(eltype(target_system), 3)
+        H_out = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
 
         for i_source in source_index # loop over sources
             # evaluate influence due to this source
             phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch)
             phi_out += phi
             U_out += U
+            if HS
+                H_out += H
+            end
         end
 
         # store results
         if PS
-            target_system[4, i_target] += phi_out
+            FastMultipole.set_scalar_potential!(target_system, derivatives_switch, i_target, phi_out)
         end
         if GS
-            target_system[5, i_target] += U_out[1]
-            target_system[6, i_target] += U_out[2]
-            target_system[7, i_target] += U_out[3]
+            FastMultipole.set_gradient!(target_system, derivatives_switch, i_target, U_out)
+        end
+        if HS
+            FastMultipole.set_hessian!(target_system, derivatives_switch, i_target, H_out)
         end
         if HS
             # @warn "Hessian output not currently implemented for PanelWake targets"
@@ -435,9 +471,18 @@ FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args..
 
 function propagate!(wake::PanelWake, dt; step=0, frames=nothing)
     for i_surf in eachindex(wake.nodes)
-        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
-        view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
-        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
+        if wake.shed_with_induced_velocity
+            view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
+            view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
+            view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
+        else
+            view(wake.nodes[i_surf], :, 1, :) .+= dt .* wake.freestream
+            if wake.nwakes[] >= 1
+                view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) .*= dt # displacements
+                view(wake.nodes[i_surf], :, 2:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) # update nodes
+                view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) ./= dt # restore velocities
+            end
+        end
     end
 end
 
@@ -544,6 +589,12 @@ struct SigmaPPS{TF} <: WakeSheddingMethod
     p_per_step::Int
 end
 
+"""Gaussian particle shedding with fixed `sigma` and minimum overlap."""
+struct SigmaOverlap{TF} <: WakeSheddingMethod
+    sigma::TF
+    overlap::TF
+end
+
 """Overlap-based particle shedding with target overlap ratio."""
 struct OverlapPPS{TF} <: WakeSheddingMethod
     overlap::TF
@@ -555,6 +606,13 @@ function _shed_particles!(pfield, r1, r2, Γ, method::OverlapPPS)
     dist < eps(typeof(dist)) && return nothing
     sigma = dist * method.overlap / method.p_per_step
     return _shed_particles!(pfield, r1, r2, Γ, SigmaPPS(sigma, method.p_per_step))
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, method::SigmaOverlap)
+    dist = LA.norm(r2 - r1)
+    dist < eps(typeof(dist)) && return nothing
+    p_per_step = max(1, ceil(Int, method.overlap * dist / method.sigma))
+    return _shed_particles!(pfield, r1, r2, Γ, SigmaPPS(method.sigma, p_per_step))
 end
 
 function _shed_particles!(pfield, r1, r2, Γ, method::SigmaPPS)
@@ -660,13 +718,12 @@ struct MergeParticles{TR,TH,TM} <: AbstractParticleFunctionalPolicy
     sigma_relative::Bool
     max_sigma_ratio::TM
     skip_static::Bool
-    check_neighboring_cells::Bool
 end
 
 MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
-    max_sigma_ratio=2.0, skip_static=true, check_neighboring_cells=true) =
+    max_sigma_ratio=2.0, skip_static=true) =
     MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
-                   skip_static, check_neighboring_cells)
+                   skip_static)
 
 prepare_particle_policy(policy, ::ParticleMaintenanceContext) = policy
 
@@ -718,7 +775,6 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
             sigma_relative=policy.sigma_relative,
             max_sigma_ratio=policy.max_sigma_ratio,
             skip_static=policy.skip_static,
-            check_neighboring_cells=policy.check_neighboring_cells,
         )
     end
     return nothing
@@ -750,7 +806,8 @@ end
     PanelParticleWake(body; optargs...)
 
 Hybrid wake model that combines a near-body panel wake with vortex particles
-shed downstream from the trailing edge.
+shed downstream from the trailing edge. Panel wake options, including
+`shed_with_induced_velocity`, are forwarded to the internal [`PanelWake`](@ref).
 """
 struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
@@ -1014,12 +1071,13 @@ function FastMultipole.body_to_multipole!(filaments::FilamentWrapper{<:PanelWake
     end
 end
 
-function FastMultipole.direct!(target_system, target_index, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, source_system::FilamentWrapper, source_buffer, source_index) where {PS,VS,GS}
+function FastMultipole.direct!(target_system, target_index, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, source_system::FilamentWrapper, source_buffer, source_index) where {PS,VS,GS,NO,NM}
     TF = FastMultipole.numtype(source_system)
     @inbounds for j_target in target_index
         target = FastMultipole.get_position(target_system, j_target)
         v = SVector{3,TF}(0.0, 0.0, 0.0)
         g = zero(SMatrix{3,3,TF,9})
+        w = SVector{3,TF}(0.0, 0.0, 0.0)
         @inbounds for i_source in source_index
             v1 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 1)
             v2 = FastMultipole.get_vertex(source_buffer, source_system, i_source, 2)
@@ -1031,12 +1089,23 @@ function FastMultipole.direct!(target_system, target_index, ::FastMultipole.Deri
             if GS
                 g += _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
             end
+            if NO == 3
+                gf = _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
+                w += SVector{3,TF}(gf[3, 2] - gf[2, 3],
+                                   gf[1, 3] - gf[3, 1],
+                                   gf[2, 1] - gf[1, 2])
+            end
         end
-        VS && FastMultipole.set_gradient!(target_system, j_target, v)
-        GS && FastMultipole.set_hessian!(target_system, j_target, g)
+        VS && FastMultipole.set_gradient!(target_system, switch, j_target, v)
+        GS && FastMultipole.set_hessian!(target_system, switch, j_target, g)
+        if NO == 3
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 1, w[1])
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 2, w[2])
+            FastMultipole.set_extra_output!(target_system, switch, j_target, 3, w[3])
+        end
     end
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::FilamentWrapper, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::FilamentWrapper, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     @warn "A `::FilamentWrapper` object should not be used as a target in an FMM call."
 end

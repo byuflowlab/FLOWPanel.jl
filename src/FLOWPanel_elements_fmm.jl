@@ -302,7 +302,7 @@ end
 
 #------- constant source, normal doublet, source + normal doublet -------#
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,TF}
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
     #--- compute values ---#
 
@@ -340,7 +340,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     velocity_gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     if GS
         # intermediate values
-        d2 = ds * dx
+        d2 = ds * ds
         r_plus_rp1 = ri + rip1
         r_plus_rp1_2 = r_plus_rp1 * r_plus_rp1
         r_times_rp1 = ri * rip1
@@ -373,7 +373,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,TF}
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
     
     # singularity at extension of the panel side
     if abs(abs(R_dot_s) - ri * ds) < 1e-12
@@ -442,7 +442,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{Union{ConstantSource, ConstantDoublet}}, R_dot_s, reg_term) where {PS,VS,GS,TF}
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{Union{ConstantSource, ConstantDoublet}}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
     # singularity if probing on a side
     # println("\nTESTING...")
@@ -551,7 +551,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TFP,NS,PS,VS,GS}
+function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TFP,NS,PS,VS,GS,NO,NM}
     #--- prelimilary computations ---#
 
     # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
@@ -654,7 +654,7 @@ end
 
 #------- vortex ring panel -------#
 
-function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {NS,PS,VS,GS}
+function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {NS,PS,VS,GS,NO,NM}
     TFT = eltype(target)
     TFP = eltype(strength)
     TF = promote_type(TFT,TFP)
@@ -671,7 +671,7 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
         v1, v2, v3 = vertices
         control_point = (v1 + v2 + v3) * 0.3333333333333333
         R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], v3[1], v3[2], v3[3])
-        p, _ = _induced(target, vertices, control_point, strength, ConstantDoublet, core_size, R, FastMultipole.DerivativesSwitch{true, false, false}())
+        p, _ = _induced(target, vertices, control_point, strength, ConstantDoublet, core_size, R, FastMultipole.DerivativesSwitch(true, false, false))
         potential += p
     end
 
@@ -743,54 +743,45 @@ function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_cor
     return V
 end
 
-function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size; epsilon=10*eps()) where TF
-    # preliminaries
-    r1norm = norm(r1)
-    r2norm = norm(r2)
+function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size) where TF
+    nr1 = norm(r1)
+    nr2 = norm(r2)
 
     # target coincides with a filament endpoint: induced gradient is zero in the limit
-    if r1norm < 5*eps(TF) || r2norm < 5*eps(TF)
+    if nr1 < 5*eps(TF) || nr2 < 5*eps(TF)
         return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     end
 
-    rdot = dot(r1, r2)
+    c = cross(r1, r2)
+    s = r1 - r2
+    A = dot(c, c)
+    B = dot(s, s)
+    q = dot(s, r1/nr1 - r2/nr2)
 
-    # zeta (with Vatistas-style core regularization: add core_size² to denominator)
-    denom = r1norm*r2norm + rdot
     if finite_core
-        denom += core_size*core_size
+        rc4 = core_size * core_size * core_size * core_size
+        D = sqrt(A*A + rc4 * B*B)
+        D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+        dD_coeff = (A / D) * (2 * cross(s, c))
+    else
+        D = A
+        D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+        dD_coeff = 2 * cross(s, c)
     end
-    t1 = 1/denom
-    t2 = 1/r1norm + 1/r2norm
-    z = t1*t2*ONE_OVER_4PI
 
-    # zeta gradient
-    r1norm3 = r1norm*r1norm*r1norm
-    r2norm3 = r2norm*r2norm*r2norm
-    t4 = FastMultipole.StaticArrays.SVector{3,TF}(r1[i]/r1norm3 + r2[i]/r2norm3 for i in 1:3)
-    t5 = FastMultipole.StaticArrays.SVector{3,TF}(r1norm/r2norm*r2[i] + r2norm/r1norm*r1[i] + r1[i] + r2[i] for i in 1:3)
-    zgrad = ONE_OVER_4PI*(-t1*t4 - t2*t5*t1^2)
+    r1hat = r1 / nr1
+    r2hat = r2 / nr2
+    dq_coeff = -((I - r1hat * transpose(r1hat)) * s) / nr1 +
+                ((I - r2hat * transpose(r2hat)) * s) / nr2
 
-    # Omega
-    o = cross(r1,r2)
-
-    # Omega gradient
-    ograd = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
-        0.0,# 1,1
-        r1[3]-r2[3], # 2,1
-        r2[2]-r1[2], # 3,1
-        r2[3]-r1[3], # 1,2
-        0.0, # 2,2
-        r1[1]-r2[1], # 3,2
-        r1[2]-r2[2], # 1,3
-        r2[1]-r1[1], # 2,3
-        0.0 # 3,3
+    dc_dx = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
+        zero(TF), -s[3],    s[2],
+           s[3], zero(TF), -s[1],
+          -s[2],    s[1], zero(TF),
     )
-    gradient = transpose(zgrad * transpose(o)) + z * ograd
+    df_coeff = dq_coeff / D - q * dD_coeff / (D*D)
 
-    gradient = zero(SMatrix{3,3,TF,9})
-
-    return gradient
+    return ONE_OVER_4PI * (dc_dx * (q / D) + c * transpose(df_coeff))
 end
 
 function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch)
@@ -871,7 +862,7 @@ get_wake_kernel(::AbstractBody{Union{ConstantSource, VortexRing}}) = VortexRing
 get_wake_kernel(::AbstractBody{VortexRing}) = VortexRing
 get_wake_kernel(::AbstractBody{ConstantDoublet}) = ConstantDoublet
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,PS,VS,GS}
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,PS,VS,GS,NO,NM}
     # check if this panel has a wake
     idx_1 = source_system.shedding_full[1, i_source]
     if idx_1 > 0
@@ -943,7 +934,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
     end
 end
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,NK,PS,VS,GS}
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,NK,PS,VS,GS,NO,NM}
     # Buffer layout (rows are 1-indexed, NK = number of element types):
     #   1-3:       center (cx, cy, cz)
     #   4:         radius
@@ -1028,7 +1019,7 @@ function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}
     return p+dp, vel+dvel, g+dg
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
+function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
     if PS
         # influence of first triangle
         v1 = vertices[1]
@@ -1054,7 +1045,7 @@ function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args
     return induced_semiinfinite(target, ConstantDoublet, args...; kerneloffset)
 end
 
-function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS}; kerneloffset) where {TF,PS,VS,GS}
+function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; kerneloffset) where {TF,PS,VS,GS,NO,NM}
     potential = zero(TF)
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
@@ -1063,6 +1054,9 @@ function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoubl
     end
     if VS
         velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+    end
+    if GS
+        gradient += _U_semiinfinite_gradient(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
     end
 
     return potential, velocity, gradient
@@ -1125,7 +1119,7 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
         this_strength = FastMultipole.StaticArrays.SVector{1,TF}(strength)
 
         # other arguments
-        derivatives_switch = FastMultipole.DerivativesSwitch{true, false, false}()
+        derivatives_switch = FastMultipole.DerivativesSwitch(true, false, false)
 
         # compute potential
         potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, kerneloffset, R, derivatives_switch)
@@ -1186,6 +1180,25 @@ function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1
     return FastMultipole.StaticArrays.SVector{3,TF}(-Ux, -Uy, -Uz)
 end
 
+function _U_semiinfinite_gradient(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+    g1 = _U_semiinfinite_vortex_gradient(v1x, v1y, v1z,
+                                    d1, d2, d3,
+                                    -strength,
+                                    target; offset=kerneloffset)
+    
+    g2 = _U_semiinfinite_vortex_gradient(v2x, v2y, v2z,
+                                    d1, d2, d3,
+                                    strength,
+                                    target; offset=kerneloffset)
+
+    gb = _U_boundvortex_gradient(v1x, v1y, v1z,
+                                    v2x, v2y, v2z,
+                                    strength,
+                                    target; offset=kerneloffset)
+
+    return -(g1 + g2 + gb)
+end
+
 function _U_boundvortex( pa1::TF1, pa2::Number, pa3::Number,
                         pb1::Number, pb2::Number, pb3::Number,
                         strength::TF2,
@@ -1242,6 +1255,19 @@ function _U_boundvortex( pa1::TF1, pa2::Number, pa3::Number,
     end
 
     return -Ux, -Uy, -Uz
+end
+
+function _U_boundvortex_gradient(pa1::TF1, pa2::Number, pa3::Number,
+                        pb1::Number, pb2::Number, pb3::Number,
+                        strength::TF2,
+                        target::AbstractVector{TF3};
+                        offset=1e-8,
+                       ) where{TF1, TF2, TF3}
+    TF = promote_type(TF1, TF2, TF3)
+    pa = FastMultipole.StaticArrays.SVector{3,TF}(pa1, pa2, pa3)
+    pb = FastMultipole.StaticArrays.SVector{3,TF}(pb1, pb2, pb3)
+    x = FastMultipole.StaticArrays.SVector{3,TF}(target[1], target[2], target[3])
+    return -strength * _bound_vortex_gradient(pa - x, pb - x, true, offset)
 end
 
 function _U_semiinfinite_vortex(p1::TF1, p2::Number, p3::Number,
@@ -1348,4 +1374,53 @@ function _U_semiinfinite_vortex(p1::TF1, p2::Number, p3::Number,
 
     return -vx, -vy, -vz
 
+end
+
+function _U_semiinfinite_vortex_gradient(p1::TF1, p2::Number, p3::Number,
+                                d1::Number, d2::Number, d3::Number,
+                                strength::TF2,
+                                target::AbstractVector{TF3};
+                                cutoff=1e-14, offset=1e-8) where {TF1,TF2,TF3}
+    TF = promote_type(TF1, TF2, TF3)
+    scaling_factor = 1/(4*π)
+
+    if abs(d1*d1 + d2*d2 + d3*d3 - 1) > 2*eps()
+        error("Found non-unitary semi-infinite direction"*
+                " norm([d1, d2, d3]) = norm($([d1,d2,d3])) = $(norm((d1,d2,d3)))")
+    end
+
+    p = FastMultipole.StaticArrays.SVector{3,TF}(p1, p2, p3)
+    d = FastMultipole.StaticArrays.SVector{3,TF}(d1, d2, d3)
+    x = FastMultipole.StaticArrays.SVector{3,TF}(target[1], target[2], target[3])
+    y = x - p
+    a = dot(y, d)
+    h = y - a*d
+    H = dot(h, h)
+
+    if H <= cutoff^2
+        return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
+    y_norm = norm(y)
+    y_norm == zero(y_norm) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+
+    a2 = a*a
+    active_bound = a2 > offset^2 && a2*H > cutoff^2
+    E = sqrt(H*H + offset*offset*offset*offset)
+    n = cross(d, h)
+    factor = one(TF) + (active_bound ? a / y_norm : zero(TF))
+    f = factor / E
+
+    grad_inv_E = -2 * H / (E*E*E) * h
+    grad_factor = active_bound ? d / y_norm - a * y / (y_norm*y_norm*y_norm) :
+                                 zero(FastMultipole.StaticArrays.SVector{3,TF})
+    grad_f = grad_factor / E + factor * grad_inv_E
+
+    dn_dx = FastMultipole.StaticArrays.SMatrix{3,3,TF,9}(
+        zero(TF),   d[3], -d[2],
+          -d[3], zero(TF),  d[1],
+           d[2],  -d[1], zero(TF),
+    )
+
+    return -strength * scaling_factor * (dn_dx * f + n * transpose(grad_f))
 end

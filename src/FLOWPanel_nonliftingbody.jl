@@ -46,7 +46,10 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Array{TF,1}              # Potential at control points
     velocity::Array{TF,2}               # Apparent fluid velocity at control points (body frame)
+    velocity_gradient::Array{TF,3}      # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
+    induced_vorticity::Matrix{TF}       # 3xncells volumetric induced vorticity at control points; populated by extra_outputs=3
     velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
+    angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     CPoffset::Float64                   # Control point offset in normal direction
@@ -55,6 +58,7 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
     inside_offset::Float64               # Offset to compute inside control points
+    needs_velocity_gradient::Base.RefValue{Bool}  # Set by simulate! when a monitor requires ∇u
 end
 
 function NonLiftingBody{E, N, TF, DBC}(
@@ -68,15 +72,19 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
+                velocity_gradient=zeros(TF, 3, 3, size(cells, 2)),
+                induced_vorticity=zeros(TF, 3, size(cells, 2)),
                 velocity_kinematic=zeros(TF, 3, size(cells, 2)),
+                angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
                 kernelcutoff=1e-14,
-                characteristiclength=characteristiclength_unitary,
+                characteristiclength=characteristiclength_sqrtarea,
                 watertight=false,
                 inside_offset=1e-6,
+                needs_velocity_gradient=Ref(false),
                 ensure_winding::Bool=true,
                 flip_normals::Bool=false
               ) where {E, N, TF, DBC}
@@ -97,7 +105,10 @@ function NonLiftingBody{E, N, TF, DBC}(
                 strength,
                 potential,
                 velocity,
+                velocity_gradient,
+                induced_vorticity,
                 velocity_kinematic,
+                angular_velocity,
                 controlpoints,
                 normals,
                 CPoffset,
@@ -105,7 +116,8 @@ function NonLiftingBody{E, N, TF, DBC}(
                 kernelcutoff,
                 characteristiclength,
                 watertight,
-                inside_offset
+                inside_offset,
+                needs_velocity_gradient
               )
 end
 
@@ -240,17 +252,33 @@ function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_bod
     source_buffer[5, i_body] = value
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     if PS
-        phi = target_buffer[4, i_buffer]
+        phi = FastMultipole.get_scalar_potential(target_buffer, switch, i_buffer)
         target_system.potential[i_target] += phi
     end
 
     if VS
-        vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+        vx, vy, vz = FastMultipole.get_gradient(target_buffer, switch, i_buffer)
         target_system.velocity[1, i_target] += vx
         target_system.velocity[2, i_target] += vy
         target_system.velocity[3, i_target] += vz
+    end
+
+    # Accumulate the 3x3 velocity gradient from rows 8..16 (column-major
+    # SMatrix layout per FastMultipole.get_hessian).
+    if GS
+        H = FastMultipole.get_hessian(target_buffer, switch, i_buffer)
+        @inbounds for j in 1:3, i in 1:3
+            target_system.velocity_gradient[i, j, i_target] += H[i, j]
+        end
+    end
+
+    if NO == 3
+        @inbounds for j in 1:3
+            target_system.induced_vorticity[j, i_target] +=
+                FastMultipole.get_extra_output(target_buffer, switch, i_buffer, j)
+        end
     end
 end
 ################################################################################

@@ -362,7 +362,7 @@ const CELLS_OCT = Int[1 1 2 2 1 1 2 2;
 | Stagnation | Velocity = 0 → `Cp = 1.0` |
 | Freestream | Velocity magnitude = Uref → `Cp = 0.0` |
 | Accelerated | Velocity = 2×Uref → `Cp = 1 - 4 = -3.0` |
-| Unsteady term | With `dphidt[i] = d`, adds `-2d / Uref²` to Cp |
+| Unsteady term | With `phi_dot[i] = d`, adds `-2d / Uref²` to Cp |
 
 ### 7.2 `calcfield_F!`
 

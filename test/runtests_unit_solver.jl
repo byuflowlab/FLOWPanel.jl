@@ -418,11 +418,6 @@ import GeoIO
 
         # benchmarks(out_file, bodies, solver; backend)
         pnl.solve!(bodies, solver; backend, update_G=true)
-        for body in bodies
-            body.velocity .= 0.0
-        end
-        pnl.apply_freestream!(body, Vinf)
-        pnl.apply_freestream!(body2, Vinf)
         assert_boundary_residuals(bodies; backend, potential_atol=1e-4)
     end
 
@@ -562,11 +557,6 @@ import GeoIO
         println("Solving body...")
 
         pnl.solve!(bodies, solver; backend, update_G=true)
-
-        for body in bodies
-            body.velocity .= 0.0
-            pnl.apply_freestream!(body, Vinf)
-        end
 
         assert_boundary_residuals(bodies; backend, potential_atol=1e-4)
 

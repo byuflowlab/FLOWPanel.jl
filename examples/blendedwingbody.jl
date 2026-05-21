@@ -24,7 +24,7 @@ import Rotations: RotX, RotY, RotZ
 
 run_name        = "blendedwing"             # Name of this run
 
-save_path       = run_name                  # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 paraview        = true                      # Whether to visualize with Paraview
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 

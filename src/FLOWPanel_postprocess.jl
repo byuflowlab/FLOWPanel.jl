@@ -24,7 +24,9 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
         backend::AbstractBackend=DirectBackend(),
         reset=true,
         convolve_panels=true,
-        doublet_gradient=true
+        doublet_gradient=true,
+        gradient_robust=false,
+        gradient_ar_threshold=10.0,
     )
 
     # reset velocity
@@ -50,11 +52,18 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
     # add doublet gradient (if applicable)
     for body in bodies
         if has_grad_mu(body) && doublet_gradient
+            mask = nothing
+            if gradient_robust
+                m = panel_aspect_ratio_mask(body.nodes, body.cells;
+                                            threshold=gradient_ar_threshold)
+                any(m) && (mask = m)
+            end
             compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
                 body.cells,
                 body.neighbor,
                 view(body.strength, :, get_Gammai(body)),
-                view(body.shedding_full, 1:2, :), scale=0.5)
+                view(body.shedding_full, 1:2, :), scale=0.5,
+                bad_panel_mask=mask)
             
             # alternatively, comment out the above function and:
             # body.velocity .*= 2.0 # (only works if self-induced velocity is the only one applied)
@@ -87,10 +96,45 @@ calcfield_U!(targetbody, args...; optargs...) = calcfield_U!((targetbody,), args
 ################################################################################
 
 """
-    compute_mu_gradient!(grad_mu, controlpoints, normals, cells, neighbors, mu, te_info; scale=0.5)
+    panel_aspect_ratio_mask(nodes, cells; threshold=10.0)
+
+Flag panels whose longest-edge / shortest-edge ratio exceeds `threshold`.
+Such panels are degenerate enough that the 1-ring LS stencil in
+`compute_mu_gradient!` cannot reliably recover the in-plane gradient. Pass
+the returned mask as `bad_panel_mask` to `compute_mu_gradient!` to trigger
+the BFS-gathered healthy-only fallback.
+"""
+function panel_aspect_ratio_mask(nodes::AbstractMatrix{<:Real},
+                                 cells::AbstractMatrix{Int};
+                                 threshold::Real=10.0)
+    _, M = size(cells)
+    mask = falses(M)
+    @inbounds for i in 1:M
+        ns1, ns2, ns3 = cells[1, i], cells[2, i], cells[3, i]
+        e1 = sqrt((nodes[1,ns2]-nodes[1,ns1])^2 + (nodes[2,ns2]-nodes[2,ns1])^2 + (nodes[3,ns2]-nodes[3,ns1])^2)
+        e2 = sqrt((nodes[1,ns3]-nodes[1,ns2])^2 + (nodes[2,ns3]-nodes[2,ns2])^2 + (nodes[3,ns3]-nodes[3,ns2])^2)
+        e3 = sqrt((nodes[1,ns1]-nodes[1,ns3])^2 + (nodes[2,ns1]-nodes[2,ns3])^2 + (nodes[3,ns1]-nodes[3,ns3])^2)
+        emin = min(e1, e2, e3); emax = max(e1, e2, e3)
+        mask[i] = emin > 0 && emax / emin > threshold
+    end
+    return mask
+end
+
+"""
+    compute_mu_gradient!(grad_mu, controlpoints, normals, cells, neighbors, mu, te_info;
+                         scale=0.5, bad_panel_mask=nothing,
+                         bfs_target_healthy=6, bfs_max_depth=4)
 
 Compute the surface gradient of doublet or vortex-ring strength using a local
 least-squares stencil, with one-sided handling at trailing-edge panels.
+
+When `bad_panel_mask` is provided, panels flagged `true` skip the 1-ring
+stencil and instead inherit a gradient computed from a BFS-gathered set of
+healthy (unmasked) panels reached by walking the `neighbors` graph and
+*stepping through* flagged panels. This makes the reconstruction robust to
+clusters of degenerate panels (e.g. cap-corner slivers on capped wing meshes).
+TE exclusion mirrors the pass-1 behavior: when the bad panel is itself a TE
+panel, the cross-TE neighbor is rejected as the first BFS step.
 """
 function compute_mu_gradient!(grad_mu,
                             controlpoints::AbstractMatrix{Float64},
@@ -99,7 +143,10 @@ function compute_mu_gradient!(grad_mu,
                             neighbors::AbstractMatrix{Int},
                             mu::AbstractVector{Float64},
                             te_info::AbstractMatrix{Int};
-                            scale=0.5
+                            scale=0.5,
+                            bad_panel_mask::Union{Nothing,AbstractVector{Bool}}=nothing,
+                            bfs_target_healthy::Int=6,
+                            bfs_max_depth::Int=4,
                         )
 
     _, M = size(cells)
@@ -108,7 +155,12 @@ function compute_mu_gradient!(grad_mu,
     stencil = Int[]
     sizehint!(stencil, 10)
 
+    is_bad = bad_panel_mask
+
     for i in 1:M
+        if is_bad !== nothing && is_bad[i]
+            continue  # handled in the second (BFS-gather) pass below
+        end
         empty!(stencil)
 
         # Check if current panel is at the Trailing Edge
@@ -209,28 +261,166 @@ function compute_mu_gradient!(grad_mu,
         grad_mu[3, i] -= g[3] * scale
     end
 
+    # ---------- Second pass: BFS-gathered healthy-only stencil for bad panels ----------
+    if is_bad !== nothing
+        visited = falses(M)
+        frontier = Int[]
+        next_frontier = Int[]
+        healthy = Int[]
+        sizehint!(frontier, 32)
+        sizehint!(next_frontier, 32)
+        sizehint!(healthy, 32)
+
+        for i in 1:M
+            is_bad[i] || continue
+
+            fill!(visited, false)
+            empty!(frontier); empty!(next_frontier); empty!(healthy)
+            visited[i] = true
+            push!(frontier, i)
+
+            is_te_i = te_info[1, i] > 0 && te_info[2, i] > 0
+            te_v1 = is_te_i ? cells[te_info[1, i], i] : -1
+            te_v2 = is_te_i ? cells[te_info[2, i], i] : -1
+
+            depth = 0
+            while !isempty(frontier) && length(healthy) < bfs_target_healthy && depth < bfs_max_depth
+                depth += 1
+                for p in frontier
+                    for k in 1:3
+                        q = neighbors[k, p]
+                        q <= 0 && continue
+                        visited[q] && continue
+                        # TE exclusion mirrors the pass-1 one-sided rule: only when
+                        # the bad panel itself is a TE panel and q sits across its TE edge.
+                        if p == i && is_te_i
+                            has_v1 = (cells[1, q] == te_v1) || (cells[2, q] == te_v1) || (cells[3, q] == te_v1)
+                            has_v2 = (cells[1, q] == te_v2) || (cells[2, q] == te_v2) || (cells[3, q] == te_v2)
+                            if has_v1 && has_v2
+                                continue
+                            end
+                        end
+                        visited[q] = true
+                        if is_bad[q]
+                            push!(next_frontier, q)  # walk through, do not use in fit
+                        else
+                            push!(healthy, q)
+                            push!(next_frontier, q)  # keep walking for multi-ring coverage
+                        end
+                    end
+                end
+                frontier, next_frontier = next_frontier, frontier
+                empty!(next_frontier)
+            end
+
+            if length(healthy) < 3
+                # Best-effort: leave grad_mu unchanged on this panel. Caller
+                # already zero-initialized via calcfield_U!'s reset path. This
+                # only triggers for fully-enclosed degenerate regions, which
+                # indicate an unusable mesh.
+                continue
+            end
+
+            ATA = zeros(Float64, 3, 3)
+            ATb = zeros(Float64, 3)
+            mean_sq_dist = 0.0
+            for j in healthy
+                dx = controlpoints[1, j] - controlpoints[1, i]
+                dy = controlpoints[2, j] - controlpoints[2, i]
+                dz = controlpoints[3, j] - controlpoints[3, i]
+                dmu = mu[j] - mu[i]
+                ATA[1,1] += dx*dx; ATA[1,2] += dx*dy; ATA[1,3] += dx*dz
+                ATA[2,1] += dy*dx; ATA[2,2] += dy*dy; ATA[2,3] += dy*dz
+                ATA[3,1] += dz*dx; ATA[3,2] += dz*dy; ATA[3,3] += dz*dz
+                ATb[1] += dx*dmu; ATb[2] += dy*dmu; ATb[3] += dz*dmu
+                mean_sq_dist += dx*dx + dy*dy + dz*dz
+            end
+            mean_sq_dist /= length(healthy)
+
+            nx = normals[1, i]; ny = normals[2, i]; nz = normals[3, i]
+            penalty = 1e4 * mean_sq_dist
+            ATA[1,1] += penalty*nx*nx; ATA[1,2] += penalty*nx*ny; ATA[1,3] += penalty*nx*nz
+            ATA[2,1] += penalty*ny*nx; ATA[2,2] += penalty*ny*ny; ATA[2,3] += penalty*ny*nz
+            ATA[3,1] += penalty*nz*nx; ATA[3,2] += penalty*nz*ny; ATA[3,3] += penalty*nz*nz
+
+            reg = 1e-10 * mean_sq_dist
+            ATA[1,1] += reg; ATA[2,2] += reg; ATA[3,3] += reg
+
+            g = ATA \ ATb
+
+            grad_mu[1, i] -= g[1] * scale
+            grad_mu[2, i] -= g[2] * scale
+            grad_mu[3, i] -= g[3] * scale
+        end
+    end
+
     return grad_mu
+end
+
+"""
+    compute_surface_velocity_gradient!(grad_u, u, controlpoints, normals,
+                                       cells, neighbors, te_info; optargs...)
+
+Compute a panel-centered surface gradient of a vector velocity field `u`.
+The output layout is `grad_u[k, l, i] = ∂u_k/∂x_l` at panel `i`, with each
+row constrained to the local tangent plane. The stencil, trailing-edge
+isolation, and optional bad-panel fallback match `compute_mu_gradient!`.
+"""
+function compute_surface_velocity_gradient!(grad_u::AbstractArray{Float64,3},
+                                            u::AbstractMatrix{Float64},
+                                            controlpoints::AbstractMatrix{Float64},
+                                            normals::AbstractMatrix{Float64},
+                                            cells::AbstractMatrix{Int},
+                                            neighbors::AbstractMatrix{Int},
+                                            te_info::AbstractMatrix{Int};
+                                            bad_panel_mask::Union{Nothing,AbstractVector{Bool}}=nothing,
+                                            bfs_target_healthy::Int=6,
+                                            bfs_max_depth::Int=4)
+    size(u, 1) == 3 || throw(ArgumentError("u must be a 3 × ncells matrix."))
+    size(grad_u, 1) == 3 && size(grad_u, 2) == 3 && size(grad_u, 3) == size(u, 2) ||
+        throw(ArgumentError("grad_u must have size 3 × 3 × ncells."))
+
+    fill!(grad_u, 0.0)
+    scratch = zeros(Float64, 3, size(u, 2))
+    @inbounds for k in 1:3
+        fill!(scratch, 0.0)
+        # compute_mu_gradient! stores -∇μ by convention. Use scale=-1 to recover
+        # the actual surface gradient of the velocity component.
+        compute_mu_gradient!(scratch, controlpoints, normals, cells, neighbors,
+            view(u, k, :), te_info;
+            scale=-1.0,
+            bad_panel_mask=bad_panel_mask,
+            bfs_target_healthy=bfs_target_healthy,
+            bfs_max_depth=bfs_max_depth)
+        for i in axes(u, 2)
+            grad_u[k, 1, i] = scratch[1, i]
+            grad_u[k, 2, i] = scratch[2, i]
+            grad_u[k, 3, i] = scratch[3, i]
+        end
+    end
+
+    return grad_u
 end
 
 ################################################################################
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_P!(out, body, Us, Uinf, rho, dphidt; correct_kuttacondition=true, clip=nothing)
+    calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=true, clip=nothing)
     calcfield_P!(body, Uinf, rho; optargs...)
     calcfield_P!(bodies, Uinf, rho; correct_kuttacondition=..., optargs...)
 
 Compute and store the dimensional gauge pressure field using the Bernoulli
 equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
 
-`dphidt` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass a zero
-vector for the steady form. The field is calculated in-place and added to
-`out` (hence, make sure that `out` starts with all zeroes).
+`phi_dot` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass
+`nothing` to ignore the unsteady term. The field is calculated in-place and
+added to `out` (hence, make sure that `out` starts with all zeroes).
 """
 function calcfield_P!(out::Arr1,
                        body::Union{NonLiftingBody, AbstractLiftingBody},
                        Us::Arr2, Uinf::Number, rho::Number,
-                       dphidt::AbstractVector;
+                       phi_dot::Union{Nothing, AbstractVector};
                        correct_kuttacondition=true,
                        clip::Union{Nothing, Function}=nothing,
                        ) where {Arr1<:AbstractArray{<:Number,1},
@@ -244,9 +434,11 @@ function calcfield_P!(out::Arr1,
         out[i] += half_rho * (Uinf2 - norm(U)^2)
     end
 
-    # Unsteady Bernoulli term: -rho * dphidt
-    for i in eachindex(out)
-        out[i] -= rho * dphidt[i]
+    if !isnothing(phi_dot)
+        # Unsteady Bernoulli term: -rho * ∂φ/∂t
+        for i in eachindex(out)
+            out[i] -= rho * phi_dot[i]
+        end
     end
 
     # Kutta-condition correction bringing the pressure on both sides of the TE
@@ -276,11 +468,12 @@ function calcfield_P!(out::Arr1,
     return out
 end
 
-calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) = calcfield_P!(body.P, body, body.velocity, Uinf, rho, body.dphidt; optargs...)
+calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) =
+    calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; optargs...)
 
 function calcfield_P!(bodies::Tuple, Uinf, rho; correct_kuttacondition=fill(true, length(bodies)), optargs...)
     for (i, body) in enumerate(bodies)
-        calcfield_P!(body.P, body, body.velocity, Uinf, rho, body.dphidt; correct_kuttacondition=correct_kuttacondition[i], optargs...)
+        calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; correct_kuttacondition=correct_kuttacondition[i], optargs...)
     end
 end
 

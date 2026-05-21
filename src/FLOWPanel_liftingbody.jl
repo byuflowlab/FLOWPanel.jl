@@ -56,9 +56,11 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Vector{TF}
-    dphidt::Vector{TF}                   # Time derivative of perturbation potential (∂φ/∂t)
     velocity::Array{TF, 2}              # Apparent fluid velocity at control points (body frame)
+    velocity_gradient::Array{TF, 3}     # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
+    induced_vorticity::Matrix{TF}       # 3xncells volumetric induced vorticity at control points; populated by extra_outputs=3
     velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
+    angular_velocity::Vector{TF}        # Net angular velocity (global frame); populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
@@ -70,6 +72,8 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
 
     # wake properties
     semiinfinite_wake::Bool
+
+    needs_velocity_gradient::Base.RefValue{Bool}  # Set by simulate! when a monitor requires ∇u
 end
 
 _normalize_shedding(shedding::AbstractMatrix{Int}) = Matrix{Int}[Matrix{Int}(shedding)]
@@ -88,9 +92,11 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 Das::Vector{Array{TF,2}} = Array{TF,2}[],
                                 strength=zeros(TF, size(cells, 2), N),
                                 potential=zeros(TF, size(cells, 2)),
-                                dphidt=zeros(TF, size(cells, 2)),
                                 velocity=zeros(TF, 3, size(cells, 2)),
+                                velocity_gradient=zeros(TF, 3, 3, size(cells, 2)),
+                                induced_vorticity=zeros(TF, 3, size(cells, 2)),
                                 velocity_kinematic=zeros(TF, 3, size(cells, 2)),
+                                angular_velocity=zeros(TF, 3),
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
@@ -100,6 +106,7 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 characteristiclength=characteristiclength_sqrtarea,
                                 check_mesh=true, watertight=true,
                                 semiinfinite_wake=true,
+                                needs_velocity_gradient=Ref(false),
                                 ensure_winding::Bool=true,
                                 flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
@@ -185,9 +192,11 @@ function RigidWakeBody{E, N, TF, DBC}(
                     P, F,
                     strength,
                     potential,
-                    dphidt,
                     velocity,
+                    velocity_gradient,
+                    induced_vorticity,
                     velocity_kinematic,
+                    angular_velocity,
                     controlpoints,
                     normals,
                     velocity_te,
@@ -196,7 +205,8 @@ function RigidWakeBody{E, N, TF, DBC}(
                     kernelcutoff,
                     characteristiclength,
                     watertight,
-                    semiinfinite_wake
+                    semiinfinite_wake,
+                    needs_velocity_gradient
                 )
 end
 
@@ -208,8 +218,7 @@ function RigidWakeBody{E, N, TF}(
     return RigidWakeBody{E, N, TF, DBC}(nodes, cells, shedding; optargs...)
 end
 
-_write_vtk_body_fields!(vtk, body::RigidWakeBody) =
-    (vtk["dphidt", WriteVTK.VTKCellData()] = body.dphidt)
+_write_vtk_body_fields!(vtk, body::RigidWakeBody) = nothing
 
 function RigidWakeBody{E, N, TF, DBC}(
                                 mesh::VSPGeom.TriMesh, shedding;
@@ -977,28 +986,44 @@ function FastMultipole.buffer_to_system_strength!(system::RigidWakeBody{<:Union{
     system.strength[i_body, 2] = source_buffer[6, i_buffer]
 end
 
-function FastMultipole.influence!(influence, target_buffer, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, source_buffer)
-    influence .= view(target_buffer, 4, :)
+function FastMultipole.influence!(influence, target_buffer, derivatives_switch::FastMultipole.DerivativesSwitch, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, source_buffer)
+    for i in 1:size(target_buffer, 2)
+        influence[i] = FastMultipole.get_scalar_potential(target_buffer, derivatives_switch, i)
+    end
 end
 
 
-function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     if PS
-        phi = target_buffer[4, i_buffer]
+        phi = FastMultipole.get_scalar_potential(target_buffer, switch, i_buffer)
         target_system.potential[i_target] += phi
     end
 
     if VS
-        vx = target_buffer[5, i_buffer]
-        vy = target_buffer[6, i_buffer]
-        vz = target_buffer[7, i_buffer]
+        vx, vy, vz = FastMultipole.get_gradient(target_buffer, switch, i_buffer)
         target_system.velocity[1, i_target] += vx
         target_system.velocity[2, i_target] += vy
         target_system.velocity[3, i_target] += vz
     end
+
+    # Accumulate 3x3 velocity gradient from rows 8..16 (column-major
+    # SMatrix layout per FastMultipole.get_hessian).
+    if GS
+        H = FastMultipole.get_hessian(target_buffer, switch, i_buffer)
+        @inbounds for j in 1:3, i in 1:3
+            target_system.velocity_gradient[i, j, i_target] += H[i, j]
+        end
+    end
+
+    if NO == 3
+        @inbounds for j in 1:3
+            target_system.induced_vorticity[j, i_target] +=
+                FastMultipole.get_extra_output(target_buffer, switch, i_buffer, j)
+        end
+    end
 end
 
-function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS}) where {NK,PS,GS,HS}
+function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}) where {NK,PS,GS,HS,NO,NM}
 
     # loop over targets
     for i_target in target_bodies_index
@@ -1059,23 +1084,13 @@ function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, sourc
 
         # update target buffer
         if PS
-            target_buffer[4, i_target] += ϕ
+            FastMultipole.set_scalar_potential!(target_buffer, switch, i_target, ϕ)
         end
         if GS
-            target_buffer[5, i_target] += u[1]
-            target_buffer[6, i_target] += u[2]
-            target_buffer[7, i_target] += u[3]
+            FastMultipole.set_gradient!(target_buffer, switch, i_target, u)
         end
         if HS
-            target_buffer[8, i_target] += ∇u[1, 1]
-            target_buffer[9, i_target] += ∇u[1, 2]
-            target_buffer[10, i_target] += ∇u[1, 3]
-            target_buffer[11, i_target] += ∇u[2, 1]
-            target_buffer[12, i_target] += ∇u[2, 2]
-            target_buffer[13, i_target] += ∇u[2, 3]
-            target_buffer[14, i_target] += ∇u[3, 1]
-            target_buffer[15, i_target] += ∇u[3, 2]
-            target_buffer[16, i_target] += ∇u[3, 3]
+            FastMultipole.set_hessian!(target_buffer, switch, i_target, ∇u)
         end
     end
 end
