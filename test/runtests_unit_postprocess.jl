@@ -211,7 +211,7 @@ end
         @test isapprox(Matrix(L), [1.0 0.0; 0.0 w]; atol=1e-12)
     end
 
-    @testset "PressureLaplace cache invalidation and force integration" begin
+    @testset "PressureLaplace rebuild policy and force integration" begin
         body = make_octa_source_body()
         pressure = pnl.PressureLaplace((body,), 1.0; reference_panel=1)
         force = pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization())
@@ -223,10 +223,24 @@ end
         pressure((body,), (nothing,), frames, zeros(3), 1, 0.1)
         @test pressure.L[1] === first_L
 
+        body.nodes[1, :] .+= 0.2
+        body.nodes[2, :] .-= 0.1
+        pressure((body,), (nothing,), frames, zeros(3), 2, 0.1)
+        @test pressure.L[1] === first_L
+
         old = body.nodes[1, 1]
         body.nodes[1, 1] = old + 0.1
-        pressure((body,), (nothing,), frames, zeros(3), 2, 0.1)
-        @test pressure.L[1] !== first_L
+        pressure((body,), (nothing,), frames, zeros(3), 3, 0.1)
+        @test pressure.L[1] === first_L
+
+        rebuilding = pnl.PressureLaplace((body,), 1.0;
+            reference_panel=1,
+            rebuild_every_step=true)
+        body.velocity[1, :] .= 0.2 .* (1:body.ncells)
+        rebuilding((body,), (nothing,), frames, zeros(3), 4, 0.1)
+        rebuild_first_L = rebuilding.L[1]
+        rebuilding((body,), (nothing,), frames, zeros(3), 5, 0.1)
+        @test rebuilding.L[1] !== rebuild_first_L
 
         force((body,), (nothing,), frames, zeros(3), 0, 0.1)
         @test all(isfinite, body.P)

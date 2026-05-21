@@ -213,6 +213,248 @@ semidefinite `-\Delta_s` convention, so the solved form is equivalently
 \rho \nabla_s \cdot \left(\mathbf{P}_s \mathbf{a}\right).
 ```
 
+## Lamb-Vector Decomposition
+
+The same Euler pressure relation can be written in a Lamb-vector form that
+separates the convective acceleration into a kinetic-energy gradient and a
+vorticity term. Start from the inertial-frame Euler equation,
+
+```math
+\rho
+\left(
+    \frac{\partial \mathbf{u}}{\partial t}
+    + \mathbf{u}\cdot\nabla\mathbf{u}
+\right)
+=
+-\nabla p .
+```
+
+Move only the convective term into an identity. In index notation, with
+Einstein summation over repeated indices,
+
+```math
+\left(\mathbf{u}\cdot\nabla\mathbf{u}\right)_i
+=
+u_j\frac{\partial u_i}{\partial x_j}.
+```
+
+The vorticity is
+
+```math
+\omega_i
+=
+\left(\nabla\times\mathbf{u}\right)_i
+=
+\epsilon_{ijk}
+\frac{\partial u_k}{\partial x_j},
+```
+
+where `\epsilon_{ijk}` is the Levi-Civita symbol. The cross product
+`\boldsymbol{\omega}\times\mathbf{u}` has components
+
+```math
+\left(\boldsymbol{\omega}\times\mathbf{u}\right)_i
+=
+\epsilon_{ijk}\omega_j u_k .
+```
+
+Substituting the curl definition and using the contraction identity
+
+```math
+\epsilon_{ijk}\epsilon_{jmn}
+=
+\delta_{in}\delta_{km}
+-
+\delta_{im}\delta_{kn},
+```
+
+gives
+
+```math
+\begin{aligned}
+\left(\boldsymbol{\omega}\times\mathbf{u}\right)_i
+&=
+\epsilon_{ijk}
+\epsilon_{jmn}
+\frac{\partial u_n}{\partial x_m}
+u_k
+\\
+&=
+\left(
+    \delta_{in}\delta_{km}
+    -
+    \delta_{im}\delta_{kn}
+\right)
+\frac{\partial u_n}{\partial x_m}
+u_k
+\\
+&=
+u_m\frac{\partial u_i}{\partial x_m}
+-
+u_n\frac{\partial u_n}{\partial x_i}.
+\end{aligned}
+```
+
+The second term is the gradient of the kinetic energy per unit mass,
+
+```math
+u_n\frac{\partial u_n}{\partial x_i}
+=
+\frac{\partial}{\partial x_i}
+\left(
+    \frac{u_n u_n}{2}
+\right)
+=
+\left[
+    \nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
+\right]_i .
+```
+
+Therefore
+
+```math
+\left(\boldsymbol{\omega}\times\mathbf{u}\right)_i
+=
+\left(\mathbf{u}\cdot\nabla\mathbf{u}\right)_i
+-
+\left[
+    \nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
+\right]_i ,
+```
+
+or equivalently,
+
+```math
+\boxed{
+\mathbf{u}\cdot\nabla\mathbf{u}
+=
+\nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
++
+\boldsymbol{\omega}\times\mathbf{u}
+}
+\qquad
+\left(
+\boldsymbol{\omega}=\nabla\times\mathbf{u}
+\right).
+```
+
+Substituting this into Euler gives
+
+```math
+\rho
+\left[
+    \frac{\partial \mathbf{u}}{\partial t}
+    +
+    \nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
+    +
+    \boldsymbol{\omega}\times\mathbf{u}
+\right]
+=
+-\nabla p .
+```
+
+Collect the gradient terms:
+
+```math
+\nabla
+\left(
+    p + \rho\frac{|\mathbf{u}|^2}{2}
+\right)
+=
+-\rho
+\left(
+    \frac{\partial \mathbf{u}}{\partial t}
+    +
+    \boldsymbol{\omega}\times\mathbf{u}
+\right).
+```
+
+This is Crocco's inviscid form for constant density. It is often useful to
+define the stagnation-pressure-like scalar
+
+```math
+p_0 = p + \rho\frac{|\mathbf{u}|^2}{2},
+```
+
+so that
+
+```math
+\nabla p_0
+=
+-\rho
+\left(
+    \frac{\partial \mathbf{u}}{\partial t}
+    +
+    \boldsymbol{\omega}\times\mathbf{u}
+\right).
+```
+
+For the panel pressure solve, however, the unknown remains the static pressure
+`p`. Taking the divergence before moving the kinetic-energy gradient into the
+unknown gives
+
+```math
+\nabla^2 p
+=
+-\rho
+\nabla\cdot
+\left[
+    \frac{\partial \mathbf{u}}{\partial t}
+    +
+    \nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
+    +
+    \boldsymbol{\omega}\times\mathbf{u}
+\right].
+```
+
+Equivalently,
+
+```math
+\boxed{
+\nabla^2 p
+=
+-\rho
+\left[
+    \nabla\cdot\frac{\partial \mathbf{u}}{\partial t}
+    +
+    \nabla^2\left(\frac{|\mathbf{u}|^2}{2}\right)
+    +
+    \nabla\cdot
+    \left(\boldsymbol{\omega}\times\mathbf{u}\right)
+\right]
+}
+```
+
+and, for exactly incompressible flow,
+`\nabla\cdot\partial\mathbf{u}/\partial t = 0`. The discrete implementation
+does not take second derivatives of `|\mathbf{u}|^2/2` directly. It instead
+uses the integrated edge form implied by Euler:
+
+```math
+p_i - p_j
+\approx
+\rho
+\left[
+    \dot{\mathbf{u}}_{ij}\cdot\mathbf{r}_{ij}
+    +
+    \left(
+        \frac{|\mathbf{u}_j|^2}{2}
+        -
+        \frac{|\mathbf{u}_i|^2}{2}
+    \right)
+    +
+    \left(
+        \boldsymbol{\omega}\times\mathbf{u}
+    \right)_{ij}
+    \cdot\mathbf{r}_{ij}
+\right],
+```
+
+where `\mathbf{r}_{ij}=\mathbf{x}_j-\mathbf{x}_i` and midpoint quantities use
+edge averages. The signs follow from integrating
+`\nabla p=-\rho\mathbf{a}` from panel `j` to panel `i`, so that the solved
+left-hand side uses `p_i-p_j`.
+
 ## Panel-Centered Surface Approximation
 
 The desired field is one pressure value per panel. Let panel `i` have pressure
@@ -399,10 +641,12 @@ L_{ji} \mathrel{-}= w_{ij}.
 The edge-based form is preferable because symmetry is exact up to floating-point
 roundoff and the nonzero pattern is independent of panel visitation order.
 
-For repeated solves on a fixed mesh, the sparse structure and weights should be
-cached. If the body moves rigidly without changing panel shape or connectivity,
-the weights are unchanged because edge lengths and control-point distances are
-unchanged. If the mesh deforms, the weights must be updated.
+For repeated solves, `PressureLaplace` reuses the sparse structure and weights
+by default. This is the intended rigid-motion path: the panel metric is fixed
+when the body moves rigidly. If the mesh deforms and the pressure Laplacian
+should track that deformation, construct the monitor with
+`rebuild_every_step=true` so the operator, preconditioner, and CG workspace are
+rebuilt on each call.
 
 ## Right-Hand Side Formation
 
@@ -473,27 +717,17 @@ uses the edge directional difference of the sampled body-frame velocity. Using
 `body.velocity` for this difference preserves constant-field behavior; tangent
 projection is still used for the relative slip velocity.
 
-The alternative `acceleration_form=:lamb_vector` uses the identity
-
-```math
-(\mathbf{u}\cdot\nabla)\mathbf{u}
-=
-\nabla\left(\frac{|\mathbf{u}|^2}{2}\right)
-\;+\;
-\boldsymbol{\omega}\times\mathbf{u},
-\qquad
-\boldsymbol{\omega}=\nabla\times\mathbf{u}.
-```
-
-Its edge pressure jump is assembled from the optional same unsteady projection,
-the kinetic-energy difference
+The alternative `acceleration_form=:lamb_vector` uses the Lamb-vector
+decomposition derived above. Its edge pressure jump is assembled from the
+optional same unsteady projection, the kinetic-energy difference
 `|\mathbf{u}_j|^2/2 - |\mathbf{u}_i|^2/2`, and the midpoint Lamb-vector
-projection. `\boldsymbol{\omega}` is the volumetric induced vorticity stored in
-`body.induced_vorticity`. `simulate!` requests this channel from FastMultipole
-with `extra_outputs=3` when any monitor uses `acceleration_form=:lamb_vector`.
-Panel source/doublet sheets do not add vorticity to this channel; supported
-vortex-volume and regularized filament sources add their direct nearfield
-vorticity contribution.
+projection `(\boldsymbol{\omega}\times\mathbf{u})_{ij}\cdot(\mathbf{x}_j -
+\mathbf{x}_i)`. `\boldsymbol{\omega}` is the volumetric induced vorticity
+stored in `body.induced_vorticity`. `simulate!` requests this
+channel from FastMultipole with `extra_outputs=3` when any monitor uses
+`acceleration_form=:lamb_vector`. Panel source/doublet sheets do not add
+vorticity to this channel; supported vortex-volume and regularized filament
+sources add their direct nearfield vorticity contribution.
 
 Both acceleration forms solve the Euler pressure Poisson equation from velocity
 and velocity derivatives only. Neither requires a scalar potential, which is
@@ -752,7 +986,7 @@ preconditioner for a sparse surface Laplacian.
 
 For performance-sensitive use:
 
-- cache the sparse matrix and Jacobi inverse diagonal when geometry is fixed;
+- reuse the sparse matrix and Jacobi inverse diagonal when geometry is fixed;
 - update only the RHS when only the flow state changes;
 - assemble from undirected edges to avoid duplicate work and preserve symmetry;
 - preallocate triplet arrays or reusable CSC buffers when rebuilding is needed;
@@ -764,5 +998,5 @@ For performance-sensitive use:
 
 The intended future post-processing interface is a solve that writes the
 resulting pressure directly into `body.P`, accepts velocity or acceleration data
-for RHS construction, and optionally reuses cached operator and preconditioner
-state across timesteps.
+for RHS construction, and reuses operator and preconditioner state across
+timesteps unless the caller explicitly requests rebuilds.

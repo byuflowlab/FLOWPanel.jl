@@ -70,19 +70,24 @@ requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 #--- Panel Wake ---#
 
 """
-    PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100)
-    PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100)
+    PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100,
+        shed_with_induced_velocity=true)
+    PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100,
+        shed_with_induced_velocity=true)
 
 Wake model that stores a panelized wake sheet behind one or more shedding-edge
-chains.
+chains. Set `shed_with_induced_velocity=false` to convect the first wake row
+with freestream only when forming newly shed panels.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
     nodes::Vector{Array{TF, 3}}
     strength::Vector{Array{TF, 3}}
     velocity::Vector{Array{TF, 3}}
+    freestream::Vector{TF}
     core_size::Float64
     overflowed::Array{Bool, 0}
+    shed_with_induced_velocity::Bool
 end
 
 """
@@ -104,7 +109,7 @@ function get_sources(wake::PanelWake)
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
-        core_size=1e-3, nwakerows=100
+        core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
@@ -119,12 +124,18 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     
     # velocity
     velocity = [zeros(TF, size(n)) for n in nodes]
+
+    # latest freestream applied to this wake
+    freestream = zeros(TF, 3)
     
     # overflowed
     overflowed = Array{Bool,0}(undef)
     overflowed[] = false
 
-    return PanelWake{kernel, dim, TF}(nwakes, nodes, strength, velocity, core_size, overflowed)
+    return PanelWake{kernel, dim, TF}(
+        nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
+        Bool(shed_with_induced_velocity),
+    )
 end
 
 PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100, kwargs...) where {TK,NK,TF} =
@@ -137,6 +148,7 @@ function reset!(wake::PanelWake)
 end
 
 function apply_freestream!(wake::PanelWake, uinf)
+    wake.freestream .= uinf
     for vel in wake.velocity
         for ns in axes(vel, 3)
             for nc in 1:wake.nwakes[]+1
@@ -311,6 +323,20 @@ FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 3)
 
 FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
 
+FastMultipole.metadata_per_body(system::ProbeWrapper{<:PanelWake}) = 2
+FastMultipole.previous_potential_metadata_index(system::ProbeWrapper{<:PanelWake}) = 1
+FastMultipole.previous_gradient_metadata_index(system::ProbeWrapper{<:PanelWake}) = 2
+
+function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::ProbeWrapper{<:PanelWake}, i_body)
+    isurf, irow, icol = global_to_matrix_index(system, i_body)
+    vx = system.system.velocity[isurf][1, irow, icol]
+    vy = system.system.velocity[isurf][2, irow, icol]
+    vz = system.system.velocity[isurf][3, irow, icol]
+    buffer[FastMultipole.metadata_index(switch, 1), i_buffer] = zero(eltype(buffer))
+    buffer[FastMultipole.metadata_index(switch, 2), i_buffer] = sqrt(vx*vx + vy*vy + vz*vz)
+    return nothing
+end
+
 function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     # get surface index of global `i_target` index
     isurf, irow, icol = global_to_matrix_index(target_system, i_target)
@@ -445,9 +471,18 @@ FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args..
 
 function propagate!(wake::PanelWake, dt; step=0, frames=nothing)
     for i_surf in eachindex(wake.nodes)
-        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
-        view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
-        view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
+        if wake.shed_with_induced_velocity
+            view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
+            view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
+            view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
+        else
+            view(wake.nodes[i_surf], :, 1, :) .+= dt .* wake.freestream
+            if wake.nwakes[] >= 1
+                view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) .*= dt # displacements
+                view(wake.nodes[i_surf], :, 2:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) # update nodes
+                view(wake.velocity[i_surf], :, 2:wake.nwakes[]+1, :) ./= dt # restore velocities
+            end
+        end
     end
 end
 
@@ -554,6 +589,12 @@ struct SigmaPPS{TF} <: WakeSheddingMethod
     p_per_step::Int
 end
 
+"""Gaussian particle shedding with fixed `sigma` and minimum overlap."""
+struct SigmaOverlap{TF} <: WakeSheddingMethod
+    sigma::TF
+    overlap::TF
+end
+
 """Overlap-based particle shedding with target overlap ratio."""
 struct OverlapPPS{TF} <: WakeSheddingMethod
     overlap::TF
@@ -565,6 +606,13 @@ function _shed_particles!(pfield, r1, r2, Γ, method::OverlapPPS)
     dist < eps(typeof(dist)) && return nothing
     sigma = dist * method.overlap / method.p_per_step
     return _shed_particles!(pfield, r1, r2, Γ, SigmaPPS(sigma, method.p_per_step))
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, method::SigmaOverlap)
+    dist = LA.norm(r2 - r1)
+    dist < eps(typeof(dist)) && return nothing
+    p_per_step = max(1, ceil(Int, method.overlap * dist / method.sigma))
+    return _shed_particles!(pfield, r1, r2, Γ, SigmaPPS(method.sigma, p_per_step))
 end
 
 function _shed_particles!(pfield, r1, r2, Γ, method::SigmaPPS)
@@ -670,13 +718,12 @@ struct MergeParticles{TR,TH,TM} <: AbstractParticleFunctionalPolicy
     sigma_relative::Bool
     max_sigma_ratio::TM
     skip_static::Bool
-    check_neighboring_cells::Bool
 end
 
 MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
-    max_sigma_ratio=2.0, skip_static=true, check_neighboring_cells=true) =
+    max_sigma_ratio=2.0, skip_static=true) =
     MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
-                   skip_static, check_neighboring_cells)
+                   skip_static)
 
 prepare_particle_policy(policy, ::ParticleMaintenanceContext) = policy
 
@@ -728,7 +775,6 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
             sigma_relative=policy.sigma_relative,
             max_sigma_ratio=policy.max_sigma_ratio,
             skip_static=policy.skip_static,
-            check_neighboring_cells=policy.check_neighboring_cells,
         )
     end
     return nothing
@@ -760,7 +806,8 @@ end
     PanelParticleWake(body; optargs...)
 
 Hybrid wake model that combines a near-body panel wake with vortex particles
-shed downstream from the trailing edge.
+shed downstream from the trailing edge. Panel wake options, including
+`shed_with_induced_velocity`, are forwarded to the internal [`PanelWake`](@ref).
 """
 struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}

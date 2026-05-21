@@ -233,7 +233,7 @@ end
     PressureLaplace(bodies, rho; unsteady=false, atol=1e-8, rtol=1e-8, itmax=1000,
                     preconditioner=JacobiPressurePreconditioner(),
                     reference_panel=1, reference_pressure=0.0,
-                    cache=true, verbose=false, gradient_mode=:raw_hessian,
+                    rebuild_every_step=false, verbose=false, gradient_mode=:raw_hessian,
                     acceleration_form=:material_derivative)
 
 Monitor that populates `body.P` by solving a sparse panel-centered surface
@@ -287,7 +287,7 @@ stored in the monitor.
 - `preconditioner::TP` — preconditioner applied during the CG solve (e.g. `JacobiPressurePreconditioner`)
 - `reference_panel::Int` — index of the panel whose pressure is pinned to `reference_pressure` (gauge condition)
 - `reference_pressure::Float64` — pressure value assigned to the reference panel
-- `cache::Bool` — when `true`, the sparse operator and preconditioner are reused if the geometry signature is unchanged
+- `rebuild_every_step::Bool` — when `true`, rebuild the sparse operator, preconditioner, and CG workspace on every call; by default they are reused
 - `verbose::Bool` — when `true`, prints per-step rebuild status and panel count to stdout
 - `gradient_mode::Symbol` — `:raw_hessian` for the current Hessian path or `:surface_velocity` for a surface reconstruction of the final velocity field
 - `acceleration_form::Symbol` — `:material_derivative` for the direct acceleration edge form or `:lamb_vector` for the Lamb-vector decomposition
@@ -301,7 +301,6 @@ stored in the monitor.
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
 - `edges::Vector{Matrix{Int}}` — shared interior edges per body (4 × nedges); rows are `(node_a, node_b, panel_i, panel_j)`
 - `workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}` — preallocated Krylov CG workspace per body
-- `geometry_signature::Vector{UInt64}` — hash of panel count, connectivity, edge lengths, and control-point distances per body; triggers a rebuild when changed
 """
 mutable struct PressureLaplace{TP} <: AbstractMonitor
     rho::Float64
@@ -312,7 +311,7 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     preconditioner::TP
     reference_panel::Int
     reference_pressure::Float64
-    cache::Bool
+    rebuild_every_step::Bool
     verbose::Bool
     gradient_mode::Symbol
     acceleration_form::Symbol
@@ -324,7 +323,6 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     tangential::Vector{Matrix{Float64}}
     edges::Vector{Matrix{Int}}
     workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}
-    geometry_signature::Vector{UInt64}
     u_inertial::Vector{Matrix{Float64}}
     surface_velocity_gradient::Vector{Array{Float64,3}}
 end
@@ -342,7 +340,7 @@ function PressureLaplace(bodies, rho::Real;
                          preconditioner::AbstractPressurePreconditioner=JacobiPressurePreconditioner(),
                          reference_panel::Integer=1,
                          reference_pressure::Real=0.0,
-                         cache::Bool=true,
+                         rebuild_every_step::Bool=false,
                          verbose::Bool=false,
                          gradient_mode::Symbol=:raw_hessian,
                          acceleration_form::Symbol=:material_derivative)
@@ -362,7 +360,6 @@ function PressureLaplace(bodies, rho::Real;
     tangential = Matrix{Float64}[]
     edges = Matrix{Int}[]
     workspace = Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}[]
-    signatures = UInt64[]
     u_inertial = Matrix{Float64}[]
     surface_velocity_gradient = Array{Float64,3}[]
     sizehint!(velocity_dot, nbodies)
@@ -373,7 +370,6 @@ function PressureLaplace(bodies, rho::Real;
     sizehint!(tangential, nbodies)
     sizehint!(edges, nbodies)
     sizehint!(workspace, nbodies)
-    sizehint!(signatures, nbodies)
     sizehint!(u_inertial, nbodies)
     sizehint!(surface_velocity_gradient, nbodies)
 
@@ -394,7 +390,6 @@ function PressureLaplace(bodies, rho::Real;
         push!(tangential, zeros(Float64, 3, body.ncells))
         push!(edges, body_edges)
         push!(workspace, Krylov.krylov_workspace(Val(:cg), L, b))
-        push!(signatures, _pressure_geometry_signature(body, Int(reference_panel), body_edges))
         push!(u_inertial, zeros(Float64, size(body.velocity)))
         push!(surface_velocity_gradient, zeros(Float64, 3, 3, body.ncells))
     end
@@ -403,9 +398,9 @@ function PressureLaplace(bodies, rho::Real;
     return PressureLaplace{typeof(preconditioner)}(
         Float64(rho), unsteady, Float64(atol), Float64(rtol), Int(itmax),
         preconditioner, Int(reference_panel), Float64(reference_pressure),
-        cache, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
+        rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
         acceleration, tangential,
-        edges, workspace, signatures, u_inertial, surface_velocity_gradient)
+        edges, workspace, u_inertial, surface_velocity_gradient)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -466,9 +461,6 @@ function build_pressure_preconditioner(::JacobiPressurePreconditioner, L::Sparse
     return PressureJacobiState(invdiag)
 end
 
-build_pressure_preconditioner(pc::AbstractPressurePreconditioner, L, cache) =
-    build_pressure_preconditioner(pc, L)
-
 function rebuild_pressure_preconditioner!(pc::NoPressurePreconditioner,
                                           L::SparseArrays.SparseMatrixCSC{Float64, Int}, i_body::Int)
     return pc
@@ -506,15 +498,12 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     topology_changed && throw(ArgumentError(
         "PressureLaplace does not support panel-count changes after construction. Reconstruct the monitor for the new body sizes."))
 
-    # Recompute L only when geometry has changed (rigid motion leaves L unchanged).
-    sig = _pressure_geometry_signature(body, m.reference_panel, m.edges[i_body])
-    rebuild = !m.cache || m.geometry_signature[i_body] != sig
+    rebuild = m.rebuild_every_step
 
     if rebuild
         m.L[i_body] = _assemble_pressure_laplacian(body, m.reference_panel, m.edges[i_body])
         rebuild_pressure_preconditioner!(m.preconditioner, m.L[i_body], i_body)
         m.workspace[i_body] = Krylov.krylov_workspace(Val(:cg), m.L[i_body], m.b[i_body])
-        m.geometry_signature[i_body] = sig
     end
 
     # velocity_dot currently holds -u_old; this call turns it into (u_new - u_old)/dt.
@@ -526,7 +515,8 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     _pressure_store_negative_velocity!(m, body, i_body)
 
     if m.verbose
-        println("\t\tPressureLaplace[step=$(i_step+1)]: rebuild=$(rebuild), panels=$(body.ncells)")
+        ws = m.workspace[i_body]
+        println("\t\tPressureLaplace($(m.acceleration_form))[step=$(i_step+1)]: rebuild=$(rebuild), panels=$(body.ncells), CG iters=$(ws.stats.niter), solved=$(ws.stats.solved)")
     end
 
     return body.P
@@ -601,21 +591,6 @@ function _pressure_panel_edges(body::AbstractBody)
         edges[4, k] = refs[2][1]
     end
     return edges
-end
-
-function _pressure_geometry_signature(body::AbstractBody, reference_panel::Int,
-                                      edges::Matrix{Int})
-    # Hash everything that affects the Laplacian weights: topology (ncells, cells, neighbor),
-    # the gauge choice (reference_panel), and the per-edge co-normal FV weights.
-    # Rigid translation/rotation changes control-point positions and node positions equally,
-    # so the co-normal weights are unchanged and the signature stays the same — no rebuild needed.
-    sig = hash((body.ncells, size(body.cells), body.cells, size(body.neighbor), body.neighbor, reference_panel))
-    @inbounds for k in axes(edges, 2)
-        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
-        w, ell, nu1, nu2, nu3, n1, n2, n3 = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)
-        sig = hash((w, ell, nu1, nu2, nu3, n1, n2, n3), sig)
-    end
-    return sig
 end
 
 function _assemble_pressure_laplacian(body::AbstractBody, reference_panel::Int)

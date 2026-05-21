@@ -1120,6 +1120,19 @@ FastMultipole.strength_dims(system::AbstractBody) = size(system.strength, 2)
 
 FastMultipole.get_n_bodies(system::AbstractBody) = system.ncells
 
+FastMultipole.metadata_per_body(system::AbstractBody) = 2
+FastMultipole.previous_potential_metadata_index(system::AbstractBody) = 1
+FastMultipole.previous_gradient_metadata_index(system::AbstractBody) = 2
+
+function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::AbstractBody, i_body)
+    vx = system.velocity[1, i_body]
+    vy = system.velocity[2, i_body]
+    vz = system.velocity[3, i_body]
+    buffer[FastMultipole.metadata_index(switch, 1), i_buffer] = system.potential[i_body]
+    buffer[FastMultipole.metadata_index(switch, 2), i_buffer] = sqrt(vx*vx + vy*vy + vz*vz)
+    return nothing
+end
+
 function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
 end
@@ -1193,9 +1206,9 @@ function FastMultipole.buffer_to_system_strength!(system::AbstractBody{<:Any,1,<
     system.strength[i_body, 1] = source_buffer[5, i_buffer]
 end
 
-function FastMultipole.influence!(influence, target_buffer, source_system::AbstractBody, source_buffer)
+function FastMultipole.influence!(influence, target_buffer, derivatives_switch::FastMultipole.DerivativesSwitch, source_system::AbstractBody, source_buffer)
     for i in 1:size(target_buffer, 2)
-        v = FastMultipole.get_gradient(target_buffer, i)
+        v = FastMultipole.get_gradient(target_buffer, derivatives_switch, i)
         n = FastMultipole.get_normal(source_buffer, source_system, i)
         influence[i] = dot(v, n)
     end

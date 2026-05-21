@@ -1,18 +1,24 @@
 #--- Das initialization helpers ---#
 
-function _accumulate_Das!(sys::AbstractLiftingBody, eta)
+function _accumulate_Das!(sys::AbstractLiftingBody, eta; min_displacement=0.0)
     for ishedding in eachindex(sys.Das)
         Das = sys.Das[ishedding]
         Vte = sys.velocity_te[ishedding]
         for j in axes(Das, 2)
-            Das[1, j] += Vte[1, j] * eta
-            Das[2, j] += Vte[2, j] * eta
-            Das[3, j] += Vte[3, j] * eta
+            speed = sqrt(Vte[1, j]^2 + Vte[2, j]^2 + Vte[3, j]^2)
+            if speed > zero(speed)
+                displacement_length = max(abs(eta) * speed, min_displacement)
+                signed_length = eta < zero(eta) ? -displacement_length : displacement_length
+                scale = signed_length / speed
+                Das[1, j] += Vte[1, j] * scale
+                Das[2, j] += Vte[2, j] * scale
+                Das[3, j] += Vte[3, j] * scale
+            end
         end
     end
 end
 
-_accumulate_Das!(::AbstractBody, eta) = nothing
+_accumulate_Das!(::AbstractBody, eta; min_displacement=0.0) = nothing
 
 #--- wake tuple helpers ---#
 
@@ -118,7 +124,8 @@ end
 
 function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         set_Das_eta_kinematic=NaN,
-        set_Das_eta_freestream=NaN)
+        set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0)
     if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic)
         return systems
     end
@@ -140,7 +147,8 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         end
         kinematic_velocity!(systems_tuple, frames)
         for sys in systems_tuple
-            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
+                min_displacement=set_Das_min_kinematic_displacement)
         end
     end
 
@@ -173,6 +181,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         monitors=(),
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0,
         start_step::Int=0,
         verbose=false
     )
@@ -207,7 +216,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
         initialize_Das!(systems_tuple, frames, Uinf, t_range[1], t_range[2] - t_range[1];
-            set_Das_eta_kinematic, set_Das_eta_freestream)
+            set_Das_eta_kinematic, set_Das_eta_freestream,
+            set_Das_min_kinematic_displacement)
     end
 
     # begin simulation

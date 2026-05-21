@@ -1,5 +1,6 @@
 using Test
 import FLOWPanel as pnl
+import FastMultipole
 
 @testset verbose=true "FMM Backends" begin
     @testset "backend construction" begin
@@ -28,6 +29,17 @@ import FLOWPanel as pnl
         @test all(isfinite, phi_fmm)
         @test maximum(abs.(vel_direct .- vel_fmm)) <= 1e-3
         @test maximum(abs.(phi_direct .- phi_fmm)) <= 1e-3
+    end
+
+    @testset "relative-error metadata" begin
+        source_body = make_octa_source_body()
+        target_body = translated_nonlifting_target([3.0, -1.0, 2.5])
+        backend = pnl.FastMultipoleBackend(expansion_order=5)
+
+        @test_nowarn pnl.influence!((target_body,), (source_body,), backend;
+            scalar_potential=true,
+            velocity=true,
+            error_tolerance=FastMultipole.PowerRelativeGradient(1e-2))
     end
 
     @testset "Direct vs FMM RigidWakeBody" begin

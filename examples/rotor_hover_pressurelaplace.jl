@@ -90,8 +90,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                         r_hash=R*merge_r_hash_factor,
                         sigma_relative=false,
                         max_sigma_ratio=2.0,
-                        skip_static=true,
-                        check_neighboring_cells=false),
+                        skip_static=true),
                 )))
 
 ## =========================================================

@@ -313,6 +313,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         monitors=(),
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0,
         verbose=false,
     )
     systems_tuple = _systems_tuple(systems)
@@ -361,7 +362,8 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
             end
             kinematic_velocity!(systems_tuple, frames)
             for sys in systems_tuple
-                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
+                    min_displacement=set_Das_min_kinematic_displacement)
             end
         end
         for sys in systems_tuple
@@ -423,6 +425,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         monitors=monitors,
         set_Das_eta_kinematic=set_Das_eta_kinematic,
         set_Das_eta_freestream=set_Das_eta_freestream,
+        set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
         start_step=restart_step + 1,
         verbose=verbose,
     )

@@ -986,8 +986,10 @@ function FastMultipole.buffer_to_system_strength!(system::RigidWakeBody{<:Union{
     system.strength[i_body, 2] = source_buffer[6, i_buffer]
 end
 
-function FastMultipole.influence!(influence, target_buffer, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, source_buffer)
-    influence .= view(target_buffer, 4, :)
+function FastMultipole.influence!(influence, target_buffer, derivatives_switch::FastMultipole.DerivativesSwitch, source_system::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, source_buffer)
+    for i in 1:size(target_buffer, 2)
+        influence[i] = FastMultipole.get_scalar_potential(target_buffer, derivatives_switch, i)
+    end
 end
 
 
