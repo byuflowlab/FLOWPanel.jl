@@ -276,12 +276,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
         end
 
-        # solve systems with cross-body coupling
-        if systems isa Tuple
-            solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
-        else
-            solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
-        end
+        # solve systems
+        solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
 
         # update control points (normals should not have changed)
         for sys in systems_tuple

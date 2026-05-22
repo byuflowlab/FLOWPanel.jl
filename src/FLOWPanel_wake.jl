@@ -71,13 +71,15 @@ requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
 """
     PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100,
-        shed_with_induced_velocity=true)
+        shed_with_induced_velocity=true, unsteady_filament=true)
     PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100,
-        shed_with_induced_velocity=true)
+        shed_with_induced_velocity=true, unsteady_filament=true)
 
 Wake model that stores a panelized wake sheet behind one or more shedding-edge
 chains. Set `shed_with_induced_velocity=false` to convect the first wake row
-with freestream only when forming newly shed panels.
+with freestream only when forming newly shed panels. Set
+`unsteady_filament=false` to make the final-edge filament cancel the current
+last wake row instead of representing the shifted-out previous row.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
@@ -88,6 +90,7 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     core_size::Float64
     overflowed::Array{Bool, 0}
     shed_with_induced_velocity::Bool
+    unsteady_filament::Bool
 end
 
 """
@@ -109,7 +112,8 @@ function get_sources(wake::PanelWake)
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
-        core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true
+        core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true,
+        unsteady_filament=true
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
@@ -134,7 +138,7 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
 
     return PanelWake{kernel, dim, TF}(
         nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
-        Bool(shed_with_induced_velocity),
+        Bool(shed_with_induced_velocity), Bool(unsteady_filament),
     )
 end
 
@@ -558,7 +562,7 @@ function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwr
                 points[:, ip + 1] .= view(wake.nodes[i_surf], :, i_row + 1, j)
                 points[:, ip + 2] .= view(wake.nodes[i_surf], :, i_row + 1, j + 1)
                 cells[j] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_LINE, [ip + 1, ip + 2])
-                strengths[j] = -wake.strength[i_surf][1, i_row + 1, j]
+                strengths[j] = _final_filament_strength(wake, i_surf, i_row, j)
             end
 
             WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vtu", points, cells) do vtk
@@ -807,7 +811,8 @@ end
 
 Hybrid wake model that combines a near-body panel wake with vortex particles
 shed downstream from the trailing edge. Panel wake options, including
-`shed_with_induced_velocity`, are forwarded to the internal [`PanelWake`](@ref).
+`shed_with_induced_velocity` and `unsteady_filament`, are forwarded to the
+internal [`PanelWake`](@ref).
 """
 struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
@@ -993,6 +998,11 @@ function fmm_to_filament_index(filaments::FilamentWrapper{<:PanelWake}, n)
     end
 end
 
+function _final_filament_strength(wake::PanelWake, i_surf, i_row, j)
+    strength_row = wake.unsteady_filament ? i_row + 1 : i_row
+    return -wake.strength[i_surf][1, strength_row, j]
+end
+
 function FastMultipole.source_system_to_buffer!(buffer, i_buffer, filaments::FilamentWrapper{<:PanelWake}, i_body)
     
     # vlm index
@@ -1003,10 +1013,7 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, filaments::Fil
     i_row = wake.nwakes[]
 
     # get strength
-    strength = -wake.strength[i_surf][1, i_row+1, j]
-    # if i_row > 0
-    #     strength += wake.strength[i_surf][1, i_row, j]
-    # end
+    strength = _final_filament_strength(wake, i_surf, i_row, j)
 
     # nodes
     v1 = SVector{3}(view(wake.nodes[i_surf], :, i_row+1, j))
@@ -1087,10 +1094,10 @@ function FastMultipole.direct!(target_system, target_index, switch::FastMultipol
                 v += _bound_vortex_velocity(target-v1, target-v2, true, cs) * gamma
             end
             if GS
-                g += _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
+                g += _bound_vortex_gradient(v1-target, v2-target, true, cs) * gamma
             end
             if NO == 3
-                gf = _bound_vortex_gradient(target-v1, target-v2, true, cs) * gamma
+                gf = _bound_vortex_gradient(v1-target, v2-target, true, cs) * gamma
                 w += SVector{3,TF}(gf[3, 2] - gf[2, 3],
                                    gf[1, 3] - gf[3, 1],
                                    gf[2, 1] - gf[1, 2])

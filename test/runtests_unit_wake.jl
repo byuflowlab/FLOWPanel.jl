@@ -1,6 +1,7 @@
 using Test
 import FLOWPanel as pnl
 import FLOWVPM
+import FastMultipole
 using LinearAlgebra: norm
 using StaticArrays: SVector
 
@@ -59,6 +60,94 @@ end
         wake = pnl.PanelParticleWake(body; shed_with_induced_velocity=false)
 
         @test !wake.panel_wake.shed_with_induced_velocity
+    end
+
+    @testset "PanelWake final filament strength option" begin
+        body = make_plate_vortex_body()
+
+        function buffered_filament_strength(; unsteady_filament)
+            wake = pnl.PanelWake(body; nwakerows=2, unsteady_filament)
+            wake.nwakes[] = 2
+            wake.overflowed[] = true
+            wake.strength[1][1, 2, 1] = 11.0
+            wake.strength[1][1, 3, 1] = 22.0
+            wake.nodes[1][:, 3, 1] .= [0.0, 0.0, 0.0]
+            wake.nodes[1][:, 3, 2] .= [1.0, 0.0, 0.0]
+
+            buffer = zeros(12, 1)
+            FastMultipole.source_system_to_buffer!(buffer, 1, pnl.FilamentWrapper(wake), 1)
+            return buffer[5, 1]
+        end
+
+        @test buffered_filament_strength(unsteady_filament=true) == -22.0
+        @test buffered_filament_strength(unsteady_filament=false) == -11.0
+    end
+
+    @testset "PanelWake steady final filament cancels last wake row influence" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelWake(body; nwakerows=1, core_size=1e-3, unsteady_filament=false)
+        wake.nwakes[] = 1
+        wake.overflowed[] = true
+
+        Γ = 2.5
+        wake.strength[1][1, 1, 1] = Γ
+        wake.strength[1][1, 2, 1] = -3.0 # ignored when unsteady_filament=false
+
+        v1 = SVector(0.0, 0.0, 0.0)
+        v2 = SVector(1.0, 0.0, 0.0)
+        v3 = SVector(1.0, 1.0, 0.0)
+        v4 = SVector(0.0, 1.0, 0.0)
+        wake.nodes[1][:, 1, 1] .= v1
+        wake.nodes[1][:, 2, 1] .= v2
+        wake.nodes[1][:, 2, 2] .= v3
+        wake.nodes[1][:, 1, 2] .= v4
+
+        switch = FastMultipole.DerivativesSwitch(false, true, true)
+        panel_buffer = zeros(FastMultipole.data_per_body(wake), 1)
+        FastMultipole.source_system_to_buffer!(panel_buffer, 1, wake, 1)
+
+        filament = pnl.FilamentWrapper(wake)
+        filament_buffer = zeros(FastMultipole.data_per_body(filament), 1)
+        FastMultipole.source_system_to_buffer!(filament_buffer, 1, filament, 1)
+
+        function filament_velocity(target, a, b, strength)
+            return pnl._bound_vortex_velocity(target - a, target - b, true, wake.core_size) * strength
+        end
+
+        function filament_gradient(target, a, b, strength)
+            return pnl._bound_vortex_gradient(a - target, b - target, true, wake.core_size) * strength
+        end
+
+        for target in (
+            SVector(0.25, 0.35, 0.7),
+            SVector(-0.4, 0.8, 0.5),
+            SVector(1.0 + 1e-6, 0.45, 1e-6),
+        )
+            _, panel_velocity, panel_gradient = pnl.induced(target, wake, panel_buffer, 1, switch)
+            final_velocity = filament_velocity(target, v2, v3, filament_buffer[5, 1])
+            final_gradient = filament_gradient(target, v2, v3, filament_buffer[5, 1])
+            combined_velocity = panel_velocity + final_velocity
+            combined_gradient = panel_gradient + final_gradient
+
+            expected_velocity =
+                filament_velocity(target, v1, v2, Γ) +
+                filament_velocity(target, v3, v4, Γ) +
+                filament_velocity(target, v4, v1, Γ)
+            expected_gradient =
+                filament_gradient(target, v1, v2, Γ) +
+                filament_gradient(target, v3, v4, Γ) +
+                filament_gradient(target, v4, v1, Γ)
+
+            @test combined_velocity ≈ expected_velocity atol=1e-12 rtol=1e-12
+            @test combined_gradient ≈ expected_gradient atol=1e-10 rtol=1e-10
+        end
+    end
+
+    @testset "PanelParticleWake forwards unsteady filament option" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body; unsteady_filament=false)
+
+        @test !wake.panel_wake.unsteady_filament
     end
 
     @testset "ParticleMaintenance separates mixed policies" begin

@@ -16,10 +16,11 @@ AOA = 0.0
 rho = 1.225
 RPM = 6000
 R = 0.119
+shedding_r_over_R = 0.2
 nrevs = 1
 nt = 36
 dt = 60 / RPM / nt
-spinup_revs = max(0.0, parse(Float64, get(ENV, "SPINUP_REVS", "3.0")))
+spinup_revs = max(0.0, parse(Float64, get(ENV, "SPINUP_REVS", "0.0")))
 spinup_start_fraction = clamp(parse(Float64, get(ENV, "SPINUP_START_FRACTION", "0.05")), eps(), 1.0)
 spinup_duration = spinup_revs * 60 / RPM
 spinup_steps = ceil(Int, spinup_duration / dt)
@@ -31,8 +32,8 @@ kerneloffset = R * 1e-3
 kernelcutoff = R * 1e-13
 p_per_step = 2
 overlap = 2.0
-merge_r_factor = 0.02
-merge_r_hash_factor = 0.04
+merge_r_factor = 0.01
+merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
 init_Das_eta_kinematic = 0.2
@@ -67,27 +68,66 @@ rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
     CPoffset, kerneloffset, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
+0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
+
+function make_shedding_bbox(nodes, seed_nodes, radial_dimension, R, shedding_r_over_R)
+    radial_midpoint = sum(nodes[radial_dimension, seed_nodes]) / length(seed_nodes)
+    radial_sign = sign(radial_midpoint)
+    radial_sign == 0 && error("Seed edge lies on the rotor axis; cannot determine shedding side")
+
+    lower = [minimum(nodes[i, :]) for i in 1:size(nodes, 1)]
+    upper = [maximum(nodes[i, :]) for i in 1:size(nodes, 1)]
+    padding = max(sqrt(eps(eltype(nodes))) * R, R * 1e-6)
+    lower .-= padding
+    upper .+= padding
+
+    radial_cutoff = shedding_r_over_R * R
+    if radial_sign > 0
+        lower[radial_dimension] = radial_cutoff - padding
+    else
+        upper[radial_dimension] = -radial_cutoff + padding
+    end
+
+    return (pnl.SVector{3}(lower...), pnl.SVector{3}(upper...))
+end
+
 # save vtk file to inspect for shedding nodes
 # vtk_path = joinpath(save_path, "rotor_initial")
 # pnl.write_vtk(vtk_path, rotor)
 
+bbox1 = make_shedding_bbox(rotor.nodes, te_indices_1[1:2], radial_dimension, R, shedding_r_over_R)
 shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
-    bbox=nothing, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+    bbox=bbox1, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+bbox2 = make_shedding_bbox(rotor.nodes, te_indices_2[1:2], radial_dimension, R, shedding_r_over_R)
 shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
-    bbox=nothing, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+    bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
     CPoffset, kerneloffset, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 
+function shedding_root_r_over_R(nodes, shedding, cells, radial_dimension, R)
+    isempty(shedding) && return NaN
+    root_edge = shedding[:, end]
+    pi, nia, nib = root_edge[1], root_edge[2], root_edge[3]
+    edge_nodes = cells[[nia, nib], pi]
+    midpoint = (nodes[:, edge_nodes[1]] + nodes[:, edge_nodes[2]]) / 2
+    return midpoint[radial_dimension] / R
+end
+
+println("Requested shedding root at |r/R| >= $(shedding_r_over_R)")
+println("  shedding1 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding1, rotor.cells, radial_dimension, R))")
+println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding2, rotor.cells, radial_dimension, R))")
+
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=150_000, core_size=wake_core_size,
-    method_trailing=pnl.SigmaOverlap(R*0.01, 1.5),
+    method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
     # method_trailing=pnl.OverlapPPS(1.3, 2),
     method_unsteady=pnl.NoShed(),
     # method_unsteady=pnl.OverlapPPS(1.3, 2),
+    unsteady_filament=false, # should be false if method_unsteady is NoShed
     shed_with_induced_velocity=false,
     particle_maintenance=pnl.MergeParticles(;
         every=merge_particles ? 1 : 0,
@@ -97,7 +137,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
     )
 
 ramp_t = 0.5 * 60 / RPM
-magVinf_start = 2.0
+magVinf_start = 0.0
 ramp_magVinf(t) = t <= ramp_t ? magVinf_start + (magVinf - magVinf_start) * (t / ramp_t) : magVinf
 Uinf(t) = ramp_magVinf(t) * Vinf_direction
 # Uinf(t) = magVinf * Vinf_direction
@@ -160,7 +200,7 @@ force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;
     i_frame=1,
     normalization=pnl.RotorNormalization(rho, 2 * R, 1),
     correct_kuttacondition=p_correct_kuttacondition_flag,
-    verbose=false)
+    verbose=true)
 
 pressure_laplace_matderiv = pnl.PressureLaplace(rotor, rho;
     acceleration_form=:material_derivative, verbose=true)
@@ -168,7 +208,7 @@ force_monitor_laplace_matderiv = pnl.ForceMonitor(length(t_range), 1;
     i_frame=1,
     normalization=pnl.RotorNormalization(rho, 2 * R, 1),
     correct_kuttacondition=p_correct_kuttacondition_flag,
-    verbose=false)
+    verbose=true)
 
 pressure_laplace_lamb = pnl.PressureLaplace(rotor, rho;
     acceleration_form=:lamb_vector, verbose=true)
@@ -176,13 +216,13 @@ force_monitor_laplace_lamb = pnl.ForceMonitor(length(t_range), 1;
     i_frame=1,
     normalization=pnl.RotorNormalization(rho, 2 * R, 1),
     correct_kuttacondition=p_correct_kuttacondition_flag,
-    verbose=false)
+    verbose=true)
 
 kj_monitor = run_kj ? pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
         rho, backend=kj_backend,
         i_frame=1,
         normalization=pnl.RotorNormalization(rho, 2 * R, 1),
-        verbose=false) : nothing
+        verbose=true) : nothing
 
 monitors = run_kj ? (
         pressure_laplace_matderiv,
