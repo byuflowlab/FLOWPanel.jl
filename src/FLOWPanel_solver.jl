@@ -240,6 +240,9 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     potential_old = copy(body.potential)
+    ti = 0.0
+    tb = 0.0
+    ts = 0.0
 
     try
         set_strengths!(body)
@@ -262,6 +265,10 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
         backend=DirectBackend(),
         update_cps_normals::Bool=true,
         optargs...)
+    
+    ti = 0.0
+    tb = 0.0
+    ts = 0.0
 
     if body isa RigidWakeBody && body.watertight
         @warn "Solving a watertight RigidWakeBody with the Neumann formulation " *
@@ -272,12 +279,12 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try
-        tb, ts = @elapsed _solve!(body, solver; backend, optargs...)
+        tb, ts = _solve!(body, solver; backend, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return tb, ts
+    return ti, tb, ts
 end
 
 function numtype(self::AbstractBody)

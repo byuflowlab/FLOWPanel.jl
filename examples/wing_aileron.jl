@@ -16,6 +16,7 @@ function generate_body(
     span::Float64,
     bodytype::Type{<:pnl.RigidWakeBody};
     translate::NTuple{3,Float64} = (0.0, 0.0, 0.0),
+    rotate::Float64 = 0.0,
     scaling::Float64 = 1.0,
     flip::Int64 = 1,
     Vinf::AbstractVector{<:Real} = zeros(3),
@@ -29,6 +30,7 @@ function generate_body(
     # --- Load + transform mesh ---
     msh = GeoIO.load(meshfile).geometry
     msh = msh |> Meshes.Scale(scaling)
+    msh = msh |> Meshes.Rotate(rotate_y(rotate))
     msh = msh |> Meshes.Translate(translate)
 
     grid = pnl.gt.GridTriangleSurface(msh)

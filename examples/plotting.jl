@@ -4,25 +4,45 @@ using Plots
 dir = @__DIR__
 
 # --- Load your CSV (skip header lines manually) ---
-data = readlines(joinpath(dir, "wing_aileron/coupled_timing_results.csv"))
+# data = readlines(joinpath(dir, "wing_aileron/coupled_timing_results.csv"))
+data = readlines(joinpath(dir, "wing_aileron/timing_summary.csv"))
 
 # Split sections
 # idx_coupled = findfirst(contains("BackslashCoupled"), data)
 # idx_iter = findfirst(contains("BackslashIterative"), data)
 
-labels = findall(line -> occursin("Backslash", line), data)
+# labels = findall(line -> occursin("Backslash", line), data)
 
 # Last two sections
-idx_iter = labels[end]
-idx_coupled = labels[end-1]
+# idx_iter = labels[end]
+# idx_coupled = labels[end-1]
 
-coupled_lines    = data[idx_coupled+1 : idx_iter-1]
-iter_lines = data[idx_iter+1 : end]
+# coupled_lines    = data[idx_coupled+1 : idx_iter-1]
+# iter_lines = data[idx_iter+1 : end]
 
 # coupled_lines = data[idx_coupled+1 : idx_iter-1]
 # iter_lines    = data[idx_iter+1 : end]
 
-# Parse into arrays
+# # Parse into arrays
+# function parse_block(lines)
+#     aoa = Float64[]
+#     cl  = Float64[]
+#     cd  = Float64[]
+    
+#     for line in lines
+#         vals = split(strip(line), ",")
+#         if length(vals) >= 3
+#             push!(aoa, parse(Float64, vals[1]))
+#             push!(cl,  parse(Float64, vals[2]))
+#             push!(cd,  parse(Float64, vals[3]))
+#         end
+#     end
+#     return aoa, cl, cd
+# end
+
+# aoa_c, cl_c, _ = parse_block(coupled_lines)
+# aoa_i, cl_i, _ = parse_block(iter_lines)
+
 function parse_block(lines)
     aoa = Float64[]
     cl  = Float64[]
@@ -30,17 +50,21 @@ function parse_block(lines)
     
     for line in lines
         vals = split(strip(line), ",")
-        if length(vals) >= 3
-            push!(aoa, parse(Float64, vals[1]))
-            push!(cl,  parse(Float64, vals[2]))
-            push!(cd,  parse(Float64, vals[3]))
+
+        # Skip summary rows or malformed lines
+        if length(vals) < 5 || vals[2] == "SUMMARY"
+            continue
         end
+
+        push!(aoa, parse(Float64, vals[3]))
+        push!(cl,  parse(Float64, vals[4]))
+        push!(cd,  parse(Float64, vals[5]))
     end
+
     return aoa, cl, cd
 end
 
-aoa_c, cl_c, _ = parse_block(coupled_lines)
-aoa_i, cl_i, _ = parse_block(iter_lines)
+aoa_c, cl_c, _ = parse_block(data[2:end])  # skip header
 
 # --- Experimental data ---
 CL_exp = [
@@ -75,7 +99,7 @@ xlabel!("AOA (deg)")
 ylabel!("CL")
 # title!("AOA vs CL Comparison")
 
-savefig("webplot_check_2.png")
+savefig("coupled_iterative_wind_tunnel.png")
 
 # function rms_error(pred, exp)
 #     return sqrt(sum((pred .- exp).^2) / length(pred))

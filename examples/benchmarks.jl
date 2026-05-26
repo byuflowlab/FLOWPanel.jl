@@ -1,10 +1,13 @@
 import FLOWPanel: norm, dot, cross
+import FLOWPanel as pnl
+include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import Meshes
 import GeoIO
-import FLOWPanel as pnl
 import GeometricTools as gt
 using LinearAlgebra: diag
 using StaticArrays: SVector
+using Rotations
+
 
 # ============================================================
 # TRAILING EDGE DETECTION
@@ -30,6 +33,7 @@ function generate_body(
     span::Float64,
     bodytype::Type{<:pnl.RigidWakeBody};
     translate::NTuple{3,Float64} = (0.0, 0.0, 0.0),
+    rotate::Float64 = 0.0,
     scaling::Float64 = 1.0,
     Vinf::AbstractVector{<:Real} = zeros(3),
     kerneloffset::Float64 = 1.0e-6
@@ -39,9 +43,10 @@ function generate_body(
 
     msh = GeoIO.load(meshfile).geometry
     msh = msh |> Meshes.Scale(scaling)
+    msh = msh |> Meshes.Rotate(RotY(rotate * pi/180))
     msh = msh |> Meshes.Translate(translate)
 
-    grid = pnl.gt.GridTriangleSurface(msh)
+    grid = gt.GridTriangleSurface(msh)
 
     CPoffset = 1e-6
     empty_shedding = zeros(Int, 6, 0)
@@ -115,18 +120,28 @@ end
 # ============================================================
 # EXPERIMENT SETUP
 # ============================================================
-run_names = ["wing.msh", "surface.msh"]
+run_names = ["wing2_33x21.msh", "surface_21x33.msh"]
+# run_names = ["wing_small.msh", "surface_small.msh"]
 files = [joinpath(pnl.examples_path, "wing_aileron", n) for n in run_names]
 
 AOAs = [
--9.5879,
--5.9886,
--0.5368,
- 3.1682,
- 6.9262,
-10.4725,
-14.2306,
-18.4650
+-9.58790170132325  
+-7.841209829867704 
+-5.988657844990541 
+-4.136105860113403 
+-2.3894139886577754
+-0.536862003780719 
+ 1.3156899810964084
+ 3.168241965973529 
+ 5.02079395085066  
+ 6.926275992438619 
+ 8.672967863894144 
+10.472589792060482 
+12.325141776937613 
+14.230623818525515 
+15.077504725897917 
+16.400756143667294 
+18.465028355387517 
 ]
 
 m = 0.0254
@@ -139,8 +154,10 @@ chords = [c_body1, c_body2]
 
 trs = [
     (0.0, 0.0, 0.0),
-    (9.8489*m, 0.0, -0.12*m)
+    (9.8489*m, 0.0, -0.22*m)
 ]
+
+rts = [0.0, 10.0]
 
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 bodytype = pnl.RigidWakeBody{kernel}
@@ -161,24 +178,39 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
     println("Running $name")
 
     sq_error = 0.0
+    tol = 3e-2
 
-    for (i, (AOA, expAOA)) in enumerate(zip(AOAs, experimental_AOA))
+    for (i, (AOA, expCL)) in enumerate(zip(AOAs, experimental_CL))
 
         Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
+
+        #------------------- GENERATE END PLATES ----------------------------------------------
+    
+        left_center = [12.0*0.5*0.0254, -b/2 * m - tol, 0.0]
+        left_normal = [0.0, 1.0, 0.0]
+        left_radius = 12.0 * 5 * m
+        left_plate = pnl.FlatGround(left_center, left_normal, left_radius; panel_length=12.0*0.25*0.0254)
+        right_center = [12.0*0.5*0.0254, b/2* m + tol, 0.0]
+        right_normal = [0.0, -1.0, 0.0]
+        right_radius = 12.0 * 5 * m    
+        right_plate = pnl.FlatGround(right_center, right_normal, right_radius; panel_length=12.0*0.25*0.0254)
 
         bodies = tuple([
             generate_body(file, chord, b, bodytype;
                 translate=tr,
                 scaling=m,
-                Vinf=Vinf
+                Vinf=Vinf,
+                rotate=rt
             )
-            for (file, chord, tr) in zip(files, chords, trs)
-        ]...)
+            for (file, chord, tr, rt) in zip(files, chords, trs, rts)
+        ]..., left_plate, right_plate)
 
         for body in bodies
             body.velocity .= 0.0
             pnl.apply_freestream!(body, Vinf)
         end
+
+        @show p = sum(b.ncells for b in bodies)
 
         solver = solver_builder(bodies)
 
@@ -192,10 +224,28 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
 
         if i == 1
             nps_tot = sum(b.ncells for b in bodies)
+
+            filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
+            files1 = split(filestr1, ", ")
+            pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
+
+            filestr2 = pnl.write_vtk(joinpath("examples", "surface_val"), bodies[2], 0, 0.0)
+            files2 = split(filestr2, ", ")
+            pvd2 = first(filter(f -> endswith(f, ".pvd"), files2))
+
+            filestr3 = pnl.write_vtk(joinpath("examples", "left_val"), bodies[3], 0, 0.0)
+            files3 = split(filestr3, ", ")
+            pvd3 = first(filter(f -> endswith(f, ".pvd"), files3))
+
+            filestr4 = pnl.write_vtk(joinpath("examples", "right_val"), bodies[4], 0, 0.0)
+            files4 = split(filestr4, ", ")
+            pvd4 = first(filter(f -> endswith(f, ".pvd"), files4))
+
+            run(`paraview $pvd1 $pvd2 $pvd3 $pvd4`, wait=false)
         end
 
         # RMS accumulation
-        sq_error += (CL - experimental_CL[i])^2
+        sq_error += (CL - expCL)^2
 
         write(io,
             "$name,$nps_tot,$AOA,$CL,$CD,$t_build,$t_solve,$(t_build + t_solve)\n"
@@ -234,25 +284,31 @@ experimental = [
 ]
 
 
-open(out_file, "w") do io
+is_new_file = !isfile(out_file) || filesize(out_file) == 0
 
-    write(io, "solver,nps,AOA,CL,CD,t_build,t_solve,total_time\n")
+open(out_file, "a") do io
+    if is_new_file
+        write(io, "solver,nps,AOA,CL,CD,t_build,t_solve,total_time\n")
+    end
 
-    run_solver(io, "BackslashCoupled",
-        bodies -> pnl.BackslashCoupled(bodies), AOAs, experimental
-    )
+    # run_solver(io, "BackslashCoupled",
+    #     bodies -> pnl.BackslashCoupled(bodies), AOAs, experimental
+    # )
 
     run_solver(io, "BackslashIterative",
         bodies -> tuple(
             pnl.Backslash(bodies[1]),
-            pnl.Backslash(bodies[2])
+            pnl.Backslash(bodies[2]),
+            pnl.Backslash(bodies[3]),pnl.Backslash(bodies[4])
         ), AOAs, experimental
     )
-
+end
     # run_solver(io, "KrylovSolver",
     #     bodies -> tuple(
     #         pnl.KrylovSolver(bodies[1]),
-    #         pnl.KrylovSolver(bodies[2])
+    #         pnl.KrylovSolver(bodies[2]),
+    #         pnl.KrylovSolver(bodies[3]),
+    #         pnl.KrylovSolver(bodies[4])
     #     )
     # )
 
@@ -269,6 +325,6 @@ open(out_file, "w") do io
     #         pnl.FGSSolver(bodies[2]; leaf_size=10000)
     #     ), AOAs
     # )
-end
+# end
 
 println("Saved results to: ", out_file)
