@@ -24,7 +24,8 @@ export  solve, save, influence!,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
         ForceMonitor, KuttaJoukowskiForce,
         WingNormalization, NoNormalization, RotorNormalization,
-        simulate_warmstart!, initialize_Das!
+        simulate_warmstart!, initialize_Das!,
+        replay, ReplayResult
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA
@@ -75,7 +76,8 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "simulate", "warmstart",
+                    "wake", "simulate_monitors", "metadata", "simulate", "warmstart",
+                    "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end

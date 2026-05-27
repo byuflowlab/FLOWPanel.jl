@@ -216,7 +216,7 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
 
-    _G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=true)
+    _G!(G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=true)
     Glu = lu!(G)
 
     return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
@@ -707,7 +707,7 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
-        _G!(solver.G, body, body; optargs...)
+        _G!(solver.G, body, body; kerneloffset=body.kerneloffset_panel, optargs...)
         Glu = lu!(solver.G)
     end
 
@@ -729,7 +729,7 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
     Glu = solver.Glu
     if update_G
         solver.G .= 0.0
-        _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
+        _G!(solver.G, self, self; kerneloffset=self.kerneloffset_panel)
         Glu = lu!(solver.G)
     end
 

@@ -35,7 +35,9 @@ Implementations of AbstractBody are expected to have the following fields
 * `characteristiclength::Function`    : Function for computing the characteristic
                                         length of each panel used to offset each
                                         control point
-* `kerneloffset::Real`                : Kernel offset to avoid singularities
+* `kerneloffset::Real`                : Active kernel offset to avoid singularities
+* `kerneloffset_panel::Real`          : Kernel offset used for panel solves and panel-panel interactions
+* `kerneloffset_targets::Real`        : Kernel offset used for panel influence on external targets
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
 * `watertight::Bool`                  : Whether the body is watertight or not
 * `Cps::Vector{TF}`                   : Pressure coefficient at each cell

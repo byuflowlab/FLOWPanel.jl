@@ -65,7 +65,9 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
     CPoffset::Float64                         # Control point offset in normal direction
-    kerneloffset::Float64                     # Kernel offset to avoid singularities
+    kerneloffset::Float64                     # Active kernel offset to avoid singularities
+    kerneloffset_panel::Float64               # Kernel offset for panel solves/interactions
+    kerneloffset_targets::Float64             # Kernel offset for panel influence on targets
     kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
     characteristiclength::Function            # Characteristic length of each panel
     watertight::Bool                         # Whether the body is watertight or not
@@ -102,6 +104,8 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
                                 CPoffset=1e-6,
                                 kerneloffset=1e-8,
+                                kerneloffset_panel=kerneloffset,
+                                kerneloffset_targets=kerneloffset,
                                 kernelcutoff=1e-14,
                                 characteristiclength=characteristiclength_sqrtarea,
                                 check_mesh=true, watertight=true,
@@ -201,7 +205,9 @@ function RigidWakeBody{E, N, TF, DBC}(
                     normals,
                     velocity_te,
                     CPoffset,
-                    kerneloffset,
+                    kerneloffset_panel,
+                    Float64(kerneloffset_panel),
+                    Float64(kerneloffset_targets),
                     kernelcutoff,
                     characteristiclength,
                     watertight,

@@ -1,9 +1,13 @@
 using Test
 import FLOWPanel as pnl
-using LinearAlgebra: diag
+using LinearAlgebra: diag, dot
 import Meshes
 using StaticArrays: SVector
 import GeoIO
+
+if !isdefined(@__MODULE__, :make_octa_source_body)
+    include("test_helpers.jl")
+end
 
 @testset verbose=true "Solvers" begin
     @testset "Backslash construction" begin
