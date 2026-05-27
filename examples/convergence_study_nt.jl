@@ -318,7 +318,7 @@ np = 144 # number of particles per revolution
 overlap = 2.0
 
 # Variable values
-nts         = [36#=, 72, 144=#]
+nts         = [36, 72, 144]
 p_per_steps = Int.(np ./ nts)
 
 for i in eachindex(p_per_steps)
