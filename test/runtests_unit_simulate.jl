@@ -1,5 +1,6 @@
 using Test
 import FLOWPanel as pnl
+import FastMultipole
 
 if !isdefined(@__MODULE__, :make_plate_vortex_body)
     include("test_helpers.jl")
@@ -34,11 +35,13 @@ end
 
 mutable struct SimMarkerBackend <: pnl.AbstractBackend
     calls::Int
+    kwargs_seen::Vector{Any}
 end
-SimMarkerBackend() = SimMarkerBackend(0)
+SimMarkerBackend() = SimMarkerBackend(0, Any[])
 
 function pnl.influence!(::Tuple, ::Tuple, backend::SimMarkerBackend; kwargs...)
     backend.calls += 1
+    push!(backend.kwargs_seen, kwargs)
     return nothing
 end
 
@@ -120,7 +123,24 @@ end
     )
     @test backend_wake.calls == 2
     @test backend_system.calls == 2
+    @test all(haskey(kwargs, :direct_conditioning) for kwargs in backend_system.kwargs_seen)
+    @test all(kwargs[:direct_conditioning] isa FastMultipole.DirectConditioningRule for kwargs in backend_system.kwargs_seen)
     @test solver.backend_seen === backend_solve
+
+    body = make_plate_vortex_body()
+    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1)
+    frames = pnl.ReferenceFrame(body)
+    solver = SimNoopSolver()
+    backend_system = SimMarkerBackend()
+    pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
+        body_solvers=solver,
+        backend=pnl.DirectBackend(),
+        backend_system=backend_system,
+        path=nothing,
+    )
+    @test backend_system.calls == 2
+    @test body.kerneloffset == body.kerneloffset_targets
+    @test body.kerneloffset_targets == 0.1
 
     body1 = make_plate_vortex_body()
     body2 = make_plate_vortex_body()

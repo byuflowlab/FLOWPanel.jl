@@ -53,7 +53,9 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     CPoffset::Float64                   # Control point offset in normal direction
-    kerneloffset::Float64               # Kernel offset to avoid singularities
+    kerneloffset::Float64               # Active kernel offset to avoid singularities
+    kerneloffset_panel::Float64         # Kernel offset for panel solves/interactions
+    kerneloffset_targets::Float64       # Kernel offset for panel influence on targets
     kernelcutoff::Float64               # Kernel cutoff to avoid singularities
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
@@ -80,6 +82,8 @@ function NonLiftingBody{E, N, TF, DBC}(
                 normals=zeros(3, size(cells, 2)),
                 CPoffset=1e-14,
                 kerneloffset=1e-8,
+                kerneloffset_panel=kerneloffset,
+                kerneloffset_targets=kerneloffset,
                 kernelcutoff=1e-14,
                 characteristiclength=characteristiclength_sqrtarea,
                 watertight=false,
@@ -112,7 +116,9 @@ function NonLiftingBody{E, N, TF, DBC}(
                 controlpoints,
                 normals,
                 CPoffset,
-                kerneloffset,
+                kerneloffset_panel,
+                Float64(kerneloffset_panel),
+                Float64(kerneloffset_targets),
                 kernelcutoff,
                 characteristiclength,
                 watertight,

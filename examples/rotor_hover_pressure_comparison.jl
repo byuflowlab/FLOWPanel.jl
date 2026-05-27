@@ -8,38 +8,44 @@ using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
-run_name = "rotor_hover_pressure_comparison"
+run_name = "rotor_hover_pressure_comparison_nt72_sfs"
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
 
 magVinf = 0.0001 # + 10
 AOA = 0.0
-rho = 1.225
+# rho = 1.225
+rho = 1.071778
 RPM = 6000
 R = 0.119
-shedding_r_over_R = 0.2
-nrevs = 1
-nt = 36
+shedding_r_over_R = 0.1
+nrevs = parse(Float64, get(ENV, "NREVS", "10"))
+nt = parse(Int, get(ENV, "NT", "72"))
 dt = 60 / RPM / nt
 spinup_revs = max(0.0, parse(Float64, get(ENV, "SPINUP_REVS", "0.0")))
 spinup_start_fraction = clamp(parse(Float64, get(ENV, "SPINUP_START_FRACTION", "0.05")), eps(), 1.0)
 spinup_duration = spinup_revs * 60 / RPM
 spinup_steps = ceil(Int, spinup_duration / dt)
-n_steps = nt * nrevs + spinup_steps
+n_steps = round(Int, nt * nrevs) + spinup_steps
 t_range = range(0.0, step=dt, length=n_steps)
 
-CPoffset = R * 1e-6
-kerneloffset = R * 1e-3
+CPoffset = R * 1e-8
+kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
+kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "3e-3")))
 kernelcutoff = R * 1e-13
 p_per_step = 2
 overlap = 2.0
-merge_r_factor = 0.01
+merge_r_factor = 0.02
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
 p_correct_kuttacondition_flag = false
-wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
+wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", string(kerneloffset_targets)))
+wake_nu_default = 1.85508e-5 / rho
+wake_nu = parse(Float64, get(ENV, "WAKE_NU", string(wake_nu_default)))
+# wake_nu = parse(Float64, get(ENV, "WAKE_NU", "1.5e-5"))
+wake_core_beta = parse(Float64, get(ENV, "WAKE_CORE_BETA", "1.5"))
 run_kj = parse(Bool, get(ENV, "RUN_KJ", "false"))
 lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "true"))
 
@@ -65,7 +71,7 @@ shedding = pnl.noshedding
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-    CPoffset, kerneloffset, kernelcutoff,
+    CPoffset, kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
@@ -103,7 +109,7 @@ shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1
     bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    CPoffset, kerneloffset, kernelcutoff,
+    CPoffset, kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 
@@ -122,7 +128,11 @@ println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, s
 
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
 wake_rotor = pnl.PanelParticleWake(rotor;
-    nwakerows=1, max_particles=150_000, core_size=wake_core_size,
+    nwakerows=1, max_particles=500_000, core_size=wake_core_size,
+    particle_kerneloffset=kerneloffset_targets,
+    viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
+        beta=wake_core_beta),
+    SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
     method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
     # method_trailing=pnl.OverlapPPS(1.3, 2),
     method_unsteady=pnl.NoShed(),

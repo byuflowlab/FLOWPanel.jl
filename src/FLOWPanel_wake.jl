@@ -52,13 +52,16 @@ function solve!(body::AbstractBody, wake::AbstractFreeWake, uinf::AbstractArray,
     # kinematics
     kinematic_velocity!(body, frames; skip_top_level=false)
 
-    # solve body (shouldn't modify body velocity, but will update body strength)
+    # solve body with the panel/solve regularization
+    _set_kerneloffsets!((body,), :kerneloffset_panel)
     solve!(body, body_solver; backend)
 
-    # body-on-all influence
+    # body-on-all influence with the external-target regularization
+    _set_kerneloffsets!((body,), :kerneloffset_targets)
     influence!((body, wake_probes), (body,), backend;
         velocity=true,
-        velocity_gradient=(requires_hessian(body), requires_hessian(wake)))
+        velocity_gradient=(requires_hessian(body), requires_hessian(wake)),
+        direct_conditioning=_self_panel_kerneloffset_conditioning())
 
     return nothing
 end
@@ -820,6 +823,7 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
     method_trailing::MT                             # particle shedding method
     method_unsteady::MU                             # particle shedding method
     particle_maintenance::TPM             # particle merge/trim policy chain
+    particle_kerneloffset::Float64        # NaN uses source body kerneloffset
 end
 
 function PanelParticleWake(body::AbstractLiftingBody;
@@ -827,6 +831,9 @@ function PanelParticleWake(body::AbstractLiftingBody;
         method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
         method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
         particle_maintenance=ParticleMaintenance(),
+        particle_kerneloffset::Real=NaN,
+        viscous=FLOWVPM.Inviscid(),
+        SFS=FLOWVPM.SFS_default,
         kwargs...)
 
     panel_wake = PanelWake(body; nwakerows, kwargs...)
@@ -834,14 +841,19 @@ function PanelParticleWake(body::AbstractLiftingBody;
 
     # Create particle field with default settings (disable autotune_reg_error to avoid convergence issues)
     pfield = FLOWVPM.ParticleField(max_particles, TF;
-        fmm=FLOWVPM.FMM(autotune_reg_error=false))
+        viscous,
+        fmm=FLOWVPM.FMM(autotune_reg_error=false),
+        SFS)
 
     # Infer type params from the actual panel_wake
     WTK = typeof(panel_wake).parameters[1]
     WNK = typeof(panel_wake).parameters[2]
     maintenance = ParticleMaintenance(particle_maintenance)
+    if !isnan(particle_kerneloffset)
+        body.kerneloffset_targets = Float64(particle_kerneloffset)
+    end
     return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady),typeof(maintenance)}(
-        panel_wake, pfield, method_trailing, method_unsteady, maintenance
+        panel_wake, pfield, method_trailing, method_unsteady, maintenance, Float64(particle_kerneloffset)
     )
 end
 

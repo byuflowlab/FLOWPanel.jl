@@ -1,9 +1,9 @@
 #=##############################################################################
 # DESCRIPTION
     Warm-start support for `simulate!`. Resume a time-marching panel-method
-    simulation from VTK files produced by a previous run, plus a small companion
-    `{name}.frames.toml` that captures `ReferenceFrame` state (which the VTK
-    output cannot represent).
+    simulation from VTK files produced by a previous run, using the unified
+    `{name}.metadata.toml` manifest when available and falling back to the
+    legacy `{name}.frames.toml` companion file for older saved runs.
 =###############################################################################
 
 import ReadVTK
@@ -24,18 +24,6 @@ function _frame_to_dict(frame::ReferenceFrame, i::Int)
     )
 end
 
-function _step_dict(frames, i_step::Int, t::Real)
-    return Dict{String, Any}(
-        "i_step" => i_step,
-        "t"      => float(t),
-        "frame"  => [_frame_to_dict(frames[i], i) for i in eachindex(frames)],
-    )
-end
-
-function _frames_toml_path(path, name)
-    return joinpath(path, name * ".frames.toml")
-end
-
 """
 Write or append the per-step ReferenceFrame state to `{path}/{name}.frames.toml`.
 At `truncate=true`, the file is overwritten with `[meta]` and the first
@@ -45,6 +33,11 @@ function _write_frame_state_toml(path, name, frames, i_step::Int, t::Real; trunc
     isnothing(frames) && return nothing
 
     file = _frames_toml_path(path, name)
+    stepdict = Dict{String, Any}(
+        "i_step" => i_step,
+        "t" => float(t),
+        "frame" => [_frame_to_dict(frames[i], i) for i in eachindex(frames)],
+    )
     if truncate
         open(file, "w") do io
             meta = Dict{String, Any}(
@@ -54,36 +47,46 @@ function _write_frame_state_toml(path, name, frames, i_step::Int, t::Real; trunc
             )
             TOML.print(io, Dict("meta" => meta))
             println(io)
-            TOML.print(io, Dict("step" => [_step_dict(frames, i_step, t)]))
+            TOML.print(io, Dict("step" => [stepdict]))
         end
     else
         open(file, "a") do io
-            TOML.print(io, Dict("step" => [_step_dict(frames, i_step, t)]))
+            TOML.print(io, Dict("step" => [stepdict]))
         end
     end
     return file
 end
 
 """
-Load `frames` state from `{path}/{name}.frames.toml` for the entry whose
-`i_step == restart_step`. Replaces each `frames[i]` in place.
+Load `frames` state from `{path}/{name}.metadata.toml` for the entry whose
+`i_step == restart_step`. Falls back to `{path}/{name}.frames.toml` for legacy
+saved runs. Replaces each `frames[i]` in place.
 """
 function _load_frame_state_toml!(frames, path, name, restart_step::Int)
     isnothing(frames) && error("simulate_warmstart! requires frames; ReferenceFrame state is not available from VTK output alone.")
 
-    file = _frames_toml_path(path, name)
-    isfile(file) || error("Warm-start frames file not found: $(file). The original simulate! run must produce this file.")
+    data = _read_metadata_toml(path, name)
+    step = nothing
+    if data !== nothing
+        framedicts = _metadata_step_frames(data, restart_step)
+        if framedicts !== nothing
+            step = framedicts
+        end
+    end
 
-    data = TOML.parsefile(file)
-    steps = data["step"]
-    idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
-    isnothing(idx_in_toml) && error("restart_step=$(restart_step) not found in $(file)")
-    step = steps[idx_in_toml]
+    if step === nothing
+        file = _frames_toml_path(path, name)
+        isfile(file) || error("Warm-start frames file not found: $(file). The original simulate! run must produce this file.")
+        legacy = TOML.parsefile(file)
+        steps = get(legacy, "step", Any[])
+        idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
+        isnothing(idx_in_toml) && error("restart_step=$(restart_step) not found in $(file)")
+        step = steps[idx_in_toml]["frame"]
+    end
 
-    framedicts = step["frame"]
-    @assert length(framedicts) == length(frames) "frames file has $(length(framedicts)) frames, but `frames` argument has $(length(frames))"
+    @assert length(step) == length(frames) "frames file has $(length(step)) frames, but `frames` argument has $(length(frames))"
 
-    for (i, fd) in enumerate(framedicts)
+    for (i, fd) in enumerate(step)
         old = frames[i]
         TF = eltype(old.x)
         x          = FastMultipole.SVector{3,TF}(fd["x"]...)
@@ -285,8 +288,9 @@ end
 """
     simulate_warmstart!(systems, wakes, frames, maneuver!, Uinf, t_range; restart_path, restart_name, restart_step=-1, body_solvers, backend_wake=backend, backend_solve=backend, backend_system=backend, optargs...)
 
-Resume a simulation from VTK output and a `{name}.frames.toml` companion file
-written by a previous `simulate!` call. The body and wake objects must be
+Resume a simulation from VTK output and the unified `{name}.metadata.toml`
+manifest written by a previous `simulate!` call, falling back to the legacy
+`{name}.frames.toml` file when needed. The body and wake objects must be
 constructed identically to the original run; their state is overwritten from
 disk.
 

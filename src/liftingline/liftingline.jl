@@ -102,7 +102,9 @@ struct LiftingLine{ R<:Number,
     Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
                                                 # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
     # Solver settings
-    kerneloffset::Float64                       # Kernel offset to avoid singularities
+    kerneloffset::Float64                       # Active kernel offset to avoid singularities
+    kerneloffset_panel::Float64                 # Kernel offset for panel solves/interactions
+    kerneloffset_targets::Float64               # Kernel offset for panel influence on targets
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
 
     # Stripwise element settings
@@ -123,6 +125,8 @@ struct LiftingLine{ R<:Number,
                             sigmaexponent=1.0,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
+                            kerneloffset_panel=kerneloffset,
+                            kerneloffset_targets=kerneloffset,
                             kernelcutoff=1e-14,
                             arraytype::Type=Array,
                             plots=nothing,
@@ -248,7 +252,7 @@ struct LiftingLine{ R<:Number,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
-                    offset=kerneloffset, cutoff=kernelcutoff)
+                    offset=kerneloffset_panel, cutoff=kernelcutoff)
 
         new{R,
             S, _count(S), DBC,
@@ -267,7 +271,7 @@ struct LiftingLine{ R<:Number,
                                 aoas, claeros, Gammas, sigmas, Cps, Us, chords,
                                 G, RHS, 
                                 residuals, Geff,
-                                kerneloffset, kernelcutoff,
+                                kerneloffset_panel, Float64(kerneloffset_panel), Float64(kerneloffset_targets), kernelcutoff,
                                 elements_settings
                                 )
 

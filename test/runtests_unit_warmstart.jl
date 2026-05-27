@@ -84,4 +84,21 @@ pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
     @test wake_A.pfield.np == wake_C.pfield.np
     np = wake_A.pfield.np
     @test view(wake_A.pfield.particles, :, 1:np) == view(wake_C.pfield.particles, :, 1:np)
+
+    pnl._write_frame_state_toml(path_B, "run", frames_B, 4, t_range[5]; truncate=true)
+    rm(joinpath(path_B, "run.metadata.toml"); force=true)
+
+    body_D, wake_D, frames_D = setup_warmstart_case()
+    pnl.simulate_warmstart!((body_D,), (wake_D,), frames_D, maneuver, Uinf, t_range;
+        body_solvers=(WarmstartNoopSolver(),),
+        backend=pnl.DirectBackend(),
+        name="run",
+        path=path_B,
+        restart_step=4,
+    )
+
+    @test body_C.nodes == body_D.nodes
+    @test body_C.strength == body_D.strength
+    @test frames_C[1].x == frames_D[1].x
+    @test wake_C.panel_wake.nwakes[] == wake_D.panel_wake.nwakes[]
 end

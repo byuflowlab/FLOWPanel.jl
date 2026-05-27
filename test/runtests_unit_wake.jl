@@ -1,6 +1,7 @@
 using Test
 import FLOWPanel as pnl
 import FLOWVPM
+import TOML
 import FastMultipole
 using LinearAlgebra: norm
 using StaticArrays: SVector
@@ -60,6 +61,33 @@ end
         wake = pnl.PanelParticleWake(body; shed_with_induced_velocity=false)
 
         @test !wake.panel_wake.shed_with_induced_velocity
+    end
+
+    @testset "PanelParticleWake stores particle kernel offset" begin
+        body = make_plate_vortex_body()
+        default_wake = pnl.PanelParticleWake(body)
+        offset_wake = pnl.PanelParticleWake(body; particle_kerneloffset=0.25)
+
+        @test isnan(default_wake.particle_kerneloffset)
+        @test offset_wake.particle_kerneloffset == 0.25
+        @test body.kerneloffset_targets == 0.25
+    end
+
+    @testset "PanelParticleWake forwards SFS model" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body; SFS=FLOWVPM.SFS_Cd_twolevel_nobackscatter)
+
+        @test wake.pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+        @test FLOWVPM.isLES(wake.pfield)
+    end
+
+    @testset "PanelParticleWake forwards viscous model" begin
+        body = make_plate_vortex_body()
+        viscous = FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm)
+        wake = pnl.PanelParticleWake(body; viscous)
+
+        @test wake.pfield.viscous === viscous
+        @test FLOWVPM.iscorespreading(wake.pfield.viscous)
     end
 
     @testset "PanelWake final filament strength option" begin
@@ -150,6 +178,57 @@ end
         @test !wake.panel_wake.unsteady_filament
     end
 
+    @testset "Kernel offset override regularizes body-to-particle influence" begin
+        body = make_plate_vortex_body()
+        body.kerneloffset = 1e-8
+        wake = pnl.PanelParticleWake(body; particle_kerneloffset=0.1)
+        FLOWVPM.add_particle(wake.pfield, [0.5, 1e-4, 1e-4], [0.0, 0.0, 0.0], 0.01)
+
+        function particle_speed(kerneloffset)
+            FLOWVPM._reset_particles(wake.pfield)
+            old = body.kerneloffset
+            body.kerneloffset = kerneloffset
+            try
+                pnl.influence!((wake.pfield,), (body,), pnl.DirectBackend();
+                    velocity=true, velocity_gradient=(false,))
+                return norm(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
+            finally
+                body.kerneloffset = old
+            end
+        end
+
+        baseline = particle_speed(body.kerneloffset_panel)
+        regularized = particle_speed(body.kerneloffset_targets)
+
+        @test regularized < baseline
+    end
+
+    @testset "Self panel conditioning leaves particle targets on target offset" begin
+        body = make_plate_vortex_body()
+        body.kerneloffset_panel = 1e-8
+        body.kerneloffset_targets = 0.1
+        body.kerneloffset = body.kerneloffset_targets
+        wake = pnl.PanelParticleWake(body; particle_kerneloffset=body.kerneloffset_targets)
+        FLOWVPM.add_particle(wake.pfield, [0.5, 1e-4, 1e-4], [0.0, 0.0, 0.0], 0.01)
+
+        FLOWVPM._reset_particles(wake.pfield)
+        body.velocity .= 0
+        pnl.influence!((body, wake.pfield), (body,), pnl.DirectBackend();
+            velocity=true,
+            velocity_gradient=(false, false),
+            direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        conditioned_velocity = copy(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
+
+        FLOWVPM._reset_particles(wake.pfield)
+        body.kerneloffset = body.kerneloffset_targets
+        pnl.influence!((wake.pfield,), (body,), pnl.DirectBackend();
+            velocity=true, velocity_gradient=(false,))
+        target_offset_velocity = copy(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
+
+        @test body.kerneloffset == body.kerneloffset_targets
+        @test conditioned_velocity ≈ target_offset_velocity atol=1e-12 rtol=1e-12
+    end
+
     @testset "ParticleMaintenance separates mixed policies" begin
         maintenance = pnl.ParticleMaintenance((
             pnl.MinGamma(1e-3),
@@ -238,5 +317,37 @@ end
         pnl.propagate!(wake, 0.0; relax=false, step=1)
 
         @test wake.pfield.np == 1
+    end
+
+    @testset "Unified wake metadata round trip" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body;
+            nwakerows=2,
+            max_particles=128,
+            method_trailing=pnl.NoShed(),
+            method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
+            particle_maintenance=pnl.ParticleMaintenance((
+                pnl.MinGamma(1e-3),
+                pnl.MergeParticles(every=2, r=0.4, r_hash=0.3, sigma_relative=false, max_sigma_ratio=1.7, skip_static=false),
+            )),
+            viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
+            SFS=FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+        )
+        frames = pnl.ReferenceFrame(body)
+        path = mktempdir()
+        pnl._write_metadata_toml(path, "run", (body,), (wake,), frames, [0.0, 0.1],
+            (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
+
+        metadata = TOML.parsefile(joinpath(path, "run.metadata.toml"))
+        @test metadata["wake"][1]["method_trailing"]["type"] == "NoShed"
+        @test metadata["wake"][1]["viscous"]["type"] == "FLOWVPM.CoreSpreading"
+        @test metadata["wake"][1]["SFS"]["type"] == "FLOWVPM.SFS_Cd_twolevel_nobackscatter"
+
+        reconstructed = pnl._construct_wakes_from_manifest((body,), metadata)
+        @test reconstructed[1] isa pnl.PanelParticleWake
+        @test reconstructed[1].method_trailing isa pnl.NoShed
+        @test reconstructed[1].method_unsteady isa pnl.SigmaOverlap
+        @test reconstructed[1].particle_maintenance.functional_policies[1] isa pnl.MergeParticles
+        @test reconstructed[1].pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
     end
 end

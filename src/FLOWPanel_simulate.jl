@@ -95,6 +95,25 @@ end
 _collect_wake_probes(wake::AbstractFreeWake) = _collect_wake_probes((wake,))
 _collect_wake_probes(::Nothing) = ()
 
+function _set_kerneloffsets!(systems::Tuple, field::Symbol)
+    for system in systems
+        system.kerneloffset = getfield(system, field)
+    end
+    return nothing
+end
+
+function _self_panel_kerneloffset_conditioning()
+    before! = function (source_buffer, source_system, i_source_system, target_buffer, i_target_system)
+        source_system.kerneloffset = source_system.kerneloffset_panel
+        return nothing
+    end
+    after! = function (source_buffer, source_system, i_source_system, target_buffer, i_target_system)
+        source_system.kerneloffset = source_system.kerneloffset_targets
+        return nothing
+    end
+    return FastMultipole.DirectConditioningRule(FastMultipole.SelfPairs(), before!, after!)
+end
+
 function _collect_wake_sources(wakes::Tuple)
     result = ()
     for w in wakes
@@ -276,7 +295,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
         end
 
-        # solve systems
+        # solve systems with the panel/solve regularization.
+        _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
         solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
 
         # update control points (normals should not have changed)
@@ -284,12 +304,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             calc_controlpoints!(sys; off=abs(sys.CPoffset))
         end
 
-        # system-on-all influence
+        # system-on-all influence with the external-target regularization.
+        _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
         influence!(targets, systems_tuple, backend_system; precalc=false,
             scalar_potential=false,
             velocity=true,
             velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
-            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
+            direct_conditioning=_self_panel_kerneloffset_conditioning())
 
         #------- other solvers -------#
 
@@ -310,6 +332,16 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         #------- save state -------#
 
         if !isnothing(path)
+            metadata_path = _metadata_toml_path(path, name)
+            if start_step == 0 || !isfile(metadata_path)
+                _write_metadata_toml(path, name, systems_tuple, wakes_tuple, frames, t_range,
+                    body_solvers, backend_wake, backend_solve, backend_system, monitors;
+                    start_step=start_step,
+                    set_Das_eta_kinematic=set_Das_eta_kinematic,
+                    set_Das_eta_freestream=set_Das_eta_freestream,
+                    set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement)
+            end
+
             for (i, sys) in enumerate(systems_tuple)
                 body_name = name * "_body$(i)"
                 write_vtk(joinpath(path, body_name), sys, i_step, t; overwrite=i_step==0)
@@ -322,8 +354,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 end
             end
 
-            # frame-state companion file for simulate_warmstart!
-            _write_frame_state_toml(path, name, frames, i_step, t; truncate=(i_step==0))
+            _append_metadata_step_toml(path, name, frames, i_step, t)
         end
 
         #------- propagate system -------#
