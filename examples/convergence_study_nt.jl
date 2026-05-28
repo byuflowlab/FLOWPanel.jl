@@ -136,8 +136,8 @@ function run_convergence(p_per_step, overlap, nt)
         viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
             beta=wake_core_beta),
         SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
-        method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
-        # method_trailing=pnl.OverlapPPS(1.3, 2),
+        # method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
+        method_trailing=pnl.OverlapPPS(overlap, p_per_step),
         method_unsteady=pnl.NoShed(),
         # method_unsteady=pnl.OverlapPPS(1.3, 2),
         unsteady_filament=false, # should be false if method_unsteady is NoShed
