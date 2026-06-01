@@ -3,8 +3,6 @@
 #   Unified restart/replay metadata helpers.
 =###############################################################################
 
-import TOML
-
 _metadata_toml_path(path, name) = joinpath(path, name * ".metadata.toml")
 _replay_manifest_path(path, name) = joinpath(path, name * ".replay.toml")
 _frames_toml_path(path, name) = joinpath(path, name * ".frames.toml")
@@ -66,12 +64,16 @@ _frame_state_dict(frame::ReferenceFrame, i::Int) = Dict{String, Any}(
     "Rp2g" => collect(reshape(frame.Rp2g, 9)),
 )
 
-function _step_dict(frames, i_step::Int, t::Real)
-    return Dict{String, Any}(
+function _step_dict(frames, i_step::Int, t::Real; uinf=nothing)
+    d = Dict{String, Any}(
         "i_step" => i_step,
         "t" => float(t),
         "frame" => [_frame_state_dict(frames[i], i) for i in eachindex(frames)],
     )
+    if uinf !== nothing
+        d["uinf"] = [float(uinf[1]), float(uinf[2]), float(uinf[3])]
+    end
+    return d
 end
 
 function _simulation_metadata_dict(t_range, start_step::Int, set_Das_eta_kinematic,
@@ -186,6 +188,7 @@ function _monitor_metadata(m)
             "correct_kuttacondition" => m.correct_kuttacondition,
             "clip" => m.clip === nothing ? "nothing" : string(m.clip),
             "backend" => _backend_metadata_dict(m.backend),
+            "vtk_fields" => collect(string.(m.vtk_fields)),
         )
     elseif m isa PressureLaplace
         return Dict{String, Any}(
@@ -202,6 +205,7 @@ function _monitor_metadata(m)
             "verbose" => m.verbose,
             "gradient_mode" => string(m.gradient_mode),
             "acceleration_form" => string(m.acceleration_form),
+            "vtk_fields" => collect(string.(m.vtk_fields)),
         )
     elseif m isa ForceMonitor
         return Dict{String, Any}(
@@ -211,6 +215,20 @@ function _monitor_metadata(m)
             "normalization" => _monitor_normalization_metadata(m.normalization),
             "correct_kuttacondition" => m.correct_kuttacondition,
             "verbose" => m.verbose,
+            "vtk_fields" => collect(string.(m.vtk_fields)),
+        )
+    elseif m isa SurfaceVorticityForce
+        return Dict{String, Any}(
+            "type" => "SurfaceVorticityForce",
+            "i_system" => m.i_system,
+            "i_frame" => m.i_frame,
+            "rho" => m.rho,
+            "normalization" => _monitor_normalization_metadata(m.normalization),
+            "correct_kuttacondition" => m.correct_kuttacondition,
+            "gradient_robust" => m.gradient_robust,
+            "gradient_ar_threshold" => m.gradient_ar_threshold,
+            "verbose" => m.verbose,
+            "vtk_fields" => collect(string.(m.vtk_fields)),
         )
     elseif m isa KuttaJoukowskiForce
         return Dict{String, Any}(
@@ -275,10 +293,20 @@ function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
     return file
 end
 
-function _append_metadata_step_toml(path, name, frames, i_step::Int, t::Real)
+function _append_metadata_step_toml(path, name, frames, i_step::Int, t::Real; uinf=nothing)
     file = _metadata_toml_path(path, name)
-    open(file, "a") do io
-        TOML.print(io, Dict("step" => [_step_dict(frames, i_step, t)]))
+    step = _step_dict(frames, i_step, t; uinf)
+    data = isfile(file) ? TOML.parsefile(file) : Dict{String, Any}()
+    steps = get(data, "step", Any[])
+    existing = findfirst(s -> Int(s["i_step"]) == i_step, steps)
+    if isnothing(existing)
+        push!(steps, step)
+    else
+        steps[existing] = step
+    end
+    data["step"] = steps
+    open(file, "w") do io
+        TOML.print(io, data)
     end
     return file
 end
@@ -308,4 +336,16 @@ function _metadata_step_frames(data, restart_step::Int)
     idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
     isnothing(idx_in_toml) && return nothing
     return steps[idx_in_toml]["frame"]
+end
+
+function _metadata_step_uinf(data, restart_step::Int)
+    data === nothing && return nothing
+    steps = get(data, "step", Any[])
+    idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
+    isnothing(idx_in_toml) && return nothing
+    step = steps[idx_in_toml]
+    haskey(step, "uinf") || return nothing
+    u = step["uinf"]
+    length(u) == 3 || throw(ArgumentError("Metadata step $(restart_step) has uinf with length $(length(u)); expected 3."))
+    return FastMultipole.SVector{3, Float64}(u[1], u[2], u[3])
 end

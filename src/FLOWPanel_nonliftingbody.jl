@@ -38,21 +38,17 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     Oaxis::Array{TF,2}                  # Coordinate system of original grid
     O::Array{TF,1}                      # Position of CS of original grid
 
-    # Fields
-    P::Vector{TF}
-    F::Matrix{TF}
-
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Array{TF,1}              # Potential at control points
     velocity::Array{TF,2}               # Apparent fluid velocity at control points (body frame)
     velocity_gradient::Array{TF,3}      # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
-    induced_vorticity::Matrix{TF}       # 3xncells volumetric induced vorticity at control points; populated by extra_outputs=3
+    induced_vorticity::Matrix{TF}       # 3xncells vorticity at control points; bound surface vorticity initialized in simulate!, then populated by extra_outputs=3
     velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
     angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
-    CPoffset::Float64                   # Control point offset in normal direction
+    cp_outer::Bool                      # Side of the surface the control point limit is taken from (true = exterior, false = interior)
     kerneloffset::Float64               # Active kernel offset to avoid singularities
     kerneloffset_panel::Float64         # Kernel offset for panel solves/interactions
     kerneloffset_targets::Float64       # Kernel offset for panel influence on targets
@@ -69,8 +65,6 @@ function NonLiftingBody{E, N, TF, DBC}(
                 neighbor=nothing,
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                P=zeros(TF, size(cells, 2)),
-                F=zeros(TF, 3, size(cells, 2)),
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
@@ -80,7 +74,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
-                CPoffset=1e-14,
+                cp_outer::Bool=!DBC,
                 kerneloffset=1e-8,
                 kerneloffset_panel=kerneloffset,
                 kerneloffset_targets=kerneloffset,
@@ -105,7 +99,6 @@ function NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
-                P, F,
                 strength,
                 potential,
                 velocity,
@@ -115,7 +108,7 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity,
                 controlpoints,
                 normals,
-                CPoffset,
+                cp_outer,
                 kerneloffset_panel,
                 Float64(kerneloffset_panel),
                 Float64(kerneloffset_targets),

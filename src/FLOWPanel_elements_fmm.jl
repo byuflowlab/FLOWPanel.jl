@@ -124,6 +124,106 @@ function get_vertices(source_system::AbstractBody, i_source::Int)
 end
 
 """
+    _self_limit(phi_raw, u_raw, ug_raw, ::Type{TK}, strength, n_gt, cp_outer)
+
+Override the on-centroid `_induced` result with the side-aware self limit.
+
+The evaluation point is NOT moved (`_induced` does not nudge target_Rz). At
+`target_Rz == 0`, `compute_source_dipole` returns the principal value of the
+solid-angle term (forces `tan_term = 0`), so the kernel outputs at a self pair
+are clean PVs:
+* doublet/ring potential PV = 0           (jump = ∓μ across the panel)
+* source `u·n_GT` PV = 0                   (jump = ±σ across the panel)
+* source potential PV: finite, from log_term integral (continuous)
+* doublet/ring tangential & normal velocity PV: finite (continuous)
+
+`_self_limit` therefore adds the side-correct half-jump to the
+jump-discontinuous components and keeps `phi_raw` / `u_raw` for the
+continuous ones:
+* `cp_outer=true`  (exterior): φ_d = -μ/2, u_s·n_GT = +σ/2
+* `cp_outer=false` (interior): φ_d = +μ/2, u_s·n_GT = -σ/2
+
+Consumers (`_G!`, Krylov matvec, post-processing) receive the actual
+surface-limit value and do not add their own ±0.5 jump. Wake contributions
+from `_induced_wake` are still added on top by the caller. The velocity
+gradient self-limit is zeroed (out of scope).
+"""
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantSource}, strength, n_gt, cp_outer::Bool)
+    # source phi is continuous (PV in phi_raw is correct); source u·n_GT has the jump.
+    sigma = strength[1]
+    half_n = cp_outer ? sigma * 0.5 : -sigma * 0.5
+    u_n_raw = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
+    u_self = u_raw + (half_n - u_n_raw) * n_gt
+    return phi_raw, u_self, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantDoublet}, strength, n_gt, cp_outer::Bool)
+    # doublet velocity at the centroid is continuous (u_raw is the clean PV);
+    # potential has the jump (PV = 0).
+    mu = strength[1]
+    phi_self = cp_outer ? -mu * 0.5 : mu * 0.5
+    return phi_self, u_raw, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{VortexRing}, strength, n_gt, cp_outer::Bool)
+    gamma = strength[1]
+    phi_self = cp_outer ? -gamma * 0.5 : gamma * 0.5
+    return phi_self, u_raw, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, ConstantDoublet}}, strength, n_gt, cp_outer::Bool)
+    # phi_raw = source PV (clean) + 0 (doublet PV).  Add doublet half-jump.
+    # u_raw   = doublet PV (clean) + source tangential PV (clean) + 0 (source normal PV).
+    # Override the normal component with the source half-jump.
+    sigma = strength[1]
+    mu    = strength[2]
+    phi_self = cp_outer ? phi_raw - mu * 0.5 : phi_raw + mu * 0.5
+    half_n   = cp_outer ? sigma * 0.5 : -sigma * 0.5
+    u_n_raw  = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
+    u_self   = u_raw + (half_n - u_n_raw) * n_gt
+    return phi_self, u_self, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, VortexRing}}, strength, n_gt, cp_outer::Bool)
+    sigma = strength[1]
+    gamma = strength[2]
+    phi_self = cp_outer ? phi_raw - gamma * 0.5 : phi_raw + gamma * 0.5
+    half_n   = cp_outer ? sigma * 0.5 : -sigma * 0.5
+    u_n_raw  = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
+    u_self   = u_raw + (half_n - u_n_raw) * n_gt
+    return phi_self, u_self, zero(ug_raw)
+end
+
+# Relative tolerance for self-pair detection: ||target - centroid|| < ε_rel * √A.
+const SELF_PAIR_EPS_REL = 1.0e-12
+
+@inline function _is_self_pair(target, control_point, vertices)
+    v1, v2, v3 = vertices
+    e1 = v2 - v1
+    e2 = v3 - v1
+    nx = e1[2]*e2[3] - e1[3]*e2[2]
+    ny = e1[3]*e2[1] - e1[1]*e2[3]
+    nz = e1[1]*e2[2] - e1[2]*e2[1]
+    area = 0.5 * sqrt(nx*nx + ny*ny + nz*nz)
+    char_len_sq = area  # √A squared = A
+    dx = target[1] - control_point[1]
+    dy = target[2] - control_point[2]
+    dz = target[3] - control_point[3]
+    return (dx*dx + dy*dy + dz*dz) < (SELF_PAIR_EPS_REL * SELF_PAIR_EPS_REL) * char_len_sq
+end
+
+@inline function _panel_normal_gt(vertices)
+    v1, v2, v3 = vertices
+    e1 = v2 - v1
+    e2 = v3 - v1
+    nx = e1[2]*e2[3] - e1[3]*e2[2]
+    ny = e1[3]*e2[1] - e1[1]*e2[3]
+    nz = e1[1]*e2[2] - e1[2]*e2[1]
+    inv_n = 1.0 / sqrt(nx*nx + ny*ny + nz*nz)
+    return FastMultipole.StaticArrays.SVector{3,Float64}(nx*inv_n, ny*inv_n, nz*inv_n)
+end
+
+"""
     induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
     induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
 
@@ -143,9 +243,15 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
+    # self-pair short-circuit: override with §3 principal value (no jump)
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt, source_system.cp_outer)
+    end
+
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
-    
+
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
@@ -161,6 +267,12 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
+    # self-pair short-circuit: override with §3 principal value (no jump)
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt, source_system.cp_outer)
+    end
+
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
 
@@ -171,15 +283,22 @@ end
 
 "Overload for non-rotated kernels"
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
-    
+
     # get vertices
     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
-    
+
     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    # self-pair short-circuit
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt, source_system.cp_outer)
+    end
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
@@ -188,13 +307,20 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
 end
 
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
-    
+
     # get vertices
     v1, v2, v3 = get_vertices(source_system, i_source)
-    
+
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    # self-pair short-circuit
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt, source_system.cp_outer)
+    end
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
@@ -310,8 +436,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     num = max(eps(typeof(ri)), ri + rip1 - ds)
     log_term = log(num / (ri + rip1 + ds))
 
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -374,9 +504,13 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
 end
 
 function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
-    
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -449,8 +583,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     num = max(eps(typeof(ri)), ri + rip1 - ds)
     log_term = log(num / (ri + rip1 + ds))
 
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # println("NOT HERE")
@@ -557,11 +695,9 @@ function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, s
     # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     TFT = eltype(target)
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
-    # check if we're on the centroid
-    to_centroid = target_Rx * target_Rx + target_Ry * target_Ry + target_Rz * target_Rz
-    if to_centroid < eps(eltype(target))
-        target_Rz += eps(eltype(target))
-    end
+    # No on-centroid nudge: when target_Rz == 0 the kernel returns the principal
+    # value (compute_source_dipole forces tan_term = 0 at target_Rz == 0), and
+    # `_self_limit` adds the side-correct half-jump at self pairs.
 
     #--- first recursive quantities ---#
 

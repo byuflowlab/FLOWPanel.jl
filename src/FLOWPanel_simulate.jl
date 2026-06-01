@@ -48,6 +48,47 @@ end
 _induced_vorticity_extra_outputs(targets::Tuple, enabled::Bool) =
     Tuple(enabled && target isa AbstractBody ? 3 : 0 for target in targets)
 
+function _bound_surface_vorticity_te_info(body::AbstractBody)
+    return hasproperty(body, :shedding_full) ?
+        view(body.shedding_full, 1:2, :) :
+        zeros(Int, 2, body.ncells)
+end
+
+function _add_bound_surface_vorticity!(systems::Tuple)
+    for body in systems
+        _add_bound_surface_vorticity!(body)
+    end
+    return nothing
+end
+
+function _add_bound_surface_vorticity!(body::AbstractBody)
+    has_grad_mu(body) || return nothing
+
+    # Accumulate the bound surface vorticity κ = n × ∇sμ into
+    # body.induced_vorticity on top of any wake-induced contribution already
+    # there. Build κ in a scratch buffer so compute_mu_gradient! (which writes
+    # ∇μ, not accumulates) does not clobber existing values.
+    TF = eltype(body.induced_vorticity)
+    kappa = zeros(TF, 3, body.ncells)
+    compute_mu_gradient!(kappa, body.controlpoints, body.normals,
+        body.cells, body.neighbor,
+        view(body.strength, :, get_Gammai(body)),
+        _bound_surface_vorticity_te_info(body);
+        scale=-1.0)
+
+    @inbounds for i in axes(kappa, 2)
+        nx, ny, nz = body.normals[1, i], body.normals[2, i], body.normals[3, i]
+        gx = kappa[1, i]
+        gy = kappa[2, i]
+        gz = kappa[3, i]
+        body.induced_vorticity[1, i] += ny * gz - nz * gy
+        body.induced_vorticity[2, i] += nz * gx - nx * gz
+        body.induced_vorticity[3, i] += nx * gy - ny * gx
+    end
+
+    return nothing
+end
+
 function _validate_body_solvers(systems::Tuple, body_solvers)
     if body_solvers isa Tuple
         length(body_solvers) == length(systems) || throw(ArgumentError("Number of body_solvers ($(length(body_solvers))) must match number of systems ($(length(systems)))"))
@@ -301,8 +342,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         # update control points (normals should not have changed)
         for sys in systems_tuple
-            calc_controlpoints!(sys; off=abs(sys.CPoffset))
+            calc_controlpoints!(sys)
         end
+
+        # Add the bound surface vorticity κ = n × ∇sμ on top of the wake-induced
+        # curl already in body.induced_vorticity from the wake-on-body pass.
+        # body-on-body influence! does not write to induced_vorticity, so this
+        # is the final state seen by downstream monitors.
+        needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple)
 
         # system-on-all influence with the external-target regularization.
         _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
@@ -322,18 +369,18 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         #------- monitors -------#
 
-        # Run monitors before VTK write so monitor-populated fields
-        # (e.g. PressureBernoulli → body.P, ForceMonitor → body.F) land in
-        # the output files.
+        # Run monitors before VTK write so monitor-owned fields can be passed to
+        # downstream monitors and output files.
+        monitor_context = MonitorContext()
         for monitor in monitors
-            monitor(systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
+            _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
         end
 
         #------- save state -------#
 
         if !isnothing(path)
             metadata_path = _metadata_toml_path(path, name)
-            if start_step == 0 || !isfile(metadata_path)
+            if i_step == start_step || !isfile(metadata_path)
                 _write_metadata_toml(path, name, systems_tuple, wakes_tuple, frames, t_range,
                     body_solvers, backend_wake, backend_solve, backend_system, monitors;
                     start_step=start_step,
@@ -344,7 +391,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             for (i, sys) in enumerate(systems_tuple)
                 body_name = name * "_body$(i)"
-                write_vtk(joinpath(path, body_name), sys, i_step, t; overwrite=i_step==0)
+                write_vtk(joinpath(path, body_name), sys, i_step, t;
+                          monitors=monitors, i_system=i, overwrite=i_step==0)
             end
 
             for (i, w) in enumerate(wakes_tuple)
@@ -354,7 +402,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 end
             end
 
-            _append_metadata_step_toml(path, name, frames, i_step, t)
+            _append_metadata_step_toml(path, name, frames, i_step, t; uinf)
         end
 
         #------- propagate system -------#

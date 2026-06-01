@@ -65,7 +65,7 @@ println("Generating body...")
 
 bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
 
-bodyoptargs = (; CPoffset=1e-14)
+bodyoptargs = (; cp_outer=true)
 
 @time body = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                         bodytype=bodytype, bodyoptargs=bodyoptargs,

@@ -80,9 +80,9 @@ println("Generating wing...")
 
 # Arguments for lofting the left side of the wing.
 # DBC=false selects the Neumann formulation (impermeability BC u·n = 0).
-# CPoffset is positive so control points sit just outside the surface.
+# Control points sit exactly on the panel surface (cp_outer=true → exterior limit).
 bodyoptargs_l = (;
-                    CPoffset=1e-6,
+                    cp_outer=true,
                     kerneloffset=1e-6,
                     kernelcutoff=1e-12,
                     semiinfinite_wake=true,

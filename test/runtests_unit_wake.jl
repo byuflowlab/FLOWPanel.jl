@@ -1,7 +1,7 @@
 using Test
 import FLOWPanel as pnl
 import FLOWVPM
-import TOML
+const TOML = pnl.TOML
 import FastMultipole
 using LinearAlgebra: norm
 using StaticArrays: SVector
@@ -289,6 +289,29 @@ end
         @test sort([FLOWVPM.get_X(wake.pfield, i)[1] for i in 1:wake.pfield.np]) == [0.0, 2.0]
     end
 
+    @testset "PanelParticleWake particle maintenance trims by global cylinder" begin
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body;
+            particle_maintenance=pnl.ParticleMaintenance((pnl.GlobalCylinder([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], 1.0),)))
+
+        FLOWVPM.add_particle(wake.pfield, [-0.1, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [2e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.add_particle(wake.pfield, [1.0, 0.5, 0.0], [3e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.add_particle(wake.pfield, [1.0, 1.1, 0.0], [4e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.add_particle(wake.pfield, [2.0, 1.0, 0.0], [5e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.add_particle(wake.pfield, [2.1, 0.0, 0.0], [6e-3, 0.0, 0.0], 1.0)
+
+        pnl.propagate!(wake, 0.0; relax=false, step=1)
+
+        retained = [SVector{3}(FLOWVPM.get_X(wake.pfield, i)) for i in 1:wake.pfield.np]
+        @test wake.pfield.np == 3
+        @test SVector(0.0, 0.0, 0.0) in retained
+        @test SVector(1.0, 0.5, 0.0) in retained
+        @test SVector(2.0, 1.0, 0.0) in retained
+        @test_throws ArgumentError pnl.GlobalCylinder([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1.0)
+        @test_throws ArgumentError pnl.GlobalCylinder([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], -1.0)
+    end
+
     @testset "PanelParticleWake particle maintenance trims by frame box" begin
         body = make_plate_vortex_body()
         frames = pnl.ReferenceFrame(body; origin=SVector(10.0, 0.0, 0.0))
@@ -328,6 +351,7 @@ end
             method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
             particle_maintenance=pnl.ParticleMaintenance((
                 pnl.MinGamma(1e-3),
+                pnl.GlobalCylinder([0.0, -1.0, -1.0], [2.0, 0.0, 0.0], 1.5),
                 pnl.MergeParticles(every=2, r=0.4, r_hash=0.3, sigma_relative=false, max_sigma_ratio=1.7, skip_static=false),
             )),
             viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
@@ -342,12 +366,31 @@ end
         @test metadata["wake"][1]["method_trailing"]["type"] == "NoShed"
         @test metadata["wake"][1]["viscous"]["type"] == "FLOWVPM.CoreSpreading"
         @test metadata["wake"][1]["SFS"]["type"] == "FLOWVPM.SFS_Cd_twolevel_nobackscatter"
+        @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["type"] == "GlobalCylinder"
+        @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["origin"] == [0.0, -1.0, -1.0]
+        @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["extrude"] == [2.0, 0.0, 0.0]
+        @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["radius"] == 1.5
 
         reconstructed = pnl._construct_wakes_from_manifest((body,), metadata)
         @test reconstructed[1] isa pnl.PanelParticleWake
         @test reconstructed[1].method_trailing isa pnl.NoShed
         @test reconstructed[1].method_unsteady isa pnl.SigmaOverlap
+        @test reconstructed[1].particle_maintenance.trim_policies[2] isa pnl.GlobalCylinder
         @test reconstructed[1].particle_maintenance.functional_policies[1] isa pnl.MergeParticles
         @test reconstructed[1].pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+
+        step1_frames = pnl.ReferenceFrame(body; ω_axis=SVector(0.0, 1.0, 0.0), ω=1.0)
+        step2_frames = pnl.ReferenceFrame(body; ω_axis=SVector(0.0, 1.0, 0.0), ω=2.0)
+        replacement_frames = pnl.ReferenceFrame(body; ω_axis=SVector(0.0, 1.0, 0.0), ω=3.0)
+
+        pnl._append_metadata_step_toml(path, "run", step1_frames, 1, 0.1)
+        pnl._append_metadata_step_toml(path, "run", step2_frames, 2, 0.2)
+        pnl._append_metadata_step_toml(path, "run", replacement_frames, 2, 0.25)
+
+        metadata = TOML.parsefile(joinpath(path, "run.metadata.toml"))
+        @test length(metadata["step"]) == 2
+        @test pnl._metadata_step_frames(metadata, 1)[1]["omega"] == 1.0
+        @test pnl._metadata_step_frames(metadata, 2)[1]["omega"] == 3.0
+        @test pnl._metadata_step_frames(metadata, 3) === nothing
     end
 end

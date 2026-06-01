@@ -34,7 +34,7 @@ c_ref = b / ar
 Sref = b^2 / ar
 
 body = simplewing(b, ar, 1.0, 0, 0, 45, 0;
-                  bodytype=bodytype, bodyoptargs=(; CPoffset=1e-14),
+                  bodytype=bodytype, bodyoptargs=(; cp_outer=true),
                   airfoil_root=airfoil, airfoil_tip=airfoil,
                   airfoil_path=airfoil_path, rfl_NDIVS=NDIVS_rfl,
                   delim=",", span_NDIVS=NDIVS_span, b_low=-1.0, b_up=1.0)

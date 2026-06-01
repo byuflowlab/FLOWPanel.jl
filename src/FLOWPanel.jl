@@ -22,7 +22,8 @@ export  solve, save, influence!,
         PressureBernoulli, PressureLaplace,
         JacobiPressurePreconditioner, NoPressurePreconditioner,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
-        ForceMonitor, KuttaJoukowskiForce,
+        ForceMonitor, KuttaJoukowskiForce, SurfaceVorticityForce,
+        BoundCirculationMonitor,
         WingNormalization, NoNormalization, RotorNormalization,
         simulate_warmstart!, initialize_Das!,
         replay, ReplayResult
@@ -37,8 +38,10 @@ import Requires: @require
 # import SimpleNonlinearSolve
 import FastMultipole
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
+import ReadVTK
 using WriteVTK
 import Meshes
+import TOML
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 import ImplicitAD as IAD

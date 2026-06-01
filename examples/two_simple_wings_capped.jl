@@ -82,11 +82,11 @@ Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
 # Generate paneled body
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    body = bodytype(grid; cp_outer=iseven(flip))
 elseif bodytype <: pnl.RigidWakeBody
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    body = bodytype(grid; cp_outer=iseven(flip))
     @show shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*b)
-    body = bodytype(body.nodes, body.cells, shedding; CPoffset=(-1)^flip * 1e-14, ensure_winding=false)
+    body = bodytype(body.nodes, body.cells, shedding; cp_outer=iseven(flip), ensure_winding=false)
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(Vinf / magVinf, 1, size(body.Das[i], 2))
     end

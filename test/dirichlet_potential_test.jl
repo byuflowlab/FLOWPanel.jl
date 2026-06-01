@@ -28,7 +28,7 @@ end
         cells,
         # pnl.noshedding;
         shedding;
-        CPoffset=1e-6,
+        cp_outer=true,
         ensure_winding=false,
         semiinfinite_wake=false
     )
@@ -49,7 +49,8 @@ end
     end
 
     pnl.calc_normals!(body)
-    pnl.calc_controlpoints!(body; off=abs(body.CPoffset))
+    body.cp_outer = true
+    pnl.calc_controlpoints!(body)
     body.potential .= 0.0
     pnl.influence!(body, pnl.get_sources(wake), backend; scalar_potential=true, velocity=false)
     wake_phi_exterior = copy(body.potential)
@@ -72,7 +73,8 @@ end
 
     centered(v) = v .- sum(v) / length(v)
 
-    pnl.calc_controlpoints!(body; off=-abs(body.CPoffset))
+    body.cp_outer = false
+    pnl.calc_controlpoints!(body)
     body.potential .= 0.0
     pnl.influence!(body, pnl.get_sources(wake), backend; scalar_potential=true, velocity=false)
     wake_phi_interior = copy(body.potential)
@@ -112,7 +114,7 @@ end
 @show maximum(abs.(green_matrix - (I - G_interior)))
 
 # new test
-body.CPoffset = -1e-6 # interior
+body.cp_outer = false # interior
 pnl.calc_normals!(body)
 pnl.calc_controlpoints!(body)
 G_interior2 = zeros(body.ncells, body.ncells)
@@ -133,7 +135,7 @@ body2 = pnl.RigidWakeBody{Union{pnl.ConstantSource,pnl.ConstantDoublet}}(
         cells,
         pnl.noshedding;
         # shedding;
-        CPoffset=-1e-8,
+        cp_outer=false,
         ensure_winding=false,
         semiinfinite_wake=false
     )

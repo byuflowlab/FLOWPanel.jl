@@ -31,10 +31,10 @@ Implementations of AbstractBody are expected to have the following fields
 * `velocity::Matrix{TF}`              : 3xncells apparent fluid velocity at control points (body frame)
 * `velocity_kinematic::Matrix{TF}`    : 3xncells rigid-body kinematic velocity at control points (inertial frame)
 * `potential::Vector{TF}`             : Total scalar potential at control points
-* `CPoffset::Real`                    : Control point offset in normal direction
+* `cp_outer::Bool`                    : Side of the surface the control point limit
+                                        is taken from (true = exterior, false = interior)
 * `characteristiclength::Function`    : Function for computing the characteristic
-                                        length of each panel used to offset each
-                                        control point
+                                        length of each panel
 * `kerneloffset::Real`                : Active kernel offset to avoid singularities
 * `kerneloffset_panel::Real`          : Kernel offset used for panel solves and panel-panel interactions
 * `kerneloffset_targets::Real`        : Kernel offset used for panel influence on external targets
@@ -101,8 +101,6 @@ function reset!(body::AbstractBody)
     body.velocity_kinematic .= 0.0
     body.angular_velocity .= 0.0
     body.potential .= 0.0
-    body.P .= 0.0
-    body.F .= 0.0
     extra_reset!(body)
     return nothing
 end
@@ -379,8 +377,33 @@ strength_names(::AbstractBody{VortexRing, <:Any}) = ("gamma",)
 strength_names(::AbstractBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = ("sigma", "mu")
 strength_names(::AbstractBody{Union{ConstantSource, VortexRing}, <:Any}) = ("sigma", "gamma")
 
+mutable struct VTKFieldNameAllocator
+    used::Set{String}
+end
+
+_vtk_field_name_allocator(names) = VTKFieldNameAllocator(Set{String}(String.(names)))
+
+function _vtk_monitor_field_name!(allocator::VTKFieldNameAllocator,
+                                  base_name::AbstractString,
+                                  monitor,
+                                  i_monitor::Integer)
+    name = String(base_name)
+    if !(name in allocator.used)
+        push!(allocator.used, name)
+        return name
+    end
+
+    suffixed = "$(name) ($(nameof(typeof(monitor))) #$(i_monitor))"
+    push!(allocator.used, suffixed)
+    return suffixed
+end
+
+function _vtk_body_field_name_allocator(body::AbstractBody)
+    return _vtk_field_name_allocator(("normals", "potential", "velocity", strength_names(body)...))
+end
+
 """
-    write_vtk(name, body::AbstractBody, idx, t; overwrite=false)
+    write_vtk(name, body::AbstractBody, idx, t; monitors=(), i_system=1, overwrite=false)
 
 Write the body mesh and its solution fields to VTK files at timestep `idx` with
 simulation time `t`, following the same pattern as `write_vtk` for `PanelWake`.
@@ -390,9 +413,10 @@ Generates:
 - `<name>_<idx>.vtm`      — VTK multiblock
 - `<name>_<idx>_body.vtu` — unstructured triangular surface mesh with data
 
-All fields stored on the body (strength, `Uinf`, `U`, `phi`, `P`, `Cps`,
-`Gamma`, `F`) are written when non-empty.  Body-type-specific fields are added
-via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
+Common body state (normals, potential, velocity, and strengths) is always
+written. Monitor-owned fields such as pressure and distributed force are added
+by monitors passed through the `monitors` keyword. Body-type-specific fields are
+added via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
 `RigidWakeBody`) can contribute additional data without duplicating the common
 code.
 
@@ -401,10 +425,12 @@ code.
 - `body`      : Body instance to write
 - `idx`       : Integer timestep index (embedded in filenames)
 - `t`         : Simulation time (used as the PVD collection key)
+- `monitors`  : Monitor tuple whose configured VTK fields should be written
+- `i_system`  : One-based body index used to select monitor-owned per-body data
 - `overwrite` : Start a fresh PVD file when `true`; append when `false` (default)
 """
 function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
-                   overwrite::Bool=false)
+                   monitors=(), i_system::Int=1, overwrite::Bool=false)
 
     # Route block files to a subdirectory named after the PVD
     _parent, _base = splitdir(name)
@@ -428,15 +454,14 @@ function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
             # Surface velocity  (3 × ncells)
             vtk["velocity", VTKCellData()] = body.velocity
 
-            # Gauge pressure (ncells,)
-            vtk["gauge pressure", VTKCellData()] = body.P
-
-            # Distributed forces  (3 × ncells)
-            vtk["F", VTKCellData()] = body.F
-
             # add strength fields
             for (i,name) in enumerate(strength_names(body))
                 vtk[name, VTKCellData()] = view(body.strength, :, i)
+            end
+
+            field_names = _vtk_body_field_name_allocator(body)
+            for (i_monitor, monitor) in enumerate(monitors)
+                write_vtk_fields!(vtk, monitor, body, i_system, idx, field_names, i_monitor)
             end
 
             # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
@@ -700,23 +725,16 @@ function characteristiclength_sqrtarea(nodes, panel)
 end
 
 function calc_controlpoints!(nodes::AbstractMatrix, cells::AbstractMatrix,
-                                controlpoints, normals; off::Real=0.005,
+                                controlpoints, normals;
                                 characteristiclength::Function=characteristiclength_sqrtarea)
 
     for pi in axes(cells, 2)
         i1, i2, i3 = cells[1, pi], cells[2, pi], cells[3, pi]
 
-        # Centroid of triangle (average of vertices; equals centroid for triangles)
+        # Centroid of triangle — control points sit exactly on the panel surface
         controlpoints[1, pi] = (nodes[1, i1] + nodes[1, i2] + nodes[1, i3]) * 0.3333333333333333
         controlpoints[2, pi] = (nodes[2, i1] + nodes[2, i2] + nodes[2, i3]) * 0.3333333333333333
         controlpoints[3, pi] = (nodes[3, i1] + nodes[3, i2] + nodes[3, i3]) * 0.3333333333333333
-
-        l = characteristiclength(nodes, view(cells, :, pi))
-
-        # Offset the controlpoint in the normal direction
-        controlpoints[1, pi] += off * l * normals[1, pi]
-        controlpoints[2, pi] += off * l * normals[2, pi]
-        controlpoints[3, pi] += off * l * normals[3, pi]
     end
 
     return controlpoints
@@ -726,8 +744,8 @@ end
     calc_controlpoints!(body::AbstractBody, controlpoints::Matrix, normals::Matrix)
 
 Calculates the control point of every cell in `body` and stores them in the 3xN
-matrix `controlpoints`. It uses `body.CPoffset`, `body.charateristiclength`, and
-`normals` to offset the control points off the surface in the normal direction.
+matrix `controlpoints`. Control points sit exactly on the panel surface
+(centroid); `normals` is unused and retained for backwards compatibility.
 
 **Output:** `controlpoints[:, i]` is the control point of the i-th cell (linearly
 indexed).
@@ -735,24 +753,22 @@ indexed).
 !!! tip
     Use `normals = calc_normals(body)` to calculate the normals.
 """
-function calc_controlpoints!(self::AbstractBody, normals=self.normals; 
-        off=self.CPoffset, characteristiclength=self.characteristiclength)
+function calc_controlpoints!(self::AbstractBody, normals=self.normals;
+        characteristiclength=self.characteristiclength)
     return calc_controlpoints!(self.nodes, self.cells, self.controlpoints, normals;
-                                off, characteristiclength)
+                                characteristiclength)
 end
 
 function calc_controlpoints(nodes::AbstractMatrix, cells::AbstractMatrix, normals;
-        off::Real=0.005,
         characteristiclength::Function=characteristiclength_sqrtarea)
     controlpoints = zeros(promote_type(eltype(nodes), eltype(normals)), 3, size(cells, 2))
-    calc_controlpoints!(nodes, cells, controlpoints, normals; off, characteristiclength)
+    calc_controlpoints!(nodes, cells, controlpoints, normals; characteristiclength)
     return controlpoints
 end
 
 function calc_controlpoints(self::AbstractBody, normals=self.normals;
-        off=self.CPoffset,
         characteristiclength=self.characteristiclength)
-    return calc_controlpoints(self.nodes, self.cells, normals; off, characteristiclength)
+    return calc_controlpoints(self.nodes, self.cells, normals; characteristiclength)
 end
 
 const _calc_controlpoints = calc_controlpoints
@@ -815,12 +831,8 @@ function calc_normals!(nodes::AbstractMatrix, cells::AbstractMatrix, normals)
     end
 end
 
-function calc_normals!(self::AbstractBody, normals=self.normals; flipbyCPoffset=false)
+function calc_normals!(self::AbstractBody, normals=self.normals)
     calc_normals!(self.nodes, self.cells, normals)
-    if flipbyCPoffset
-        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
-    end
-
     return normals
 end
 
@@ -1049,7 +1061,7 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     # normal_x = dy1*dz2 - dz1*dy2
     # normal_y = dz1*dx2 - dx1*dz2
     # normal_z = dx1*dy2 - dy1*dx2
-    # norm_inv = system.CPoffset / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
+    # norm_inv = 1 / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
     # normal_x *= norm_inv
     # normal_y *= norm_inv
     # normal_z *= norm_inv

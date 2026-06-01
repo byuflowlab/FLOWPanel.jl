@@ -128,9 +128,9 @@ target body's boundary-condition flag (the 4th type parameter of
 `(target_system.ncells, source_system.ncells)`.
 
 If `update_geometry=true`, the target body's normals and control points are
-recomputed before assembling `G`, with the sign of `target_system.CPoffset`
-forced to match the formulation (negative/interior for Dirichlet, positive/
-exterior for Neumann). The original `CPoffset` is restored on return.
+recomputed before assembling `G`. Control points sit exactly on the panel
+surface (no offset); the diagonal jump term is added explicitly below based on
+`target_system.cp_outer`.
 """
 function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
              source_system::AbstractBody{<:Any,NK,TF};
@@ -145,11 +145,8 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
     end
 
     if update_geometry
-        CPoffset_old = target_system.CPoffset
-        target_system.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
         calc_normals!(target_system)
         calc_controlpoints!(target_system)
-        target_system.CPoffset = CPoffset_old
     end
 
     kernel, strength_index = _G_kernel_and_strength_index(source_system)
@@ -165,6 +162,9 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
     CPs = target_system.controlpoints
     normals = target_system.normals
 
+    # `induced` returns the §3 side-aware self limit at self pairs
+    # (read from `source_system.cp_outer`), so no explicit ±0.5 jump add is
+    # needed here.
     Threads.@threads for i_source in 1:N
         for i_target in 1:M
             tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
@@ -224,13 +224,15 @@ end
 
 function _set_formulation_geometry!(body::AbstractBody{<:Any,<:Any,<:Any,DBC},
                                     update_cps_normals::Bool) where DBC
-    CPoffset_old = body.CPoffset
+    # Pick the side of the surface the control-point limit is taken from.
+    # Neumann → exterior (cp_outer=true); Dirichlet → interior (cp_outer=false).
+    # cp_outer is allowed to mutate during solves and is not restored afterward.
+    body.cp_outer = !DBC
     if update_cps_normals
-        body.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
         normals = calc_normals!(body)
         calc_controlpoints!(body, normals)
     end
-    return CPoffset_old
+    return nothing
 end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolver;
@@ -238,7 +240,7 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         update_cps_normals::Bool=true,
         optargs...)
 
-    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
+    _set_formulation_geometry!(body, update_cps_normals)
     potential_old = copy(body.potential)
 
     try
@@ -250,8 +252,6 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
         _solve!(body, solver; backend, optargs...)
     finally
-        # body.potential .= potential_old
-        body.CPoffset = CPoffset_old
         body.potential .= potential_old
     end
 
@@ -270,12 +270,8 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
               "surfaces, or remove a cap to make the surface non-watertight." maxlog=1
     end
 
-    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
-    try
-        _solve!(body, solver; backend, optargs...)
-    finally
-        body.CPoffset = CPoffset_old
-    end
+    _set_formulation_geometry!(body, update_cps_normals)
+    _solve!(body, solver; backend, optargs...)
 
     return nothing
 end
@@ -380,7 +376,8 @@ function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B
     solver.unabbreviated_strengths .= B
     _set_strength(solver.body, solver.unabbreviated_strengths)
 
-    # get induced velocity at control points
+    # `induced` (called via `influence!`) returns the §3 side-aware self limit
+    # at self pairs, so no extra jump add is needed.
     solver.body.velocity .= 0
     influence!(solver.body, solver.body, solver.backend; velocity=true)
 
@@ -574,14 +571,13 @@ end
 
 function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, optargs...)
     offsets = _coupled_offsets(bodies)
-    CPoffset_old = map(body -> body.CPoffset, bodies)
     velocity_old = [copy(body.velocity) for body in bodies]
     potential_old = [copy(body.potential) for body in bodies]
     fixed_sources = Vector{Any}(undef, length(bodies))
 
     try
         for (i, body) in enumerate(bodies)
-            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
+            body.cp_outer = !has_dirichlet_bc(body)
             normals = calc_normals!(body)
             calc_controlpoints!(body, normals)
             set_strengths!(body)
@@ -615,7 +611,6 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
     finally
         for (i, body) in enumerate(bodies)
-            body.CPoffset = CPoffset_old[i]
             body.velocity .= velocity_old[i]
             body.potential .= potential_old[i]
         end
@@ -672,9 +667,8 @@ function FGSSolver(body::AbstractBody;
         project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
     )
 
-    # save and set CPoffset to negative for Dirichlet bodies (interior solve)
-    CPoffset_old = body.CPoffset
-    body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
+    # set side-of-surface limit for the formulation; cp_outer is not restored
+    body.cp_outer = !has_dirichlet_bc(body)
 
     # calculate control points if needed
     if calc_cps
@@ -686,9 +680,6 @@ function FGSSolver(body::AbstractBody;
     TF = numtype(body)
     bodies = (body,)
     fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
-
-    # restore CPoffset
-    body.CPoffset = CPoffset_old
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
@@ -872,11 +863,11 @@ function solve!(bodies::Tuple, solvers::Tuple;
     prev_velocity = [copy(body.velocity) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
     
-    # update control points and normals
+    # update control points and normals; cp_outer is selected by formulation
+    # and is not restored afterward.
     if update_cps_normals
-        CPoffsets_old = map(body -> body.CPoffset, bodies)
         for body in bodies
-            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
+            body.cp_outer = !has_dirichlet_bc(body)
             normals = calc_normals!(body)
             calc_controlpoints!(body, normals)
         end
@@ -924,12 +915,9 @@ function solve!(bodies::Tuple, solvers::Tuple;
         println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
     end
 
-    # restore velocities and CPoffsets
+    # restore velocities
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
-        if update_cps_normals
-            body.CPoffset = CPoffsets_old[i]
-        end
     end
 
     return nothing
@@ -1135,10 +1123,9 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views solver.phi_ext[r]  .= body.potential
     end
 
-    # flip CP offset
-    CPoffset_old = map(b -> b.CPoffset, bodies)
+    # pick the side of the surface the control-point limit is taken from
     for b in bodies
-        b.CPoffset = abs(b.CPoffset) * (-1)^(has_dirichlet_bc(b))
+        b.cp_outer = !has_dirichlet_bc(b)
     end
 
     for body in bodies
@@ -1195,7 +1182,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         r = offsets[bi]+1 : offsets[bi+1]
         write_solution!(b, view(sol, r))
 
-        b.CPoffset = CPoffset_old[bi]
         @views b.velocity  .= solver.Uext[:, r]
         @views b.potential .= solver.phi_ext[r]
     end

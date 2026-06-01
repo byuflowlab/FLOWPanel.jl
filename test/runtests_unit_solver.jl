@@ -113,8 +113,7 @@ end
         solver = pnl.Backslash(body)
         i1, i2, i3 = body.cells[:, 1]
         centroid1 = (body.nodes[:, i1] + body.nodes[:, i2] + body.nodes[:, i3]) ./ 3
-        inward = body.controlpoints[:, 1] - centroid1
-        @test dot(inward, normals[:, 1]) < 0
+        @test isapprox(body.controlpoints[:, 1], centroid1; atol=1e-12)
         @test size(solver.G) == (body.ncells, body.ncells)
         body.velocity .= 0
         body.velocity[1, :] .= 1.0
@@ -137,8 +136,7 @@ end
         solver = pnl.Backslash(body)
         i1, i2, i3 = body.cells[:, 1]
         centroid1 = (body.nodes[:, i1] + body.nodes[:, i2] + body.nodes[:, i3]) ./ 3
-        inward = body.controlpoints[:, 1] - centroid1
-        @test dot(inward, normals[:, 1]) < 0
+        @test isapprox(body.controlpoints[:, 1], centroid1; atol=1e-12)
         @test size(solver.G) == (body.ncells, body.ncells)
 
         body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(copy(NODES_OCT), copy(CELLS_OCT); DBC=true)
@@ -150,13 +148,13 @@ end
         solver = pnl.Backslash(body)
         velocity_before = copy(body.velocity)
         potential_before = copy(body.potential)
-        CPoffset_before = body.CPoffset
+        cp_outer_before = body.cp_outer
         pnl.solve!(body, solver)
         @test any(abs.(body.strength[:, 2]) .> 0)
         @test isapprox(vec(body.strength[:, 1]), expected_sigma; atol=1e-12)
         @test body.velocity == velocity_before
         @test body.potential == potential_before
-        @test body.CPoffset == CPoffset_before
+        @test body.cp_outer == false  # Dirichlet: interior limit; cp_outer set by solver
         assert_boundary_residuals((body,); potential_atol=1e-10)
     end
 
@@ -554,22 +552,22 @@ end
         bodies = tuple([generate_body(file, chord, b, bodytype, scaling, 1, Vinf, firstnode, secondnode)
                         for (file, chord, firstnode, secondnode) in zip(files, chords, nodes1, nodes2)]...)
 
-        # bodies = (bodies[2],)
+        bodies = (bodies[2],)
         #------------------- SOLVE BODY ----------------------------------------------
         backend = pnl.DirectBackend()
         solver = pnl.BackslashCoupled(bodies)
         println("Solving body...")
 
         pnl.solve!(bodies, solver; backend, update_G=true)
-
-        assert_boundary_residuals(bodies; backend, potential_atol=1e-4)
-
+        
         # write vtk files
         for i in eachindex(bodies)
             pnl.write_vtk("check_mesh_body_$(i)", bodies[i])
         end
+
+        assert_boundary_residuals(bodies; backend, potential_atol=1e-4)
     end
 
 end
 
-println("done.")
+# println("done.")

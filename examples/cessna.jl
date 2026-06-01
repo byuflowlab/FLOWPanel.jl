@@ -79,7 +79,7 @@ msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Sc
 
 # Wrap Meshes object into a Grid object from GeometricTools
 grid = gt.GridTriangleSurface(msh)
-body_preview = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+body_preview = bodytype(grid; cp_outer=iseven(flip))
 
 # Read all trailing edges
 sheddings = []
@@ -134,7 +134,7 @@ shedding = hcat(sheddings...)
 
 # Generate paneled body
 body = bodytype(body_preview.nodes, body_preview.cells, shedding;
-                CPoffset=(-1)^flip * 1e-14,
+                cp_outer=iseven(flip),
                 ensure_winding=false)
 
 println("Number of panels:\t$(body.ncells)")

@@ -47,7 +47,7 @@ function build_simple_wing_capped_dirichlet(;
         nodes,
         cells,
         shedding;
-        CPoffset=cp_offset,
+        cp_outer=(cp_offset > 0),
         kerneloffset=kernel_offset,
         ensure_winding=true,
         semiinfinite_wake=true,
@@ -58,7 +58,7 @@ function build_simple_wing_capped_dirichlet(;
         body.nodes,
         body.cells,
         shedding;
-        CPoffset=cp_offset,
+        cp_outer=(cp_offset > 0),
         kerneloffset=kernel_offset,
         ensure_winding=true,
         semiinfinite_wake=true,
@@ -76,16 +76,16 @@ end
 
 function dirichlet_potential_max_residual(body; backend=pnl.DirectBackend(), cp_off=-1e-10)
     potential_ext = copy(body.potential)
-    cp_offset_old = body.CPoffset
+    cp_outer_old = body.cp_outer
 
     try
         pnl.calc_normals!(body)
-        pnl.calc_controlpoints!(body; off=cp_off)
+        pnl.calc_controlpoints!(body)
         body.potential .= 0.0
         pnl.influence!((body,), (body,), backend; scalar_potential=true, velocity=false)
         return maximum(abs.(body.potential .+ potential_ext))
     finally
-        body.CPoffset = cp_offset_old
+        body.cp_outer = cp_outer_old
         body.potential .= potential_ext
     end
 end

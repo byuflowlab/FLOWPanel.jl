@@ -698,6 +698,26 @@ function GlobalBox(xmin, xmax)
     return GlobalBox(SVector{3,T}(xmin_s), SVector{3,T}(xmax_s))
 end
 
+struct GlobalCylinder{T} <: AbstractParticleTrimPolicy
+    origin::SVector{3,T}
+    extrude::SVector{3,T}
+    radius::T
+end
+
+function GlobalCylinder(origin, extrude, radius)
+    origin_s = SVector{3}(origin)
+    extrude_s = SVector{3}(extrude)
+    T = promote_type(eltype(origin_s), eltype(extrude_s), typeof(radius))
+    origin_t = SVector{3,T}(origin_s)
+    extrude_t = SVector{3,T}(extrude_s)
+    radius_t = T(radius)
+
+    radius_t >= zero(T) || throw(ArgumentError("GlobalCylinder radius must be nonnegative"))
+    sum(abs2, extrude_t) > zero(T) || throw(ArgumentError("GlobalCylinder extrude vector must be nonzero"))
+
+    return GlobalCylinder(origin_t, extrude_t, radius_t)
+end
+
 struct FrameBox{T} <: AbstractParticleTrimPolicy
     i_frame::Int
     xmin::SVector{3,T}
@@ -759,6 +779,16 @@ keep(policy::MaxGamma, pfield, i, ::ParticleMaintenanceContext) =
 function keep(policy::GlobalBox, pfield, i, ::ParticleMaintenanceContext)
     x = FLOWVPM.get_X(pfield, i)
     return all(policy.xmin .<= x .<= policy.xmax)
+end
+
+function keep(policy::GlobalCylinder, pfield, i, ::ParticleMaintenanceContext)
+    x = SVector{3}(FLOWVPM.get_X(pfield, i))
+    dx = x - policy.origin
+    axis_length2 = sum(abs2, policy.extrude)
+    axial = dot(dx, policy.extrude) / axis_length2
+    zero(axial) <= axial <= one(axial) || return false
+    closest = policy.origin + axial * policy.extrude
+    return sum(abs2, x - closest) <= policy.radius^2
 end
 
 function keep(policy::PreparedFrameBox, pfield, i, ::ParticleMaintenanceContext)
@@ -931,6 +961,8 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
         vtp["circulation", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.CIRCULATION_INDEX, 1:np)
         vtp["velocity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.U_INDEX, 1:np)
         vtp["vorticity", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.VORTICITY_INDEX, 1:np)
+        vtp["C", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.C_INDEX, 1:np)
+        vtp["SFS", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.SFS_INDEX, 1:np)
         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(view(w.pfield.particles, FLOWVPM.J_INDEX, 1:np), 3, 3, np)
     end
 

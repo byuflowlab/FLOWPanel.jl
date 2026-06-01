@@ -67,7 +67,7 @@ function make_lifting_duct(; semiinfinite_wake=false)
     points = hcat(xs, ys)
 
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
                              semiinfinite_wake))
@@ -86,7 +86,7 @@ function make_nonlifting_duct()
     points = hcat(xs, ys)
 
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio))
 end

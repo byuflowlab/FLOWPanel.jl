@@ -8,18 +8,19 @@ using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
-run_name = "rotor_hover_pressure_comparison_nt72_sfs"
+run_name = "rotor_hover_pressure_comparison"
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
 
 magVinf = 0.0001 # + 10
 AOA = 0.0
 # rho = 1.225
-rho = 1.071778
+# rho = 1.071778 # from FLOWUnsteady docs
+rho = 1.179 # from NASA paper
 RPM = 6000
 R = 0.119
 shedding_r_over_R = 0.1
 nrevs = parse(Float64, get(ENV, "NREVS", "10"))
-nt = parse(Int, get(ENV, "NT", "72"))
+nt = parse(Int, get(ENV, "NT", "36"))
 dt = 60 / RPM / nt
 spinup_revs = max(0.0, parse(Float64, get(ENV, "SPINUP_REVS", "0.0")))
 spinup_start_fraction = clamp(parse(Float64, get(ENV, "SPINUP_START_FRACTION", "0.05")), eps(), 1.0)
@@ -28,12 +29,17 @@ spinup_steps = ceil(Int, spinup_duration / dt)
 n_steps = round(Int, nt * nrevs) + spinup_steps
 t_range = range(0.0, step=dt, length=n_steps)
 
-CPoffset = R * 1e-8
+ramp_nrev = 5.0
+ramp_t = ramp_nrev * 60 / RPM
+magVinf_start = 0.0
+cylinder_depth = 4R
+
+cp_outer=true
 kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "3e-3")))
+kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-2")))
 kernelcutoff = R * 1e-13
 p_per_step = 2
-overlap = 2.0
+overlap = 3.0
 merge_r_factor = 0.02
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
@@ -42,12 +48,13 @@ init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
 p_correct_kuttacondition_flag = false
 wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", string(kerneloffset_targets)))
-wake_nu_default = 1.85508e-5 / rho
+# wake_nu_default = 1.85508e-5 / rho # from FLOWUnsteady docs
+wake_nu_default = 1.69e-5 / rho # from NASA paper
 wake_nu = parse(Float64, get(ENV, "WAKE_NU", string(wake_nu_default)))
 # wake_nu = parse(Float64, get(ENV, "WAKE_NU", "1.5e-5"))
 wake_core_beta = parse(Float64, get(ENV, "WAKE_CORE_BETA", "1.5"))
 run_kj = parse(Bool, get(ENV, "RUN_KJ", "false"))
-lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "true"))
+lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "false"))
 
 read_path = joinpath(pnl.examples_path, "data")
 # msh_file = joinpath(read_path, "phantom_3_rebuild_r2.msh")
@@ -71,7 +78,7 @@ shedding = pnl.noshedding
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-    CPoffset, kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
@@ -109,7 +116,7 @@ shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1
     bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    CPoffset, kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 
@@ -130,24 +137,25 @@ println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, s
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
-    viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
-        beta=wake_core_beta),
-    SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
-    method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
-    # method_trailing=pnl.OverlapPPS(1.3, 2),
+    # viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
+        # beta=wake_core_beta),
+    # SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+    # method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
+    method_trailing=pnl.OverlapPPS(overlap, 2),
     method_unsteady=pnl.NoShed(),
     # method_unsteady=pnl.OverlapPPS(1.3, 2),
     unsteady_filament=false, # should be false if method_unsteady is NoShed
     shed_with_induced_velocity=false,
-    particle_maintenance=pnl.MergeParticles(;
-        every=merge_particles ? 1 : 0,
-        r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
-        r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
-        sigma_relative=merge_sigma_relative)
+    particle_maintenance=pnl.ParticleMaintenance((
+        pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], 1.5R),
+        pnl.MergeParticles(;
+            every=merge_particles ? 1 : 0,
+            r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
+            r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
+            sigma_relative=merge_sigma_relative),
+    ))
     )
 
-ramp_t = 0.5 * 60 / RPM
-magVinf_start = 0.0
 ramp_magVinf(t) = t <= ramp_t ? magVinf_start + (magVinf - magVinf_start) * (t / ramp_t) : magVinf
 Uinf(t) = ramp_magVinf(t) * Vinf_direction
 # Uinf(t) = magVinf * Vinf_direction
@@ -203,7 +211,7 @@ wakes = (wake_rotor,)
 body_solvers = (solver_rotor,)
 
 pressure_bernoulli = pnl.PressureBernoulli(rho;
-    unsteady=true,
+    unsteady=false,
     correct_kuttacondition=p_correct_kuttacondition_flag,
     backend=backend)
 force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;
@@ -233,6 +241,10 @@ kj_monitor = run_kj ? pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
         i_frame=1,
         normalization=pnl.RotorNormalization(rho, 2 * R, 1),
         verbose=true) : nothing
+bound_circulation = pnl.BoundCirculationMonitor(rotor, length(t_range), 1;
+    i_frame=1,
+    radial_dimension,
+    R)
 
 monitors = run_kj ? (
         pressure_laplace_matderiv,
@@ -242,9 +254,11 @@ monitors = run_kj ? (
         pressure_bernoulli,
         force_monitor_bernoulli,
         kj_monitor,
+        bound_circulation,
     ) : lamb_only ? (
         pressure_laplace_lamb,
         force_monitor_laplace_lamb,
+        bound_circulation,
     ) : (
         pressure_laplace_matderiv,
         force_monitor_laplace_matderiv,
@@ -252,6 +266,7 @@ monitors = run_kj ? (
         force_monitor_laplace_lamb,
         pressure_bernoulli,
         force_monitor_bernoulli,
+        bound_circulation,
     )
 
 if spinup_revs > 0

@@ -108,7 +108,7 @@ points = hcat(xs, ys)
 # Generate body of revolution
 generate_body() = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-10,
+                                                        cp_outer=true,
                                                         kerneloffset=1e-10,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
