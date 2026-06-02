@@ -265,7 +265,7 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     influence!(targets, systems_tuple, backend_system; precalc=false,
         scalar_potential=false,
         velocity=true,
-        velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+        velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in targets),
         extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
         direct_conditioning=_self_panel_kerneloffset_conditioning())
 
