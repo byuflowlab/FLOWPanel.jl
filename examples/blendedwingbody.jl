@@ -101,10 +101,10 @@ spantips = extrema(X -> pnl.dot(X, spandir), eachcol(trailingedge))
 span = spantips[2] - spantips[1]
 
 # Generate paneled body
-body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+body = bodytype(grid; cp_outer=iseven(flip))
 shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*span)
 body = bodytype(body.nodes, body.cells, shedding;
-                CPoffset=(-1)^flip * 1e-14,
+                cp_outer=iseven(flip),
                 ensure_winding=false)
 
 println("Number of panels:\t$(body.ncells)")

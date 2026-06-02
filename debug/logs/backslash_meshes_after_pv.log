@@ -1,0 +1,51 @@
+Precompiling packages...
+   6752.1 ms  ✓ FLOWPanel
+  1 dependency successfully precompiled in 8 seconds. 388 already precompiled.
+
+== sizes ==
+body 1: ncells=112  watertight=true  DBC=true
+body 2: ncells=112  watertight=true  DBC=true
+
+== Assembling G directly via _G! ==
+size(G)       = (224, 224)
+norm(G)       = 9.981264033349635
+norm(G - G')  = 7.528486172150477
+
+== SVD of true G ==
+svd top 5   : [2.960754546765956, 2.952491707835468, 2.545250303840411, 2.4756133296771874, 1.1386011006383934]
+svd bottom 5: [0.010407232002634156, 0.008352902724959846, 0.0062078586316736345, 0.004708997591525897, 0.0032615962400773593]
+cond(G)     = 907.762435578394
+numerical rank = 224 / 224  (tol=9.947598300641403e-14)
+
+== Smallest right-singular vectors ==
+k=0  sigma=0.003261596240077359  max|v|=0.1691424104145156  min|v|=0.002090537706809602  mean(v)=-0.031368564857272956  std(v)=0.05899405777771842
+k=1  sigma=0.004708997591525894  max|v|=0.24441111041842523  min|v|=0.0015469457871969544  mean(v)=-8.040133539103219e-17  std(v)=0.0668153104781061
+k=2  sigma=0.006207858631673634  max|v|=0.21511814192723538  min|v|=0.0012724927883248109  mean(v)=-0.0063942870153243314  std(v)=0.06650863709212038
+
+== Build rhs ==
+norm(rhs) = 106.15377892713563
+
+== Solve G \ rhs ==
+max|x|         = 48.31119806702089
+median|x|      = 9.245153784467394
+norm(G*x - rhs)/norm(rhs) = 2.4559966072306646e-15
+
+== matvec G*x vs influence! ==
+max|G*x|       = 1.0183822368233635
+max|phi|       = 1.0183822368233637
+max|G*x - phi| = 8.881784197001252e-16
+max rel diff   = 1.1431201914579459e-14
+argmax diff at i=18:  G*x=0.6184060984784  phi=0.6184060984784009  diff=-8.881784197001252e-16
+
+== Single-panel probes ==
+probe panel 1:
+  G[1,1]   = 0.4831936879381466    phi[1] = 0.4831936879381466
+  max|G*e - phi| = 0.0  argmax at 1
+probe panel 56:
+  G[56,56]   = 0.5    phi[56] = 0.5
+  max|G*e - phi| = 0.0  argmax at 1
+probe panel 113:
+  G[113,113]   = 0.5096409356633587    phi[113] = 0.5096409356633587
+  max|G*e - phi| = 0.0  argmax at 1
+
+done.

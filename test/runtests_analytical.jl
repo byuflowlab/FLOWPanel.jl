@@ -5,10 +5,9 @@ using Statistics: mean
 @testset verbose=true "Analytical Validation" begin
     @testset "Sphere in uniform flow - Neumann" begin
         body = make_sphere_source_body(ntheta=18, nphi=36)
-        solve_source_body!(body)
+        body, pvals, Fs = solve_source_body!(body)
 
         cps = body.controlpoints
-        pvals = body.P
         xcoords = view(cps, 1, :)
         ycoords = view(cps, 2, :)
         zcoords = view(cps, 3, :)
@@ -23,7 +22,7 @@ using Statistics: mean
         @test isapprox(p_equator, -0.625; atol=0.1)
 
         q = 0.5 * pi
-        ftot = pnl.calcfield_Ftot!(zeros(3), body, body.F)
+        ftot = pnl.calcfield_Ftot!(zeros(3), body, Fs)
         @test abs(ftot[1]) / q < 0.05
         @test abs(ftot[3]) / q < 0.05
 
@@ -41,7 +40,7 @@ using Statistics: mean
 
         @testset "Cp pointwise comparison" begin
             q = 0.5 * 1.0 * 1.0^2  # 0.5*rho*Uinf^2
-            Cp = body.P ./ q
+            Cp = pvals ./ q
             # Analytic: Cp = 1 - (9/4)*sin²θ; on the unit sphere sin²θ = y² + z²
             Cp_analytic = [1 - (9/4) * (cps[2, i]^2 + cps[3, i]^2) for i in 1:size(cps, 2)]
             abs_err = abs.(Cp .- Cp_analytic)

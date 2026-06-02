@@ -39,7 +39,7 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
     # recalculate normals/control points on the target body
     for body in bodies
         calc_normals!(body)
-        calc_controlpoints!(body; off=abs(body.CPoffset))
+        calc_controlpoints!(body)
     end
 
     # add wake-induced velocity at control points
@@ -407,8 +407,6 @@ end
 ################################################################################
 """
     calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=true, clip=nothing)
-    calcfield_P!(body, Uinf, rho; optargs...)
-    calcfield_P!(bodies, Uinf, rho; correct_kuttacondition=..., optargs...)
 
 Compute and store the dimensional gauge pressure field using the Bernoulli
 equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
@@ -468,24 +466,15 @@ function calcfield_P!(out::Arr1,
     return out
 end
 
-calcfield_P!(body::AbstractBody, Uinf, rho; optargs...) =
-    calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; optargs...)
-
-function calcfield_P!(bodies::Tuple, Uinf, rho; correct_kuttacondition=fill(true, length(bodies)), optargs...)
-    for (i, body) in enumerate(bodies)
-        calcfield_P!(body.P, body, body.velocity, Uinf, rho, nothing; correct_kuttacondition=correct_kuttacondition[i], optargs...)
-    end
-end
-
 """
-    calcfield_Cp(body::AbstractBody, uinf, rho)
+    calcfield_Cp(Ps, uinf, rho)
 
 Compute and return the pressure coefficient field from the dimensional gauge
-pressure stored in `body.P`.
+pressure vector `Ps`.
 """
-function calcfield_Cp(body::AbstractBody, uinf::Number, rho::Number)
+function calcfield_Cp(Ps::AbstractVector, uinf::Number, rho::Number)
     qinf = 0.5 * rho * uinf^2
-    return body.P ./ qinf
+    return Ps ./ qinf
 end
 
 ################################################################################
@@ -493,8 +482,6 @@ end
 ################################################################################
 """
     calcfield_F!(out, body, areas, normals, Ps; correct_kuttacondition=true)
-    calcfield_F!(body; correct_kuttacondition=true)
-    calcfield_F!(bodies; correct_kuttacondition=...)
 
 Compute and store distributed surface forces from the current gauge pressure
 field:  ``F = -P \\cdot A \\cdot \\hat{n}``
@@ -553,15 +540,6 @@ function calcfield_F!(out::Arr0, body::AbstractBody,
     end
 
     return out
-end
-
-calcfield_F!(body::AbstractBody; correct_kuttacondition=true) =
-    calcfield_F!(body.F, body, calc_areas(body), body.normals, body.P; correct_kuttacondition)
-
-function calcfield_F!(bodies::Tuple; correct_kuttacondition=fill(true, length(bodies)))
-    for (i, body) in enumerate(bodies)
-        calcfield_F!(body.F, body, calc_areas(body), body.normals, body.P; correct_kuttacondition=correct_kuttacondition[i])
-    end
 end
 
 """
@@ -648,40 +626,6 @@ function calcfield_sectionalforce!(outf::Arr0, outpos::Arr1,
 end
 
 """
-    calcfield_sectionalforce!(outFs::Matrix, outpos::Vector,
-                                    body::Union{NonLiftingBody, AbstractLiftingBody};
-                                    optargs...
-                                    )
-
-Calculate the sectional force (a vectorial force per unit span) along the span.
-This is calculated from the force field stored in `body.F` and saved as a field
-named `fieldname`.
-
-The field is calculated in-place on `outFs` while the spanwise position of each
-section is stored under `outpos`.
-"""
-function calcfield_sectionalforce!(outFs::Arr0, outpos::Arr1,
-                                    body::Union{NonLiftingBody, AbstractLiftingBody};
-                                    offset=nothing, characteristiclength=nothing,
-                                    optargs...
-                                    ) where {   Arr0<:AbstractArray{<:Number,2},
-                                                Arr1<:AbstractArray{<:Number,1}}
-    Fs = body.F
-
-    # Optional arguments for calc_controlpoints
-    cp_optargs = (off=offset, characteristiclength=characteristiclength)
-    cp_optargs = ((key, val) for (key, val) in pairs(cp_optargs) if val!=nothing)
-
-    # Calculate control points
-    normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals; cp_optargs...)
-
-    return calcfield_sectionalforce!(outFs, outpos, body,
-                                            controlpoints, Fs; optargs...)
-end
-
-
-"""
     calcfield_sectionalforce(args...; optargs...)
 
 Similar to [`calcfield_sectionalforce!`](@ref) but without in-place calculation
@@ -701,7 +645,6 @@ end
 
 """
     calcfield_Ftot!(out, body, Fs; fieldname="Ftot")
-    calcfield_Ftot!(out, body; optargs...)
     calcfield_Ftot(body, args...; optargs...)
 
 Integrate the stored distributed force field into a total force vector.
@@ -723,20 +666,6 @@ function calcfield_Ftot!(out::AbstractVector, body::AbstractBody,
     # end
 
     return out
-end
-
-"""
-    calcfield_Ftot!(out::AbstractVector, body::AbstractBody;
-                                    optargs...)
-
-Calculate the integrated force of this body, which is a three-dimensional vector.
-This is calculated from the force field stored in `body.F` and saved as a field
-named `fieldname`.
-
-The field is calculated in-place and added to `out`.
-"""
-function calcfield_Ftot!(out, body; optargs...)
-    return calcfield_Ftot!(out, body, body.F; optargs...)
 end
 
 """
@@ -787,59 +716,6 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
     return out
 end
 
-function calcfield_LDS!(out::Matrix, bodies::Tuple,
-                        Lhat::Vector, Dhat::Vector,
-                        Shat::Vector;
-                        )
-
-    @assert size(out) == (3,3)
-
-    fill!(out, 0.0)
-
-    Ftot = zeros(eltype(out), 3)
-
-    # ---- same force integration idea as single-body version
-    for body in bodies
-        Fs = body.F
-        for i in 1:3
-            Ftot[i] += sum(view(Fs, i, :))
-        end
-    end
-
-    # ---- same projection logic as single-body version
-    L = dot(Ftot, Lhat)
-    D = dot(Ftot, Dhat)
-    S = dot(Ftot, Shat)
-
-    out[:,1] .= Lhat .* L
-    out[:,2] .= Dhat .* D
-    out[:,3] .= Shat .* S
-
-    return out
-end
-
-"""
-    calcfield_LDS!(out::Matrix, body::AbstractBody,
-                    Lhat::Vector, Dhat::Vector, Shat::Vector; optargs...)
-
-Calculate the integrated force decomposed as lift, drag, and sideslip according
-to the orthonormal basis `Lhat`, `Dhat`, `Shat`.
-This is calculated from the force field stored in `body.F`.
-"""
-function calcfield_LDS!(out, body::AbstractBody, Lhat, Dhat, Shat; optargs...)
-    return calcfield_LDS!(out, body, body.F, Lhat, Dhat, Shat; optargs...)
-end
-
-"""
-    calcfield_LDS!(out, body, Lhat, Dhat; optargs...)
-
-`Shat` is calculated automatically from `Lhat` and `Dhat`,
-"""
-function calcfield_LDS!(out, body::AbstractBody, Lhat, Dhat; optargs...)
-    return calcfield_LDS!(out, body, Lhat, Dhat, cross(Lhat, Dhat); optargs...)
-end
-
-
 """
     calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, args...; optargs...)
 
@@ -861,7 +737,6 @@ calcfield_LDS(body, args...; optargs...) = calcfield_LDS!(zeros(3, 3), body, arg
 ################################################################################
 """
     calcfield_Mtot!(out, body, Xac, controlpoints, Fs; fieldname="Mtot", addfield=true)
-    calcfield_Mtot!(out, body, Xac; optargs...)
     calcfield_Mtot(body, args...; optargs...)
 
 Integrate the stored distributed force field into a total moment about a
@@ -899,33 +774,6 @@ function calcfield_Mtot!(out::AbstractVector, body::AbstractBody,
 end
 
 """
-    calcfield_Mtot!(out, body, Xac;
-                    offset=nothing, characteristiclength=nothing, optargs...)
-
-Calculate the integrated moment of this body (which is a three-dimensional
-vector) with respect to the aerodynamic center `Xac`.
-This is calculated from the force field stored in `body.F` and saved as a field
-named `fieldname`.
-
-The field is calculated in-place and added to `out`.
-"""
-function calcfield_Mtot!(out, body, Xac;
-                            offset=nothing, characteristiclength=nothing,
-                            optargs...)
-    Fs = body.F
-
-    # Optional arguments for calc_controlpoints
-    cp_optargs = (off=offset, characteristiclength=characteristiclength)
-    cp_optargs = ((key, val) for (key, val) in pairs(cp_optargs) if val!=nothing)
-
-    # Calculate control points
-    normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals; cp_optargs...)
-
-    return calcfield_Mtot!(out, body, Xac, controlpoints, Fs; optargs...)
-end
-
-"""
     calcfield_Mtot(body, args...; optargs...) = calcfield_Mtot!(zeros(3), body, args...; optargs...)
 
 Similar to [`calcfield_Mtot!`](@ref) but without in-place calculation (`out` is
@@ -937,7 +785,6 @@ calcfield_Mtot(body, args...; optargs...) = calcfield_Mtot!(zeros(3), body, args
 
 """
     calcfield_lmn!(out, body, Xac, controlpoints, Fs, lhat, mhat, nhat; addfield=true)
-    calcfield_lmn!(out, body, Xac, lhat, mhat, nhat; optargs...)
     calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
     calcfield_lmn(body, args...; optargs...)
 
@@ -991,44 +838,6 @@ function calcfield_lmn!(out::AbstractMatrix, body::AbstractBody,
     # end
 
     return out
-end
-
-
-"""
-    calcfield_lmn!(out, body, Xac, lhat, mhat, nhat;
-                    offset=nothing, characteristiclength=nothing, optargs...)
-
-Calculate the integrated moment of this body with respect to the aerodynamic
-center `Xac` and decompose it as rolling, pitching, and yawing moments according
-to the orthonormal basis `lhat`, `mhat`, `nhat`, repsectively.
-This is calculated from the force field stored in `body.F`.
-
-The field is calculated in-place on `out`.
-"""
-function calcfield_lmn!(out, body, Xac, lhat, mhat, nhat;
-                            offset=nothing, characteristiclength=nothing,
-                            optargs...)
-    Fs = body.F
-
-    # Optional arguments for calc_controlpoints
-    cp_optargs = (off=offset, characteristiclength=characteristiclength)
-    cp_optargs = ((key, val) for (key, val) in pairs(cp_optargs) if val!=nothing)
-
-    # Calculate control points
-    normals = calc_normals(body)
-    controlpoints = calc_controlpoints(body, normals; cp_optargs...)
-
-    return calcfield_lmn!(out, body, Xac, controlpoints, Fs, lhat, mhat, nhat;
-                                                                     optargs...)
-end
-
-"""
-    calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
-
-`nhat` is calculated automatically from `lhat` and `mhat`,
-"""
-function calcfield_lmn!(out, body, Xac, lhat, mhat; optargs...)
-    return calcfield_lmn!(out, body, Xac, lhat, mhat, cross(lhat, mhat); optargs...)
 end
 
 

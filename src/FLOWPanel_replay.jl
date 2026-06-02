@@ -4,8 +4,6 @@
 #   advancing the solver, wake, or kinematics.
 =###############################################################################
 
-import ReadVTK
-
 struct ReplayResult{TS,TW,TF,TR,TM}
     systems::TS
     wakes::TW
@@ -13,6 +11,12 @@ struct ReplayResult{TS,TW,TF,TR,TM}
     t_range::TR
     steps::Vector{Int}
     monitors::TM
+end
+
+struct ReplayLoadedFields
+    fields::Set{Symbol}
+    pressure::Union{Nothing, Vector{Float64}}
+    force::Union{Nothing, Matrix{Float64}}
 end
 
 function _body_vtu_path(path::AbstractString, body_name::AbstractString, idx::Int)
@@ -96,6 +100,13 @@ function _particle_policy_manifest(policy)
             "xmin" => collect(policy.xmin),
             "xmax" => collect(policy.xmax),
         )
+    elseif policy isa GlobalCylinder
+        return Dict{String, Any}(
+            "type" => "GlobalCylinder",
+            "origin" => collect(policy.origin),
+            "extrude" => collect(policy.extrude),
+            "radius" => policy.radius,
+        )
     elseif policy isa FrameBox
         return Dict{String, Any}(
             "type" => "FrameBox",
@@ -162,7 +173,6 @@ function _body_manifest_dict(body::AbstractBody, i::Int)
         "kind" => _body_kind_string(body),
         "strength_names" => collect(strength_names(body)),
         "dbc" => has_dirichlet_bc(body),
-        "cp_offset" => body.CPoffset,
         "kerneloffset_panel" => body.kerneloffset_panel,
         "kerneloffset_targets" => body.kerneloffset_targets,
         "kernelcutoff" => body.kernelcutoff,
@@ -212,7 +222,6 @@ function _construct_body_from_metadata(nodes, cells, body_meta, cell_data)
     dbc = Bool(get(body_meta, "dbc", false))
     kwargs = (;
         DBC=dbc,
-        CPoffset=Float64(get(body_meta, "cp_offset", E === VortexRing ? 1e-6 : 1e-14)),
         kerneloffset_panel=Float64(get(body_meta, "kerneloffset_panel", get(body_meta, "kerneloffset", 1e-8))),
         kerneloffset_targets=Float64(get(body_meta, "kerneloffset_targets", get(body_meta, "kerneloffset", 1e-8))),
         kernelcutoff=Float64(get(body_meta, "kernelcutoff", 1e-14)),
@@ -242,6 +251,8 @@ end
 
 function _load_optional_body_fields!(body::AbstractBody, cell_data)
     loaded = Set{Symbol}()
+    pressure = nothing
+    force = nothing
     for (i, sname) in enumerate(strength_names(body))
         sname in keys(cell_data) || throw(ArgumentError("Cannot load replay body: missing strength field $(sname)."))
         body.strength[:, i] .= ReadVTK.get_data(cell_data[sname])
@@ -256,18 +267,18 @@ function _load_optional_body_fields!(body::AbstractBody, cell_data)
         push!(loaded, :velocity)
     end
     if "gauge pressure" in keys(cell_data)
-        body.P .= ReadVTK.get_data(cell_data["gauge pressure"])
+        pressure = Vector{Float64}(ReadVTK.get_data(cell_data["gauge pressure"]))
         push!(loaded, :P)
     end
     if "F" in keys(cell_data)
-        body.F .= ReadVTK.get_data(cell_data["F"])
+        force = Matrix{Float64}(ReadVTK.get_data(cell_data["F"]))
         push!(loaded, :F)
     end
     if "normals" in keys(cell_data)
         body.normals .= ReadVTK.get_data(cell_data["normals"])
         push!(loaded, :normals)
     end
-    return loaded
+    return ReplayLoadedFields(loaded, pressure, force)
 end
 
 function _load_body_step!(body::AbstractBody, path, body_name, idx)
@@ -279,7 +290,7 @@ function _load_body_step!(body::AbstractBody, path, body_name, idx)
     cell_data = ReadVTK.get_cell_data(vtk)
     loaded = _load_optional_body_fields!(body, cell_data)
     calc_normals!(body)
-    calc_controlpoints!(body; off=abs(body.CPoffset))
+    calc_controlpoints!(body)
     return loaded
 end
 
@@ -405,6 +416,12 @@ function _deserialize_particle_policy(meta)
         return MaxGamma(Float64(get(meta, "threshold", 0.0)))
     elseif ptype == "GlobalBox"
         return GlobalBox(get(meta, "xmin", [0.0, 0.0, 0.0]), get(meta, "xmax", [0.0, 0.0, 0.0]))
+    elseif ptype == "GlobalCylinder"
+        return GlobalCylinder(
+            get(meta, "origin", [0.0, 0.0, 0.0]),
+            get(meta, "extrude", [1.0, 0.0, 0.0]),
+            Float64(get(meta, "radius", 0.0)),
+        )
     elseif ptype == "FrameBox"
         return FrameBox(Int(get(meta, "i_frame", 1)), get(meta, "xmin", [0.0, 0.0, 0.0]), get(meta, "xmax", [0.0, 0.0, 0.0]))
     elseif ptype == "MergeParticles"
@@ -491,6 +508,13 @@ function _frames_from_metadata(path, name, idx, systems, metadata)
             step_frames = steps[i_toml]["frame"]
             static_frames = get(metadata === nothing ? data : metadata, "frame", Any[])
         else
+            if metadata !== nothing && haskey(metadata, "frame")
+                steps_available = [Int(s["i_step"]) for s in get(metadata, "step", Any[])]
+                throw(ArgumentError("Replay frame state for step $(idx) not found in $(_metadata_toml_path(path, name)). " *
+                    "Frame states available for steps: $(steps_available). " *
+                    "This may be caused by a bug in simulate! that overwrote earlier step frame states; re-running the simulation will fix this for future runs. " *
+                    "To replay existing data, restrict STEPS to the available steps listed above."))
+            end
             return ReferenceFrame(systems[1]; dependent_index=collect(eachindex(systems)))
         end
     else
@@ -535,19 +559,23 @@ function _selected_replay_steps(path, run_name, steps)
 end
 
 function _recompute_set(recompute)
-    recompute === :all && return Set([:velocity, :potential, :velocity_gradient, :induced_vorticity, :P, :F])
+    supported = Set([:velocity, :potential, :velocity_gradient, :induced_vorticity])
+    recompute === :all && return copy(supported)
     recompute isa Tuple || throw(ArgumentError("recompute must be a tuple of symbols, (:auto,), (:all,), (), or :all."))
-    :all in recompute && return Set([:velocity, :potential, :velocity_gradient, :induced_vorticity, :P, :F])
+    :all in recompute && return copy(supported)
     :auto in recompute && length(recompute) == 1 && return Set{Symbol}([:auto])
-    return Set(Symbol.(recompute))
+    fields = Set(Symbol.(recompute))
+    unsupported = setdiff(fields, supported)
+    isempty(unsupported) || throw(ArgumentError(
+        "Unsupported replay recompute field(s): $(join(sort!(String.(collect(unsupported))), ", ")). " *
+        "Supported fields are :velocity, :potential, :velocity_gradient, and :induced_vorticity."))
+    return fields
 end
 
 function _monitor_replay_requirements(monitors)
     req = Set{Symbol}()
     for m in monitors
-        for r in monitor_requires(m)
-            push!(req, Symbol(r))
-        end
+        union!(req, Symbol.(monitor_requires(m)))
         if m isa PressureBernoulli
             push!(req, :velocity)
             m.unsteady && push!(req, :potential)
@@ -555,6 +583,8 @@ function _monitor_replay_requirements(monitors)
             push!(req, :velocity)
             monitor_requires_body_hessian(m) && push!(req, :velocity_gradient)
             monitor_requires_induced_vorticity(m) && push!(req, :induced_vorticity)
+        elseif m isa SurfaceVorticityForce
+            push!(req, :velocity)
         end
     end
     return req
@@ -589,6 +619,10 @@ function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, f
         if recompute_potential && length(scalar_sources) > 0
             influence!(systems, scalar_sources, backend_system; scalar_potential=true, velocity=false)
         end
+        # Mirror simulate!: add κ = n × ∇sμ on top of the wake-induced curl
+        # before the body-on-body pass, so replay produces the same
+        # induced_vorticity = wake_induced + κ that simulate! does.
+        recompute_induced_vorticity && _add_bound_surface_vorticity!(systems)
         if recompute_velocity || recompute_velocity_gradient || recompute_induced_vorticity
             influence!(systems, systems, backend_system; precalc=false,
                 scalar_potential=false,
@@ -613,23 +647,42 @@ function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, f
             _refresh_replay_kinematic_sidecars!(systems, frames)
         end
     end
-    if :F in fields
-        for body in systems
-            fill!(body.F, zero(eltype(body.F)))
-        end
-        calcfield_F!(systems)
-    end
+
     return nothing
 end
 
-function _missing_replay_fields(loaded::Vector{Set{Symbol}}, required::Set{Symbol})
+function _missing_replay_fields(loaded::Vector{ReplayLoadedFields}, required::Set{Symbol})
     missing = String[]
-    for (i, fields) in enumerate(loaded)
+    for (i, loaded_fields) in enumerate(loaded)
+        fields = loaded_fields.fields
         for r in required
             r in fields || push!(missing, "body$(i):$(r)")
         end
     end
     return missing
+end
+
+function _replay_step_uinf(metadata, idx::Int, t, Uinf)
+    uinf = _metadata_step_uinf(metadata, idx)
+    uinf !== nothing && return uinf
+    u = Uinf(t)
+    length(u) == 3 || throw(ArgumentError("Replay Uinf fallback returned length $(length(u)); expected 3."))
+    return FastMultipole.SVector{3, Float64}(u[1], u[2], u[3])
+end
+
+function _seed_replay_monitor_context!(ctx::MonitorContext, provided::Set{Symbol},
+                                      loaded::Vector{ReplayLoadedFields}, fields::AbstractSet)
+    for (i, lf) in enumerate(loaded)
+        if lf.pressure !== nothing && !(:P in fields)
+            monitor_register!(ctx, :P, i, lf.pressure)
+            push!(provided, :P)
+        end
+        if lf.force !== nothing && !(:F in fields)
+            monitor_register!(ctx, :F, i, lf.force)
+            push!(provided, :F)
+        end
+    end
+    return nothing
 end
 
 function _refresh_replay_kinematic_sidecars!(systems::Tuple, frames)
@@ -647,7 +700,8 @@ end
 
 """
     replay(path, run_name; monitors=(), monitor_factory=nothing, reconstruct=nothing,
-           recompute=(:auto,), backend=FastMultipoleBackend(), backend_wake=backend,
+           recompute=(:auto,), Uinf=t -> FastMultipole.SVector{3, Float64}(0.0, 0.0, 0.0),
+           backend=FastMultipoleBackend(), backend_wake=backend,
            backend_system=backend, steps=:all, verbose=false)
 
 Load saved VTK body/wake/frame state and run monitors for selected saved steps
@@ -658,6 +712,7 @@ function replay(path::AbstractString, run_name::AbstractString;
         monitor_factory=nothing,
         reconstruct=nothing,
         recompute=(:auto,),
+        Uinf=t -> FastMultipole.SVector{3, Float64}(0.0, 0.0, 0.0),
         backend=FastMultipoleBackend(),
         backend_wake=backend,
         backend_system=backend,
@@ -696,7 +751,7 @@ function replay(path::AbstractString, run_name::AbstractString;
     forced = auto ? Set{Symbol}() : rset
 
     for (out_i, idx) in enumerate(selected)
-        loaded = Set{Symbol}[]
+        loaded = ReplayLoadedFields[]
         for (i, body) in enumerate(systems)
             push!(loaded, _load_body_step!(body, path, run_name * "_body$(i)", idx))
         end
@@ -710,7 +765,7 @@ function replay(path::AbstractString, run_name::AbstractString;
             end
         end
         frames = _frames_from_metadata(path, run_name, idx, systems, metadata)
-        uinf = FastMultipole.SVector{3, Float64}(0.0, 0.0, 0.0)
+        uinf = _replay_step_uinf(metadata, idx, t_range[out_i], Uinf)
         dt = out_i < length(selected) ? t_range[out_i + 1] - t_range[out_i] :
              out_i > 1 ? t_range[out_i] - t_range[out_i - 1] : 1.0
 
@@ -718,7 +773,7 @@ function replay(path::AbstractString, run_name::AbstractString;
         if auto
             to_recompute = Set{Symbol}()
             for r in needed
-                any(!(r in f) for f in loaded) && push!(to_recompute, r)
+                any(!(r in f.fields) for f in loaded) && push!(to_recompute, r)
             end
         else
             to_recompute = forced
@@ -726,19 +781,20 @@ function replay(path::AbstractString, run_name::AbstractString;
             isempty(missing) || throw(ArgumentError("Replay missing required monitor fields and recompute is disabled for them: $(join(missing, ", "))."))
         end
 
-        (:P in to_recompute) && throw(ArgumentError("Replay cannot generically recompute :P without a pressure monitor; include PressureBernoulli or PressureLaplace before consumers, or load gauge pressure from VTK."))
         _recompute_replay_fields!(systems, wakes, frames, uinf, to_recompute, backend_wake, backend_system)
 
+        monitor_context = MonitorContext()
         provided = Set{Symbol}()
+        _seed_replay_monitor_context!(monitor_context, provided, loaded, to_recompute)
         for (i, m) in enumerate(monitors)
             missing = String[]
             for r in monitor_requires(m)
-                if !(Symbol(r) in provided) && any(!(Symbol(r) in f) for f in loaded) && !(Symbol(r) in to_recompute)
+                if !(Symbol(r) in provided)
                     push!(missing, String(r))
                 end
             end
             isempty(missing) || throw(ArgumentError("Replay monitor $(nameof(typeof(m))) at position $(i) is missing fields $(join(missing, ", "))."))
-            m(systems, wakes, frames, uinf, out_i - 1, dt)
+            _run_monitor!(m, monitor_context, systems, wakes, frames, uinf, out_i - 1, dt)
             union!(provided, Symbol.(monitor_provides(m)))
         end
         verbose && println("replay: processed step $(idx)")

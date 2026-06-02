@@ -37,7 +37,7 @@ dt      = 60 / RPM / nt
 n_steps = nt * nrevs
 t_range = range(0.0, step=dt, length=n_steps)
 
-CPoffset       = R * 1e-6
+cp_outer=true
 kerneloffset   = R * 1e-3
 kernelcutoff   = R * 1e-13
 wake_core_size = 1e-3
@@ -63,7 +63,7 @@ kernel   = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC      = kernel == pnl.VortexRing ? false : true
 
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-    CPoffset, kerneloffset, kernelcutoff,
+    kerneloffset, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
@@ -72,7 +72,7 @@ shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1
     bbox=nothing, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    CPoffset, kerneloffset, kernelcutoff,
+    kerneloffset, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 

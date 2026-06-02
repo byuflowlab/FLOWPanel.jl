@@ -51,14 +51,14 @@ trailingedge[3, :] .= 0.0
 # --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 wing = pnl.RigidWakeBody{kernel}(grid;
-            CPoffset=1e-14,
+            cp_outer=true,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
 shedding = pnl.calc_shedding(wing.nodes, wing.cells, trailingedge; tolerance=0.001 * b)
 wing = pnl.RigidWakeBody{kernel}(wing.nodes, wing.cells, shedding;
-            CPoffset=1e-14,
+            cp_outer=true,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,

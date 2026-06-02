@@ -102,7 +102,7 @@ function generate_body(
     trailingedge[3, :] .= 0.0
 
     # 6enerate the paneled body
-    body = bodytype(nodes, cells; CPoffset = (-1)^flip * 1e-14)
+    body = bodytype(nodes, cells; cp_outer=iseven(flip))
 
     pnl.apply_freestream!(body, Vinf)
 
@@ -140,7 +140,7 @@ function generate_body(
     # Generate the paneled body
     shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance = 0.001 * span)
     body = bodytype(nodes, cells, [shedding];
-                    CPoffset = (-1)^flip * 1e-14,
+                    cp_outer=iseven(flip),
                     ensure_winding=false)
 
     # initialize wake doublets

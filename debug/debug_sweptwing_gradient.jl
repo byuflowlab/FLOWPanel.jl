@@ -29,7 +29,7 @@ NDIVS_rfl = [(0.25, n_rfl, 10.0, false),
              (0.25, n_rfl, 1/10.0, false)]
 NDIVS_span = [(1.0, 30, 20.0, true)]
 bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
-bodyoptargs = (; CPoffset=1e-14)
+bodyoptargs = (; cp_outer=true)
 
 c_ref = b / ar
 println("Physical scale: |Vinf|/c_ref = $(magVinf/c_ref) /s")

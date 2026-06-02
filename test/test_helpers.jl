@@ -60,8 +60,7 @@ make_nonlifting(::Type{E}, nodes=NODES_2TRI, cells=CELLS_2TRI; kwargs...) where 
     pnl.NonLiftingBody{E}(copy(nodes), copy(cells); kwargs...)
 
 function make_octa_source_body()
-    body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT); 
-                CPoffset=1e-14,
+    body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT);
                 kerneloffset=1e-12)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
@@ -81,7 +80,7 @@ function make_plate_vortex_body()
         3 4;
     ]
     shedding = [pnl.calc_shedding_from_seed(nodes, cells, 1, 3)]
-    body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; check_mesh=false, watertight=false)
+    body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding; DBC=false, check_mesh=false, watertight=false)
     body.Das[1] .= repeat([1.0, 0.0, 0.0], 1, size(body.Das[1], 2))
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
@@ -122,6 +121,8 @@ function make_sphere_source_body(; radius=1.0, ntheta=24, nphi=48, theta_pad=0.1
 end
 
 function solve_source_body!(body; uinf=[1.0, 0.0, 0.0], rho=1.0, backend=pnl.DirectBackend())
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
     body.velocity .= repeat(uinf, 1, body.ncells)
     solver = pnl.Backslash(body)
     pnl.solve!(body, solver)
@@ -135,9 +136,13 @@ function solve_source_body!(body; uinf=[1.0, 0.0, 0.0], rho=1.0, backend=pnl.Dir
     end
 
     body.velocity .= tgt.velocity
-    pnl.calcfield_P!(body, norm(uinf), rho)
-    pnl.calcfield_F!(body)
-    return body
+    Ps = zeros(body.ncells)
+    Fs = zeros(3, body.ncells)
+    areas = pnl.calc_areas(body)
+    pnl.calcfield_P!(Ps, body, body.velocity, norm(uinf), rho, nothing;
+        correct_kuttacondition=false)
+    pnl.calcfield_F!(Fs, body, areas, body.normals, Ps; correct_kuttacondition=false)
+    return body, Ps, Fs
 end
 
 function translated_nonlifting_target(shift)
@@ -206,8 +211,7 @@ function generate_body(
     shedding = zeros(Int, 6, 0)
 
     # Generate the paneled body
-    CPoffset = 1e-6
-    body = bodytype(nodes, cells, [shedding]; CPoffset, flip_normals=false, watertight=true)
+    body = bodytype(nodes, cells, [shedding]; flip_normals=false, watertight=true)
     # pnl.write_vtk("spaced_nasa", body)
 
     # Recompute shedding from the finalized cell winding used by `body`.
@@ -223,7 +227,6 @@ function generate_body(
             body.nodes,
             body.cells,
             [shedding];
-            CPoffset,
             flip_normals=false,
             ensure_winding=false
         )
@@ -312,7 +315,7 @@ Assumes freestream has already been applied.
 function flow_tangency_residuals(bodies::Tuple)
     for body in bodies
         pnl.calc_normals!(body)
-        pnl.calc_controlpoints!(body; off=1e-10)
+        pnl.calc_controlpoints!(body)
     end
 
     pnl.influence!(bodies, bodies; scalar_potential=false, velocity=true)
@@ -334,7 +337,7 @@ end
 
 function nonlifting_flow_tangency_max_residual(body::pnl.NonLiftingBody{<:Any, <:Any, <:Any, false})
     pnl.calc_normals!(body)
-    pnl.calc_controlpoints!(body; off=0.0)
+    pnl.calc_controlpoints!(body)
     pnl.influence!(body, body, pnl.DirectBackend(); velocity=true)
 
     r = 0.0
@@ -358,12 +361,12 @@ has_dirichlet_body(body::pnl.AbstractBody{<:Any, <:Any, <:Any, DBC}) where DBC =
 Evaluate the solved Neumann boundary condition by adding the induced velocity
 field to the current external velocity field and projecting onto panel normals.
 """
-function flow_tangency_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=1e-10)
+function flow_tangency_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=nothing)
     Uext = [copy(body.velocity) for body in bodies]
 
     for body in bodies
         pnl.calc_normals!(body)
-        pnl.calc_controlpoints!(body; off=cp_off)
+        pnl.calc_controlpoints!(body)
     end
 
     pnl.influence!(bodies, bodies, backend; scalar_potential=false, velocity=true)
@@ -388,12 +391,12 @@ end
 Evaluate the solved Dirichlet boundary condition by recomputing the interior
 perturbation potential induced by the solved source/doublet strengths.
 """
-function interior_potential_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=-1e-10)
+function interior_potential_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(), cp_off=nothing)
     phi_ext = [copy(body.potential) for body in bodies]
 
     for body in bodies
         pnl.calc_normals!(body)
-        pnl.calc_controlpoints!(body; off=cp_off)
+        pnl.calc_controlpoints!(body)
         body.potential .= 0.0
     end
 
@@ -428,10 +431,10 @@ function assert_boundary_residuals(
     return (; tangency_residuals, potential_residuals)
 end
 
-function flow_potential_residuals(bodies::Tuple; cp_off=-1e-10)
+function flow_potential_residuals(bodies::Tuple; cp_off=nothing)
     for body in bodies
         pnl.calc_normals!(body)
-        pnl.calc_controlpoints!(body; off=cp_off)
+        pnl.calc_controlpoints!(body)
         body.potential .= 0.0
     end
 

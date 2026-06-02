@@ -60,7 +60,7 @@ function make_duct(;
 
     body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                 bodyoptargs = (
-                    CPoffset=1e-12,
+                    cp_outer=true,
                     kerneloffset=1e-2,
                     kernelcutoff=1e-14,
                     characteristiclength=(args...)->d*aspectratio,

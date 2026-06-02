@@ -209,7 +209,7 @@ function build_sweptwing()
     bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
     body = simplewing(b, ar, tr, 0, 0, lambda, 0;
         bodytype=bodytype,
-        bodyoptargs=(; CPoffset=1e-14),
+        bodyoptargs=(; cp_outer=true),
         airfoil_root=airfoil,
         airfoil_tip=airfoil,
         airfoil_path=airfoil_path,

@@ -53,11 +53,13 @@ d               = 2*0.835                   # (m) duct diameter
 # ----------------- SOLVER PARAMETERS ------------------------------------------
 # Discretization
 NDIVS_theta     = 80                        # Number of azimuthal panels
+# NDIVS_theta     = 20                        # Number of azimuthal panels
 
 # NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
 #       either an integer, or an array of tuples as shown below
 
 n_rfl           = 8                        # This controls the number of chordwise panels
+# n_rfl           = 6                        # This controls the number of chordwise panels
 
 NDIVS_rfl_up = [                            # Discretization of airfoil upper surface
             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
@@ -107,7 +109,6 @@ points = hcat(xs, ys)
 # Generate body of revolution
 body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-6,
                                                         kerneloffset=1e-2,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,
@@ -135,14 +136,11 @@ global solver = nothing
 # for (i, AOA) in enumerate(AOAs)             # Sweep over angle of attack
 i = 2
 AOA = AOAs[i]
-    
+
     println("Solving body...")
 
     # Freestream vector
     Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
-
-    # Freestream at every control point
-    Uinfs = repeat(Vinf, 1, body.ncells)
 
     # Unitary direction of semi-infinite vortex at points `a` and `b` of each
     # trailing edge panel
@@ -190,13 +188,30 @@ AOA = AOAs[i]
         #     verbose=false
         # )
         solver = pnl.Backslash(body)
+        frames = pnl.ReferenceFrame(body)
+        pressure_monitor = pnl.PressureBernoulli(rho; correct_kuttacondition=true)
+        force_monitor = pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization())
+        monitors = (pressure_monitor, force_monitor)
+
+        name = typeof(solver) <: pnl.Backslash ? "duct_dirichlet" : "duct"
+        name *= kernel == pnl.VortexRing ? "_vortexring" :
+                kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
+                ""
 
         println("\nSolving...")
 
         # profile
         # using Profile, PProf
-    pnl.apply_freestream!(body, Uinfs[:,1])
-    @time pnl.solve!(body, solver; backend)
+    @time pnl.steady!(body, frames, Vinf;
+        body_solvers=solver,
+        backend=backend,
+        monitors=monitors,
+        i_run=1,
+        dt=1.0,
+        path=paraview ? save_path : nothing,
+        name=name,
+    )
+    paraview && (global vtks *= joinpath(save_path, "$(name)_body1.pvd"))
         # @profile pnl.solve!(body, solver; backend)
         # Profile.clear()
         # @profile pnl.solve!(body, solver; backend)
@@ -213,25 +228,26 @@ AOA = AOAs[i]
     # ----------------- POST PROCESSING ----------------------------------------
     println("\nPost processing...")
 
-    # Calculate surface velocity U on the body
-    @time Us = pnl.calcfield_U!(body; backend)
-    pnl.apply_freestream!(body, Uinfs[:,1])
-
-    # Calculate gauge pressure (based on body.velocity)
-    @time Ps = pnl.calcfield_P!(body, magVinf, rho; correct_kuttacondition=true)
-
-    # Calculate the force of each panel (based on P)
-    @time Fs = pnl.calcfield_F!(body)
-
-    # check normal flow condition
+    # check boundary condition
     Us_tot = body.velocity
     Udotn = sum(Us_tot .* body.normals, dims=1)
-    resid = maximum(abs.(Udotn))
-    println("Max flow tangency residual: $resid")
+    tangency_resid = maximum(abs.(Udotn))
+    println("Max flow tangency residual: $tangency_resid")
+
+    if pnl.has_dirichlet_bc(body)
+        potential_old = copy(body.potential)
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body)
+        body.potential .= 0
+        pnl.influence!(body, body, pnl.DirectBackend(); scalar_potential=true, velocity=false)
+        resid = maximum(abs.(body.potential))
+        body.potential .= potential_old
+        println("Max interior potential residual: $resid")
+    end
 
     # ----------------- COMPARISON TO EXPERIMENTAL DATA ------------------------
     # Plot surface pressure along slices of the duct
-    fig, axs = plot_Cp(body, AOA, rho, magVinf)
+    fig, axs = plot_Cp(body, AOA, rho, magVinf; pressure=pressure_monitor.pressure[1])
 
     if save_plots
         fname = "$(run_name)-Cp-AOA$(ceil(Int, AOA)).png"
@@ -243,15 +259,6 @@ AOA = AOAs[i]
     if fluiddomain
         global vtks *= generate_fluiddomain(body, AOA, Vinf, d,
                                                 aspectratio, save_path; num=i)
-    end
-
-    # Save body as VTK
-    if paraview
-        name = typeof(solver) <: pnl.Backslash ? "duct_dirichlet" : "duct"
-        name *= kernel == pnl.VortexRing ? "_vortexring" :
-                kernel == Union{pnl.ConstantSource, pnl.ConstantDoublet} ? "_source_doublet" :
-                ""
-        global vtks *= pnl.write_vtk(joinpath(save_path, name), body, i, 0.0; overwrite=true)
     end
 
 # end

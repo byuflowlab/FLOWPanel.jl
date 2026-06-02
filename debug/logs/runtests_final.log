@@ -1,0 +1,610 @@
+Test Summary:                                 | Pass  Total  Time
+FMM Backends                                  |   19     19  8.5s
+  backend construction                        |    5      5  0.3s
+  Direct vs FMM NonLiftingBody                |    6      6  4.5s
+  relative-error metadata                     |    1      1  0.5s
+  Direct vs FMM RigidWakeBody                 |    3      3  2.7s
+  self panel conditioning splits body offsets |    4      4  0.6s
+Test Summary:                                                                              | Pass  Total  Time
+Kernel potential/velocity/gradient consistency                                             |   53     53  3.8s
+  ConstantSource triangle                                                                  |    6      6  0.8s
+  ConstantDoublet triangle                                                                 |    6      6  0.4s
+  ConstantSource + ConstantDoublet triangle                                                |    6      6  0.5s
+  VortexRing triangle                                                                      |    3      3  0.2s
+  VortexRing control-point velocity converges to scalar-potential gradient as core shrinks |    4      4  0.1s
+  ConstantSource + VortexRing triangle                                                     |    3      3  0.3s
+  ConstantDoublet wake quad                                                                |    6      6  0.5s
+  VortexRing wake quad                                                                     |    3      3  0.2s
+  VortexRing filament (_bound_vortex_gradient)                                             |    8      8  0.1s
+  Semi-infinite ConstantDoublet wake                                                       |    6      6  0.5s
+  Semi-infinite VortexRing wake alias                                                      |    2      2  0.2s
+Test Summary:                             | Pass  Total  Time
+Abstract Body Geometry And NonLiftingBody |   85     85  1.5s
+  ensure_consistent_winding               |   11     11  0.2s
+  iswatertight                            |   11     11  0.1s
+  calc_normals!                           |    5      5  0.2s
+  calc_areas!                             |    4      4  0.1s
+  calc_controlpoints!                     |    3      3  0.0s
+  characteristic lengths                  |    4      4  0.1s
+  calc_tangents! and calc_obliques!       |   12     12  0.1s
+  rotate! reset! get_cell no grid2cells   |   10     10  0.6s
+  NonLiftingBody construction             |   22     22  0.2s
+  calcfield_Cp                            |    3      3  0.0s
+workspace.stats = SimpleStats
+ niter: 1
+ solved: true
+ inconsistent: false
+ indefinite: false
+ npcCount: 0
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ allocation timer: 1.50μs
+ timer: 88.67μs
+ status: solution good enough given atol and rtol
+
+workspace.stats = SimpleStats
+ niter: 1
+ solved: true
+ inconsistent: false
+ indefinite: false
+ npcCount: 0
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ allocation timer: 0.96μs
+ timer: 52.33μs
+ status: solution good enough given atol and rtol
+
+workspace.stats = SimpleStats
+ niter: 1
+ solved: true
+ inconsistent: false
+ indefinite: false
+ npcCount: 0
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ allocation timer: 0.54μs
+ timer: 11.42μs
+ status: solution good enough given atol and rtol
+
+workspace.stats = SimpleStats
+ niter: 1
+ solved: true
+ inconsistent: false
+ indefinite: false
+ npcCount: 0
+ residuals: []
+ Aresiduals: []
+ κ₂(A): []
+ allocation timer: 2.29μs
+ timer: 54.62μs
+ status: solution good enough given atol and rtol
+
+┌ Info: trace_trailing_edge
+│   ordered_nodes =
+│    3-element Vector{Int64}:
+│     1
+│     2
+│     3
+│   edge_keys =
+│    2-element Vector{Tuple{Int64, Int64}}:
+│     (1, 2)
+└     (2, 3)
+Solving body...
+┌ Info: trace_trailing_edge
+│   ordered_nodes =
+│    3-element Vector{Int64}:
+│     1
+│     2
+│     3
+│   edge_keys =
+│    2-element Vector{Tuple{Int64, Int64}}:
+│     (1, 2)
+└     (2, 3)
+Solving body...
+Solving body...
+Test Summary:                                              | Pass  Total   Time
+Solvers                                                    |   77     77  22.1s
+  Backslash construction                                   |    2      2   0.4s
+  Backslash Neumann construction and solve                 |    6      6   0.4s
+  Backslash Neumann RigidWakeBody (single ConstantDoublet) |    3      3   0.6s
+  Backslash Dirichlet construction and solve               |    5      5   1.2s
+  Backslash Dirichlet construction and solve               |    8      8   1.0s
+  KrylovSolver solve                                       |    2      2   1.7s
+  KrylovSolver Dirichlet solve                             |    4      4   0.4s
+  KrylovSolver + JacobiPreconditioner                      |    6      6   1.2s
+  FGSSolver construction                                   |    5      5   1.2s
+  FGSSolver boundary-condition preparation                 |    3      3   4.2s
+  Multi-body solve                                         |    4      4   0.7s
+  KrylovCoupled nonlifting                                 |    5      5   0.6s
+  numtype                                                  |    2      2   0.3s
+  BackslashCoupled nonlifting                              |    5      5   0.5s
+  backslashcoupled                                         |    9      9   1.9s
+  backslash                                                |    7      7   0.8s
+  backslash_meshes                                         |    1      1   5.1s
+Test Summary:                                   | Pass  Total  Time
+RigidWakeBody                                   |   40     40  1.0s
+  construction                                  |   11     11  0.3s
+  shedding edge consistency                     |    4      4  0.1s
+  extra_reset!                                  |    1      1  0.1s
+  initialize_Das! matches simulate inline logic |    2      2  0.3s
+  kinematic Das minimum displacement            |    4      4  0.2s
+  seeded shedding trace                         |   11     11  0.1s
+  seeded shedding validation                    |    2      2  0.1s
+  seeded shedding relaxed bootstrap             |    5      5  0.0s
+Test Summary:                                                      | Pass  Total  Time
+Free Wakes                                                         |   54     54  4.4s
+  SigmaOverlap chooses particle count from fixed sigma             |    4      4  0.3s
+  PanelWake first row shedding velocity option                     |    4      4  0.8s
+  PanelParticleWake forwards shedding velocity option              |    1      1  0.0s
+  PanelParticleWake stores particle kernel offset                  |    3      3  0.0s
+  PanelParticleWake forwards SFS model                             |    2      2  0.0s
+  PanelParticleWake forwards viscous model                         |    2      2  0.0s
+  PanelWake final filament strength option                         |    2      2  0.1s
+  PanelWake steady final filament cancels last wake row influence  |    6      6  0.1s
+  PanelParticleWake forwards unsteady filament option              |    1      1  0.0s
+  Kernel offset override regularizes body-to-particle influence    |    1      1  0.4s
+  Self panel conditioning leaves particle targets on target offset |    2      2  0.2s
+  ParticleMaintenance separates mixed policies                     |    3      3  0.0s
+  PanelParticleWake particle maintenance trims by strength         |    3      3  0.2s
+  PanelParticleWake particle maintenance trims by strength range   |    2      2  0.1s
+  PanelParticleWake particle maintenance trims by global box       |    2      2  0.4s
+  PanelParticleWake particle maintenance trims by frame box        |    3      3  0.1s
+  PanelParticleWake particle maintenance merges particles          |    1      1  0.2s
+  Unified wake metadata round trip                                 |   12     12  1.1s
+PressureLaplace co-normal metric: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:259
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_skewed_two_panel_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:68
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:260 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:260 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+BoundCirculationMonitor rotor-frame slicing: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:438
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.RigidWakeBody{FLOWPanel.VortexRing, 1, Float64, true}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.RigidWakeBody{FLOWPanel.VortexRing, 1, Float64, true}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_bound_circulation_side_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:120
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:439 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:439 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+BoundCirculationMonitor rotor-frame invariance: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:461
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.RigidWakeBody{FLOWPanel.VortexRing, 1, Float64, true}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.RigidWakeBody{FLOWPanel.VortexRing, 1, Float64, true}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_bound_circulation_side_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:120
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:462 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:462 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+SurfaceVorticityForce analytic panel force and integration: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:488
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_surface_vorticity_gradient_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:98
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:489 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:489 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+SurfaceVorticityForce frame rotation and zero velocity: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:521
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_surface_vorticity_gradient_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:98
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:522 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:522 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+Bound surface vorticity initialization: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:552
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantDoublet, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_surface_vorticity_gradient_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:98
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:553 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:553 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+PressureLaplace acceleration RHS projection: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:590
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_skewed_two_panel_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:68
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:591 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:591 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+PressureLaplace edge material derivative RHS projection: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:605
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_skewed_two_panel_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:68
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:606 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:606 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+PressureLaplace Lamb vector RHS projection: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:623
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_skewed_two_panel_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:68
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:624 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:624 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+PressureLaplace unsteady toggle: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:686
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] make_skewed_two_panel_body()
+     @ Main ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:68
+   [3] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:687 [inlined]
+   [4] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [5] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:687 [inlined]
+   [6] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [8] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [9] top-level scope
+     @ none:1
+compute_mu_gradient! interior recovery: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:708
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:715 [inlined]
+   [3] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [4] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:709 [inlined]
+   [5] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [6] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [8] top-level scope
+     @ none:1
+compute_surface_velocity_gradient! interior recovery: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:746
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.NonLiftingBody{FLOWPanel.ConstantSource, 1, Float64, false}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:753 [inlined]
+   [3] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [4] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:747 [inlined]
+   [5] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [6] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [8] top-level scope
+     @ none:1
+compute_mu_gradient! trailing-edge stencil isolation: Error During Test at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:777
+  Got exception outside of a @test
+  MethodError: no method matching calc_controlpoints!(::FLOWPanel.RigidWakeBody{Union{FLOWPanel.ConstantSource, FLOWPanel.VortexRing}, 2, Float64, true}, ::Matrix{Float64}; off::Float64)
+  This method does not support all of the given keyword arguments (and may not support any).
+  
+  Closest candidates are:
+    calc_controlpoints!(::FLOWPanel.AbstractBody, ::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:756
+    calc_controlpoints!(!Matched::AbstractMatrix, ::AbstractMatrix, !Matched::Any, !Matched::Any; characteristiclength) got unsupported keyword argument "off"
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_abstractbody.jl:727
+    calc_controlpoints!(!Matched::FLOWPanel.LiftingLine, ::Any...; optargs...)
+     @ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/liftingline/liftingline.jl:946
+    ...
+  
+  Stacktrace:
+   [1] kwerr(::@NamedTuple{off::Float64}, ::Function, ::FLOWPanel.RigidWakeBody{Union{FLOWPanel.ConstantSource, FLOWPanel.VortexRing}, 2, Float64, true}, ::Matrix{Float64})
+     @ Base ./error.jl:175
+   [2] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:788 [inlined]
+   [3] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [4] macro expansion
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:778 [inlined]
+   [5] macro expansion
+     @ /opt/homebrew/Cellar/julia/1.12.5/share/julia/stdlib/v1.12/Test/src/Test.jl:1776 [inlined]
+   [6] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:138
+   [7] top-level scope
+     @ ~/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13
+   [8] top-level scope
+     @ none:1
+Test Summary:                                                | Pass  Error  Total  Time
+Postprocess                                                  |   66     13     79  6.1s
+  PressureBernoulli unsteady monitor-owned phi_dot           |   18            18  0.2s
+  PressureLaplace monitor                                    |   14            14  2.0s
+  PressureLaplace surface velocity gradient mode             |    6             6  0.0s
+  PressureLaplace sparse matrix and solve                    |    7             7  0.3s
+  PressureLaplace co-normal metric                           |           1      1  1.2s
+  PressureLaplace rebuild policy and force integration       |    7             7  0.3s
+  KuttaJoukowskiForce frame rotation                         |    1             1  0.5s
+  KuttaJoukowskiForce relative translational velocity        |    1             1  0.0s
+  KuttaJoukowskiForce rotational edge kinematics             |    1             1  0.0s
+  KuttaJoukowskiForce preserves kernel offsets               |    2             2  0.2s
+  BoundCirculationMonitor constructor and TE jump            |    7             7  0.4s
+  BoundCirculationMonitor rotor-frame slicing                |           1      1  0.5s
+  BoundCirculationMonitor rotor-frame invariance             |           1      1  0.0s
+  SurfaceVorticityForce analytic panel force and integration |           1      1  0.1s
+  SurfaceVorticityForce frame rotation and zero velocity     |           1      1  0.0s
+  Bound surface vorticity initialization                     |           1      1  0.0s
+  SurfaceVorticityForce constructor validation               |    1             1  0.0s
+  PressureLaplace Bernoulli constant-field comparison        |    1             1  0.0s
+  PressureLaplace acceleration RHS projection                |           1      1  0.0s
+  PressureLaplace edge material derivative RHS projection    |           1      1  0.0s
+  PressureLaplace Lamb vector RHS projection                 |           1      1  0.0s
+  PressureLaplace unsteady toggle                            |           1      1  0.0s
+  compute_mu_gradient! interior recovery                     |           1      1  0.0s
+  compute_surface_velocity_gradient! interior recovery       |           1      1  0.0s
+  compute_mu_gradient! trailing-edge stencil isolation       |           1      1  0.2s
+RNG of the outermost testset: Random.Xoshiro(0x6a8af9b0a340fe14, 0x741f46a70b76bbf6, 0x8c404f1d65018cfc, 0x57cec088214afa57, 0xead19cf1a7b9cb43)
+ERROR: LoadError: Some tests did not pass: 66 passed, 0 failed, 13 errored, 0 broken.
+in expression starting at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests_unit_postprocess.jl:137
+in expression starting at /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/test/runtests.jl:13

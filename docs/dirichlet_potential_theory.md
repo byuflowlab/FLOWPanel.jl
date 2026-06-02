@@ -262,5 +262,10 @@ The test performs this twice:
   equivalently use `I - G_interior`, since raw interior assembly gives
   `G[i,i] ≈ +½`.
 
+With exact control-point self pairs, FLOWPanel's kernel self-potential uses
+the interior limit as the canonical stored value. When an exterior self-panel
+potential is needed for an operator comparison, it is recovered by subtracting
+the self panel's doublet or vortex strength from that interior value.
+
 Because normal-derivative data determines potential only up to an additive
 constant, the test compares both potentials after subtracting their means.

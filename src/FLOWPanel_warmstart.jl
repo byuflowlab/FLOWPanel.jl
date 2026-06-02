@@ -239,45 +239,33 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     pf = wake.pfield
     @assert np <= size(pf.particles, 2) "Loaded $(np) particles but pfield has capacity $(size(pf.particles, 2))"
 
-    # first reset any existing particles
-    while pf.np > 0
-        FLOWVPM.remove_particle(pf, pf.np)
-    end
-
+    # Clear all active storage so replay/restart cannot retain stale rows from
+    # a previously loaded state with more particles.
+    pf.particles[:, :] .= zero(eltype(pf.particles))
     pf.np = 0
     if np == 0
         return wake
     end
 
-    # positions
-    points = ReadVTK.get_points(vtk)  # 3 × np
-    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
-
     # per-particle fields
     point_data = ReadVTK.get_point_data(vtk)
-    if "gamma" in keys(point_data)
-        pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
-    end
-    if "sigma" in keys(point_data)
-        pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
-    end
-    if "vol" in keys(point_data)
-        pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
-    end
-    if "circulation" in keys(point_data)
-        pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
-    end
-    if "velocity" in keys(point_data)
-        pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
-    end
-    if "vorticity" in keys(point_data)
-        pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
-    end
-    if "velocity_gradient" in keys(point_data)
-        J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
-        # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
-        pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
-    end
+    required_fields = ("gamma", "sigma", "vol", "circulation", "velocity", "vorticity", "C", "SFS", "velocity_gradient")
+    missing = filter(field -> !(field in keys(point_data)), required_fields)
+    isempty(missing) || throw(ArgumentError("Loaded particle VTK is missing required field(s): $(join(missing, ", "))."))
+
+    points = ReadVTK.get_points(vtk)  # 3 × np
+    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
+    pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
+    pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
+    pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
+    pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
+    pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
+    pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
+    pf.particles[FLOWVPM.C_INDEX, 1:np] .= ReadVTK.get_data(point_data["C"])
+    pf.particles[FLOWVPM.SFS_INDEX, 1:np] .= ReadVTK.get_data(point_data["SFS"])
+    J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
+    # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
+    pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
 
     pf.np = np
     return wake
@@ -347,7 +335,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # 2. Mirror simulate!'s pre-loop initialization on the freshly-constructed bodies.
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
@@ -398,7 +386,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # 4. Refresh derived geometry that wasn't persisted.
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
 
     # 5. Replay the end-of-step-`restart_step` actions that simulate! skipped
@@ -412,7 +400,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     propagate_kinematics!(systems_tuple, frames, dt_end)
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
     for (sys, w) in zip(systems_tuple, wakes_tuple)
         !isnothing(w) && shed_wake!(w, sys)

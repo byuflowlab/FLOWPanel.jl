@@ -39,7 +39,7 @@ NDIVS_rfl = [(0.25, n_rfl, 10.0, false),
 NDIVS_span = [(1.0, 30, 20.0, true)]
 
 bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
-bodyoptargs = (; CPoffset=1e-14)
+bodyoptargs = (; cp_outer=true)
 
 println("Generating body...")
 body = simplewing(b, ar, tr, 0, 0, lambda, 0;

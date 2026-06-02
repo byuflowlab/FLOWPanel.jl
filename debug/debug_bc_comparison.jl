@@ -48,11 +48,11 @@ function build_neumann_body(; meshfile=MESHFILE, AOA=5.88, magVinf=56.0,
 
     shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance=0.001 * span)
     body = bodytype(nodes, cells, shedding;
-        CPoffset=cp_offset, kerneloffset=kernel_offset,
+        cp_outer=(cp_offset > 0), kerneloffset=kernel_offset,
         ensure_winding=true, semiinfinite_wake=true)
     shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001 * span)
     body = bodytype(body.nodes, body.cells, shedding;
-        CPoffset=cp_offset, kerneloffset=kernel_offset,
+        cp_outer=(cp_offset > 0), kerneloffset=kernel_offset,
         ensure_winding=true, semiinfinite_wake=true)
 
     wake_direction = reshape(Vinf ./ norm(Vinf), :, 1)

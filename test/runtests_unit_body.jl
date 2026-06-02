@@ -137,33 +137,15 @@ const CELLS_NONMANIFOLD = Int[
         pnl.calc_normals!(NODES_1TRI, CELLS_1TRI, normals)
         cps = zeros(3, 1)
 
-        pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps, normals; off=0.0)
+        pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps, normals)
         centroid = vec(sum(NODES_1TRI; dims=2) ./ 3)
         @test isapprox(cps[:, 1], centroid; atol=1e-12)
 
-        pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps, normals; off=0.25, characteristiclength=pnl.characteristiclength_unitary)
-        @test isapprox(cps[:, 1] - centroid, 0.25 .* normals[:, 1]; atol=1e-12)
-
-        cps_bbox = zeros(3, 1)
-        pnl.calc_controlpoints!(NODES_1TRI, CELLS_1TRI, cps_bbox, normals; off=0.5, characteristiclength=pnl.characteristiclength_bbox)
-        @test isapprox(norm(cps_bbox[:, 1] - centroid), 0.5 * sqrt(2); atol=1e-12)
-
-        body_default = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                              CPoffset=0.25)
+        body_default = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI))
         pnl.calc_normals!(body_default)
         pnl.calc_controlpoints!(body_default)
         @test body_default.characteristiclength === pnl.characteristiclength_sqrtarea
-        @test isapprox(body_default.controlpoints[:, 1] - centroid,
-                       0.25 * sqrt(0.5) .* body_default.normals[:, 1]; atol=1e-12)
-
-        body_unitary = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                              CPoffset=0.25,
-                                                              characteristiclength=pnl.characteristiclength_unitary)
-        pnl.calc_normals!(body_unitary)
-        pnl.calc_controlpoints!(body_unitary)
-        @test body_unitary.characteristiclength === pnl.characteristiclength_unitary
-        @test isapprox(body_unitary.controlpoints[:, 1] - centroid,
-                       0.25 .* body_unitary.normals[:, 1]; atol=1e-12)
+        @test isapprox(body_default.controlpoints[:, 1], centroid; atol=1e-12)
     end
 
     @testset "characteristic lengths" begin
@@ -215,13 +197,13 @@ const CELLS_NONMANIFOLD = Int[
 
         body4.velocity .= 1.0
         body4.potential .= 2.0
-        body4.P .= 3.0
-        body4.F .= 4.0
+        body4.velocity_gradient .= 3.0
+        body4.induced_vorticity .= 4.0
         pnl.reset!(body4)
         @test all(body4.velocity .== 0)
         @test all(body4.potential .== 0)
-        @test all(body4.P .== 0)
-        @test all(body4.F .== 0)
+        @test all(body4.velocity_gradient .== 0)
+        @test all(body4.induced_vorticity .== 0)
 
         @test pnl.get_cell(body4, 1) == (CELLS_2TRI[1, 1], CELLS_2TRI[2, 1], CELLS_2TRI[3, 1])
 
@@ -233,7 +215,6 @@ const CELLS_NONMANIFOLD = Int[
         @test body.nnodes == 4
         @test body.ncells == 2
         @test size(body.strength) == (2, 1)
-        @test body.CPoffset == 1e-14
         @test body.watertight == false
         @test length(body.vtk_cells) == 2
 
@@ -252,6 +233,8 @@ const CELLS_NONMANIFOLD = Int[
         @test grid_constructor_body.nnodes == size(tri_nodes, 2)
         @test grid_constructor_body.ncells == size(tri_cells, 2)
         @test grid_constructor_body.watertight == false
+        @test !(:P in fieldnames(typeof(grid_constructor_body)))
+        @test !(:F in fieldnames(typeof(grid_constructor_body)))
 
         closed_nodes, closed_cells = make_octa_triangle_surface()
         closed_grid_body = pnl.NonLiftingBody{pnl.ConstantSource}(closed_nodes, closed_cells; watertight=true)
@@ -272,18 +255,12 @@ const CELLS_NONMANIFOLD = Int[
     end
 
     @testset "calcfield_Cp" begin
-        body = make_nonlifting(pnl.ConstantSource, NODES_1TRI, CELLS_1TRI)
         rho = 1.0
         uinf = 10.0
         qinf = 0.5 * rho * uinf^2
 
-        body.P[1] = qinf
-        @test pnl.calcfield_Cp(body, uinf, rho) == [1.0]
-
-        body.P[1] = 0.0
-        @test pnl.calcfield_Cp(body, uinf, rho) == [0.0]
-
-        body.P[1] = -3.0 * qinf
-        @test pnl.calcfield_Cp(body, uinf, rho) == [-3.0]
+        @test pnl.calcfield_Cp([qinf], uinf, rho) == [1.0]
+        @test pnl.calcfield_Cp([0.0], uinf, rho) == [0.0]
+        @test pnl.calcfield_Cp([-3.0 * qinf], uinf, rho) == [-3.0]
     end
 end

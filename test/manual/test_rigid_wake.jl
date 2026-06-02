@@ -9,7 +9,7 @@ include_wake = true
 
 # recalculate G matrix
 normals = pnl._calc_normals(body)
-CPs = pnl._calc_controlpoints(body, normals; off=1e-14)
+CPs = pnl._calc_controlpoints(body, normals)
 G1 = deepcopy(solver.G)
 G1 .= 0.0
 backend = pnl.FastMultipoleBackend(leaf_size=1000000)

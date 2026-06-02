@@ -48,7 +48,7 @@ body.strength[1,2] = str
 
 normals = pnl.calc_normals!(body)
 @show normals # outward facing
-cps = pnl.calc_controlpoints!(body, normals; off=1e-14)
+cps = pnl.calc_controlpoints!(body, normals)
 
 # compute velocity at a line of points above the triangle
 npoints = 1000

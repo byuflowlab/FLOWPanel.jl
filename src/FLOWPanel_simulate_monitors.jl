@@ -2,14 +2,14 @@
 
 abstract type AbstractMonitor end
 
-# Each monitor declares which body fields it populates (`monitor_provides`)
+# Each monitor declares which per-step fields it populates (`monitor_provides`)
 # and which it consumes (`monitor_requires`). `audit_monitors` checks at the
 # start of `simulate!` that every requirement is met by an earlier monitor
 # in the tuple, surfacing ordering bugs before the time loop starts.
 #
-# Field symbols correspond to per-body arrays touched by monitors:
-#   :P  → body.P (pressure)
-#   :F  → body.F (distributed surface force)
+# Field symbols correspond to monitor-owned per-body arrays:
+#   :P  → pressure
+#   :F  → distributed surface force
 #
 # Add a new monitor's contract by defining methods on these two traits.
 
@@ -39,7 +39,7 @@ function audit_monitors(monitors)
             if !(r in provided)
                 throw(ArgumentError(
                     "Monitor at position $(i) ($(nameof(typeof(m)))) requires " *
-                    "body.$(r) to be populated, but no earlier monitor in the " *
+                    ":$(r) to be produced, but no earlier monitor in the " *
                     "tuple provides it. Insert a monitor whose " *
                     "`monitor_provides` includes :$(r) (e.g. PressureBernoulli " *
                     "for :P, ForceMonitor for :F) before position $(i)."))
@@ -52,14 +52,47 @@ function audit_monitors(monitors)
     return monitors
 end
 
+mutable struct MonitorContext
+    fields::Dict{Tuple{Symbol, Int}, Any}
+end
+
+MonitorContext() = MonitorContext(Dict{Tuple{Symbol, Int}, Any}())
+
+function monitor_register!(ctx::MonitorContext, field::Symbol, i_body::Integer, value)
+    ctx.fields[(field, Int(i_body))] = value
+    return value
+end
+
+function monitor_field(ctx::MonitorContext, field::Symbol, i_body::Integer)
+    key = (field, Int(i_body))
+    haskey(ctx.fields, key) || throw(ArgumentError(
+        "Monitor field :$(field) for body $(i_body) is unavailable. " *
+        "Check monitor ordering and `monitor_provides`/`monitor_requires`."))
+    return ctx.fields[key]
+end
+
+function _run_monitor!(m, ctx::MonitorContext, systems, wakes,
+                       frames::AbstractVector{<:ReferenceFrame},
+                       uinf, i_step::Int, dt::Real)
+    m(systems, wakes, frames, uinf, i_step, dt)
+    _register_monitor_outputs!(ctx, m, _systems_tuple(systems))
+    return nothing
+end
+
+_register_monitor_outputs!(ctx::MonitorContext, m, systems_tuple::Tuple) = nothing
+
+write_vtk_fields!(vtk, monitor, body, i_system::Int, i_step::Int) = nothing
+write_vtk_fields!(vtk, monitor, body, i_system::Int, i_step::Int,
+                  field_names::VTKFieldNameAllocator, i_monitor::Int) = nothing
+
 """
     PressureBernoulli(rho; unsteady=false, correct_kuttacondition=true, clip=nothing,
                       backend=FastMultipoleBackend(expansion_order=10,
                                                    multipole_acceptance=0.4,
                                                    leaf_size=100))
 
-Monitor that populates `body.P` on every body in the simulation by evaluating
-the Bernoulli equation each step. With `unsteady=false` (default) the steady
+Monitor that owns pressure arrays for every body in the simulation by
+evaluating the Bernoulli equation each step. With `unsteady=false` (default) the steady
 form ``P = \\tfrac{1}{2} \\rho (U_\\infty^2 - U^2)`` is used; with
 `unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is added.
 The monitor evaluates scalar potential at the body control points, finite
@@ -78,9 +111,11 @@ mutable struct PressureBernoulli{TF, TC, TB} <: AbstractMonitor
     correct_kuttacondition::Bool
     clip::TC
     backend::TB
+    pressure::Vector{Vector{Float64}}
     phi_dot::Vector{Vector{Float64}}
     potential_history::Vector{Vector{Float64}}
     probes::Vector{FastMultipole.ProbeSystem{Float64}}
+    vtk_fields::Tuple{Vararg{Symbol}}
 end
 
 monitor_provides(::PressureBernoulli) = (:P,)
@@ -90,10 +125,12 @@ function PressureBernoulli(rho::Real; unsteady::Bool=false,
                           clip=nothing,
                           backend=FastMultipoleBackend(expansion_order=10,
                                                        multipole_acceptance=0.4,
-                                                       leaf_size=100))
+                                                       leaf_size=100),
+                          vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,))
     return PressureBernoulli{typeof(rho), typeof(clip), typeof(backend)}(
         rho, unsteady, correct_kuttacondition, clip, backend,
-        Vector{Float64}[], Vector{Float64}[], FastMultipole.ProbeSystem{Float64}[])
+        Vector{Float64}[], Vector{Float64}[], Vector{Float64}[],
+        FastMultipole.ProbeSystem{Float64}[], vtk_fields)
 end
 
 function (m::PressureBernoulli)(systems, wakes,
@@ -102,30 +139,60 @@ function (m::PressureBernoulli)(systems, wakes,
     systems_tuple = _systems_tuple(systems)
     Uinf_mag = norm(uinf)
     scalar_sources = m.unsteady ? _bernoulli_scalar_sources(systems_tuple, wakes) : ()
-    m.unsteady && _pressure_bernoulli_ensure_storage!(m, systems_tuple)
+    _pressure_bernoulli_ensure_storage!(m, systems_tuple)
     for (i_body, body) in enumerate(systems_tuple)
-        fill!(body.P, zero(eltype(body.P)))
+        pressure = m.pressure[i_body]
+        fill!(pressure, 0.0)
         phi_dot = m.unsteady ?
             _pressure_bernoulli_phi_dot!(m, body, i_body, scalar_sources, uinf, dt) :
             nothing
-        calcfield_P!(body.P, body, body.velocity, Uinf_mag, m.rho, phi_dot;
+        calcfield_P!(pressure, body, body.velocity, Uinf_mag, m.rho, phi_dot;
                      correct_kuttacondition=m.correct_kuttacondition,
                      clip=m.clip)
     end
 end
 
+function _register_monitor_outputs!(ctx::MonitorContext, m::PressureBernoulli, systems_tuple::Tuple)
+    for i in eachindex(systems_tuple)
+        monitor_register!(ctx, :P, i, m.pressure[i])
+    end
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::PressureBernoulli, body, i_system::Int, i_step::Int)
+    (:pressure in m.vtk_fields) || return nothing
+    i_system <= length(m.pressure) || return nothing
+    length(m.pressure[i_system]) == body.ncells || return nothing
+    vtk["gauge pressure", VTKCellData()] = m.pressure[i_system]
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::PressureBernoulli, body, i_system::Int, i_step::Int,
+                           field_names::VTKFieldNameAllocator, i_monitor::Int)
+    (:pressure in m.vtk_fields) || return nothing
+    i_system <= length(m.pressure) || return nothing
+    pressure = m.pressure[i_system]
+    length(pressure) == body.ncells || return nothing
+    vtk[_vtk_monitor_field_name!(field_names, "gauge pressure", m, i_monitor), VTKCellData()] = pressure
+    return nothing
+end
+
 function _pressure_bernoulli_ensure_storage!(m::PressureBernoulli, systems_tuple::Tuple)
     nbodies = length(systems_tuple)
-    if length(m.phi_dot) != nbodies ||
+    if length(m.pressure) != nbodies ||
+       length(m.phi_dot) != nbodies ||
        length(m.potential_history) != nbodies ||
        length(m.probes) != nbodies
+        m.pressure = Vector{Float64}[]
         m.phi_dot = Vector{Float64}[]
         m.potential_history = Vector{Float64}[]
         m.probes = FastMultipole.ProbeSystem{Float64}[]
+        sizehint!(m.pressure, nbodies)
         sizehint!(m.phi_dot, nbodies)
         sizehint!(m.potential_history, nbodies)
         sizehint!(m.probes, nbodies)
         for body in systems_tuple
+            push!(m.pressure, zeros(Float64, body.ncells))
             push!(m.phi_dot, zeros(Float64, body.ncells))
             push!(m.potential_history, zeros(Float64, body.ncells))
             push!(m.probes, FastMultipole.ProbeSystem(body.ncells, Float64))
@@ -134,9 +201,11 @@ function _pressure_bernoulli_ensure_storage!(m::PressureBernoulli, systems_tuple
     end
 
     for (i, body) in enumerate(systems_tuple)
-        if length(m.phi_dot[i]) != body.ncells ||
+        if length(m.pressure[i]) != body.ncells ||
+           length(m.phi_dot[i]) != body.ncells ||
            length(m.potential_history[i]) != body.ncells ||
            length(m.probes[i].scalar_potential) != body.ncells
+            m.pressure[i] = zeros(Float64, body.ncells)
             m.phi_dot[i] = zeros(Float64, body.ncells)
             m.potential_history[i] = zeros(Float64, body.ncells)
             m.probes[i] = FastMultipole.ProbeSystem(body.ncells, Float64)
@@ -236,7 +305,7 @@ end
                     rebuild_every_step=false, verbose=false, gradient_mode=:raw_hessian,
                     acceleration_form=:material_derivative)
 
-Monitor that populates `body.P` by solving a sparse panel-centered surface
+Monitor that owns pressure by solving a sparse panel-centered surface
 pressure Poisson equation. The monitor uses `velocity_dot` as a rolling
 time-difference buffer of the tangent-projected **inertial** fluid velocity
 `u_inertial = tangent(body.velocity) + body.velocity_kinematic`: between calls it
@@ -264,7 +333,8 @@ for Dirichlet lifting bodies whose `body.velocity` includes a postprocessed
 The pressure RHS has two velocity-only acceleration forms. The default
 `acceleration_form=:material_derivative` uses the direct
 `∂t u + (u · ∇)u` edge form. `acceleration_form=:lamb_vector` uses the Lamb
-decomposition `(u · ∇)u = ∇(|u|²/2) + ω × u`, where `ω` is the volumetric
+decomposition `(u · ∇)u = ∇(|u|²/2) + ω × u` with the same tangent relative
+velocity used by the material-derivative edge form, where `ω` is the volumetric
 induced vorticity accumulated in `body.induced_vorticity` by FastMultipole
 `extra_outputs=3`. Both forms use only velocity and its derivatives; neither
 requires a scalar potential.
@@ -296,7 +366,7 @@ stored in the monitor.
 - `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
 - `L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}` — sparse FV surface Laplacian per body, gauge-fixed at `reference_panel`
 - `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the selected acceleration form
-- `p::Vector{Vector{Float64}}` — solution vector per body (length ncells); written to `body.P` after each solve
+- `p::Vector{Vector{Float64}}` — owned pressure solution vector per body (length ncells)
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
 - `edges::Vector{Matrix{Int}}` — shared interior edges per body (4 × nedges); rows are `(node_a, node_b, panel_i, panel_j)`
@@ -325,6 +395,7 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}
     u_inertial::Vector{Matrix{Float64}}
     surface_velocity_gradient::Vector{Array{Float64,3}}
+    vtk_fields::Tuple{Vararg{Symbol}}
 end
 
 monitor_provides(::PressureLaplace) = (:P,)
@@ -343,7 +414,8 @@ function PressureLaplace(bodies, rho::Real;
                          rebuild_every_step::Bool=false,
                          verbose::Bool=false,
                          gradient_mode::Symbol=:raw_hessian,
-                         acceleration_form::Symbol=:material_derivative)
+                         acceleration_form::Symbol=:material_derivative,
+                         vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,))
     reference_panel >= 1 || throw(ArgumentError("reference_panel must be at least 1; got $(reference_panel)."))
     gradient_mode in (:raw_hessian, :surface_velocity) || throw(ArgumentError(
         "gradient_mode must be :raw_hessian or :surface_velocity; got $(gradient_mode)."))
@@ -378,7 +450,7 @@ function PressureLaplace(bodies, rho::Real;
         reference_panel <= body.ncells || throw(ArgumentError(
             "reference_panel=$(reference_panel) exceeds body.ncells=$(body.ncells)."))
         calc_normals!(body)
-        calc_controlpoints!(body; off=abs(body.CPoffset))
+        calc_controlpoints!(body)
         body_edges = _pressure_panel_edges(body)
         L = _assemble_pressure_laplacian(body, Int(reference_panel), body_edges)
         b = zeros(Float64, body.ncells)
@@ -400,7 +472,7 @@ function PressureLaplace(bodies, rho::Real;
         preconditioner, Int(reference_panel), Float64(reference_pressure),
         rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
         acceleration, tangential,
-        edges, workspace, u_inertial, surface_velocity_gradient)
+        edges, workspace, u_inertial, surface_velocity_gradient, vtk_fields)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -488,7 +560,7 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
 
     # Keep normals and control points current; bodies may have moved this step.
     calc_normals!(body)
-    calc_controlpoints!(body; off=abs(body.CPoffset))
+    calc_controlpoints!(body)
 
     # Panel count changes would invalidate all preallocated arrays.
     topology_changed = body.ncells != length(m.b[i_body]) ||
@@ -510,7 +582,6 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     _pressure_velocity_dot!(m, body, i_body, dt)
     _pressure_rhs!(m, body, i_body)   # build b from material acceleration
     _pressure_solve!(m, i_body)       # solve L p = b with CG
-    copyto!(body.P, m.p[i_body])
     # Store -u_new so the next call can form the finite difference.
     _pressure_store_negative_velocity!(m, body, i_body)
 
@@ -519,7 +590,32 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
         println("\t\tPressureLaplace($(m.acceleration_form))[step=$(i_step+1)]: rebuild=$(rebuild), panels=$(body.ncells), CG iters=$(ws.stats.niter), solved=$(ws.stats.solved)")
     end
 
-    return body.P
+    return m.p[i_body]
+end
+
+function _register_monitor_outputs!(ctx::MonitorContext, m::PressureLaplace, systems_tuple::Tuple)
+    for i in eachindex(systems_tuple)
+        monitor_register!(ctx, :P, i, m.p[i])
+    end
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::PressureLaplace, body, i_system::Int, i_step::Int)
+    (:pressure in m.vtk_fields) || return nothing
+    i_system <= length(m.p) || return nothing
+    length(m.p[i_system]) == body.ncells || return nothing
+    vtk["gauge pressure", VTKCellData()] = m.p[i_system]
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::PressureLaplace, body, i_system::Int, i_step::Int,
+                           field_names::VTKFieldNameAllocator, i_monitor::Int)
+    (:pressure in m.vtk_fields) || return nothing
+    i_system <= length(m.p) || return nothing
+    pressure = m.p[i_system]
+    length(pressure) == body.ncells || return nothing
+    vtk[_vtk_monitor_field_name!(field_names, "gauge pressure", m, i_monitor), VTKCellData()] = pressure
+    return nothing
 end
 
 function _pressure_velocity_dot!(m::PressureLaplace, body::AbstractBody, i_body::Int, dt::Real)
@@ -734,7 +830,6 @@ function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
     rho = m.rho
     reference_panel = m.reference_panel
     reference_pressure = m.reference_pressure
-    u_inertial = m.u_inertial[i_body]
     fill!(b, 0.0)
 
     @inbounds for k in axes(edges, 2)
@@ -752,10 +847,6 @@ function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
                 (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
         end
 
-        qi = 0.5 * (u_inertial[1, i]^2 + u_inertial[2, i]^2 + u_inertial[3, i]^2)
-        qj = 0.5 * (u_inertial[1, j]^2 + u_inertial[2, j]^2 + u_inertial[3, j]^2)
-        kinetic_jump = qj - qi
-
         wx_i, wy_i, wz_i = body.induced_vorticity[1, i], body.induced_vorticity[2, i], body.induced_vorticity[3, i]
         wx_j, wy_j, wz_j = body.induced_vorticity[1, j], body.induced_vorticity[2, j], body.induced_vorticity[3, j]
         wx = 0.5 * (wx_i + wx_j)
@@ -766,9 +857,19 @@ function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
         nx_j, ny_j, nz_j = body.normals[1, j], body.normals[2, j], body.normals[3, j]
         ui_n = body.velocity[1, i] * nx_i + body.velocity[2, i] * ny_i + body.velocity[3, i] * nz_i
         uj_n = body.velocity[1, j] * nx_j + body.velocity[2, j] * ny_j + body.velocity[3, j] * nz_j
-        urel1 = 0.5 * (body.velocity[1, i] - ui_n * nx_i + body.velocity[1, j] - uj_n * nx_j)
-        urel2 = 0.5 * (body.velocity[2, i] - ui_n * ny_i + body.velocity[2, j] - uj_n * ny_j)
-        urel3 = 0.5 * (body.velocity[3, i] - ui_n * nz_i + body.velocity[3, j] - uj_n * nz_j)
+        uit1 = body.velocity[1, i] - ui_n * nx_i
+        uit2 = body.velocity[2, i] - ui_n * ny_i
+        uit3 = body.velocity[3, i] - ui_n * nz_i
+        ujt1 = body.velocity[1, j] - uj_n * nx_j
+        ujt2 = body.velocity[2, j] - uj_n * ny_j
+        ujt3 = body.velocity[3, j] - uj_n * nz_j
+        urel1 = 0.5 * (uit1 + ujt1)
+        urel2 = 0.5 * (uit2 + ujt2)
+        urel3 = 0.5 * (uit3 + ujt3)
+
+        qi = 0.5 * (uit1^2 + uit2^2 + uit3^2)
+        qj = 0.5 * (ujt1^2 + ujt2^2 + ujt3^2)
+        kinetic_jump = qj - qi
 
         lamb1 = wy * urel3 - wz * urel2
         lamb2 = wz * urel1 - wx * urel3
@@ -1018,9 +1119,9 @@ end
     ForceMonitor(nt, i_system; i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64, normalization=WingNormalization(...), correct_kuttacondition=true, verbose=false)
 
 Storage monitor for integrated force and moment coefficient histories over `nt`
-simulation steps.  At each step the monitor calls `calcfield_F!` to populate
-`body.F` (reading the pressure field `body.P` set by an earlier
-`PressureBernoulli`), then integrates force and moment on `systems[i_system]`
+simulation steps. At each step the monitor reads the latest monitor-provided
+pressure field, writes its own distributed-force array, then integrates force
+and moment on `systems[i_system]`
 in the coordinate system of `frames[i_frame]`. A `PressureBernoulli` must
 therefore appear **before** this monitor in the `monitors` tuple passed to
 `simulate!`.
@@ -1032,18 +1133,338 @@ which divides by `0.5 ρ |U∞|² Sref` (and `… Lref` for moments).
 If `verbose=true`, the normalized CF and CM for each step are printed to stdout
 with a single `\\t` indent.
 """
-struct ForceMonitor{TF, TN} <: AbstractMonitor
+mutable struct ForceMonitor{TF, TN} <: AbstractMonitor
     force::Matrix{TF}
     moment::Matrix{TF}
+    distributed_force::Matrix{TF}
     i_system::Int
     i_frame::Int
     normalization::TN
     correct_kuttacondition::Bool
     verbose::Bool
+    vtk_fields::Tuple{Vararg{Symbol}}
 end
 
 monitor_requires(::ForceMonitor) = (:P,)
 monitor_provides(::ForceMonitor) = (:F,)
+
+"""
+    SurfaceVorticityForce(body, nt, i_system; rho=1.225, i_frame=-1,
+                          TF=Float64, normalization=NoNormalization(),
+                          correct_kuttacondition=true,
+                          gradient_robust=false,
+                          gradient_ar_threshold=10.0,
+                          verbose=false)
+
+Diagnostic force monitor that reconstructs the surface vortex sheet from the
+panel strength gradient and integrates the body-side Kutta-Joukowski force at
+control points:
+``kappa = -n x grad_s(mu)`` and ``dF = rho (V_cp x kappa) dS``.
+The leading minus sign follows FLOWPanel's stored doublet/vortex-ring strength
+convention, which is opposite the common exterior-minus-interior potential-jump
+convention used in much of the panel-method literature.
+
+The strength column is selected from `strength_names(body)`, preferring
+`"gamma"` and falling back to `"mu"`. `body.velocity` is used exactly as stored
+at the time the monitor runs. The monitor writes its own distributed-force
+array, then integrates force and moment with the same frame rotation and
+normalization convention as `ForceMonitor`.
+"""
+struct SurfaceVorticityForce{TF, TN} <: AbstractMonitor
+    force::Matrix{TF}
+    moment::Matrix{TF}
+    distributed_force::Matrix{TF}
+    grad_mu::Matrix{Float64}
+    areas::Vector{Float64}
+    i_system::Int
+    i_frame::Int
+    i_strength::Int
+    rho::TF
+    normalization::TN
+    correct_kuttacondition::Bool
+    gradient_robust::Bool
+    gradient_ar_threshold::Float64
+    verbose::Bool
+    vtk_fields::Tuple{Vararg{Symbol}}
+end
+
+monitor_provides(::SurfaceVorticityForce) = (:F,)
+
+function SurfaceVorticityForce(body::AbstractBody, nt::Int, i_system::Int;
+                               rho::Real=1.225,
+                               i_frame::Int=-1,
+                               TF=Float64,
+                               normalization=NoNormalization(),
+                               correct_kuttacondition::Bool=true,
+                               gradient_robust::Bool=false,
+                               gradient_ar_threshold::Real=10.0,
+                               verbose::Bool=false,
+                               vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,))
+    names = strength_names(body)
+    i_strength = something(findfirst(==("gamma"), names),
+                            findfirst(==("mu"), names),
+                            0)
+    i_strength == 0 && throw(ArgumentError(
+        "SurfaceVorticityForce requires a body with a ConstantDoublet or "*
+        "VortexRing kernel; got strengths $(names)."))
+
+    force = zeros(TF, 3, nt)
+    moment = zeros(TF, 3, nt)
+    distributed_force = zeros(TF, 3, body.ncells)
+    grad_mu = zeros(Float64, 3, body.ncells)
+    areas = calc_areas(body)
+    return SurfaceVorticityForce{TF, typeof(normalization)}(
+        force, moment, distributed_force, grad_mu, areas, i_system, i_frame, i_strength, TF(rho),
+        normalization, correct_kuttacondition, gradient_robust,
+        Float64(gradient_ar_threshold), verbose, vtk_fields)
+end
+
+_surface_vorticity_te_info(body::AbstractLiftingBody) = view(body.shedding_full, 1:2, :)
+_surface_vorticity_te_info(body::AbstractBody) = zeros(Int, 2, body.ncells)
+
+function _surface_vorticity_correct_kutta!(F::AbstractMatrix, body::AbstractLiftingBody)
+    @inbounds for shedding in body.shedding
+        for (pi, nia, nib, pj, nja, njb) in eachcol(shedding)
+            if pj != -1
+                f1 = 0.5 * (F[1, pi] + F[1, pj])
+                f2 = 0.5 * (F[2, pi] + F[2, pj])
+                f3 = 0.5 * (F[3, pi] + F[3, pj])
+                F[1, pi] = f1; F[2, pi] = f2; F[3, pi] = f3
+                F[1, pj] = f1; F[2, pj] = f2; F[3, pj] = f3
+            end
+        end
+    end
+    return F
+end
+
+_surface_vorticity_correct_kutta!(F::AbstractMatrix, body::AbstractBody) = F
+
+"""
+    BoundCirculationMonitor(body, nt, i_system; i_frame, radial_dimension, R,
+                            section_tol=nothing, TF=Float64, verbose=false)
+
+Storage monitor for rotor-section bound circulation histories. Each shedding
+chain in `body.shedding` is treated as one blade, and each current trailing-edge
+edge midpoint is treated as one section station. The monitor stores dimensional
+circulation in memory only:
+
+- `r_over_R[section, blade]`
+- `circulation_te[section, blade, step]`
+- `circulation_slice[section, blade, step]`
+- `valid_section[section, blade]`
+
+The trailing-edge estimate uses the wake-strength convention
+`upper_strength - lower_strength`. The slice estimate transforms panel geometry
+to `frames[i_frame]`, selects panels in a radial tolerance band around the
+station and on the same signed blade side, and sums signed vortex-ring/doublet
+edge crossings through the section plane.
+"""
+struct BoundCirculationMonitor{TF} <: AbstractMonitor
+    r_over_R::Matrix{TF}
+    circulation_te::Array{TF, 3}
+    circulation_slice::Array{TF, 3}
+    valid_section::BitMatrix
+    i_system::Int
+    i_frame::Int
+    radial_dimension::Int
+    radius::TF
+    section_tol::Union{Nothing, TF}
+    i_strength::Int
+    verbose::Bool
+end
+
+function BoundCirculationMonitor(body::AbstractBody, nt::Int, i_system::Int; kwargs...)
+    names = strength_names(body)
+    i_strength = something(findfirst(==("gamma"), names),
+                            findfirst(==("mu"), names),
+                            0)
+    i_strength == 0 && throw(ArgumentError(
+        "BoundCirculationMonitor requires a body with a ConstantDoublet or " *
+        "VortexRing kernel; got strengths $(names)."))
+    throw(ArgumentError(
+        "BoundCirculationMonitor requires an AbstractLiftingBody with shedding chains."))
+end
+
+function BoundCirculationMonitor(body::AbstractLiftingBody, nt::Int, i_system::Int;
+                                 i_frame::Int,
+                                 radial_dimension::Int,
+                                 R::Real,
+                                 section_tol=nothing,
+                                 TF=Float64,
+                                 verbose::Bool=false)
+    1 <= radial_dimension <= 3 ||
+        throw(ArgumentError("BoundCirculationMonitor radial_dimension must be in 1:3; got $(radial_dimension)."))
+    R > 0 || throw(ArgumentError("BoundCirculationMonitor requires positive R; got $(R)."))
+
+    names = strength_names(body)
+    i_strength = something(findfirst(==("gamma"), names),
+                            findfirst(==("mu"), names),
+                            0)
+    i_strength == 0 && throw(ArgumentError(
+        "BoundCirculationMonitor requires a body with a ConstantDoublet or " *
+        "VortexRing kernel; got strengths $(names)."))
+    isempty(body.shedding) && throw(ArgumentError(
+        "BoundCirculationMonitor requires at least one shedding chain."))
+
+    n_blades = length(body.shedding)
+    max_sections = maximum(size(s, 2) for s in body.shedding)
+    max_sections > 0 || throw(ArgumentError(
+        "BoundCirculationMonitor requires shedding chains with at least one section."))
+
+    r_over_R = fill(TF(NaN), max_sections, n_blades)
+    circulation_te = fill(TF(NaN), max_sections, n_blades, nt)
+    circulation_slice = fill(TF(NaN), max_sections, n_blades, nt)
+    valid_section = falses(max_sections, n_blades)
+    for (i_blade, shedding) in pairs(body.shedding)
+        valid_section[1:size(shedding, 2), i_blade] .= true
+    end
+
+    tol = isnothing(section_tol) ? nothing : TF(section_tol)
+    if !isnothing(tol) && !(tol > 0)
+        throw(ArgumentError("BoundCirculationMonitor section_tol must be positive; got $(section_tol)."))
+    end
+
+    return BoundCirculationMonitor{TF}(
+        r_over_R, circulation_te, circulation_slice, valid_section, i_system,
+        i_frame, radial_dimension, TF(R), tol, i_strength, verbose)
+end
+
+function _bound_circulation_frame_point(body::AbstractBody, node::Integer,
+                                        origin_global, R_g2f)
+    p = SVector{3}(body.nodes[1, node], body.nodes[2, node], body.nodes[3, node])
+    return R_g2f * (p - origin_global)
+end
+
+function _bound_circulation_frame_controlpoint(body::AbstractBody, panel::Integer,
+                                               origin_global, R_g2f)
+    p = SVector{3}(body.controlpoints[1, panel],
+                   body.controlpoints[2, panel],
+                   body.controlpoints[3, panel])
+    return R_g2f * (p - origin_global)
+end
+
+function _bound_circulation_te_midpoint(body::AbstractLiftingBody, shedding_col,
+                                        origin_global, R_g2f)
+    _, nia, nib, _, _, _ = shedding_col
+    a = _bound_circulation_frame_point(body, nia, origin_global, R_g2f)
+    b = _bound_circulation_frame_point(body, nib, origin_global, R_g2f)
+    return 0.5 * (a + b)
+end
+
+function _bound_circulation_infer_tol(stations::AbstractVector{TF}) where {TF}
+    vals = sort!(collect(stations))
+    diffs = TF[]
+    for i in 2:length(vals)
+        d = abs(vals[i] - vals[i - 1])
+        d > eps(TF) && push!(diffs, d)
+    end
+    isempty(diffs) && return one(TF)
+    sort!(diffs)
+    n = length(diffs)
+    med = isodd(n) ? diffs[(n + 1) ÷ 2] : 0.5 * (diffs[n ÷ 2] + diffs[n ÷ 2 + 1])
+    return 0.5 * med
+end
+
+function _bound_circulation_same_side(point, station, radial_dimension::Int)
+    side_dim = 0
+    side_mag = zero(eltype(point))
+    for d in 1:3
+        d == radial_dimension && continue
+        mag = abs(station[d])
+        if mag > side_mag
+            side_mag = mag
+            side_dim = d
+        end
+    end
+    side_dim == 0 && return true
+    abs(station[side_dim]) <= eps(eltype(point)) && return true
+    return point[side_dim] * station[side_dim] >= zero(eltype(point))
+end
+
+function _bound_circulation_edge_crossing_sign(ra, rb, station_r)
+    if (ra < station_r && station_r < rb)
+        return 1
+    elseif (rb < station_r && station_r < ra)
+        return -1
+    else
+        return 0
+    end
+end
+
+function _bound_circulation_slice(body::AbstractBody, station, tol, radial_dimension::Int,
+                                  i_strength::Int, origin_global, R_g2f)
+    station_r = station[radial_dimension]
+    Γ = zero(eltype(body.strength))
+    @inbounds for panel in 1:body.ncells
+        cp = _bound_circulation_frame_controlpoint(body, panel, origin_global, R_g2f)
+        abs(cp[radial_dimension] - station_r) <= tol || continue
+        _bound_circulation_same_side(cp, station, radial_dimension) || continue
+
+        γ = body.strength[panel, i_strength]
+        nodes = body.cells[:, panel]
+        for i_edge in 1:3
+            na = nodes[i_edge]
+            nb = nodes[i_edge == 3 ? 1 : i_edge + 1]
+            pa = _bound_circulation_frame_point(body, na, origin_global, R_g2f)
+            pb = _bound_circulation_frame_point(body, nb, origin_global, R_g2f)
+            s = _bound_circulation_edge_crossing_sign(
+                pa[radial_dimension], pb[radial_dimension], station_r)
+            Γ += s * γ
+        end
+    end
+    return Γ
+end
+
+function (m::BoundCirculationMonitor{TF})(systems, wakes,
+                                           frames::AbstractVector{<:ReferenceFrame},
+                                           uinf, i_step::Int, dt::Real) where {TF}
+    body = systems[m.i_system]
+    body isa AbstractLiftingBody || throw(ArgumentError(
+        "BoundCirculationMonitor requires systems[$(m.i_system)] to be an AbstractLiftingBody."))
+
+    origin_global, R_f2g = frame_global_transform(frames, m.i_frame)
+    R_g2f = transpose(R_f2g)
+
+    stations_by_blade = Vector{Vector{SVector{3, TF}}}(undef, length(body.shedding))
+    all_station_r = TF[]
+    for (i_blade, shedding) in pairs(body.shedding)
+        stations = Vector{SVector{3, TF}}(undef, size(shedding, 2))
+        for (i_section, col) in enumerate(eachcol(shedding))
+            station = SVector{3, TF}(_bound_circulation_te_midpoint(
+                body, col, origin_global, R_g2f)...)
+            stations[i_section] = station
+            push!(all_station_r, station[m.radial_dimension])
+        end
+        stations_by_blade[i_blade] = stations
+    end
+
+    tol = isnothing(m.section_tol) ?
+          _bound_circulation_infer_tol(all_station_r) :
+          m.section_tol
+
+    @inbounds for (i_blade, shedding) in pairs(body.shedding)
+        for (i_section, col) in enumerate(eachcol(shedding))
+            station = stations_by_blade[i_blade][i_section]
+            pi, _, _, pj, _, _ = col
+            upper = body.strength[pi, m.i_strength]
+            lower = pj != -1 ? body.strength[pj, m.i_strength] : zero(upper)
+
+            m.r_over_R[i_section, i_blade] = station[m.radial_dimension] / m.radius
+            m.circulation_te[i_section, i_blade, i_step + 1] = upper - lower
+            m.circulation_slice[i_section, i_blade, i_step + 1] =
+                _bound_circulation_slice(body, station, tol, m.radial_dimension,
+                                         m.i_strength, origin_global, R_g2f)
+        end
+    end
+
+    if m.verbose
+        Γte = view(m.circulation_te, :, :, i_step + 1)
+        Γslice = view(m.circulation_slice, :, :, i_step + 1)
+        println("\t\tBoundCirculationMonitor[i_system=$(m.i_system), step=$(i_step+1)]:")
+        println("\t\t\tΓ_TE range = ($(minimum(skipmissing(vec(Γte)))), $(maximum(skipmissing(vec(Γte)))))")
+        println("\t\t\tΓ_slice range = ($(minimum(skipmissing(vec(Γslice)))), $(maximum(skipmissing(vec(Γslice)))))")
+    end
+end
 
 """
     KuttaJoukowskiForce(body, nt, i_system; rho=1.225, backend=DirectBackend(),
@@ -1055,9 +1476,10 @@ edge and reports the **force on the body**:
 ``F = ρ Σᵢ Σⱼ γᵢ \\, (Vᵢⱼ × Δsᵢⱼ) = -ρ Σᵢ Σⱼ γᵢ \\, (Δsᵢⱼ × Vᵢⱼ)``
 summed over panels `i` and their three edges `j`, where `γᵢ` is the panel
 circulation (column of `body.strength` named `"gamma"` or `"mu"`), `Δsᵢⱼ` is the
-directed edge vector along the filament, and `Vᵢⱼ` is the inertial-frame fluid
-velocity (induced + freestream) at the edge midpoint, evaluated via a
-`FastMultipole.ProbeSystem`. The sign matches the pressure-integral
+directed edge vector along the filament, and `Vᵢⱼ` is the body-relative/apparent
+fluid velocity at the edge midpoint: induced velocity plus freestream, minus
+the local rigid-body kinematic velocity. The induced velocity is evaluated via
+a `FastMultipole.ProbeSystem`. The sign matches the pressure-integral
 `ForceMonitor` convention (force on the body, not on the fluid).
 
 Provides an independent cross-check against the pressure-integral force
@@ -1082,6 +1504,7 @@ struct KuttaJoukowskiForce{TF, TB, TN} <: AbstractMonitor
     edge_node_a::Vector{Int}
     edge_node_b::Vector{Int}
     panel_of_probe::Vector{Int}
+    velocity_kinematic::Matrix{TF}
     normalization::TN
     verbose::Bool
 end
@@ -1123,10 +1546,64 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
 
     probes = FastMultipole.ProbeSystem(n_probes, TF)
     force = zeros(TF, 3, nt)
+    velocity_kinematic = zeros(TF, 3, n_probes)
 
     return KuttaJoukowskiForce{TF, typeof(backend), typeof(normalization)}(
         force, i_system, i_frame, i_strength, TF(rho), backend, probes,
-        edge_node_a, edge_node_b, panel_of_probe, normalization, verbose)
+        edge_node_a, edge_node_b, panel_of_probe, velocity_kinematic,
+        normalization, verbose)
+end
+
+function _kutta_joukowski_edge_kinematic_velocity!(
+    velocity_kinematic::AbstractMatrix{TF},
+    probes::FastMultipole.ProbeSystem{TF},
+    i_system::Int,
+    frames::AbstractVector{<:ReferenceFrame},
+) where {TF}
+    fill!(velocity_kinematic, zero(TF))
+    identity = SMatrix{3, 3, TF, 9}(
+        one(TF), zero(TF), zero(TF),
+        zero(TF), one(TF), zero(TF),
+        zero(TF), zero(TF), one(TF),
+    )
+    _kutta_joukowski_edge_kinematic_velocity!(
+        velocity_kinematic, probes, i_system, frames, 1,
+        zero(SVector{3, TF}), identity)
+    return velocity_kinematic
+end
+
+function _kutta_joukowski_edge_kinematic_velocity!(
+    velocity_kinematic::AbstractMatrix{TF},
+    probes::FastMultipole.ProbeSystem{TF},
+    i_system::Int,
+    frames::AbstractVector{<:ReferenceFrame},
+    i_frame::Int,
+    dx_parent_to_global,
+    R_parent_to_global,
+) where {TF}
+    frame = frames[i_frame]
+
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global
+    v_global = R_parent_to_global * frame.v
+    ω_global = R_parent_to_global * frame.ω_axis * frame.ω
+
+    if i_system in frame.dependent_index
+        @inbounds for k in eachindex(probes.position)
+            dv = v_global + cross(ω_global, probes.position[k] - origin_global)
+            velocity_kinematic[1, k] += dv[1]
+            velocity_kinematic[2, k] += dv[2]
+            velocity_kinematic[3, k] += dv[3]
+        end
+    end
+
+    dx_parent_to_global = origin_global
+    R_parent_to_global = R_parent_to_global * frame.R
+    for i in frame.child_index
+        _kutta_joukowski_edge_kinematic_velocity!(
+            velocity_kinematic, probes, i_system, frames, i,
+            dx_parent_to_global, R_parent_to_global)
+    end
+    return velocity_kinematic
 end
 
 function (m::KuttaJoukowskiForce{TF})(systems, wakes,
@@ -1148,22 +1625,39 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
         m.probes.scalar_potential[k] = zero(TF)
         m.probes.hessian[k] = zero_h
     end
+    _kutta_joukowski_edge_kinematic_velocity!(
+        m.velocity_kinematic, m.probes, m.i_system, frames)
 
     # 2. Collect all sources: every body, plus every wake's source list.
     wake_sources = _collect_wake_sources(wakes)
     all_sources  = (systems..., wake_sources...)
 
     # 3. Compute induced velocity at probes.
-    influence!((m.probes,), all_sources, m.backend;
-                precalc=false,
-                scalar_potential=false,
-                gradient=true,
-                hessian=(false,))
+    old_offsets = [sys.kerneloffset for sys in systems]
+    try
+        for (i, sys) in pairs(systems)
+            sys.kerneloffset = i == m.i_system ? sys.kerneloffset_panel : sys.kerneloffset_targets
+        end
+        influence!((m.probes,), all_sources, m.backend;
+                    precalc=false,
+                    scalar_potential=false,
+                    gradient=true,
+                    hessian=(false,))
+    finally
+        for (sys, offset) in zip(systems, old_offsets)
+            sys.kerneloffset = offset
+        end
+    end
 
     # 4. Add freestream manually (no apply_freestream! method for ProbeSystem).
     uinf_sv = SVector{3, TF}(uinf[1], uinf[2], uinf[3])
     @inbounds for k in eachindex(m.probes.gradient)
         m.probes.gradient[k] += uinf_sv
+        m.probes.gradient[k] -= SVector{3, TF}(
+            m.velocity_kinematic[1, k],
+            m.velocity_kinematic[2, k],
+            m.velocity_kinematic[3, k],
+        )
     end
 
     # 5. Sum Kutta–Joukowski contributions. Per the K–J theorem the force on the
@@ -1200,40 +1694,133 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
     end
 end
 
+function (m::SurfaceVorticityForce{TF})(systems, wakes,
+                                         frames::AbstractVector{<:ReferenceFrame},
+                                         uinf, i_step::Int, dt::Real) where {TF}
+    systems_tuple = _systems_tuple(systems)
+    body = systems_tuple[m.i_system]
+    size(m.distributed_force) == (3, body.ncells) || throw(ArgumentError(
+        "SurfaceVorticityForce was constructed for $(size(m.distributed_force, 2)) panels, got $(body.ncells)."))
 
-function ForceMonitor(nt::Int, i_system::Int;
-                       i_frame=-1, TF=Float64,
-                       normalization=WingNormalization(TF(rho), TF(Sref), TF(Lref)),
-                       correct_kuttacondition::Bool=true,
-                       verbose::Bool=false)
-    force = zeros(TF, 3, nt)
-    moment = zeros(TF, 3, nt)
-    return ForceMonitor{TF, typeof(normalization)}(force, moment, i_system, i_frame, normalization, correct_kuttacondition, verbose)
+    F = m.distributed_force
+    fill!(F, zero(eltype(F)))
+    fill!(m.grad_mu, 0.0)
+    calc_areas!(body, m.areas)
+
+    mask = nothing
+    if m.gradient_robust
+        candidate = panel_aspect_ratio_mask(body.nodes, body.cells;
+                                            threshold=m.gradient_ar_threshold)
+        any(candidate) && (mask = candidate)
+    end
+
+    compute_mu_gradient!(m.grad_mu, body.controlpoints, body.normals,
+        body.cells, body.neighbor, view(body.strength, :, m.i_strength),
+        _surface_vorticity_te_info(body);
+        scale=1.0,
+        bad_panel_mask=mask)
+
+    @inbounds for i in 1:body.ncells
+        n = SVector{3, Float64}(body.normals[1, i], body.normals[2, i], body.normals[3, i])
+        grad = SVector{3, Float64}(m.grad_mu[1, i], m.grad_mu[2, i], m.grad_mu[3, i])
+        kappa = cross(n, grad)
+        V = SVector{3, Float64}(body.velocity[1, i], body.velocity[2, i], body.velocity[3, i])
+        Fi = m.rho * cross(V, kappa) * m.areas[i]
+        F[1, i] = Fi[1]
+        F[2, i] = Fi[2]
+        F[3, i] = Fi[3]
+    end
+
+    m.correct_kuttacondition && _surface_vorticity_correct_kutta!(F, body)
+
+    Ftot = calcfield_Ftot(body, F)
+    Fvec = SVector{3, TF}(Ftot[1], Ftot[2], Ftot[3])
+
+    if m.i_frame < 0
+        Mtot = calcfield_Mtot(body, zeros(3), body.controlpoints, F)
+        Mvec = SVector{3, TF}(Mtot[1], Mtot[2], Mtot[3])
+    else
+        origin_global, R_f2g = frame_global_transform(frames, m.i_frame)
+        Mtot = calcfield_Mtot(body, collect(origin_global), body.controlpoints, F)
+        R_g2f = transpose(R_f2g)
+        Fvec = R_g2f * Fvec
+        Mvec = R_g2f * SVector{3, TF}(Mtot[1], Mtot[2], Mtot[3])
+    end
+
+    CF_norm, CM_norm = m.normalization(Fvec, Mvec, systems_tuple, frames, uinf)
+    m.force[:, i_step + 1] .= CF_norm
+    m.moment[:, i_step + 1] .= CM_norm
+
+    if m.verbose
+        println("\t\tSurfaceVorticityForce[i_system=$(m.i_system), i_frame=$(m.i_frame), step=$(i_step+1)]:")
+        println("\t\t\tCF = ($(round(CF_norm[1], sigdigits=4)), $(round(CF_norm[2], sigdigits=4)), $(round(CF_norm[3], sigdigits=4)))")
+        println("\t\t\tCM = ($(round(CM_norm[1], sigdigits=4)), $(round(CM_norm[2], sigdigits=4)), $(round(CM_norm[3], sigdigits=4)))")
+    end
 end
 
-function (monitor::ForceMonitor)(systems, wakes,
-                                  frames::AbstractVector{<:ReferenceFrame},
-                                  uinf, i_step::Int, dt::Real)
+function _register_monitor_outputs!(ctx::MonitorContext, m::SurfaceVorticityForce, systems_tuple::Tuple)
+    monitor_register!(ctx, :F, m.i_system, m.distributed_force)
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::SurfaceVorticityForce, body, i_system::Int, i_step::Int)
+    (:distributed_force in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    size(m.distributed_force) == (3, body.ncells) || return nothing
+    vtk["F", VTKCellData()] = m.distributed_force
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::SurfaceVorticityForce, body, i_system::Int, i_step::Int,
+                           field_names::VTKFieldNameAllocator, i_monitor::Int)
+    (:distributed_force in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    size(m.distributed_force) == (3, body.ncells) || return nothing
+    vtk[_vtk_monitor_field_name!(field_names, "F", m, i_monitor), VTKCellData()] = m.distributed_force
+    return nothing
+end
+
+
+function ForceMonitor(nt::Int, i_system::Int;
+                       i_frame=-1, rho=1.0, Sref=1.0, Lref=1.0, TF=Float64,
+                       normalization=WingNormalization(TF(rho), TF(Sref), TF(Lref)),
+                       correct_kuttacondition::Bool=true,
+                       verbose::Bool=false,
+                       vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,))
+    force = zeros(TF, 3, nt)
+    moment = zeros(TF, 3, nt)
+    distributed_force = zeros(TF, 3, 0)
+    return ForceMonitor{TF, typeof(normalization)}(
+        force, moment, distributed_force, i_system, i_frame, normalization,
+        correct_kuttacondition, verbose, vtk_fields)
+end
+
+function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wakes,
+                       frames::AbstractVector{<:ReferenceFrame},
+                       uinf, i_step::Int, dt::Real)
     systems_tuple = _systems_tuple(systems)
     body = systems_tuple[monitor.i_system]
+    pressure = monitor_field(ctx, :P, monitor.i_system)
 
-    # Populate body.F from body.P. Reset first so multiple ForceMonitors in the same
-    # chain each see only their own pressure, not accumulated values from earlier monitors.
-    fill!(body.F, zero(eltype(body.F)))
-    calcfield_F!(body; correct_kuttacondition=monitor.correct_kuttacondition)
+    if size(monitor.distributed_force) != (3, body.ncells)
+        monitor.distributed_force = zeros(eltype(monitor.force), 3, body.ncells)
+    end
+    fill!(monitor.distributed_force, zero(eltype(monitor.distributed_force)))
+    calcfield_F!(monitor.distributed_force, body, calc_areas(body), body.normals, pressure;
+                 correct_kuttacondition=monitor.correct_kuttacondition)
 
     # total force in global frame
-    Ftot = calcfield_Ftot(body)
+    Ftot = calcfield_Ftot(body, monitor.distributed_force)
     Fvec = FastMultipole.SVector{3}(Ftot[1], Ftot[2], Ftot[3])
 
     if monitor.i_frame < 0
         # global frame: moment about the origin
-        Mtot = calcfield_Mtot(body, zeros(3))
+        Mtot = calcfield_Mtot(body, zeros(3), body.controlpoints, monitor.distributed_force)
         Mvec = FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
     else
         # frame-local: moment about frame origin, rotated into frame axes
         origin_global, R_f2g = frame_global_transform(frames, monitor.i_frame)
-        Mtot = calcfield_Mtot(body, collect(origin_global))
+        Mtot = calcfield_Mtot(body, collect(origin_global), body.controlpoints, monitor.distributed_force)
         R_g2f = transpose(R_f2g)
         Fvec = R_g2f * Fvec
         Mvec = R_g2f * FastMultipole.SVector{3}(Mtot[1], Mtot[2], Mtot[3])
@@ -1249,4 +1836,29 @@ function (monitor::ForceMonitor)(systems, wakes,
         println("\t\t\tCF = ($(round(CF_norm[1], sigdigits=4)), $(round(CF_norm[2], sigdigits=4)), $(round(CF_norm[3], sigdigits=4)))")
         println("\t\t\tCM = ($(round(CM_norm[1], sigdigits=4)), $(round(CM_norm[2], sigdigits=4)), $(round(CM_norm[3], sigdigits=4)))")
     end
+    monitor_register!(ctx, :F, monitor.i_system, monitor.distributed_force)
+    return nothing
+end
+
+function (monitor::ForceMonitor)(systems, wakes,
+                                  frames::AbstractVector{<:ReferenceFrame},
+                                  uinf, i_step::Int, dt::Real)
+    throw(ArgumentError("ForceMonitor requires monitor-owned pressure context; run it through simulate! or replay after a pressure monitor."))
+end
+
+function write_vtk_fields!(vtk, m::ForceMonitor, body, i_system::Int, i_step::Int)
+    (:distributed_force in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    size(m.distributed_force) == (3, body.ncells) || return nothing
+    vtk["F", VTKCellData()] = m.distributed_force
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::ForceMonitor, body, i_system::Int, i_step::Int,
+                           field_names::VTKFieldNameAllocator, i_monitor::Int)
+    (:distributed_force in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    size(m.distributed_force) == (3, body.ncells) || return nothing
+    vtk[_vtk_monitor_field_name!(field_names, "F", m, i_monitor), VTKCellData()] = m.distributed_force
+    return nothing
 end
