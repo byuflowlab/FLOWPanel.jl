@@ -315,7 +315,7 @@ np = 144 # number of particles per revolution
 # Constant values
 # nt = 36
 # p_per_step = 2
-overlap = 2.0
+overlap = 4.0
 
 # Variable values
 nts         = [36, 72, 144]
