@@ -48,7 +48,6 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
-    cp_outer::Bool                      # Side of the surface the control point limit is taken from (true = exterior, false = interior)
     kerneloffset::Float64               # Active kernel offset to avoid singularities
     kerneloffset_panel::Float64         # Kernel offset for panel solves/interactions
     kerneloffset_targets::Float64       # Kernel offset for panel influence on targets
@@ -74,7 +73,6 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
-                cp_outer::Bool=!DBC,
                 kerneloffset=1e-8,
                 kerneloffset_panel=kerneloffset,
                 kerneloffset_targets=kerneloffset,
@@ -108,7 +106,6 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity,
                 controlpoints,
                 normals,
-                cp_outer,
                 kerneloffset_panel,
                 Float64(kerneloffset_panel),
                 Float64(kerneloffset_targets),

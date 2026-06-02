@@ -1,6 +1,6 @@
 # Exact Control Points
 
-**Status:** v2 — derivation notes for the kernel self limits. No code changes are implied by this document.
+**Status:** v2 — derivation notes for the kernel self limits.
 
 This note proposes replacing the `CPoffset` regularization currently used to avoid singular self-influence at panel control points with an *exact on-surface* evaluation scheme: evaluate kernels at the true control point on the panel, and substitute a closed-form limit value when the field point is within `ε` of a source-panel control point.
 
@@ -28,7 +28,7 @@ Costs of the current `CPoffset` regularization:
 What this proposal means:
 
 - "Exact control points" — control points sit exactly on the panel surface (centroid, no offset); when a field point is within `ε` of a source-panel control point, the kernel returns its known closed-form limit instead of being numerically evaluated.
-- Goal — decouple control-point geometry from the solver formulation and make the diagonal contribution to the influence matrix an explicit per-kernel statement.
+- Goal — decouple control-point geometry from the solver formulation and make the diagonal contribution to the influence matrix an explicit per-kernel statement. FLOWPanel uses a fixed self-pair convention: velocity returns the exterior surface limit, while potential returns the interior surface limit.
 
 ## 2. Notation and Conventions
 
@@ -60,6 +60,12 @@ This section is a self-contained glossary for the rest of the document.
   \(\mathbf{x}\to\mathbf{x}_j+\eta\mathbf{n}_j,\ \eta\downarrow0\); \(-\)
   denotes the interior limit. Jumps are always written as
   \((\cdot)^+-(\cdot)^-\).
+- **FLOWPanel self-pair convention** — exact self-pair velocity always uses
+  the exterior limit, because that is the physical aerodynamic surface
+  velocity. Exact self-pair potential always uses the interior limit, because
+  that is the useful boundary-integral value for Dirichlet-style solves. For
+  a self panel, exterior doublet or vortex-ring potential is recovered as
+  `interior_potential - doublet_or_vortex_strength`.
 - **Kernel strengths** — \(\sigma_j\) (source), \(\mu_j\) (doublet),
   \(\Gamma_j\) (vortex-ring circulation),
   \(\boldsymbol{\gamma}_j=\gamma_t\mathbf{t}_j+\gamma_o\mathbf{o}_j\)
@@ -84,7 +90,7 @@ This section is a self-contained glossary for the rest of the document.
 
 ## 3. Limit Values at the Source Control Point
 
-For each element type defined in `src/FLOWPanel_elements.jl:25–54`, document the on-surface limit (as the field point approaches the source panel's own control point from the exterior side) of:
+For each element type defined in `src/FLOWPanel_elements.jl:25–54`, document the on-surface limits at the source panel's own control point of:
 
 - induced potential `φ`,
 - induced velocity `u = ∇φ`,
@@ -516,18 +522,13 @@ closed-form sheet formula.
 - Net effect: the `DBC=false` branch of `_set_formulation_geometry!`
   (`src/FLOWPanel_solver.jl:225-234`) becomes a no-op modulo the
   unconditional control-point/normal recomputation.
-- **`cp_outer::Bool` field on `AbstractBody`.** The
-  \(\pm\sigma/2\) source-velocity jump and the corresponding sign in the
-  velocity-gradient jump term depend on which side of the sheet the control
-  point is taken from. Because the control point now sits *on* the surface,
-  the sign is no longer encoded in the offset direction and must be carried
-  by the body. Add a `cp_outer::Bool` field to `AbstractBody` (true =
-  exterior side, the Neumann-solve convention; false = interior side, the
-  Dirichlet convention) and select the sign of the `ConstantSource`
-  self-velocity jump (and the matching contribution to
-  \(\nabla\mathbf{u}_{\sigma,\mathrm{self}}^\pm\) in §3.1) accordingly.
-  Without this field the Neumann solve has no way to recover the \(+\tfrac12\)
-  on the diagonal.
+- Exact self-pair evaluation no longer needs a formulation-side flag. The
+  constant-source self-velocity jump is always the exterior
+  \(+\tfrac12\sigma\mathbf{n}\) contribution, while doublet and vortex-ring
+  self-potential always use the interior \(+\tfrac12\mu\) or
+  \(+\tfrac12\Gamma\) contribution. If an exterior self-potential is needed,
+  subtract the self panel's doublet or vortex strength from the returned
+  interior value.
 
 ### 4.2 Dirichlet Formulation (`BackslashDirichlet`)
 
@@ -622,11 +623,8 @@ closed-form sheet formula.
 
 ## 6. Removal of `CPoffset` from the Body Types
 
-- Field to add: `cp_outer::Bool` on `AbstractBody` (default `true`),
-  carrying the side convention previously encoded in `sign(CPoffset)`. See
-  §4.1 — the constant-source self-velocity jump and the matching
-  velocity-gradient jump term need this to pick a sign once the control
-  point is on the surface.
+- No replacement side-convention field is required for self pairs. Exact
+  self-pair velocity and potential use the fixed convention stated in §2.
 - Fields to retire:
   - `NonLiftingBody.CPoffset` (`src/FLOWPanel_nonliftingbody.jl:51`, default `1e-14` at line 77).
   - `RigidWakeBody.CPoffset` (`src/FLOWPanel_liftingbody.jl:63`, default `1e-6` at line 99).
@@ -662,9 +660,10 @@ relative to the repository root.
    `kerneloffset=0` and the new self short-circuit active, and asserts
    equality with:
    - exterior \(+\tfrac12\,\mathbf{n}\) normal-velocity jump for
-     `ConstantSource`,
-   - interior \(+\tfrac12\) / exterior \(-\tfrac12\) potential for
-     `ConstantDoublet` and `VortexRing`,
+     `ConstantSource`, independent of `DBC`,
+   - interior \(+\tfrac12\) potential for `ConstantDoublet` and `VortexRing`,
+     independent of `DBC`; exterior self-potential is recovered by subtracting
+     the self panel's doublet or vortex strength,
    - \(\tfrac12\,\boldsymbol{\gamma}\times\mathbf{n}\) velocity jump for
      `ConstantVortexSheet` and `UniformVortexSheet`.
 2. **Sphere potential-flow** — extend the existing sphere test in

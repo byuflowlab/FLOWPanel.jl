@@ -45,6 +45,20 @@ function pnl.influence!(::Tuple, ::Tuple, backend::SimMarkerBackend; kwargs...)
     return nothing
 end
 
+mutable struct SimWakeRecorder <: pnl.AbstractMonitor
+    wakes_seen::Any
+    i_step_seen::Int
+    dt_seen::Float64
+end
+SimWakeRecorder() = SimWakeRecorder(nothing, -1, NaN)
+
+function (m::SimWakeRecorder)(systems, wakes, frames, uinf, i_step::Int, dt::Real)
+    m.wakes_seen = wakes
+    m.i_step_seen = i_step
+    m.dt_seen = Float64(dt)
+    return nothing
+end
+
 @testset "simulate! input normalization" begin
     Uinf = t -> [1.0, 0.0, 0.0]
     maneuver = (frames, systems, wakes, t) -> nothing
@@ -163,4 +177,104 @@ end
         backend_solve=(pnl.DirectBackend(),),
         path=nothing,
     )
+end
+
+@testset "steady! body-only solve and validation" begin
+    uinf = [1.0, 0.0, 0.0]
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    solver = SimNoopSolver()
+    backend_system = SimMarkerBackend()
+    backend_solve = :steady_solve_backend
+    recorder = SimWakeRecorder()
+
+    pnl.steady!(body, frames, uinf;
+        body_solvers=solver,
+        backend=pnl.DirectBackend(),
+        backend_solve=backend_solve,
+        backend_system=backend_system,
+        monitors=(recorder,),
+        i_run=2,
+        dt=0.25,
+    )
+    @test solver.backend_seen === backend_solve
+    @test backend_system.calls == 1
+    @test all(haskey(kwargs, :direct_conditioning) for kwargs in backend_system.kwargs_seen)
+    @test all(kwargs[:direct_conditioning] isa FastMultipole.DirectConditioningRule for kwargs in backend_system.kwargs_seen)
+    @test body.kerneloffset == body.kerneloffset_targets
+    @test recorder.wakes_seen === (nothing,)
+    @test recorder.i_step_seen == 1
+    @test recorder.dt_seen == 0.25
+
+    body1 = make_plate_vortex_body()
+    body2 = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body1)
+    @test_throws ArgumentError pnl.steady!((body1, body2), frames, uinf;
+        body_solvers=(SimNoopSolver(),),
+        backend=pnl.DirectBackend(),
+    )
+    @test_throws ArgumentError pnl.steady!(body1, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_solve=(pnl.DirectBackend(),),
+    )
+    @test_throws ArgumentError pnl.steady!(body1, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        i_run=0,
+    )
+    @test_throws ArgumentError pnl.steady!(body1, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        dt=0.0,
+    )
+end
+
+@testset "steady! monitors" begin
+    uinf = [1.0, 0.0, 0.0]
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    solver = SimNoopSolver()
+    pressure = pnl.PressureBernoulli(1.0)
+    force = pnl.ForceMonitor(3, 1; normalization=pnl.NoNormalization())
+    force.force .= NaN
+    force.moment .= NaN
+
+    pnl.steady!(body, frames, uinf;
+        body_solvers=solver,
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(pressure, force),
+        i_run=2,
+        dt=1.0,
+    )
+    @test all(isnan, force.force[:, 1])
+    @test all(isfinite, force.force[:, 2])
+    @test all(isnan, force.force[:, 3])
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    @test_throws ArgumentError pnl.steady!(body, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        monitors=(pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()),),
+    )
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    laplace = pnl.PressureLaplace((body,), 1.0; reference_panel=1)
+    recorder = SimWakeRecorder()
+    @test !body.needs_velocity_gradient[]
+    pnl.steady!(body, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(laplace, recorder),
+        i_run=1,
+        dt=0.1,
+    )
+    @test body.needs_velocity_gradient[]
+    @test recorder.wakes_seen === (nothing,)
 end

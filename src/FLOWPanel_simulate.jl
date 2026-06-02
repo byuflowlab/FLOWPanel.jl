@@ -220,6 +220,147 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
     return systems
 end
 
+function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple,
+        frames, uinf, body_solvers; backend_wake=nothing, backend_solve,
+        backend_system, needs_induced_vorticity::Bool=false,
+        update_trailing_edges::Bool=false)
+    for w in wakes_tuple
+        !isnothing(w) && reset!(w)
+    end
+    for sys in systems_tuple
+        reset!(sys)
+    end
+
+    wake_probes = _collect_wake_probes(wakes_tuple)
+    targets = (systems_tuple..., wake_probes...)
+    wake_sources = _collect_wake_sources(wakes_tuple)
+
+    apply_freestream!(systems_tuple, uinf)
+    for w in wakes_tuple
+        !isnothing(w) && apply_freestream!(w, uinf)
+    end
+
+    kinematic_velocity!(systems_tuple, frames)
+
+    if update_trailing_edges
+        for (sys, w) in zip(systems_tuple, wakes_tuple)
+            !isnothing(w) && update_TE!(w, sys)
+        end
+    end
+
+    if length(wake_sources) > 0
+        influence!(targets, wake_sources, backend_wake; precalc=true,
+            scalar_potential=false,
+            velocity=true,
+            velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+    end
+
+    _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
+    solve!(systems, body_solvers; backend=backend_solve)
+
+    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple)
+
+    _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+    influence!(targets, systems_tuple, backend_system; precalc=false,
+        scalar_potential=false,
+        velocity=true,
+        velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+        extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
+        direct_conditioning=_self_panel_kerneloffset_conditioning())
+
+    # Add the +½∇μ tangential half-jump on each surface so body.velocity is
+    # the EXTERIOR surface limit (matching OLD calcfield_U!). The kernel-
+    # induced velocity at the on-surface centroid is the PV (continuous
+    # through the doublet sheet); the exterior limit requires this extra
+    # tangential half-jump that depends on neighbor strengths, which
+    # _self_limit cannot supply locally.
+    for body in systems_tuple
+        if has_grad_mu(body)
+            compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
+                body.cells, body.neighbor,
+                view(body.strength, :, get_Gammai(body)),
+                _bound_surface_vorticity_te_info(body);
+                scale=0.5)
+        end
+    end
+
+    return nothing
+end
+
+"""
+    steady!(systems, frames, uinf; body_solvers, backend=FastMultipoleBackend(...),
+            backend_solve=backend, backend_system=backend, monitors=(), i_run=1,
+            dt=1.0, path=nothing, name="default_steady", verbose=false)
+
+Run a one-shot steady panel solve for one body or a tuple of bodies. The solve
+uses wake geometry already stored on the bodies, if any, and does not create,
+propagate, or shed external free wakes.
+"""
+function steady!(systems, frames, uinf;
+        name="default_steady",
+        path=nothing,
+        body_solvers,
+        backend=FastMultipoleBackend(;
+                expansion_order=10,
+                multipole_acceptance=0.4,
+                leaf_size=100,
+            ),
+        backend_solve=backend,
+        backend_system=backend,
+        monitors=(),
+        i_run::Int=1,
+        dt::Real=1.0,
+        verbose=false
+    )
+    i_run >= 1 || throw(ArgumentError("i_run must be >= 1, got $(i_run)."))
+    dt > 0 || throw(ArgumentError("dt must be positive, got $(dt)."))
+
+    systems_tuple = _systems_tuple(systems)
+    wakes_tuple = Tuple(nothing for _ in systems_tuple)
+    _validate_body_solvers(systems, body_solvers)
+    _validate_influence_backend(:backend_system, backend_system)
+    _validate_solve_backend(systems, body_solvers, backend_solve)
+    audit_monitors(monitors)
+
+    i_step = i_run - 1
+    verbose && println("\tsteady run $(i_run)")
+
+    needs_grad = any(monitor_requires_body_hessian, monitors)
+    needs_induced_vorticity = any(monitor_requires_induced_vorticity, monitors)
+    for sys in systems_tuple
+        sys.needs_velocity_gradient[] = needs_grad
+    end
+
+    if !isnothing(path) && !isdir(path)
+        mkpath(path)
+    end
+
+    for sys in systems_tuple
+        calc_normals!(sys)
+        calc_controlpoints!(sys)
+    end
+
+    _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
+        body_solvers; backend_solve, backend_system, needs_induced_vorticity)
+
+    monitor_context = MonitorContext()
+    for monitor in monitors
+        _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
+    end
+
+    if !isnothing(path)
+        t = i_step * dt
+        for (i, sys) in enumerate(systems_tuple)
+            body_name = name * "_body$(i)"
+            write_vtk(joinpath(path, body_name), sys, i_step, t;
+                      monitors=monitors, i_system=i, overwrite=i_run==1)
+        end
+    end
+
+    return systems
+end
+
 """
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range; body_solvers, backend=FastMultipoleBackend(...), backend_wake=backend, backend_solve=backend, backend_system=backend, monitors=(), ...)
 
@@ -271,7 +412,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
     # update control points and normals according to Neumann/Dirichlet BCs
     for sys in systems_tuple
-        _set_formulation_geometry!(sys, true)
+        calc_normals!(sys)
+        calc_controlpoints!(sys)
     end
 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
@@ -296,69 +438,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         #------- aerodynamics -------#
 
-        # reset potential/velocity
-        for w in wakes_tuple
-            !isnothing(w) && reset!(w)
-        end
-        for sys in systems_tuple
-            reset!(sys)
-        end
-
-        # get probes
-        wake_probes = _collect_wake_probes(wakes_tuple)
-        targets = (systems_tuple..., wake_probes...)
-        wake_sources = _collect_wake_sources(wakes_tuple)
-
-        # freestream
         uinf = Uinf(t)
-        apply_freestream!(systems_tuple, uinf)
-        for w in wakes_tuple
-            !isnothing(w) && apply_freestream!(w, uinf)
-        end
-
-        # kinematics
-        kinematic_velocity!(systems_tuple, frames)
 
         # dt for this step
         dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
 
-        # snap first row of wake nodes to the trailing edge
-        for (sys, w) in zip(systems_tuple, wakes_tuple)
-            !isnothing(w) && update_TE!(w, sys)
-        end
-
-        # apply wake velocity to body surface
-        if length(wake_sources) > 0
-            influence!(targets, wake_sources, backend_wake; precalc=true,
-                scalar_potential=false,
-                velocity=true,
-                velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
-                extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
-        end
-
-        # solve systems with the panel/solve regularization.
-        _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
-        solve!(systems, body_solvers; backend=backend_solve, update_cps_normals=false)
-
-        # update control points (normals should not have changed)
-        for sys in systems_tuple
-            calc_controlpoints!(sys)
-        end
-
-        # Add the bound surface vorticity κ = n × ∇sμ on top of the wake-induced
-        # curl already in body.induced_vorticity from the wake-on-body pass.
-        # body-on-body influence! does not write to induced_vorticity, so this
-        # is the final state seen by downstream monitors.
-        needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple)
-
-        # system-on-all influence with the external-target regularization.
-        _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
-        influence!(targets, systems_tuple, backend_system; precalc=false,
-            scalar_potential=false,
-            velocity=true,
-            velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
-            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
-            direct_conditioning=_self_panel_kerneloffset_conditioning())
+        _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
+            body_solvers; backend_wake, backend_solve, backend_system,
+            needs_induced_vorticity, update_trailing_edges=true)
 
         #------- other solvers -------#
 
@@ -421,7 +508,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # update control points and normals according to Neumann/Dirichlet BCs
             for sys in systems_tuple
-                _set_formulation_geometry!(sys, true)
+                calc_normals!(sys)
+        calc_controlpoints!(sys)
             end
 
             #--- shed new wake ---#

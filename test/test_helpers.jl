@@ -314,7 +314,6 @@ Assumes freestream has already been applied.
 """
 function flow_tangency_residuals(bodies::Tuple)
     for body in bodies
-        body.cp_outer = true
         pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
     end
@@ -337,7 +336,6 @@ function flow_tangency_residuals(bodies::Tuple)
 end
 
 function nonlifting_flow_tangency_max_residual(body::pnl.NonLiftingBody{<:Any, <:Any, <:Any, false})
-    body.cp_outer = true
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     pnl.influence!(body, body, pnl.DirectBackend(); velocity=true)
@@ -367,7 +365,6 @@ function flow_tangency_max_residuals(bodies::Tuple; backend=pnl.DirectBackend(),
     Uext = [copy(body.velocity) for body in bodies]
 
     for body in bodies
-        body.cp_outer = true
         pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
     end
@@ -398,7 +395,6 @@ function interior_potential_max_residuals(bodies::Tuple; backend=pnl.DirectBacke
     phi_ext = [copy(body.potential) for body in bodies]
 
     for body in bodies
-        body.cp_outer = false
         pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
         body.potential .= 0.0
@@ -437,7 +433,6 @@ end
 
 function flow_potential_residuals(bodies::Tuple; cp_off=nothing)
     for body in bodies
-        body.cp_outer = false
         pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
         body.potential .= 0.0

@@ -124,9 +124,9 @@ function get_vertices(source_system::AbstractBody, i_source::Int)
 end
 
 """
-    _self_limit(phi_raw, u_raw, ug_raw, ::Type{TK}, strength, n_gt, cp_outer)
+    _self_limit(phi_raw, u_raw, ug_raw, ::Type{TK}, strength, n_gt)
 
-Override the on-centroid `_induced` result with the side-aware self limit.
+Override the on-centroid `_induced` result with FLOWPanel's fixed self limit.
 
 The evaluation point is NOT moved (`_induced` does not nudge target_Rz). At
 `target_Rz == 0`, `compute_source_dipole` returns the principal value of the
@@ -137,60 +137,63 @@ are clean PVs:
 * source potential PV: finite, from log_term integral (continuous)
 * doublet/ring tangential & normal velocity PV: finite (continuous)
 
-`_self_limit` therefore adds the side-correct half-jump to the
-jump-discontinuous components and keeps `phi_raw` / `u_raw` for the
-continuous ones:
-* `cp_outer=true`  (exterior): φ_d = -μ/2, u_s·n_GT = +σ/2
-* `cp_outer=false` (interior): φ_d = +μ/2, u_s·n_GT = -σ/2
+`_self_limit` therefore applies the fixed physical convention used by
+FLOWPanel's exact control-point path:
+* self-pair velocity is always the exterior surface limit, so source
+  `u_s·n_GT = +σ/2`;
+* self-pair potential is always the interior surface limit, so
+  `φ_d = +μ/2` or `φ_Γ = +Γ/2`;
+* continuous components keep their principal-value result.
+
+For a self panel, the exterior doublet/ring potential can be recovered from the
+returned interior value by subtracting the panel's doublet or vortex strength.
 
 Consumers (`_G!`, Krylov matvec, post-processing) receive the actual
-surface-limit value and do not add their own ±0.5 jump. Wake contributions
-from `_induced_wake` are still added on top by the caller. The velocity
-gradient self-limit is zeroed (out of scope).
+surface-limit value and do not add their own ±0.5 jump. Wake contributions from
+`_induced_wake` are still added on top by the caller. The velocity gradient
+self-limit is zeroed (out of scope).
 """
-@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantSource}, strength, n_gt, cp_outer::Bool)
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantSource}, strength, n_gt)
     # source phi is continuous (PV in phi_raw is correct); source u·n_GT has the jump.
     sigma = strength[1]
-    half_n = cp_outer ? sigma * 0.5 : -sigma * 0.5
+    half_n = sigma * 0.5
     u_n_raw = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
     u_self = u_raw + (half_n - u_n_raw) * n_gt
     return phi_raw, u_self, zero(ug_raw)
 end
 
-@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantDoublet}, strength, n_gt, cp_outer::Bool)
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantDoublet}, strength, n_gt)
     # doublet velocity at the centroid is continuous (u_raw is the clean PV);
-    # potential has the jump (PV = 0).
+    # potential uses the interior half-jump (PV = 0).
     mu = strength[1]
-    phi_self = cp_outer ? -mu * 0.5 : mu * 0.5
+    phi_self = mu * 0.5
     return phi_self, u_raw, zero(ug_raw)
 end
 
-@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{VortexRing}, strength, n_gt, cp_outer::Bool)
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{VortexRing}, strength, n_gt)
     gamma = strength[1]
-    phi_self = cp_outer ? -gamma * 0.5 : gamma * 0.5
+    phi_self = gamma * 0.5
     return phi_self, u_raw, zero(ug_raw)
 end
 
-@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, ConstantDoublet}}, strength, n_gt, cp_outer::Bool)
-    # phi_raw = source PV (clean) + 0 (doublet PV).  Add doublet half-jump.
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, ConstantDoublet}}, strength, n_gt)
+    # phi_raw = source PV (clean) + 0 (doublet PV).  Add interior doublet half-jump.
     # u_raw   = doublet PV (clean) + source tangential PV (clean) + 0 (source normal PV).
-    # Override the normal component with the source half-jump.
+    # Add only the exterior source half-jump so the continuous doublet velocity is preserved.
     sigma = strength[1]
     mu    = strength[2]
-    phi_self = cp_outer ? phi_raw - mu * 0.5 : phi_raw + mu * 0.5
-    half_n   = cp_outer ? sigma * 0.5 : -sigma * 0.5
-    u_n_raw  = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
-    u_self   = u_raw + (half_n - u_n_raw) * n_gt
+    phi_self = phi_raw + mu * 0.5
+    half_n   = sigma * 0.5
+    u_self   = u_raw + half_n * n_gt
     return phi_self, u_self, zero(ug_raw)
 end
 
-@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, VortexRing}}, strength, n_gt, cp_outer::Bool)
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, VortexRing}}, strength, n_gt)
     sigma = strength[1]
     gamma = strength[2]
-    phi_self = cp_outer ? phi_raw - gamma * 0.5 : phi_raw + gamma * 0.5
-    half_n   = cp_outer ? sigma * 0.5 : -sigma * 0.5
-    u_n_raw  = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
-    u_self   = u_raw + (half_n - u_n_raw) * n_gt
+    phi_self = phi_raw + gamma * 0.5
+    half_n   = sigma * 0.5
+    u_self   = u_raw + half_n * n_gt
     return phi_self, u_self, zero(ug_raw)
 end
 
@@ -243,10 +246,10 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    # self-pair short-circuit: override with §3 principal value (no jump)
+    # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
         n_gt = _panel_normal_gt((v1, v2, v3))
-        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt, source_system.cp_outer)
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt)
     end
 
     # check for wake (if any)
@@ -267,10 +270,10 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
-    # self-pair short-circuit: override with §3 principal value (no jump)
+    # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
         n_gt = _panel_normal_gt((v1, v2, v3))
-        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt, source_system.cp_outer)
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt)
     end
 
     # check for wake (if any)
@@ -297,7 +300,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     control_point = (v1 + v2 + v3) * 0.3333333333333333
     if _is_self_pair(target, control_point, (v1, v2, v3))
         n_gt = _panel_normal_gt((v1, v2, v3))
-        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt, source_system.cp_outer)
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt)
     end
 
     # check for wake (if any)
@@ -319,7 +322,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     control_point = (v1 + v2 + v3) * 0.3333333333333333
     if _is_self_pair(target, control_point, (v1, v2, v3))
         n_gt = _panel_normal_gt((v1, v2, v3))
-        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt, source_system.cp_outer)
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt)
     end
 
     # check for wake (if any)
@@ -697,7 +700,7 @@ function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, s
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
     # No on-centroid nudge: when target_Rz == 0 the kernel returns the principal
     # value (compute_source_dipole forces tan_term = 0 at target_Rz == 0), and
-    # `_self_limit` adds the side-correct half-jump at self pairs.
+    # `_self_limit` applies the fixed exterior velocity and interior potential limits at self pairs.
 
     #--- first recursive quantities ---#
 

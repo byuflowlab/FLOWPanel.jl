@@ -173,7 +173,6 @@ function _body_manifest_dict(body::AbstractBody, i::Int)
         "kind" => _body_kind_string(body),
         "strength_names" => collect(strength_names(body)),
         "dbc" => has_dirichlet_bc(body),
-        "cp_outer" => body.cp_outer,
         "kerneloffset_panel" => body.kerneloffset_panel,
         "kerneloffset_targets" => body.kerneloffset_targets,
         "kernelcutoff" => body.kernelcutoff,
@@ -223,7 +222,6 @@ function _construct_body_from_metadata(nodes, cells, body_meta, cell_data)
     dbc = Bool(get(body_meta, "dbc", false))
     kwargs = (;
         DBC=dbc,
-        cp_outer=Bool(get(body_meta, "cp_outer", !dbc)),
         kerneloffset_panel=Float64(get(body_meta, "kerneloffset_panel", get(body_meta, "kerneloffset", 1e-8))),
         kerneloffset_targets=Float64(get(body_meta, "kerneloffset_targets", get(body_meta, "kerneloffset", 1e-8))),
         kernelcutoff=Float64(get(body_meta, "kernelcutoff", 1e-14)),

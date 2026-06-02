@@ -31,8 +31,6 @@ Implementations of AbstractBody are expected to have the following fields
 * `velocity::Matrix{TF}`              : 3xncells apparent fluid velocity at control points (body frame)
 * `velocity_kinematic::Matrix{TF}`    : 3xncells rigid-body kinematic velocity at control points (inertial frame)
 * `potential::Vector{TF}`             : Total scalar potential at control points
-* `cp_outer::Bool`                    : Side of the surface the control point limit
-                                        is taken from (true = exterior, false = interior)
 * `characteristiclength::Function`    : Function for computing the characteristic
                                         length of each panel
 * `kerneloffset::Real`                : Active kernel offset to avoid singularities

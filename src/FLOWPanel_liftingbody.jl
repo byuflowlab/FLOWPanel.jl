@@ -60,7 +60,6 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
-    cp_outer::Bool                            # Side of the surface the control point limit is taken from (true = exterior, false = interior)
     kerneloffset::Float64                     # Active kernel offset to avoid singularities
     kerneloffset_panel::Float64               # Kernel offset for panel solves/interactions
     kerneloffset_targets::Float64             # Kernel offset for panel influence on targets
@@ -96,7 +95,6 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
-                                cp_outer::Bool=!DBC,
                                 kerneloffset=1e-8,
                                 kerneloffset_panel=kerneloffset,
                                 kerneloffset_targets=kerneloffset,
@@ -197,7 +195,6 @@ function RigidWakeBody{E, N, TF, DBC}(
                     controlpoints,
                     normals,
                     velocity_te,
-                    cp_outer,
                     kerneloffset_panel,
                     Float64(kerneloffset_panel),
                     Float64(kerneloffset_targets),

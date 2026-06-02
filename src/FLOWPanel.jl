@@ -25,7 +25,7 @@ export  solve, save, influence!,
         ForceMonitor, KuttaJoukowskiForce, SurfaceVorticityForce,
         BoundCirculationMonitor,
         WingNormalization, NoNormalization, RotorNormalization,
-        simulate_warmstart!, initialize_Das!,
+        steady!, simulate_warmstart!, initialize_Das!,
         replay, ReplayResult
 
 # ------------ GENERIC MODULES -------------------------------------------------

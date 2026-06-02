@@ -215,7 +215,6 @@ const CELLS_NONMANIFOLD = Int[
         @test body.nnodes == 4
         @test body.ncells == 2
         @test size(body.strength) == (2, 1)
-        @test body.cp_outer == true
         @test body.watertight == false
         @test length(body.vtk_cells) == 2
 

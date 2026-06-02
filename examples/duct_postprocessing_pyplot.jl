@@ -5,7 +5,8 @@ include(joinpath(pnl.examples_path, "plotformat.jl"))
 Compare solution to experimental surface pressure (figures 4.8 and 6.4 in Lewis
 1991)
 """
-function plot_Cp(body, AOA, rho, magVinf; plot_experimental=true)
+function plot_Cp(body, AOA, rho, magVinf; pressure=getfield(body, :P),
+                 plot_experimental=true)
 
     fig = plt.figure("AOA $(AOA)", figsize=[7, 5*0.8]*2/3 .* [2, 1])
     axs = fig.subplots(1, 2)
@@ -25,7 +26,12 @@ function plot_Cp(body, AOA, rho, magVinf; plot_experimental=true)
 
         # Data filter to get only +z or only -z data points
         slicefilter(x, i) = (x[3] >= 0) == upperside
-        slicepoints, slicePs = pnl.slice_scalarfield(body, :P, 2, 0.0, 0.1; filter=slicefilter)
+        controlpoints = body.controlpoints
+        target = abs.(view(controlpoints, 2, :) .- 0.0)
+        idx = (target .<= 0.1) .&& slicefilter.(eachcol(controlpoints), eachindex(target))
+        sum(idx) == 0 && error("No panels found within tolerance 0.1 of coordinate 0.0 in dimension 2.")
+        slicepoints = controlpoints[:, idx]
+        slicePs = pressure[idx]
         sliceCps = slicePs ./ (0.5 * rho * magVinf^2)
 
         side = upperside ? "upper" : "lower"
