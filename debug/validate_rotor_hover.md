@@ -258,8 +258,19 @@ Planned runs (advance only if the previous row is stable):
 | --- | ---: | --- | --- | --- |
 | B0 | `1e-2` | done — stable | TBD (record from existing baseline if logged) | Current script default, user-confirmed stable |
 | R1 | `5e-3` | done — stable | -0.0188 / -0.189 / -0.300 | Final-rev (steps 325–360) mean; periodic oscillation, no drift. Log: `debug/logs/rotor_hover_R1_kerneloffset_5e-3.log` |
-| R2 | `2e-3` | pending | Run only if R1 stable | |
-| R3 | `1e-3` | pending | Run only if R2 stable | User's stretch target |
+| R2 | `2e-3` | done — stable | -0.0253 / -0.217 / -0.399 | Final-rev (325–360) mean; ~1–1.5% drift vs prior rev. Notably different from R1 — *not yet in converged regime* (lamb shifted ~35% from R1). Log: `debug/logs/rotor_hover_R2_kerneloffset_2e-3.log` |
+| R3 | `1e-3` | done — stable | -0.0270 / -0.219 / -0.420 | Final-rev (325–360) mean; <1% drift vs prior rev. Still drifting vs R2 (~7% on lamb) — not converged. Log: `debug/logs/rotor_hover_R3_kerneloffset_1e-3.log` |
+| R4 | `5e-4` | **killed** at step 216/360 | n/a | Process terminated mid-run with no Julia exception (exit 0 from `tee`, julia silently killed — almost certainly OS OOM-kill given the growing particle count). Log: `debug/logs/rotor_hover_R4_kerneloffset_5e-4.log` (truncated mid-step). |
+| R5 | `2e-4` | skipped | — | Sweep halted at R4 break. |
+| R6 | `1e-4` | skipped | — | |
+
+**Sweep outcome:** R3 (`KERNELOFFSET=1e-3`) is the smallest value that runs
+to completion. The thrust prediction did **not** converge with respect to
+`KERNELOFFSET` in the surviving range — the lamb-vector CT moved from
+`-0.0188` (R1, `5e-3`) to `-0.0253` (R2, `2e-3`) to `-0.0270` (R3, `1e-3`),
+still trending. Pushing further breaks the run. Open question for next
+session: rerun R4 with fewer threads / lower `max_particles` / tighter
+`MERGE_PARTICLES` to disambiguate "physically unstable" from "OOM-killed".
 
 Decision rule per row: if the run completes all `n_steps=360` steps and the
 final-rev CT has small step-to-step drift, mark stable and advance to the next
