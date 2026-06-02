@@ -36,7 +36,7 @@ cylinder_depth = 4R
 
 cp_outer=true
 kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-2")))
+kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-3")))
 kernelcutoff = R * 1e-13
 p_per_step = 2
 overlap = 3.0

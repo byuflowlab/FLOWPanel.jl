@@ -53,13 +53,13 @@ d               = 2*0.835                   # (m) duct diameter
 # ----------------- SOLVER PARAMETERS ------------------------------------------
 # Discretization
 NDIVS_theta     = 80                        # Number of azimuthal panels
-NDIVS_theta     = 20                        # Number of azimuthal panels
+# NDIVS_theta     = 20                        # Number of azimuthal panels
 
 # NOTE: NDIVS is the number of divisions (panels) in each dimension. This can be
 #       either an integer, or an array of tuples as shown below
 
 n_rfl           = 8                        # This controls the number of chordwise panels
-n_rfl           = 6                        # This controls the number of chordwise panels
+# n_rfl           = 6                        # This controls the number of chordwise panels
 
 NDIVS_rfl_up = [                            # Discretization of airfoil upper surface
             # 0 to 0.25 of the airfoil has `n_rfl` panels at a geometric expansion of 10 that is not central
