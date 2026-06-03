@@ -22,7 +22,7 @@ The monitor reports the body-side force contribution
 dF = \rho \left(V_{cp} \times \kappa\right) dS ,
 ```
 
-where `V_cp` is the already-stored `body.velocity` at the panel control point.
+where `V_cp` is the already-stored relative velocity `body.velocity` at the panel control point.
 It does not add `body.velocity_kinematic`.
 
 ```julia

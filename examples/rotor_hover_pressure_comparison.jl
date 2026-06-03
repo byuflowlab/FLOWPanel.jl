@@ -137,9 +137,9 @@ println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, s
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
-    # viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
-        # beta=wake_core_beta),
-    # SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+    viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
+        beta=wake_core_beta),
+    SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
     # method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
     method_trailing=pnl.OverlapPPS(overlap, 2),
     method_unsteady=pnl.NoShed(),
@@ -195,6 +195,11 @@ backend = pnl.FastMultipoleBackend(;
     expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "8")),
     multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
     leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "20")),
+)
+backend_wake = pnl.FastMultipoleBackend(;
+    expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "4")),
+    multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
+    leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "50")),
 )
 kj_backend = pnl.FastMultipoleBackend(;
     expansion_order=parse(Int, get(ENV, "KJ_FMM_EXPANSION_ORDER", "3")),
@@ -278,7 +283,8 @@ name = run_name
     set_Das_eta_kinematic=NaN,
     set_Das_min_kinematic_displacement,
     monitors,
-    body_solvers, backend, verbose=true,
+    body_solvers, backend, backend_wake,
+    verbose=true,
     path=save_path, name,
 )
 
