@@ -196,6 +196,11 @@ backend = pnl.FastMultipoleBackend(;
     multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
     leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "20")),
 )
+backend_wake = pnl.FastMultipoleBackend(;
+    expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "4")),
+    multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
+    leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "50")),
+)
 kj_backend = pnl.FastMultipoleBackend(;
     expansion_order=parse(Int, get(ENV, "KJ_FMM_EXPANSION_ORDER", "3")),
     multipole_acceptance=parse(Float64, get(ENV, "KJ_FMM_ACCEPTANCE", "0.4")),
@@ -278,7 +283,8 @@ name = run_name
     set_Das_eta_kinematic=NaN,
     set_Das_min_kinematic_displacement,
     monitors,
-    body_solvers, backend, verbose=true,
+    body_solvers, backend, backend_wake,
+    verbose=true,
     path=save_path, name,
 )
 
