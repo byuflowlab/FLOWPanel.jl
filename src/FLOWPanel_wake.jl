@@ -673,9 +673,10 @@ function _split_particle_policies(policies::Tuple)
     end
 end
 
-struct ParticleMaintenanceContext{TF}
+struct ParticleMaintenanceContext{TF,TD}
     frames::TF
     step::Int
+    dt::TD
 end
 
 struct MinGamma{T} <: AbstractParticleTrimPolicy
@@ -685,6 +686,22 @@ end
 struct MaxGamma{T} <: AbstractParticleTrimPolicy
     threshold::T
 end
+
+struct RelativeMinGamma{T} <: AbstractParticleTrimPolicy
+    fraction::T
+end
+
+function RelativeMinGamma(fraction)
+    fraction >= zero(fraction) || throw(ArgumentError("RelativeMinGamma fraction must be nonnegative"))
+    return RelativeMinGamma{typeof(fraction)}(fraction)
+end
+
+struct PreparedRelativeMinGamma{T} <: AbstractParticleTrimPolicy
+    absolute_threshold::T
+end
+
+MinGammaPolicy(threshold; relative=true) =
+    relative ? RelativeMinGamma(threshold) : MinGamma(threshold)
 
 struct GlobalBox{T} <: AbstractParticleTrimPolicy
     xmin::SVector{3,T}
@@ -752,9 +769,18 @@ MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
     MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
                    skip_static)
 
-prepare_particle_policy(policy, ::ParticleMaintenanceContext) = policy
+struct SplitParticles{TO} <: AbstractParticleFunctionalPolicy
+    every::Int
+    opts::TO
+    verbose::Bool
+end
 
-function prepare_particle_policy(policy::FrameBox, ctx::ParticleMaintenanceContext)
+SplitParticles(opts; every=1, verbose=false) =
+    SplitParticles(Int(every), opts, verbose)
+
+prepare_particle_policy(policy, pfield, ::ParticleMaintenanceContext) = policy
+
+function prepare_particle_policy(policy::FrameBox, pfield, ctx::ParticleMaintenanceContext)
     isnothing(ctx.frames) && throw(ArgumentError("FrameBox particle trimming requires frames"))
     transform = frame_global_transform(ctx.frames, policy.i_frame)
     isnothing(transform) && throw(ArgumentError("FrameBox references unknown frame index $(policy.i_frame)"))
@@ -762,8 +788,17 @@ function prepare_particle_policy(policy::FrameBox, ctx::ParticleMaintenanceConte
     return PreparedFrameBox(origin_global, R_f2g', policy.xmin, policy.xmax)
 end
 
-prepare_particle_policies(policies::Tuple, ctx::ParticleMaintenanceContext) =
-    Tuple(prepare_particle_policy(policy, ctx) for policy in policies)
+function prepare_particle_policy(policy::RelativeMinGamma, pfield, ::ParticleMaintenanceContext)
+    gmax = zero(typeof(policy.fraction))
+    for i in 1:pfield.np
+        g = _particle_gamma_magnitude(pfield, i)
+        g > gmax && (gmax = g)
+    end
+    return PreparedRelativeMinGamma(policy.fraction * gmax)
+end
+
+prepare_particle_policies(policies::Tuple, pfield, ctx::ParticleMaintenanceContext) =
+    Tuple(prepare_particle_policy(policy, pfield, ctx) for policy in policies)
 
 function _particle_gamma_magnitude(pfield, i)
     gamma = FLOWVPM.get_Gamma(pfield, i)
@@ -775,6 +810,9 @@ keep(policy::MinGamma, pfield, i, ::ParticleMaintenanceContext) =
 
 keep(policy::MaxGamma, pfield, i, ::ParticleMaintenanceContext) =
     _particle_gamma_magnitude(pfield, i) <= policy.threshold
+
+keep(policy::PreparedRelativeMinGamma, pfield, i, ::ParticleMaintenanceContext) =
+    _particle_gamma_magnitude(pfield, i) >= policy.absolute_threshold
 
 function keep(policy::GlobalBox, pfield, i, ::ParticleMaintenanceContext)
     x = FLOWVPM.get_X(pfield, i)
@@ -817,6 +855,13 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
     return nothing
 end
 
+function apply_particle_policy!(policy::SplitParticles, pfield, ctx::ParticleMaintenanceContext)
+    if policy.every > 0 && ctx.step > 0 && ctx.step % policy.every == 0
+        FLOWVPM.split_particles!(pfield, policy.opts; dt=ctx.dt, verbose=policy.verbose)
+    end
+    return nothing
+end
+
 function apply_particle_policies!(policies::Tuple, pfield, ctx::ParticleMaintenanceContext)
     for policy in policies
         apply_particle_policy!(policy, pfield, ctx)
@@ -826,7 +871,7 @@ end
 
 function apply_particle_maintenance!(pfield, maintenance::ParticleMaintenance, ctx::ParticleMaintenanceContext)
     apply_particle_policies!(maintenance.functional_policies, pfield, ctx)
-    prepared_trim_policies = prepare_particle_policies(maintenance.trim_policies, ctx)
+    prepared_trim_policies = prepare_particle_policies(maintenance.trim_policies, pfield, ctx)
 
     for i in pfield.np:-1:1
         if !_keep_particle(prepared_trim_policies, pfield, i, ctx)
@@ -933,7 +978,7 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     FLOWVPM._euler(w.pfield, dt; relax)
 
     # particle maintenance
-    apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step))
+    apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step, dt))
 end
 
 function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)

@@ -44,6 +44,13 @@ merge_r_factor = 0.02
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
+split_particles = parse(Bool,    get(ENV, "SPLIT_PARTICLES",    "true"))
+split_log_R_max = parse(Float64, get(ENV, "SPLIT_LOG_R_MAX",    string(log(1.5))))
+split_c_mu      = parse(Float64, get(ENV, "SPLIT_C_MU",         "0.5"))
+split_N_hold    = parse(Int,     get(ENV, "SPLIT_N_HOLD",       "1"))
+split_N_cool    = parse(Int,     get(ENV, "SPLIT_N_COOLDOWN",   "1"))
+split_kappa     = parse(Float64, get(ENV, "SPLIT_KAPPA",        "1.0"))
+split_max_frac  = parse(Float64, get(ENV, "SPLIT_MAX_FRACTION", "0.05"))
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
 p_correct_kuttacondition_flag = false
@@ -143,7 +150,7 @@ sfs_magnitude_control      = parse(Bool,    get(ENV, "SFS_MAGNITUDE_CONTROL",   
 sfs_directional_control    = parse(Bool,    get(ENV, "SFS_DIRECTIONAL_CONTROL",    "false"))
 sfs_threelevel             = parse(Bool,    get(ENV, "SFS_THREELEVEL",             "false"))
 sfs_nostatic               = parse(Bool,    get(ENV, "SFS_NOSTATIC",               "false"))
-sfs_maxC                   = parse(Float64, get(ENV, "SFS_MAXC",                   "0.3"))
+sfs_maxC                   = parse(Float64, get(ENV, "SFS_MAXC",                   "1.0"))
 sfs_rlxf                   = parse(Float64, get(ENV, "SFS_RLXF",                   "0.005"))
 
 sfs_choice = if sfs_backscatter_signed
@@ -168,6 +175,19 @@ else
 end
 
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
+FV = pnl.FLOWVPM
+split_trigger = FV.AllTrigger(
+    FV.HoldTrigger(FV.SeparationTrigger(split_log_R_max, :streamline), split_N_hold),
+    FV.HoldTrigger(FV.StretchTrigger(split_c_mu),                       split_N_hold),
+)
+split_opts = FV.SplitOptions(;
+    trigger=split_trigger,
+    direction=FV.STRENGTH,
+    kappa_split=split_kappa,
+    N_cooldown=split_N_cool,
+    max_fraction=split_max_frac,
+)
+
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
@@ -181,13 +201,14 @@ wake_rotor = pnl.PanelParticleWake(rotor;
     unsteady_filament=false, # should be false if method_unsteady is NoShed
     shed_with_induced_velocity=false,
     particle_maintenance=pnl.ParticleMaintenance((
-        pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], 1.5R),
-        pnl.MergeParticles(;
-            every=merge_particles ? 1 : 0,
-            r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
-            r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
-            sigma_relative=merge_sigma_relative),
-    ))
+            pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], 1.5R),
+            pnl.MergeParticles(;
+                every=merge_particles ? 1 : 0,
+                r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
+                r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
+                sigma_relative=merge_sigma_relative),
+            pnl.SplitParticles(split_opts; every = split_particles ? 1 : 0),
+        ))
     )
 
 ramp_magVinf(t) = t <= ramp_t ? magVinf_start + (magVinf - magVinf_start) * (t / ramp_t) : magVinf

@@ -135,3 +135,7 @@ Meshes are built using `GeometricTools.GridTriangleSurface`. Grids are created p
 ### Differentiation Support
 
 The solver supports forward-mode AD (ForwardDiff) and reverse-mode AD (ReverseDiff) through `ImplicitAD`. The `solve_ludiv!` function is overloaded in `ImplicitAD` to efficiently differentiate through the linear solve.
+
+## Response Style
+
+When you respond to prompts, if you ever need to ask me questions where I decide between possible options (not including asking permissions to perform shell commands), and you suspect any of the option will be token-heavy, also include a brief estimate of the token count required as a fraction of my 5-hour limit.
