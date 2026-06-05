@@ -174,6 +174,22 @@ function _monitor_normalization_metadata(norm)
             "D" => norm.D,
             "i_frame" => norm.i_frame,
         )
+    elseif norm isa NoSectionalNormalization
+        return Dict{String, Any}("type" => "NoSectionalNormalization")
+    elseif norm isa FreestreamSectionalNormalization
+        return Dict{String, Any}(
+            "type" => "FreestreamSectionalNormalization",
+            "rho" => norm.rho,
+            "Lref" => norm.Lref,
+        )
+    elseif norm isa RotorSectionalNormalization
+        return Dict{String, Any}(
+            "type" => "RotorSectionalNormalization",
+            "rho" => norm.rho,
+            "R" => norm.R,
+            "i_frame" => norm.i_frame,
+            "omega_scale" => string(norm.omega_scale),
+        )
     else
         return _metadata_unsupported_dict(typeof(norm))
     end
@@ -227,6 +243,20 @@ function _monitor_metadata(m)
             "correct_kuttacondition" => m.correct_kuttacondition,
             "gradient_robust" => m.gradient_robust,
             "gradient_ar_threshold" => m.gradient_ar_threshold,
+            "verbose" => m.verbose,
+            "vtk_fields" => collect(string.(m.vtk_fields)),
+        )
+    elseif m isa SpanwiseLoadingMonitor
+        return Dict{String, Any}(
+            "type" => "SpanwiseLoadingMonitor",
+            "nbins" => m.nbins,
+            "i_system" => m.i_system,
+            "i_frame" => m.i_frame,
+            "component_names" => collect(string.(m.component_names)),
+            "span_axis" => collect(m.span_axis),
+            "normalization" => _monitor_normalization_metadata(m.normalization),
+            "per_length" => m.per_length,
+            "csv_path" => m.csv_path === nothing ? "nothing" : m.csv_path,
             "verbose" => m.verbose,
             "vtk_fields" => collect(string.(m.vtk_fields)),
         )

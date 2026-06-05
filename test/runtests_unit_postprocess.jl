@@ -89,6 +89,25 @@ function make_skewed_two_panel_doublet_body()
     return body
 end
 
+function make_spanwise_loading_body(ys)
+    n = length(ys)
+    nodes = zeros(Float64, 3, 3n)
+    cells = zeros(Int, 3, n)
+    for (i, y) in enumerate(ys)
+        j = 3 * (i - 1)
+        nodes[:, j + 1] .= [0.0, y, 0.0]
+        nodes[:, j + 2] .= [1.0, y, 0.0]
+        nodes[:, j + 3] .= [0.0, y, 1.0]
+        cells[:, i] .= (j + 1, j + 2, j + 3)
+    end
+    body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+        watertight=false,
+        ensure_winding=false)
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    return body
+end
+
 function make_surface_vorticity_gradient_body()
     nodes, cells = make_planar_gradient_mesh()
     body = pnl.NonLiftingBody{pnl.ConstantDoublet}(nodes, cells;
@@ -313,6 +332,112 @@ end
         @test all(isfinite, rebuilding.p[1])
         @test all(isfinite, force.distributed_force)
         @test all(isfinite, force.force)
+    end
+
+    @testset "SpanwiseLoadingMonitor binning and validation" begin
+        body = make_spanwise_loading_body([0.125, 0.375, 0.625, 0.875])
+        force = Float64[
+            10.0 20.0 30.0 40.0;
+             0.0  0.0  0.0  0.0;
+             1.0  2.0  3.0  4.0;
+        ]
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, force)
+        monitor = pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]))
+
+        @test pnl.monitor_requires(monitor) == (:F,)
+        @test_throws ArgumentError pnl.audit_monitors((monitor,))
+        @test pnl.audit_monitors((pnl.SurfaceVorticityForce(make_plate_vortex_body(), 1, 1), monitor)) !== nothing
+        @test isapprox(monitor.span_axis, SVector(0.0, 1.0, 0.0); atol=1e-12)
+        @test_throws ArgumentError pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 2.0], drag=[1.0, 0.0, 0.0]))
+        @test_throws ArgumentError pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            span_axis=[0.0, 0.0, 1.0])
+
+        pnl._run_monitor!(monitor, ctx, (body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.1)
+        @test monitor.counts == [2, 2]
+        @test monitor.panel_bin_id == [1, 1, 2, 2]
+        @test isapprox(monitor.bin_center, [0.3125, 0.6875]; atol=1e-12)
+        @test isapprox(monitor.load_components, [3.0 7.0; 30.0 70.0]; atol=1e-12)
+        @test isapprox(monitor.force_components, monitor.load_components; atol=1e-12)
+
+        explicit = pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            span_axis=[0.0, 1.0, 0.0])
+        @test isapprox(explicit.span_axis, monitor.span_axis; atol=1e-12)
+    end
+
+    @testset "SpanwiseLoadingMonitor frame, interpolation, normalization, CSV, VTK" begin
+        R = SMatrix{3,3}(0.0, -1.0, 0.0,
+                         1.0,  0.0, 0.0,
+                         0.0,  0.0, 1.0)
+        origin = SVector(2.0, -1.0, 0.5)
+        local_body = make_spanwise_loading_body([0.0, 1.0])
+        nodes_global = similar(local_body.nodes)
+        for i in axes(local_body.nodes, 2)
+            nodes_global[:, i] .= origin + R * SVector{3}(local_body.nodes[:, i])
+        end
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes_global, copy(local_body.cells);
+            watertight=false,
+            ensure_winding=false)
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body)
+        frames = pnl.ReferenceFrame(body; origin=origin, R=R)
+
+        f_local = [0.0 0.0; 0.0 0.0; 2.0 8.0]
+        f_global = Matrix(R * f_local)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, f_global)
+        monitor = pnl.SpanwiseLoadingMonitor(3, 1; i_frame=1,
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            per_length=true)
+        pnl._run_monitor!(monitor, ctx, (body,), (nothing,), frames, zeros(3), 0, 0.1)
+        @test monitor.counts == [1, 0, 1]
+        @test monitor.panel_bin_id == [1, 3]
+        @test isapprox(monitor.force_components[1, :], [2.0, 5.0, 8.0]; atol=1e-12)
+        @test isapprox(monitor.load_components[1, :], [6.0, 15.0, 24.0]; atol=1e-12)
+
+        fs = pnl.SpanwiseLoadingMonitor(1, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            normalization=pnl.FreestreamSectionalNormalization(1.0, 2.0),
+            per_length=true)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, [0.0 0.0; 0.0 0.0; 4.0 4.0])
+        pnl._run_monitor!(fs, ctx, (local_body,), (nothing,), pnl.ReferenceFrame(local_body), [2.0, 0.0, 0.0], 0, 0.1)
+        @test isapprox(fs.load_components[1, 1], 2.0; atol=1e-12)
+
+        rotor = pnl.SpanwiseLoadingMonitor(1, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            normalization=pnl.RotorSectionalNormalization(2.0, 2.0, 1))
+        rframes = pnl.ReferenceFrame(local_body; ω=3.0)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, [0.0 0.0; 0.0 0.0; 36.0 36.0])
+        pnl._run_monitor!(rotor, ctx, (local_body,), (nothing,), rframes, zeros(3), 0, 0.1)
+        @test isapprox(rotor.load_components[1, 1], 2.0; atol=1e-12)
+
+        csv = joinpath(mktempdir(), "span", "loading.csv")
+        csvmon = pnl.SpanwiseLoadingMonitor(1, 1;
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+            csv_path=csv)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, [0.0 0.0; 0.0 0.0; 1.0 1.0])
+        pnl._run_monitor!(csvmon, ctx, (local_body,), (nothing,), pnl.ReferenceFrame(local_body), zeros(3), 0, 0.1, 1.25)
+        pnl._run_monitor!(csvmon, ctx, (local_body,), (nothing,), pnl.ReferenceFrame(local_body), zeros(3), 1, 0.1, 1.50)
+        rows = readlines(csv)
+        @test rows[1] == "step,time,bin,bin_center,bin_width,count,lift,drag"
+        @test length(rows) == 3
+        @test startswith(rows[2], "0,1.25,1,")
+        @test startswith(rows[3], "1,1.5,1,")
+
+        vtkdir = mktempdir()
+        pnl.write_vtk(joinpath(vtkdir, "span_body"), local_body, 0, 0.0;
+            monitors=(csvmon,), i_system=1, overwrite=true)
+        vtk = pnl.ReadVTK.VTKFile(joinpath(vtkdir, "span_body", "span_body.0.vtu"))
+        cell_data = pnl.ReadVTK.get_cell_data(vtk)
+        @test "spanwise bin id" in keys(cell_data)
+        @test vec(pnl.ReadVTK.get_data(cell_data["spanwise bin id"])) == [1, 1]
     end
 
     @testset "KuttaJoukowskiForce frame rotation" begin
@@ -744,6 +869,35 @@ end
 
         for i in exact_panels
             @test isapprox(grad_half[:, i], 0.5 .* grad_mu[:, i]; atol=1e-10)
+        end
+    end
+
+    @testset "compute_mu_gradient! quad-pair consistency" begin
+        nodes, cells = make_planar_gradient_mesh()
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+            watertight=false,
+            ensure_winding=false)
+
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body)
+
+        mu = [0.0, 2.0, -1.0, 5.0, 1.5, -3.0, 4.0, -2.5]
+        te_info = zeros(Int, 2, body.ncells)
+        grad_raw = zeros(3, body.ncells)
+        grad_quad = zeros(3, body.ncells)
+
+        pnl.compute_mu_gradient!(grad_raw, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info; scale=1.0)
+        pnl.compute_mu_gradient!(grad_quad, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info; scale=1.0, nodes=body.nodes)
+
+        pairs = ((1, 2), (3, 4), (5, 6), (7, 8))
+        @test maximum(maximum(abs.(grad_raw[:, i] .- grad_raw[:, j])) for (i, j) in pairs) > 1e-3
+        for (i, j) in pairs
+            @test isapprox(grad_quad[:, i], grad_quad[:, j]; atol=1e-12)
+        end
+        for i in 1:body.ncells
+            @test abs(dot(grad_quad[:, i], body.normals[:, i])) ≤ 1e-10
         end
     end
 

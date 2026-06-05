@@ -59,6 +59,22 @@ function (m::SimWakeRecorder)(systems, wakes, frames, uinf, i_step::Int, dt::Rea
     return nothing
 end
 
+mutable struct SimDistributedForce <: pnl.AbstractMonitor
+    force::Matrix{Float64}
+    i_system::Int
+end
+
+pnl.monitor_provides(::SimDistributedForce) = (:F,)
+
+function (m::SimDistributedForce)(systems, wakes, frames, uinf, i_step::Int, dt::Real)
+    return nothing
+end
+
+function pnl._register_monitor_outputs!(ctx::pnl.MonitorContext, m::SimDistributedForce, systems_tuple::Tuple)
+    pnl.monitor_register!(ctx, :F, m.i_system, m.force)
+    return nothing
+end
+
 @testset "simulate! input normalization" begin
     Uinf = t -> [1.0, 0.0, 0.0]
     maneuver = (frames, systems, wakes, t) -> nothing
@@ -277,4 +293,23 @@ end
     )
     @test body.needs_velocity_gradient[]
     @test recorder.wakes_seen === (nothing,)
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    csv = joinpath(mktempdir(), "span_loading.csv")
+    provider = SimDistributedForce([0.0 0.0; 0.0 0.0; 1.0 1.0], 1)
+    spanwise = pnl.SpanwiseLoadingMonitor(1, 1;
+        components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
+        csv_path=csv)
+    pnl.simulate!(body, nothing, frames, (frames, systems, wakes, t) -> nothing,
+        t -> uinf, [2.0, 2.25];
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(provider, spanwise),
+        path=nothing,
+    )
+    rows = readlines(csv)
+    @test startswith(rows[2], "0,2.0,1,")
+    @test startswith(rows[3], "1,2.25,1,")
 end

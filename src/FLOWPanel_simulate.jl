@@ -249,11 +249,35 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     end
 
     if length(wake_sources) > 0
-        influence!(targets, wake_sources, backend_wake; precalc=true,
-            scalar_potential=false,
-            velocity=true,
-            velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
-            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+        # Diagnostic gate: ablate the panel-wake-row -> particle Hessian (vortex
+        # rings + closing filaments produce |∇U| ~ 1/r^2 at edges that linear
+        # panels would smooth into a sheet). Default off, leaves the run
+        # bit-identical to the canonical configuration.
+        wakerow_no_hessian = parse(Bool, get(ENV, "WAKEROW_NO_HESSIAN_TO_PARTICLES", "false"))
+        if wakerow_no_hessian
+            panel_sources  = Tuple(s for s in wake_sources if !(s isa FLOWVPM.ParticleField))
+            pfield_sources = Tuple(s for s in wake_sources if   s isa FLOWVPM.ParticleField)
+            if length(panel_sources) > 0
+                influence!(targets, panel_sources, backend_wake; precalc=true,
+                    scalar_potential=false,
+                    velocity=true,
+                    velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in targets),
+                    extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+            end
+            if length(pfield_sources) > 0
+                influence!(targets, pfield_sources, backend_wake; precalc=true,
+                    scalar_potential=false,
+                    velocity=true,
+                    velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+                    extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+            end
+        else
+            influence!(targets, wake_sources, backend_wake; precalc=true,
+                scalar_potential=false,
+                velocity=true,
+                velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+                extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+        end
     end
 
     _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
@@ -281,7 +305,8 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
                 body.cells, body.neighbor,
                 view(body.strength, :, get_Gammai(body)),
                 _bound_surface_vorticity_te_info(body);
-                scale=0.5)
+                scale=0.5,
+                nodes=body.nodes)
         end
     end
 
@@ -345,6 +370,7 @@ function steady!(systems, frames, uinf;
         body_solvers; backend_solve, backend_system, needs_induced_vorticity)
 
     monitor_context = MonitorContext()
+    monitor_set_time!(monitor_context, i_step * dt)
     for monitor in monitors
         _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
     end
@@ -459,8 +485,9 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         # Run monitors before VTK write so monitor-owned fields can be passed to
         # downstream monitors and output files.
         monitor_context = MonitorContext()
+        monitor_set_time!(monitor_context, t)
         for monitor in monitors
-            _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
+            _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
         end
 
         #------- save state -------#

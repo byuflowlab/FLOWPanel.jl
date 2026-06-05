@@ -133,13 +133,47 @@ println("Requested shedding root at |r/R| >= $(shedding_r_over_R)")
 println("  shedding1 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding1, rotor.cells, radial_dimension, R))")
 println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding2, rotor.cells, radial_dimension, R))")
 
+# Diagnostic gate: ablate the clipping_backscatter strategy by replacing the
+# canonical SFS with an equivalent DynamicSFS that omits the clip. Default
+# off, leaves the run bit-identical to the canonical configuration.
+sfs_no_backscatter_clip    = parse(Bool,    get(ENV, "SFS_NO_BACKSCATTER_CLIP",    "false"))
+sfs_no_backscatter_project = parse(Bool,    get(ENV, "SFS_NO_BACKSCATTER_PROJECT", "false"))
+sfs_backscatter_signed     = parse(Bool,    get(ENV, "SFS_BACKSCATTER_SIGNED",     "false"))
+sfs_magnitude_control      = parse(Bool,    get(ENV, "SFS_MAGNITUDE_CONTROL",      "false"))
+sfs_directional_control    = parse(Bool,    get(ENV, "SFS_DIRECTIONAL_CONTROL",    "false"))
+sfs_threelevel             = parse(Bool,    get(ENV, "SFS_THREELEVEL",             "false"))
+sfs_nostatic               = parse(Bool,    get(ENV, "SFS_NOSTATIC",               "false"))
+sfs_maxC                   = parse(Float64, get(ENV, "SFS_MAXC",                   "0.3"))
+sfs_rlxf                   = parse(Float64, get(ENV, "SFS_RLXF",                   "0.005"))
+
+sfs_choice = if sfs_backscatter_signed
+    pnl.FLOWVPM.SFS_Cd_twolevel_backscatter_signed
+elseif sfs_no_backscatter_project
+    pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter_projection
+elseif sfs_threelevel
+    pnl.FLOWVPM.SFS_Cd_threelevel_nobackscatter
+else
+    sfs_controls = ()
+    sfs_magnitude_control   && (sfs_controls = (sfs_controls..., pnl.FLOWVPM.control_magnitude))
+    sfs_directional_control && (sfs_controls = (sfs_controls..., pnl.FLOWVPM.control_directional))
+    sfs_clippings = sfs_no_backscatter_clip ? () : (pnl.FLOWVPM.clipping_backscatter,)
+    sfs_model = sfs_nostatic ?
+        ((pfield; optargs...) -> pnl.FLOWVPM.E_nostaticparticles(pfield; E=pnl.FLOWVPM.Estr_fmm, optargs...)) :
+        pnl.FLOWVPM.Estr_fmm
+    pnl.FLOWVPM.DynamicSFS(sfs_model,
+        pnl.FLOWVPM.pseudo3level_beforeUJ,
+        pnl.FLOWVPM.pseudo3level_positive_afterUJ;
+        alpha=0.999, clippings=sfs_clippings, controls=sfs_controls,
+        maxC=sfs_maxC, rlxf=sfs_rlxf)
+end
+
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
     viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
         beta=wake_core_beta),
-    SFS=pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+    SFS=sfs_choice,
     # method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
     method_trailing=pnl.OverlapPPS(overlap, 2),
     method_unsteady=pnl.NoShed(),
@@ -279,6 +313,13 @@ if spinup_revs > 0
 end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 name = run_name
+
+# Allow other scripts to `include` this file purely for setup (geometry,
+# frames, wake, monitors) without executing the time-marching call.
+rhpc_setup_only = parse(Bool, get(ENV, "RHPC_SETUP_ONLY", "false"))
+
+if !rhpc_setup_only
+
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     set_Das_eta_kinematic=NaN,
     set_Das_min_kinematic_displacement,
@@ -317,3 +358,5 @@ println("  Bernoulli vs Laplace(∇u):  $(bern_md_rel)")
 println("  Bernoulli vs Laplace(λ):   $(bern_lv_rel)")
 println("  Bernoulli vs KJ:           $(bern_kj_rel)")
 println("  Laplace(∇u) vs Laplace(λ): $(md_lv_rel)")
+
+end # !rhpc_setup_only

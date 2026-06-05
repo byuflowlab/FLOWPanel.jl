@@ -246,3 +246,108 @@ function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                                   rflspl_s=rflspl_s,
                                   opt_args...)
 end
+
+function simplewing_mirrored(b::Number, ar::Number, tr::Number, twist_root::Number,
+                             twist_tip::Number, lambda::Number, gamma::Number;
+                             bodytype::Type{<:pnl.AbstractBody}=pnl.RigidWakeBody{Union{pnl.ConstantSource,pnl.ConstantDoublet}},
+                             span_NDIVS=nothing,
+                             rfl_NDIVS=nothing,
+                             airfoil_root::String="naca6412.dat",
+                             airfoil_tip::String="naca6412.dat",
+                             airfoil_path::String=pnl.def_rfl_path,
+                             spl_s::Real=0.0000001,
+                             rflspl_s::Real=0.00000001,
+                             verify_spline::Bool=true,
+                             verify_rflspline::Bool=true,
+                             mirror_tol::Real=100eps(Float64),
+                             bodyoptargs=(;),
+                             opt_args...)
+    c_tip = b/ar
+    c_root = c_tip/tr
+    semispan = b/2
+
+    y_tip = b/2
+    x_tip = y_tip*tan(lambda*pi/180)
+    z_tip = y_tip*tan(gamma*pi/180)
+
+    chords = [0.00 c_root/semispan; 1.00 c_tip/semispan]
+    twists = [0.0 twist_root; 1.0 twist_tip]
+    x_pos = [0.00 0; 1.00 x_tip/semispan]
+    z_pos = [0.00 0; 1.00 z_tip/semispan]
+    airfoil_files = [(0.0, airfoil_root), (1.0, airfoil_tip)]
+
+    b_NDIVS = span_NDIVS == nothing ? [(1.0, 35, 20.0, true)] : span_NDIVS
+    urfl_NDIVS = rfl_NDIVS == nothing ?
+                 [(0.25, 7, 10.0, false), (0.50, 5, 1.0, true), (0.25, 6, 0.1, false)] :
+                 rfl_NDIVS
+    lrfl_NDIVS = urfl_NDIVS
+
+    grid = gt.generate_loft(airfoil_files, airfoil_path,
+                            urfl_NDIVS, lrfl_NDIVS,
+                            semispan, 0.0, 1.0, b_NDIVS,
+                            chords, twists, x_pos, z_pos;
+                            loop_dim=1,
+                            symmetric=false,
+                            spl_k=1, spl_s=spl_s,
+                            verify_spline=verify_spline,
+                            verify_rflspline=verify_rflspline,
+                            rflspl_s=rflspl_s,
+                            opt_args...)
+    triang_grid = gt.GridTriangleSurface(grid, 1)
+    half_nodes = triang_grid._nodes
+    half_cells = grid2cells(triang_grid)
+
+    ndivs = gt.get_ndivscells(triang_grid)
+    U = [Base._sub2ind(ndivs, ndivs[1] - 1, i) for i in 1:ndivs[2]]
+    L = [Base._sub2ind(ndivs, 2, i) for i in 1:ndivs[2]]
+    half_shedding = zeros(Int, 6, length(U))
+    for (ei, (u, l)) in enumerate(zip(U, L))
+        half_shedding[:, ei] .= (u, 3, 2, l, 3, 2)
+    end
+
+    mirror_index = Vector{Int}(undef, size(half_nodes, 2))
+    nodes = copy(half_nodes)
+    for ni in axes(half_nodes, 2)
+        if abs(half_nodes[2, ni]) <= mirror_tol
+            mirror_index[ni] = ni
+        else
+            nodes = hcat(nodes, [half_nodes[1, ni], -half_nodes[2, ni], half_nodes[3, ni]])
+            mirror_index[ni] = size(nodes, 2)
+        end
+    end
+
+    half_centers_y = [sum(half_nodes[2, half_cells[:, ci]]) / 3 for ci in axes(half_cells, 2)]
+    pos_order = sort(collect(axes(half_cells, 2)); by=ci -> half_centers_y[ci])
+    neg_order = sort(collect(axes(half_cells, 2)); by=ci -> -half_centers_y[ci])
+
+    cells = Matrix{Int}(undef, 3, 2 * size(half_cells, 2))
+    out_ci = 0
+    for ci in neg_order
+        out_ci += 1
+        cells[:, out_ci] .= reverse(mirror_index[half_cells[:, ci]])
+    end
+    for ci in pos_order
+        out_ci += 1
+        cells[:, out_ci] .= half_cells[:, ci]
+    end
+
+    watertight, _ = pnl.iswatertight(nodes, cells)
+    if bodytype <: pnl.AbstractLiftingBody
+        te_nodes = Int[]
+        for col in eachcol(half_shedding)
+            pi, nia, nib = col[1], col[2], col[3]
+            push!(te_nodes, half_cells[nia, pi])
+            push!(te_nodes, half_cells[nib, pi])
+        end
+        full_te_nodes = unique(vcat(mirror_index[te_nodes], te_nodes))
+        sort!(full_te_nodes; by=ni -> nodes[2, ni])
+        shedding = pnl.calc_shedding(nodes, cells, full_te_nodes, zeros(eltype(nodes), 3, 0))
+        final_bodyoptargs = merge((ensure_winding=false,), bodyoptargs)
+        return bodytype(nodes, cells, [shedding]; watertight, final_bodyoptargs...)
+    elseif bodytype <: pnl.NonLiftingBody
+        final_bodyoptargs = merge((ensure_winding=false,), bodyoptargs)
+        return bodytype(nodes, cells; watertight, final_bodyoptargs...)
+    else
+        error("Body type $(bodytype) is not a lifting or non-lifting body.")
+    end
+end

@@ -54,9 +54,20 @@ end
 
 mutable struct MonitorContext
     fields::Dict{Tuple{Symbol, Int}, Any}
+    time::Float64
+    has_time::Bool
 end
 
-MonitorContext() = MonitorContext(Dict{Tuple{Symbol, Int}, Any}())
+MonitorContext() = MonitorContext(Dict{Tuple{Symbol, Int}, Any}(), 0.0, false)
+
+function monitor_set_time!(ctx::MonitorContext, t::Real)
+    ctx.time = Float64(t)
+    ctx.has_time = true
+    return ctx
+end
+
+monitor_time(ctx::MonitorContext, i_step::Int, dt::Real) =
+    ctx.has_time ? ctx.time : Float64(i_step * dt)
 
 function monitor_register!(ctx::MonitorContext, field::Symbol, i_body::Integer, value)
     ctx.fields[(field, Int(i_body))] = value
@@ -73,7 +84,8 @@ end
 
 function _run_monitor!(m, ctx::MonitorContext, systems, wakes,
                        frames::AbstractVector{<:ReferenceFrame},
-                       uinf, i_step::Int, dt::Real)
+                       uinf, i_step::Int, dt::Real, t=nothing)
+    !isnothing(t) && monitor_set_time!(ctx, t)
     m(systems, wakes, frames, uinf, i_step, dt)
     _register_monitor_outputs!(ctx, m, _systems_tuple(systems))
     return nothing
@@ -995,7 +1007,8 @@ function _pressure_material_acceleration!(m::PressureLaplace, body::AbstractBody
                   zeros(Int, 2, body.ncells)
         compute_surface_velocity_gradient!(G_surf, u_inertial, body.controlpoints,
             body.normals, body.cells, body.neighbor, te_info;
-            bad_panel_mask=any(bad_panel_mask) ? bad_panel_mask : nothing)
+            bad_panel_mask=any(bad_panel_mask) ? bad_panel_mask : nothing,
+            nodes=body.nodes)
     end
 
     # In raw_hessian mode, ∇u_inertial = ∇u_induced + [Ω]_×. The induced part is
@@ -1113,6 +1126,315 @@ function (c::RotorNormalization2)(CF, CM, systems, frames, uinf)
     n = frames[c.i_frame].ω # rad/s
     ref = c.rho * pi * c.D^2 * 0.25 * (n * c.D / 2)^2
     return CF / ref, CM / (ref * c.D*0.5)
+end
+
+"""
+    NoSectionalNormalization()
+
+Pass-through normalization for `SpanwiseLoadingMonitor`: returns dimensional
+sectional loads and bin forces unchanged.
+"""
+struct NoSectionalNormalization end
+
+function (::NoSectionalNormalization)(load_components, force_components, systems, frames, uinf)
+    return load_components, force_components
+end
+
+"""
+    FreestreamSectionalNormalization(rho, Lref)
+
+Normalize spanwise per-length sectional loads by
+`0.5*rho*|uinf|^2*Lref`. This is intended for fixed-wing steady or
+quasi-steady freestream cases.
+"""
+struct FreestreamSectionalNormalization{TF}
+    rho::TF
+    Lref::TF
+end
+
+function (n::FreestreamSectionalNormalization)(load_components, force_components,
+                                               systems, frames, uinf)
+    qinf = n.rho / 2 * (uinf[1]^2 + uinf[2]^2 + uinf[3]^2)
+    ref = qinf * n.Lref
+    return load_components / ref, force_components / ref
+end
+
+"""
+    RotorSectionalNormalization(rho, R, i_frame; omega_scale=:tip)
+
+Normalize spanwise sectional loads using a rotor dynamic pressure scale from
+`frames[i_frame].ω` and radius `R`. The default `omega_scale=:tip` uses
+`q = 0.5*rho*(abs(ω)*R)^2`.
+"""
+struct RotorSectionalNormalization{TF}
+    rho::TF
+    R::TF
+    i_frame::Int
+    omega_scale::Symbol
+end
+
+function RotorSectionalNormalization(rho::Real, R::Real, i_frame::Int; omega_scale::Symbol=:tip)
+    omega_scale == :tip || throw(ArgumentError(
+        "RotorSectionalNormalization only supports omega_scale=:tip; got $(omega_scale)."))
+    R > 0 || throw(ArgumentError("RotorSectionalNormalization requires positive R; got $(R)."))
+    TF = promote_type(typeof(rho), typeof(R))
+    return RotorSectionalNormalization{TF}(TF(rho), TF(R), i_frame, omega_scale)
+end
+
+function (n::RotorSectionalNormalization)(load_components, force_components,
+                                          systems, frames, uinf)
+    ω = frames[n.i_frame].ω
+    q = n.rho / 2 * (abs(ω) * n.R)^2
+    return load_components / q, force_components / q
+end
+
+function _spanwise_unit_vector(v, name::AbstractString; TF=Float64)
+    length(v) == 3 || throw(ArgumentError("$(name) must have length 3."))
+    sv = SVector{3, TF}(v[1], v[2], v[3])
+    isapprox(norm(sv), one(TF); atol=sqrt(eps(TF)), rtol=sqrt(eps(TF))) ||
+        throw(ArgumentError("$(name) must be unit length; got norm $(norm(sv))."))
+    return sv
+end
+
+function _spanwise_default_axis(component_vectors::AbstractVector)
+    length(component_vectors) >= 2 || throw(ArgumentError(
+        "SpanwiseLoadingMonitor requires span_axis when fewer than two components are provided."))
+    axis = cross(component_vectors[1], component_vectors[2])
+    mag = norm(axis)
+    mag > sqrt(eps(eltype(axis))) || throw(ArgumentError(
+        "Cannot infer span_axis from collinear first two components."))
+    return axis / mag
+end
+
+function _spanwise_validate_axis(axis, component_vectors)
+    for c in component_vectors
+        isapprox(dot(axis, c), zero(eltype(axis)); atol=sqrt(eps(eltype(axis))),
+                 rtol=sqrt(eps(eltype(axis)))) ||
+            throw(ArgumentError("span_axis must be orthogonal to every component direction."))
+    end
+    return axis
+end
+
+"""
+    SpanwiseLoadingMonitor(nbins, i_system; i_frame=-1, components,
+                           span_axis=nothing,
+                           normalization=NoSectionalNormalization(),
+                           per_length=false, csv_path=nothing, TF=Float64,
+                           verbose=false, vtk_fields=(:bin_id,))
+
+Consume distributed panel forces from an earlier force monitor, bin them along a
+span axis in the requested reference frame, and store latest-step sectional
+loading. `components` is a named tuple of unit vectors expressed in the selected
+frame, e.g. `components=(lift=Lhat, drag=Dhat)`.
+"""
+mutable struct SpanwiseLoadingMonitor{TF, TN} <: AbstractMonitor
+    nbins::Int
+    i_system::Int
+    i_frame::Int
+    component_names::Tuple{Vararg{Symbol}}
+    components::Matrix{TF}
+    span_axis::SVector{3, TF}
+    normalization::TN
+    per_length::Bool
+    csv_path::Union{Nothing, String}
+    verbose::Bool
+    vtk_fields::Tuple{Vararg{Symbol}}
+    bin_center::Vector{TF}
+    bin_width::Vector{TF}
+    load_components::Matrix{TF}
+    force_components::Matrix{TF}
+    counts::Vector{Int}
+    panel_bin_id::Vector{Int}
+    bin_force::Matrix{TF}
+end
+
+monitor_requires(::SpanwiseLoadingMonitor) = (:F,)
+
+function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
+                                i_frame::Int=-1,
+                                components,
+                                span_axis=nothing,
+                                normalization=NoSectionalNormalization(),
+                                per_length::Bool=false,
+                                csv_path=nothing,
+                                TF=Float64,
+                                verbose::Bool=false,
+                                vtk_fields::Tuple{Vararg{Symbol}}=(:bin_id,))
+    nbins > 0 || throw(ArgumentError("SpanwiseLoadingMonitor requires nbins > 0; got $(nbins)."))
+    components isa NamedTuple || throw(ArgumentError("components must be a NamedTuple of unit vectors."))
+    !isempty(keys(components)) || throw(ArgumentError("components must contain at least one direction."))
+
+    names = Tuple(Symbol.(keys(components)))
+    vectors = [_spanwise_unit_vector(v, "component $(name)"; TF) for (name, v) in pairs(components)]
+    axis = isnothing(span_axis) ?
+        _spanwise_default_axis(vectors) :
+        _spanwise_unit_vector(span_axis, "span_axis"; TF)
+    axis = _spanwise_validate_axis(axis, vectors)
+
+    component_matrix = zeros(TF, 3, length(vectors))
+    for (i, v) in enumerate(vectors)
+        component_matrix[:, i] .= v
+    end
+
+    csv = isnothing(csv_path) ? nothing : String(csv_path)
+    return SpanwiseLoadingMonitor{TF, typeof(normalization)}(
+        nbins, i_system, i_frame, names, component_matrix, axis, normalization,
+        per_length, csv, verbose, vtk_fields,
+        zeros(TF, nbins), zeros(TF, nbins),
+        zeros(TF, length(vectors), nbins), zeros(TF, length(vectors), nbins),
+        zeros(Int, nbins), Int[], zeros(TF, 3, nbins))
+end
+
+function _spanwise_ensure_storage!(m::SpanwiseLoadingMonitor{TF}, ncells::Int) where TF
+    length(m.panel_bin_id) == ncells || (m.panel_bin_id = zeros(Int, ncells))
+    size(m.bin_force) == (3, m.nbins) || (m.bin_force = zeros(TF, 3, m.nbins))
+    return nothing
+end
+
+function _spanwise_frame_transform(frames, i_frame::Int)
+    if i_frame < 0
+        origin = SVector{3, Float64}(0.0, 0.0, 0.0)
+        R_g2f = SMatrix{3, 3, Float64, 9}(1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0)
+        return origin, R_g2f
+    end
+    origin_global, R_f2g = frame_global_transform(frames, i_frame)
+    return origin_global, transpose(R_f2g)
+end
+
+function _spanwise_fill_empty_bins!(bin_force::AbstractMatrix, counts::AbstractVector)
+    populated = findall(!=(0), counts)
+    isempty(populated) && throw(ArgumentError(
+        "SpanwiseLoadingMonitor cannot compute loading because all bins are empty."))
+    length(populated) == length(counts) && return bin_force
+
+    first_pop = first(populated)
+    for b in 1:first_pop-1
+        bin_force[:, b] .= bin_force[:, first_pop]
+    end
+    last_pop = last(populated)
+    for b in last_pop+1:length(counts)
+        bin_force[:, b] .= bin_force[:, last_pop]
+    end
+    for k in 1:length(populated)-1
+        left = populated[k]
+        right = populated[k + 1]
+        gap = right - left
+        gap <= 1 && continue
+        for b in left+1:right-1
+            α = (b - left) / gap
+            bin_force[:, b] .= (1 - α) .* bin_force[:, left] .+ α .* bin_force[:, right]
+        end
+    end
+    return bin_force
+end
+
+function _spanwise_write_csv!(m::SpanwiseLoadingMonitor, i_step::Int, t::Real)
+    isnothing(m.csv_path) && return nothing
+    dir = dirname(m.csv_path)
+    !isempty(dir) && dir != "." && !isdir(dir) && mkpath(dir)
+    mode = i_step == 0 ? "w" : "a"
+    open(m.csv_path, mode) do io
+        if i_step == 0
+            println(io, join(("step", "time", "bin", "bin_center", "bin_width", "count",
+                              string.(m.component_names)...), ","))
+        end
+        for b in 1:m.nbins
+            vals = Any[i_step, t, b, m.bin_center[b], m.bin_width[b], m.counts[b]]
+            append!(vals, m.load_components[:, b])
+            println(io, join(vals, ","))
+        end
+    end
+    return nothing
+end
+
+function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, systems, wakes,
+                       frames::AbstractVector{<:ReferenceFrame},
+                       uinf, i_step::Int, dt::Real, t=nothing) where TF
+    !isnothing(t) && monitor_set_time!(ctx, t)
+    systems_tuple = _systems_tuple(systems)
+    body = systems_tuple[m.i_system]
+    F = monitor_field(ctx, :F, m.i_system)
+    size(F) == (3, body.ncells) || throw(ArgumentError(
+        "SpanwiseLoadingMonitor requires distributed force with size (3, $(body.ncells)); got $(size(F))."))
+    body.ncells > 0 || throw(ArgumentError(
+        "SpanwiseLoadingMonitor requires at least one panel."))
+    _spanwise_ensure_storage!(m, body.ncells)
+
+    origin, R_g2f = _spanwise_frame_transform(frames, m.i_frame)
+    span_coord = Vector{TF}(undef, body.ncells)
+    @inbounds for p in 1:body.ncells
+        cp_global = SVector{3, TF}(body.controlpoints[1, p], body.controlpoints[2, p], body.controlpoints[3, p])
+        cp_frame = R_g2f * (cp_global - origin)
+        span_coord[p] = dot(m.span_axis, cp_frame)
+    end
+
+    smin = minimum(span_coord)
+    smax = maximum(span_coord)
+    span = smax - smin
+    width = span > sqrt(eps(TF)) ? span / m.nbins : one(TF)
+    fill!(m.counts, 0)
+    fill!(m.bin_force, zero(TF))
+    fill!(m.panel_bin_id, 0)
+    @inbounds for p in 1:body.ncells
+        b = span > sqrt(eps(TF)) ? clamp(floor(Int, (span_coord[p] - smin) / width) + 1, 1, m.nbins) : 1
+        m.panel_bin_id[p] = b
+        m.counts[b] += 1
+        f_global = SVector{3, TF}(F[1, p], F[2, p], F[3, p])
+        f_frame = R_g2f * f_global
+        m.bin_force[1, b] += f_frame[1]
+        m.bin_force[2, b] += f_frame[2]
+        m.bin_force[3, b] += f_frame[3]
+    end
+
+    for b in 1:m.nbins
+        m.bin_width[b] = width
+        m.bin_center[b] = span > sqrt(eps(TF)) ? smin + (b - 0.5) * width : smin
+    end
+
+    _spanwise_fill_empty_bins!(m.bin_force, m.counts)
+
+    raw_force_components = zeros(TF, size(m.force_components))
+    raw_load_components = zeros(TF, size(m.load_components))
+    @inbounds for b in 1:m.nbins
+        f = SVector{3, TF}(m.bin_force[1, b], m.bin_force[2, b], m.bin_force[3, b])
+        l = m.per_length ? f / m.bin_width[b] : f
+        for c in axes(m.components, 2)
+            comp = SVector{3, TF}(m.components[1, c], m.components[2, c], m.components[3, c])
+            raw_force_components[c, b] = dot(f, comp)
+            raw_load_components[c, b] = dot(l, comp)
+        end
+    end
+
+    loads, forces = m.normalization(raw_load_components, raw_force_components,
+                                    systems_tuple, frames, uinf)
+    m.load_components .= loads
+    m.force_components .= forces
+    _spanwise_write_csv!(m, i_step, monitor_time(ctx, i_step, dt))
+
+    if m.verbose
+        println("\t\tSpanwiseLoadingMonitor[i_system=$(m.i_system), i_frame=$(m.i_frame), step=$(i_step+1)]:")
+        println("\t\t\tspan range = ($(round(smin, sigdigits=4)), $(round(smax, sigdigits=4)))")
+    end
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::SpanwiseLoadingMonitor, body, i_system::Int, i_step::Int)
+    (:bin_id in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    length(m.panel_bin_id) == body.ncells || return nothing
+    vtk["spanwise bin id", VTKCellData()] = m.panel_bin_id
+    return nothing
+end
+
+function write_vtk_fields!(vtk, m::SpanwiseLoadingMonitor, body, i_system::Int, i_step::Int,
+                           field_names::VTKFieldNameAllocator, i_monitor::Int)
+    (:bin_id in m.vtk_fields) || return nothing
+    i_system == m.i_system || return nothing
+    length(m.panel_bin_id) == body.ncells || return nothing
+    vtk[_vtk_monitor_field_name!(field_names, "spanwise bin id", m, i_monitor), VTKCellData()] = m.panel_bin_id
+    return nothing
 end
 
 """
@@ -1797,7 +2119,8 @@ end
 
 function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wakes,
                        frames::AbstractVector{<:ReferenceFrame},
-                       uinf, i_step::Int, dt::Real)
+                       uinf, i_step::Int, dt::Real, t=nothing)
+    !isnothing(t) && monitor_set_time!(ctx, t)
     systems_tuple = _systems_tuple(systems)
     body = systems_tuple[monitor.i_system]
     pressure = monitor_field(ctx, :P, monitor.i_system)

@@ -20,7 +20,7 @@ function cross!(out, A, B)
 end
 cross(A,B) = (out = zeros(3); cross!(out, A, B); return out)
 
-function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;
+function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, pressure, spanposs, b, rho, magVinf;
                         spandirection=[0, 1, 0], AOA=nothing,
                         _fig=nothing, _axs=nothing,
                         ttl=nothing, xscaling=1,
@@ -70,8 +70,10 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
             if !isnothing(rowstart)
 
-                data_vsp_cp = CSV.read(vsp_file, DataFrame; skipto=rowstart+7, limit=1)
-                data_vsp_loc = CSV.read(vsp_file, DataFrame; skipto=rowstart+12, limit=3)
+                data_vsp_cp = CSV.read(vsp_file, DataFrame; skipto=rowstart+7,
+                                        limit=1, header=false)
+                data_vsp_loc = CSV.read(vsp_file, DataFrame; skipto=rowstart+12,
+                                         limit=3, header=false)
 
                 cp_vsp = [val for val in data_vsp_cp[1, 2:end]]
                 x_vsp = [val for val in data_vsp_loc[1, 2:end]]
@@ -109,7 +111,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         isempty(idx) && error("No panels found within tolerance $slicetol of spanwise $target_y")
 
         points = cps_b[:, idx]
-        Cps = body.P[idx] ./ (0.5 * rho * magVinf^2)
+        Cps = pressure[idx] ./ (0.5 * rho * magVinf^2)
 
         # Per-panel sweep-aware chord normalization.
         xs = points[1, :]
@@ -124,9 +126,12 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         ord_u = sortperm(chordposs[upper])
         ord_l = sortperm(chordposs[lower])
 
-        plot_optargs_lower = merge(NamedTuple(plot_optargs), (label="_nolegend_",))
-        ax.plot(chordposs[upper][ord_u], Cps[upper][ord_u], stl; clip_on=false, plot_optargs...)
-        ax.plot(chordposs[lower][ord_l], Cps[lower][ord_l], stl; clip_on=false, plot_optargs_lower...)
+        upper_lines = ax.plot(chordposs[upper][ord_u], Cps[upper][ord_u], stl;
+                              clip_on=false, plot_optargs...)
+        plot_optargs_lower = merge(NamedTuple(plot_optargs),
+                                   (label="_nolegend_", color=upper_lines[1].get_color()))
+        ax.plot(chordposs[lower][ord_l], Cps[lower][ord_l], stl;
+                clip_on=false, plot_optargs_lower...)
 
         if xlims!=nothing; ax.set_xlim(xlims); end;
         if ylims!=nothing; ax.set_ylim(ylims); end;
@@ -155,11 +160,11 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
 end
 
-function plot_Cps(body, spanposs, b, rho, magVinf; optargs...)
+function plot_Cps(body, pressure, spanposs, b, rho, magVinf; optargs...)
     normals_b = pnl._calc_normals(body)
     controlpoints_b = pnl._calc_controlpoints(body, normals_b)
 
-    return plot_Cps(body, controlpoints_b, spanposs, b, rho, magVinf; optargs...)
+    return plot_Cps(body, controlpoints_b, pressure, spanposs, b, rho, magVinf; optargs...)
 end
 
 function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;

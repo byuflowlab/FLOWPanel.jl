@@ -23,8 +23,10 @@ export  solve, save, influence!,
         JacobiPressurePreconditioner, NoPressurePreconditioner,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
         ForceMonitor, KuttaJoukowskiForce, SurfaceVorticityForce,
-        BoundCirculationMonitor,
+        BoundCirculationMonitor, SpanwiseLoadingMonitor,
         WingNormalization, NoNormalization, RotorNormalization,
+        NoSectionalNormalization, FreestreamSectionalNormalization,
+        RotorSectionalNormalization,
         steady!, simulate_warmstart!, initialize_Das!,
         replay, ReplayResult
 

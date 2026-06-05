@@ -27,6 +27,7 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
         doublet_gradient=true,
         gradient_robust=false,
         gradient_ar_threshold=10.0,
+        gradient_quad_consistent=true,
     )
 
     # reset velocity
@@ -63,7 +64,8 @@ function calcfield_U!(bodies::Tuple, uinf=SVector{3,Float64}(0.0, 0.0, 0.0), wak
                 body.neighbor,
                 view(body.strength, :, get_Gammai(body)),
                 view(body.shedding_full, 1:2, :), scale=0.5,
-                bad_panel_mask=mask)
+                bad_panel_mask=mask,
+                nodes=gradient_quad_consistent ? body.nodes : nothing)
             
             # alternatively, comment out the above function and:
             # body.velocity .*= 2.0 # (only works if self-induced velocity is the only one applied)
@@ -123,7 +125,8 @@ end
 """
     compute_mu_gradient!(grad_mu, controlpoints, normals, cells, neighbors, mu, te_info;
                          scale=0.5, bad_panel_mask=nothing,
-                         bfs_target_healthy=6, bfs_max_depth=4)
+                         bfs_target_healthy=6, bfs_max_depth=4,
+                         nodes=nothing, quad_consistent=!isnothing(nodes))
 
 Compute the surface gradient of doublet or vortex-ring strength using a local
 least-squares stencil, with one-sided handling at trailing-edge panels.
@@ -135,6 +138,13 @@ healthy (unmasked) panels reached by walking the `neighbors` graph and
 clusters of degenerate panels (e.g. cap-corner slivers on capped wing meshes).
 TE exclusion mirrors the pass-1 behavior: when the bad panel is itself a TE
 panel, the cross-TE neighbor is rejected as the first BFS step.
+
+When `nodes` is supplied and `quad_consistent=true`, mutually paired
+triangles across their longest shared edge are treated as the two halves of a
+logical quadrilateral patch: their reconstructed contributions are averaged
+and projected back onto each triangle tangent plane. This removes alternating
+triangle-stencil artifacts on structured lofted lifting surfaces while leaving
+unpaired or strongly folded neighbors unchanged.
 """
 function compute_mu_gradient!(grad_mu,
                             controlpoints::AbstractMatrix{Float64},
@@ -147,9 +157,13 @@ function compute_mu_gradient!(grad_mu,
                             bad_panel_mask::Union{Nothing,AbstractVector{Bool}}=nothing,
                             bfs_target_healthy::Int=6,
                             bfs_max_depth::Int=4,
+                            nodes::Union{Nothing,AbstractMatrix{Float64}}=nothing,
+                            quad_consistent::Bool=!isnothing(nodes),
+                            quad_normal_dot_min::Float64=cos(pi / 4),
                         )
 
     _, M = size(cells)
+    local_grad = zeros(Float64, 3, M)
 
     # Pre-allocate array for stencil to avoid allocations inside the loop
     stencil = Int[]
@@ -256,9 +270,9 @@ function compute_mu_gradient!(grad_mu,
         # 6. Solve the 3x3 local system
         g = ATA \ ATb
 
-        grad_mu[1, i] -= g[1] * scale
-        grad_mu[2, i] -= g[2] * scale
-        grad_mu[3, i] -= g[3] * scale
+        local_grad[1, i] -= g[1] * scale
+        local_grad[2, i] -= g[2] * scale
+        local_grad[3, i] -= g[3] * scale
     end
 
     # ---------- Second pass: BFS-gathered healthy-only stencil for bad panels ----------
@@ -348,13 +362,111 @@ function compute_mu_gradient!(grad_mu,
 
             g = ATA \ ATb
 
-            grad_mu[1, i] -= g[1] * scale
-            grad_mu[2, i] -= g[2] * scale
-            grad_mu[3, i] -= g[3] * scale
+            local_grad[1, i] -= g[1] * scale
+            local_grad[2, i] -= g[2] * scale
+            local_grad[3, i] -= g[3] * scale
         end
     end
 
+    if quad_consistent && nodes !== nothing
+        _enforce_quad_consistent_gradient!(local_grad, nodes, cells, neighbors,
+            normals, te_info; normal_dot_min=quad_normal_dot_min)
+    end
+
+    grad_mu .+= local_grad
+
     return grad_mu
+end
+
+function _edge_vertices(cells::AbstractMatrix{Int}, edge_i::Int, cell_i::Int)
+    edge_i == 1 && return cells[1, cell_i], cells[2, cell_i]
+    edge_i == 2 && return cells[2, cell_i], cells[3, cell_i]
+    return cells[3, cell_i], cells[1, cell_i]
+end
+
+function _edge_length2(nodes::AbstractMatrix{Float64},
+                       cells::AbstractMatrix{Int},
+                       edge_i::Int,
+                       cell_i::Int)
+    a, b = _edge_vertices(cells, edge_i, cell_i)
+    dx = nodes[1, a] - nodes[1, b]
+    dy = nodes[2, a] - nodes[2, b]
+    dz = nodes[3, a] - nodes[3, b]
+    return dx*dx + dy*dy + dz*dz
+end
+
+function _shares_te_edge(cells::AbstractMatrix{Int},
+                         te_info::AbstractMatrix{Int},
+                         i::Int,
+                         j::Int)
+    te_info[1, i] > 0 && te_info[2, i] > 0 || return false
+    te_v1 = cells[te_info[1, i], i]
+    te_v2 = cells[te_info[2, i], i]
+    has_v1 = (cells[1, j] == te_v1) || (cells[2, j] == te_v1) || (cells[3, j] == te_v1)
+    has_v2 = (cells[1, j] == te_v2) || (cells[2, j] == te_v2) || (cells[3, j] == te_v2)
+    return has_v1 && has_v2
+end
+
+function _quad_candidate_neighbor(nodes::AbstractMatrix{Float64},
+                                  cells::AbstractMatrix{Int},
+                                  neighbors::AbstractMatrix{Int},
+                                  normals::AbstractMatrix{Float64},
+                                  te_info::AbstractMatrix{Int},
+                                  i::Int;
+                                  normal_dot_min::Float64)
+    best = 0
+    best_l2 = -Inf
+    @inbounds for edge_i in 1:3
+        j = neighbors[edge_i, i]
+        j > 0 || continue
+        _shares_te_edge(cells, te_info, i, j) && continue
+        ndot = normals[1, i]*normals[1, j] + normals[2, i]*normals[2, j] + normals[3, i]*normals[3, j]
+        ndot >= normal_dot_min || continue
+        l2 = _edge_length2(nodes, cells, edge_i, i)
+        if l2 > best_l2
+            best_l2 = l2
+            best = j
+        end
+    end
+    return best
+end
+
+function _enforce_quad_consistent_gradient!(grad::AbstractMatrix{Float64},
+                                            nodes::AbstractMatrix{Float64},
+                                            cells::AbstractMatrix{Int},
+                                            neighbors::AbstractMatrix{Int},
+                                            normals::AbstractMatrix{Float64},
+                                            te_info::AbstractMatrix{Int};
+                                            normal_dot_min::Float64=cos(pi / 4))
+    M = size(cells, 2)
+    paired = falses(M)
+    @inbounds for i in 1:M
+        paired[i] && continue
+        j = _quad_candidate_neighbor(nodes, cells, neighbors, normals, te_info, i;
+                                     normal_dot_min=normal_dot_min)
+        j > 0 || continue
+        paired[j] && continue
+        _quad_candidate_neighbor(nodes, cells, neighbors, normals, te_info, j;
+                                 normal_dot_min=normal_dot_min) == i || continue
+
+        gx = 0.5 * (grad[1, i] + grad[1, j])
+        gy = 0.5 * (grad[2, i] + grad[2, j])
+        gz = 0.5 * (grad[3, i] + grad[3, j])
+
+        ni_dot = gx*normals[1, i] + gy*normals[2, i] + gz*normals[3, i]
+        nj_dot = gx*normals[1, j] + gy*normals[2, j] + gz*normals[3, j]
+        grad[1, i] = gx - ni_dot * normals[1, i]
+        grad[2, i] = gy - ni_dot * normals[2, i]
+        grad[3, i] = gz - ni_dot * normals[3, i]
+        grad[1, j] = gx - nj_dot * normals[1, j]
+        grad[2, j] = gy - nj_dot * normals[2, j]
+        grad[3, j] = gz - nj_dot * normals[3, j]
+
+        paired[i] = true
+        paired[j] = true
+    end
+
+    return grad
 end
 
 """
@@ -375,7 +487,9 @@ function compute_surface_velocity_gradient!(grad_u::AbstractArray{Float64,3},
                                             te_info::AbstractMatrix{Int};
                                             bad_panel_mask::Union{Nothing,AbstractVector{Bool}}=nothing,
                                             bfs_target_healthy::Int=6,
-                                            bfs_max_depth::Int=4)
+                                            bfs_max_depth::Int=4,
+                                            nodes::Union{Nothing,AbstractMatrix{Float64}}=nothing,
+                                            quad_consistent::Bool=!isnothing(nodes))
     size(u, 1) == 3 || throw(ArgumentError("u must be a 3 × ncells matrix."))
     size(grad_u, 1) == 3 && size(grad_u, 2) == 3 && size(grad_u, 3) == size(u, 2) ||
         throw(ArgumentError("grad_u must have size 3 × 3 × ncells."))
@@ -391,7 +505,9 @@ function compute_surface_velocity_gradient!(grad_u::AbstractArray{Float64,3},
             scale=-1.0,
             bad_panel_mask=bad_panel_mask,
             bfs_target_healthy=bfs_target_healthy,
-            bfs_max_depth=bfs_max_depth)
+            bfs_max_depth=bfs_max_depth,
+            nodes=nodes,
+            quad_consistent=quad_consistent)
         for i in axes(u, 2)
             grad_u[k, 1, i] = scratch[1, i]
             grad_u[k, 2, i] = scratch[2, i]
