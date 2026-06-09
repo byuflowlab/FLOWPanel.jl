@@ -8,7 +8,7 @@ using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
-run_name = "rotor_hover_pressure_comparison"
+run_name = get(ENV, "RUN_NAME", "rotor_hover_pressure_comparison")
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
 
 magVinf = 0.0001 # + 10
@@ -40,11 +40,12 @@ kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, 
 kernelcutoff = R * 1e-13
 p_per_step = 2
 overlap = 3.0
+particle_shedding = lowercase(get(ENV, "PARTICLE_SHEDDING", "overlap_pps"))
 merge_r_factor = 0.02
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
-split_particles = parse(Bool,    get(ENV, "SPLIT_PARTICLES",    "true"))
+split_particles = parse(Bool,    get(ENV, "SPLIT_PARTICLES",    "false"))
 split_log_R_max = parse(Float64, get(ENV, "SPLIT_LOG_R_MAX",    string(log(1.5))))
 split_c_mu      = parse(Float64, get(ENV, "SPLIT_C_MU",         "0.5"))
 split_N_hold    = parse(Int,     get(ENV, "SPLIT_N_HOLD",       "1"))
@@ -62,14 +63,25 @@ wake_nu = parse(Float64, get(ENV, "WAKE_NU", string(wake_nu_default)))
 wake_core_beta = parse(Float64, get(ENV, "WAKE_CORE_BETA", "1.5"))
 run_kj = parse(Bool, get(ENV, "RUN_KJ", "false"))
 lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "false"))
+run_monitors = parse(Bool, get(ENV, "RUN_MONITORS", "true"))
 
 read_path = joinpath(pnl.examples_path, "data")
+
 # msh_file = joinpath(read_path, "phantom_3_rebuild_r2.msh")
 # te_indices_1 = [9, 175, 127]
 # te_indices_2 = [13, 286, 238]
-msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
-te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
-te_indices_2 = [3324, 3284, 1755] .+ 1 # (or 1755 instead of 1711) convert from 0-based to 1-based indexing
+
+# msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
+# te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
+# te_indices_2 = [3324, 3284, 1755] .+ 1 # (or 1755 instead of 1711) convert from 0-based to 1-based indexing
+
+msh_file = joinpath(read_path, "dji9443_56_57.msh")
+te_indices_1 = [6370, 6314, 3255] .+ 1 # (or 3255 instead of 3253) convert from 0-based to 1-based indexing
+te_indices_2 = [3117, 3061, 0] .+ 1 # (or 0 instead of 1) convert from 0-based to 1-based indexing
+
+# msh_file = joinpath(read_path, "dji9443_80_81.msh")
+# te_indices_1 = [12898, 12818, 6549] .+ 1 # (or 6549 instead of 6547) convert from 0-based to 1-based indexing
+# te_indices_2 = [3324, 3284, 0] .+ 1 # (or 0 instead of 3) convert from 0-based to 1-based indexing
 
 axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is rotated compared to typical rotor convention
 radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
@@ -114,6 +126,7 @@ end
 # save vtk file to inspect for shedding nodes
 # vtk_path = joinpath(save_path, "rotor_initial")
 # pnl.write_vtk(vtk_path, rotor)
+# sherlock
 
 bbox1 = make_shedding_bbox(rotor.nodes, te_indices_1[1:2], radial_dimension, R, shedding_r_over_R)
 shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
@@ -152,8 +165,23 @@ sfs_threelevel             = parse(Bool,    get(ENV, "SFS_THREELEVEL",          
 sfs_nostatic               = parse(Bool,    get(ENV, "SFS_NOSTATIC",               "false"))
 sfs_maxC                   = parse(Float64, get(ENV, "SFS_MAXC",                   "1.0"))
 sfs_rlxf                   = parse(Float64, get(ENV, "SFS_RLXF",                   "0.005"))
+panel_wake_hessian_to_particles = parse(Bool, get(ENV, "PANEL_WAKE_HESSIAN_TO_PARTICLES",
+    string(!parse(Bool, get(ENV, "WAKEROW_NO_HESSIAN_TO_PARTICLES", "true")))))
+wakerow_no_hessian_to_particles = !panel_wake_hessian_to_particles
+body_hessian_to_particles       = parse(Bool, get(ENV, "BODY_HESSIAN_TO_PARTICLES",        "false"))
+body_on_wake                    = parse(Bool, get(ENV, "BODY_ON_WAKE",                     "true"))
+panel_wake_on_particles         = parse(Bool, get(ENV, "PANEL_WAKE_VELOCITY_TO_PARTICLES",
+    get(ENV, "PANEL_WAKE_ON_PARTICLES", "true")))
+particle_hessian_self           = parse(Bool, get(ENV, "PARTICLE_HESSIAN_SELF",            "true"))
+particle_relax                  = parse(Bool, get(ENV, "PARTICLE_RELAX",                   "true"))
+diagnose_particle_gamma         = parse(Bool, get(ENV, "DIAGNOSE_PARTICLE_GAMMA",          "false"))
+diagnose_particle_influence     = parse(Bool, get(ENV, "DIAGNOSE_PARTICLE_INFLUENCE",      "false"))
+particle_diagnostic_vertical    = ntuple(i -> i == axial_dimension ? 1.0 : 0.0, 3)
+sfs_off                         = parse(Bool, get(ENV, "SFS_OFF",                          "false"))
 
-sfs_choice = if sfs_backscatter_signed
+sfs_choice = if sfs_off
+    pnl.FLOWVPM.noSFS
+elseif sfs_backscatter_signed
     pnl.FLOWVPM.SFS_Cd_twolevel_backscatter_signed
 elseif sfs_no_backscatter_project
     pnl.FLOWVPM.SFS_Cd_twolevel_nobackscatter_projection
@@ -188,14 +216,22 @@ split_opts = FV.SplitOptions(;
     max_fraction=split_max_frac,
 )
 
+method_trailing = if particle_shedding == "overlap_pps"
+    pnl.OverlapPPS(overlap, p_per_step)
+elseif particle_shedding == "sigma_overlap"
+    tip_sigma = 2 * pi * R / nt * overlap / p_per_step
+    pnl.SigmaOverlap(tip_sigma, overlap)
+else
+    error("Unknown PARTICLE_SHEDDING=$(repr(particle_shedding)); use overlap_pps or sigma_overlap")
+end
+
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows=1, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
     viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
         beta=wake_core_beta),
     SFS=sfs_choice,
-    # method_trailing=pnl.SigmaOverlap(R*0.05, 4.0),
-    method_trailing=pnl.OverlapPPS(overlap, 2),
+    method_trailing,
     method_unsteady=pnl.NoShed(),
     # method_unsteady=pnl.OverlapPPS(1.3, 2),
     unsteady_filament=false, # should be false if method_unsteady is NoShed
@@ -306,7 +342,7 @@ bound_circulation = pnl.BoundCirculationMonitor(rotor, length(t_range), 1;
     radial_dimension,
     R)
 
-monitors = run_kj ? (
+monitors = !run_monitors ? () : run_kj ? (
         pressure_laplace_matderiv,
         force_monitor_laplace_matderiv,
         pressure_laplace_lamb,
@@ -333,6 +369,7 @@ if spinup_revs > 0
     println("\nRotor spin-up enabled: $(spinup_revs) nominal revs from $(spinup_start_fraction)×RPM to full RPM")
 end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
+println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical)")
 name = run_name
 
 # Allow other scripts to `include` this file purely for setup (geometry,
@@ -346,9 +383,22 @@ if !rhpc_setup_only
     set_Das_min_kinematic_displacement,
     monitors,
     body_solvers, backend, backend_wake,
+    wakerow_no_hessian_to_particles,
+    body_hessian_to_particles,
+    body_on_wake,
+    panel_wake_on_particles,
+    particle_hessian_self,
+    particle_relax,
+    diagnose_particle_gamma,
+    diagnose_particle_influence,
+    diagnostic_vertical=particle_diagnostic_vertical,
     verbose=true,
     path=save_path, name,
 )
+
+if !run_monitors
+    println("\nRUN_MONITORS=false; skipping pressure/force history summary.")
+else
 
 CT_bernoulli   = lamb_only ? fill(NaN, length(t_range)) : force_monitor_bernoulli.force[axial_dimension, :]
 CT_laplace_md  = lamb_only ? fill(NaN, length(t_range)) : force_monitor_laplace_matderiv.force[axial_dimension, :]
@@ -379,5 +429,20 @@ println("  Bernoulli vs Laplace(∇u):  $(bern_md_rel)")
 println("  Bernoulli vs Laplace(λ):   $(bern_lv_rel)")
 println("  Bernoulli vs KJ:           $(bern_kj_rel)")
 println("  Laplace(∇u) vs Laplace(λ): $(md_lv_rel)")
+
+if save_path !== nothing
+    isdir(save_path) || mkpath(save_path)
+    csv_path = joinpath(save_path, "$(run_name)_CT_vs_rev.csv")
+    open(csv_path, "w") do io
+        println(io, "step,revolution,CT_bernoulli,CT_laplace_matderiv,CT_laplace_lamb,CT_kj")
+        for k in 1:length(t_range)
+            rev = (k - 1) * dt * RPM / 60
+            println(io, "$k,$rev,$(-CT_bernoulli[k]),$(-CT_laplace_md[k]),$(-CT_laplace_lv[k]),$(-CT_kj[k])")
+        end
+    end
+    println("\nWrote CT vs revolution CSV: $csv_path")
+end
+
+end # run_monitors
 
 end # !rhpc_setup_only
