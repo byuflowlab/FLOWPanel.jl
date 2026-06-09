@@ -81,7 +81,7 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "metadata", "simulate", "warmstart",
+                    "wake", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
                     "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")

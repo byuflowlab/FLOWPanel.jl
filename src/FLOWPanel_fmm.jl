@@ -43,7 +43,7 @@ FastMultipoleBackend(; expansion_order=10, multipole_acceptance=0.4, leaf_size=2
     FastMultipoleBackend(expansion_order, multipole_acceptance, leaf_size)
 
 """
-    influence!(targets, sources, backend; scalar_potential=false, velocity=false, velocity_gradient=false, precalc=false, optargs...)
+    influence!(targets, sources, backend; scalar_potential=false, velocity=false, velocity_gradient=false, precalc=false, postcalc=false, optargs...)
 
 Accumulate influence from `sources` onto `targets` using the requested backend.
 Targets and sources may be individual systems or tuples of systems.
@@ -59,7 +59,7 @@ has_semiinfinite_wake(self) = false
 
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
                      scalar_potential=false, velocity=false,
-                     velocity_gradient=false, precalc=false, optargs...)
+                     velocity_gradient=false, precalc=false, postcalc=false, optargs...)
 
     # apply pre-calculations per system
     if precalc
@@ -77,7 +77,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
         end
     end
 
-    FastMultipole.fmm!(target_bodies, source_bodies;
+    outputs = FastMultipole.fmm!(target_bodies, source_bodies;
         expansion_order=backend.expansion_order,
         multipole_acceptance=backend.multipole_acceptance,
         leaf_size_source=backend.leaf_size,
@@ -87,12 +87,16 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
         shrink=true,
         optargs...)
 
+    if postcalc
+        post_evaluate_influence!(target_bodies, source_bodies, backend, outputs)
+    end
+
     return nothing
 end
 
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
                      scalar_potential=false, velocity=false,
-                     velocity_gradient=false, precalc=false, optargs...)
+                     velocity_gradient=false, precalc=false, postcalc=false, optargs...)
 
     # apply pre-calculations per system
     if precalc
@@ -106,6 +110,10 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectB
         gradient=velocity,
         hessian=velocity_gradient, 
         optargs...)
+
+    if postcalc
+        post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
+    end
 
     return nothing
 end
@@ -123,6 +131,27 @@ Hook for systems that need preprocessing before influence evaluation. The
 default implementation does nothing.
 """
 function pre_evaluate_influence!(system)
+    # default behavior
+    return nothing
+end
+
+"""
+    post_evaluate_influence!(targets, sources, backend, outputs)
+
+Hook for systems that need postprocessing after influence evaluation. Tuple
+dispatch walks all target-source combinations; the default scalar
+implementation does nothing.
+"""
+function post_evaluate_influence!(targets::Tuple, sources::Tuple, backend::AbstractBackend, outputs)
+    for (i_t, target) in enumerate(targets)
+        for (i_s, source) in enumerate(sources)
+            post_evaluate_influence!(target, source, backend, outputs; i_target=i_t, i_source=i_s)
+        end
+    end
+    return nothing
+end
+
+function post_evaluate_influence!(target, source, backend::AbstractBackend, outputs; i_target::Int=1, i_source::Int=1)
     # default behavior
     return nothing
 end

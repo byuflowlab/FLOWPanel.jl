@@ -689,12 +689,13 @@ end
 
 struct RelativeMinGamma{T} <: AbstractParticleTrimPolicy
     fraction::T
+    function RelativeMinGamma{T}(fraction) where {T}
+        fraction >= zero(fraction) || throw(ArgumentError("RelativeMinGamma fraction must be nonnegative"))
+        return new{T}(fraction)
+    end
 end
 
-function RelativeMinGamma(fraction)
-    fraction >= zero(fraction) || throw(ArgumentError("RelativeMinGamma fraction must be nonnegative"))
-    return RelativeMinGamma{typeof(fraction)}(fraction)
-end
+RelativeMinGamma(fraction::T) where {T} = RelativeMinGamma{T}(fraction)
 
 struct PreparedRelativeMinGamma{T} <: AbstractParticleTrimPolicy
     absolute_threshold::T
@@ -936,7 +937,40 @@ end
 Run SFS pre-calculations for particle field before evaluating the velocity field.
 """
 function pre_evaluate_influence!(pfield::FLOWVPM.ParticleField)
+    if !FLOWVPM.isSFSenabled(pfield.SFS)
+        pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+        return nothing
+    end
+
+    velocities = copy(view(pfield.particles, FLOWVPM.U_INDEX, 1:pfield.np))
     pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+    FLOWVPM._reset_particles(pfield)
+    pfield.particles[FLOWVPM.U_INDEX, 1:pfield.np] .= velocities
+    return nothing
+end
+
+function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
+        source::FLOWVPM.ParticleField, backend::FastMultipoleBackend, outputs;
+        i_target::Int=1, i_source::Int=1)
+    pfield === source || return nothing
+    FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
+
+    _, _, target_tree, source_tree, _, direct_list, _ = outputs
+    FLOWVPM.Estr_fmm!(pfield, pfield, target_tree, source_tree, direct_list;
+        i_target_system=i_target, i_source_system=i_source)
+    pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    return nothing
+end
+
+function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
+        source::FLOWVPM.ParticleField, backend::DirectBackend, outputs;
+        i_target::Int=1, i_source::Int=1)
+    pfield === source || return nothing
+    FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
+
+    FLOWVPM.Estr_direct!(pfield)
+    pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    return nothing
 end
 
 #--- Delegation methods ---#
@@ -969,13 +1003,64 @@ end
 
 update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
-function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing)
+function _particle_gamma_direction_stats(pfield::FLOWVPM.ParticleField;
+        vertical=(0.0, 0.0, 1.0), before_gamma=nothing)
+    np = pfield.np
+    np == 0 && return "np=0"
+
+    vertical_norm = LA.norm(vertical)
+    zhat = vertical_norm > 0 ? SVector{3}(vertical...) / vertical_norm : SVector(0.0, 0.0, 1.0)
+    mean_abs = zeros(Float64, 3)
+    mean_dot_vertical = 0.0
+    mean_angle_change = 0.0
+    n_angle = 0
+
+    for i in 1:np
+        gamma = SVector{3}(view(pfield.particles, FLOWVPM.GAMMA_INDEX, i))
+        gamma_norm = LA.norm(gamma)
+        gamma_norm > 0 || continue
+        ghat = gamma / gamma_norm
+        mean_abs .+= abs.(ghat)
+        mean_dot_vertical += dot(ghat, zhat)
+
+        if !isnothing(before_gamma) && i <= size(before_gamma, 2)
+            gamma0 = SVector{3}(view(before_gamma, :, i))
+            gamma0_norm = LA.norm(gamma0)
+            if gamma0_norm > 0
+                ghat0 = gamma0 / gamma0_norm
+                mean_angle_change += acos(clamp(dot(ghat0, ghat), -1.0, 1.0))
+                n_angle += 1
+            end
+        end
+    end
+
+    mean_abs ./= np
+    mean_dot_vertical /= np
+    angle = n_angle == 0 ? NaN : mean_angle_change / n_angle
+    return "np=$(np) mean_abs_gammahat=($(mean_abs[1]), $(mean_abs[2]), $(mean_abs[3])) mean_gammahat_dot_vertical=$(mean_dot_vertical) mean_angle_change=$(angle)"
+end
+
+function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing,
+        diagnose_particle_gamma::Bool=false, diagnostic_vertical=(0.0, 0.0, 1.0))
 
     # panel wake
     propagate!(w.panel_wake, dt)
 
+    gamma_before = diagnose_particle_gamma && w.pfield.np > 0 ?
+        copy(view(w.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:w.pfield.np)) : nothing
+    if diagnose_particle_gamma
+        println("particle gamma step=$(step) phase=before_euler " *
+            _particle_gamma_direction_stats(w.pfield; vertical=diagnostic_vertical))
+    end
+
     # convect particles
     FLOWVPM._euler(w.pfield, dt; relax)
+
+    if diagnose_particle_gamma
+        println("particle gamma step=$(step) phase=after_euler relax=$(relax) " *
+            _particle_gamma_direction_stats(w.pfield;
+                vertical=diagnostic_vertical, before_gamma=gamma_before))
+    end
 
     # particle maintenance
     apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step, dt))

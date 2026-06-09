@@ -168,6 +168,64 @@ end
 _collect_wake_sources(wake::AbstractFreeWake) = _collect_wake_sources((wake,))
 _collect_wake_sources(::Nothing) = ()
 
+function _particle_j_rms(pfield::FLOWVPM.ParticleField)
+    np = pfield.np
+    np == 0 && return 0.0
+    J = view(pfield.particles, FLOWVPM.J_INDEX, 1:np)
+    return sqrt(sum(abs2, J) / np)
+end
+
+function _set_particle_j_zero!(pfield::FLOWVPM.ParticleField)
+    pfield.np == 0 && return nothing
+    view(pfield.particles, FLOWVPM.J_INDEX, 1:pfield.np) .= 0
+    return nothing
+end
+
+function _diagnostic_particle_j_from_sources!(pfield::FLOWVPM.ParticleField, sources::Tuple,
+        backend; velocity_gradient::Bool=true, optargs...)
+    length(sources) == 0 && return 0.0
+    pfield.np == 0 && return 0.0
+
+    particles = copy(view(pfield.particles, :, 1:pfield.np))
+    try
+        _set_particle_j_zero!(pfield)
+        influence!((pfield,), sources, backend;
+            scalar_potential=false,
+            velocity=false,
+            velocity_gradient=(velocity_gradient,),
+            precalc=false,
+            postcalc=false,
+            optargs...)
+        return _particle_j_rms(pfield)
+    finally
+        view(pfield.particles, :, 1:size(particles, 2)) .= particles
+    end
+end
+
+function _diagnose_particle_influence!(wakes_tuple::Tuple, systems_tuple::Tuple,
+        backend_wake, backend_system; needs_induced_vorticity::Bool=false,
+        particle_hessian_self::Bool=true, diagnostic_vertical=(0.0, 0.0, 1.0))
+    for (iw, w) in enumerate(wakes_tuple)
+        w isa PanelParticleWake || continue
+        pfield = w.pfield
+        pfield.np == 0 && continue
+
+        wake_sources = _collect_wake_sources((w,))
+        panel_sources = Tuple(s for s in wake_sources if !(s isa FLOWVPM.ParticleField))
+        particle_sources = Tuple(s for s in wake_sources if s isa FLOWVPM.ParticleField)
+
+        j_total = _particle_j_rms(pfield)
+        j_body = _diagnostic_particle_j_from_sources!(pfield, systems_tuple, backend_system;
+            direct_conditioning=_self_panel_kerneloffset_conditioning())
+        j_panelwake = _diagnostic_particle_j_from_sources!(pfield, panel_sources, backend_wake)
+        j_particles = _diagnostic_particle_j_from_sources!(pfield, particle_sources, backend_wake;
+            velocity_gradient=particle_hessian_self)
+
+        println("particle influence wake=$(iw) np=$(pfield.np) |J_total|=$(j_total) |J_body|=$(j_body) |J_panelwake|=$(j_panelwake) |J_particles|=$(j_particles)")
+    end
+    return nothing
+end
+
 # Wake sources that have a well-defined scalar potential. Excludes vortex
 # particle fields (which carry only a vector potential).
 _scalar_potential_sources(w::PanelWake) = get_sources(w)
@@ -223,7 +281,14 @@ end
 function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple,
         frames, uinf, body_solvers; backend_wake=nothing, backend_solve,
         backend_system, needs_induced_vorticity::Bool=false,
-        update_trailing_edges::Bool=false)
+        update_trailing_edges::Bool=false,
+        wakerow_no_hessian_to_particles::Bool=false,
+        body_hessian_to_particles::Bool=false,
+        body_on_wake::Bool=true,
+        panel_wake_on_particles::Bool=true,
+        particle_hessian_self::Bool=true,
+        diagnose_particle_influence::Bool=false,
+        diagnostic_vertical=(0.0, 0.0, 1.0))
     for w in wakes_tuple
         !isnothing(w) && reset!(w)
     end
@@ -249,30 +314,86 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     end
 
     if length(wake_sources) > 0
-        # Diagnostic gate: ablate the panel-wake-row -> particle Hessian (vortex
-        # rings + closing filaments produce |∇U| ~ 1/r^2 at edges that linear
-        # panels would smooth into a sheet). Default off, leaves the run
-        # bit-identical to the canonical configuration.
-        wakerow_no_hessian = parse(Bool, get(ENV, "WAKEROW_NO_HESSIAN_TO_PARTICLES", "false"))
-        if wakerow_no_hessian
+        # Diagnostic gates:
+        #   wakerow_no_hessian_to_particles: ablate the panel-wake-row ->
+        #     particle Hessian (vortex rings + closing filaments produce
+        #     |∇U| ~ 1/r^2 at edges that linear panels would smooth into a sheet).
+        #   panel_wake_on_particles=false: drop panel-wake-row -> particle
+        #     velocity entirely; particles still receive particle-on-particle
+        #     velocity, and panel wake still acts on bodies and panel-wake nodes.
+        if wakerow_no_hessian_to_particles || !panel_wake_on_particles
             panel_sources  = Tuple(s for s in wake_sources if !(s isa FLOWVPM.ParticleField))
             pfield_sources = Tuple(s for s in wake_sources if   s isa FLOWVPM.ParticleField)
-            if length(panel_sources) > 0
-                influence!(targets, panel_sources, backend_wake; precalc=true,
+            panel_targets = !panel_wake_on_particles ?
+                Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField)) : targets
+            if length(panel_sources) > 0 && length(panel_targets) > 0
+                influence!(panel_targets, panel_sources, backend_wake; precalc=true,
                     scalar_potential=false,
                     velocity=true,
-                    velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in targets),
-                    extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+                    velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in panel_targets),
+                    extra_outputs=_induced_vorticity_extra_outputs(panel_targets, needs_induced_vorticity))
             end
             if length(pfield_sources) > 0
-                influence!(targets, pfield_sources, backend_wake; precalc=true,
+                particle_targets = Tuple(t for t in targets if t isa FLOWVPM.ParticleField)
+                nonparticle_targets = Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField))
+                if particle_hessian_self || length(particle_targets) == 0
+                    influence!(targets, pfield_sources, backend_wake; precalc=true,
+                        postcalc=true,
+                        scalar_potential=false,
+                        velocity=true,
+                        velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
+                        extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
+                else
+                    if length(nonparticle_targets) > 0
+                        influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true,
+                            postcalc=false,
+                            scalar_potential=false,
+                            velocity=true,
+                            velocity_gradient=Tuple(requires_hessian(sys) for sys in nonparticle_targets),
+                            extra_outputs=_induced_vorticity_extra_outputs(nonparticle_targets, needs_induced_vorticity))
+                    end
+                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true,
+                        postcalc=true,
+                        scalar_potential=false,
+                        velocity=true,
+                        velocity_gradient=Tuple(false for _ in particle_targets),
+                        extra_outputs=_induced_vorticity_extra_outputs(particle_targets, needs_induced_vorticity))
+                end
+            end
+        elseif !particle_hessian_self && any(source isa FLOWVPM.ParticleField for source in wake_sources)
+            panel_sources = Tuple(s for s in wake_sources if !(s isa FLOWVPM.ParticleField))
+            pfield_sources = Tuple(s for s in wake_sources if s isa FLOWVPM.ParticleField)
+            if length(panel_sources) > 0
+                influence!(targets, panel_sources, backend_wake; precalc=true,
                     scalar_potential=false,
                     velocity=true,
                     velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
                     extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
             end
+            particle_targets = Tuple(t for t in targets if t isa FLOWVPM.ParticleField)
+            nonparticle_targets = Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField))
+            if length(pfield_sources) > 0
+                if length(nonparticle_targets) > 0
+                    influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true,
+                        postcalc=false,
+                        scalar_potential=false,
+                        velocity=true,
+                        velocity_gradient=Tuple(requires_hessian(sys) for sys in nonparticle_targets),
+                        extra_outputs=_induced_vorticity_extra_outputs(nonparticle_targets, needs_induced_vorticity))
+                end
+                if length(particle_targets) > 0
+                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true,
+                        postcalc=true,
+                        scalar_potential=false,
+                        velocity=true,
+                        velocity_gradient=Tuple(false for _ in particle_targets),
+                        extra_outputs=_induced_vorticity_extra_outputs(particle_targets, needs_induced_vorticity))
+                end
+            end
         else
+            wake_postcalc = any(source isa FLOWVPM.ParticleField for source in wake_sources)
             influence!(targets, wake_sources, backend_wake; precalc=true,
+                postcalc=wake_postcalc,
                 scalar_potential=false,
                 velocity=true,
                 velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
@@ -286,12 +407,28 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple)
 
     _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
-    influence!(targets, systems_tuple, backend_system; precalc=false,
-        scalar_potential=false,
-        velocity=true,
-        velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in targets),
-        extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
-        direct_conditioning=_self_panel_kerneloffset_conditioning())
+    if !body_on_wake
+        # body-on-body only; skip the body-on-wake-probes pass so the wake
+        # never receives body-induced velocity this step.
+        influence!(systems_tuple, systems_tuple, backend_system; precalc=false,
+            scalar_potential=false,
+            velocity=true,
+            velocity_gradient=Tuple(requires_hessian(sys) for sys in systems_tuple),
+            extra_outputs=_induced_vorticity_extra_outputs(systems_tuple, needs_induced_vorticity),
+            direct_conditioning=_self_panel_kerneloffset_conditioning())
+    else
+        influence!(targets, systems_tuple, backend_system; precalc=false,
+            scalar_potential=false,
+            velocity=true,
+            velocity_gradient=Tuple((sys isa FLOWVPM.ParticleField && !body_hessian_to_particles) ? false : requires_hessian(sys) for sys in targets),
+            extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
+            direct_conditioning=_self_panel_kerneloffset_conditioning())
+    end
+
+    if diagnose_particle_influence
+        _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
+            needs_induced_vorticity, particle_hessian_self, diagnostic_vertical)
+    end
 
     # Add the +½∇μ tangential half-jump on each surface so body.velocity is
     # the EXTERIOR surface limit (matching OLD calcfield_U!). The kernel-
@@ -336,6 +473,13 @@ function steady!(systems, frames, uinf;
         monitors=(),
         i_run::Int=1,
         dt::Real=1.0,
+        wakerow_no_hessian_to_particles::Bool=false,
+        body_hessian_to_particles::Bool=false,
+        body_on_wake::Bool=true,
+        panel_wake_on_particles::Bool=true,
+        particle_hessian_self::Bool=true,
+        diagnose_particle_influence::Bool=false,
+        diagnostic_vertical=(0.0, 0.0, 1.0),
         verbose=false
     )
     i_run >= 1 || throw(ArgumentError("i_run must be >= 1, got $(i_run)."))
@@ -367,7 +511,14 @@ function steady!(systems, frames, uinf;
     end
 
     _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
-        body_solvers; backend_solve, backend_system, needs_induced_vorticity)
+        body_solvers; backend_solve, backend_system, needs_induced_vorticity,
+        wakerow_no_hessian_to_particles,
+        body_hessian_to_particles,
+        body_on_wake,
+        panel_wake_on_particles,
+        particle_hessian_self,
+        diagnose_particle_influence,
+        diagnostic_vertical)
 
     monitor_context = MonitorContext()
     monitor_set_time!(monitor_context, i_step * dt)
@@ -410,6 +561,15 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
         start_step::Int=0,
+        wakerow_no_hessian_to_particles::Bool=false,
+        body_hessian_to_particles::Bool=false,
+        body_on_wake::Bool=true,
+        panel_wake_on_particles::Bool=true,
+        particle_hessian_self::Bool=true,
+        particle_relax::Bool=true,
+        diagnose_particle_gamma::Bool=false,
+        diagnose_particle_influence::Bool=false,
+        diagnostic_vertical=(0.0, 0.0, 1.0),
         verbose=false
     )
     @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
@@ -471,7 +631,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
             body_solvers; backend_wake, backend_solve, backend_system,
-            needs_induced_vorticity, update_trailing_edges=true)
+            needs_induced_vorticity, update_trailing_edges=true,
+            wakerow_no_hessian_to_particles,
+            body_hessian_to_particles,
+            body_on_wake,
+            panel_wake_on_particles,
+            particle_hessian_self,
+            diagnose_particle_influence,
+            diagnostic_vertical)
 
         #------- other solvers -------#
 
@@ -527,7 +694,12 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # propagate wake
             for w in wakes_tuple
-                !isnothing(w) && propagate!(w, dt; step=i_step, frames)
+                if w isa PanelParticleWake
+                    propagate!(w, dt; relax=particle_relax,
+                        step=i_step, frames, diagnose_particle_gamma, diagnostic_vertical)
+                elseif !isnothing(w)
+                    propagate!(w, dt; step=i_step, frames)
+                end
             end
 
             # propagate rigid-body kinematics
