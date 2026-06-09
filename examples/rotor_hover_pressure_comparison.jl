@@ -2,7 +2,7 @@
 ## KuttaJoukowskiForce is available as an opt-in diagnostic with RUN_KJ=true.
 
 import FLOWPanel as pnl
-include(joinpath(pnl.examples_path, "helper_functions.jl"))
+# include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
@@ -45,13 +45,6 @@ merge_r_factor = 0.02
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
-split_particles = parse(Bool,    get(ENV, "SPLIT_PARTICLES",    "false"))
-split_log_R_max = parse(Float64, get(ENV, "SPLIT_LOG_R_MAX",    string(log(1.5))))
-split_c_mu      = parse(Float64, get(ENV, "SPLIT_C_MU",         "0.5"))
-split_N_hold    = parse(Int,     get(ENV, "SPLIT_N_HOLD",       "1"))
-split_N_cool    = parse(Int,     get(ENV, "SPLIT_N_COOLDOWN",   "1"))
-split_kappa     = parse(Float64, get(ENV, "SPLIT_KAPPA",        "1.0"))
-split_max_frac  = parse(Float64, get(ENV, "SPLIT_MAX_FRACTION", "0.05"))
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
 p_correct_kuttacondition_flag = false
@@ -204,17 +197,6 @@ end
 
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
 FV = pnl.FLOWVPM
-split_trigger = FV.AllTrigger(
-    FV.HoldTrigger(FV.SeparationTrigger(split_log_R_max, :streamline), split_N_hold),
-    FV.HoldTrigger(FV.StretchTrigger(split_c_mu),                       split_N_hold),
-)
-split_opts = FV.SplitOptions(;
-    trigger=split_trigger,
-    direction=FV.STRENGTH,
-    kappa_split=split_kappa,
-    N_cooldown=split_N_cool,
-    max_fraction=split_max_frac,
-)
 
 method_trailing = if particle_shedding == "overlap_pps"
     pnl.OverlapPPS(overlap, p_per_step)
@@ -243,7 +225,6 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
                 r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
                 sigma_relative=merge_sigma_relative),
-            pnl.SplitParticles(split_opts; every = split_particles ? 1 : 0),
         ))
     )
 
