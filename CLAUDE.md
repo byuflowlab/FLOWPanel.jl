@@ -136,6 +136,17 @@ Meshes are built using `GeometricTools.GridTriangleSurface`. Grids are created p
 
 The solver supports forward-mode AD (ForwardDiff) and reverse-mode AD (ReverseDiff) through `ImplicitAD`. The `solve_ludiv!` function is overloaded in `ImplicitAD` to efficiently differentiate through the linear solve.
 
+## Running Simulations Iteratively
+
+When you launch a simulation from an example (especially diagnostic / repro runs of an in-progress investigation), default to **leaving VTK output on** — the I/O cost is small relative to the value of having ParaView-ready state to inspect after the fact. Do not set `SAVE_VTK=false` unless the user asks for a no-output run.
+
+To avoid filling the disk across repeated iterations, **write each new run over the previous run's directory** rather than creating a new one per attempt. Two acceptable patterns:
+
+- Reuse the example's default `save_path` (typically `data/<run_name>/`) and let `simulate!` overwrite per-step files in place. Before launching, `rm -rf` the previous run's directory so stale steps past the current run's length don't linger.
+- If side-by-side comparison is needed, pick one persistent sibling dir per scenario (e.g. `data/<run_name>_nocouple/`) and overwrite it on each rerun of that scenario — don't suffix with timestamps or attempt numbers.
+
+When the user explicitly wants to preserve a previous run for comparison, ask before overwriting and offer to `mv` the old directory aside.
+
 ## Response Style
 
 When you respond to prompts, if you ever need to ask me questions where I decide between possible options (not including asking permissions to perform shell commands), and you suspect any of the option will be token-heavy, also include a brief estimate of the token count required as a fraction of my 5-hour limit.
