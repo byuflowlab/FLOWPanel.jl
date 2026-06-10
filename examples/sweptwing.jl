@@ -49,7 +49,7 @@ gamma           = 0                             # (deg) dihedral
 airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 
 # ----- Chordwise discretization
-n_rfl           = 8                             # Control number of chordwise panels
+n_rfl           = 32                            # Control number of chordwise panels
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
               (0.50, n_rfl,    1.0, true),
               (0.25, n_rfl, 1/10.0, false)]
@@ -59,7 +59,7 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 # end up coarsest and the tips finest, which makes the inner Cp slice
 # (2y/b ≈ 0.04) too under-resolved to plot cleanly. Uniform spacing keeps
 # panel size constant across the span.
-n_span_full     = 40                            # Number of spanwise panels across full span
+n_span_full     = 24                            # Number of spanwise panels across full span
 NDIVS_span      = [(1.0, n_span_full, 1.0, true)]
 
 
@@ -74,7 +74,8 @@ function simplewing_mirrored_from_negative(b, ar, tr, twist_root, twist_tip, lam
                                            bodytype, bodyoptargs=(;),
                                            airfoil_root, airfoil_tip, airfoil_path,
                                            rfl_NDIVS, span_NDIVS, delim=",",
-                                           mirror_tol=100eps(Float64))
+                                           mirror_tol=100eps(Float64),
+                                           reference_nodes=nothing)
     half = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                       bodytype=bodytype, bodyoptargs=bodyoptargs,
                       airfoil_root=airfoil_root, airfoil_tip=airfoil_tip,
@@ -119,6 +120,36 @@ function simplewing_mirrored_from_negative(b, ar, tr, twist_root, twist_tip, lam
         push!(te_nodes, half_cells[nib, pi])
     end
     full_te_nodes = unique(vcat(te_nodes, mirror_index[te_nodes]))
+
+    if !isnothing(reference_nodes)
+        size(reference_nodes) == size(nodes) ||
+            error("Cannot reindex negative-half mirror: reference node size $(size(reference_nodes)) differs from generated node size $(size(nodes)).")
+
+        old_to_reference = zeros(Int, size(nodes, 2))
+        reference_used = falses(size(reference_nodes, 2))
+        for old_i in axes(nodes, 2)
+            match_i = 0
+            for ref_i in axes(reference_nodes, 2)
+                reference_used[ref_i] && continue
+                if maximum(abs.(view(nodes, :, old_i) .- view(reference_nodes, :, ref_i))) <= mirror_tol
+                    match_i = ref_i
+                    break
+                end
+            end
+            match_i != 0 ||
+                error("Cannot reindex negative-half mirror: generated node $old_i has no matching reference node within $(mirror_tol).")
+            old_to_reference[old_i] = match_i
+            reference_used[match_i] = true
+        end
+
+        all(reference_used) ||
+            error("Cannot reindex negative-half mirror: not all reference nodes were matched.")
+
+        nodes = copy(reference_nodes)
+        cells = old_to_reference[cells]
+        full_te_nodes = unique(old_to_reference[full_te_nodes])
+    end
+
     sort!(full_te_nodes; by=ni -> nodes[2, ni])
     shedding = pnl.calc_shedding(nodes, cells, full_te_nodes, zeros(eltype(nodes), 3, 0))
 
@@ -356,6 +387,34 @@ function report_spanwise_symmetry(label, spanwise_monitor, b, sectional_qc)
     return (; counts_match, center_symmetry, lift_symmetry)
 end
 
+function cell_scalar_to_nodes(body, cell_values)
+    length(cell_values) == body.ncells ||
+        error("Expected one cell value per panel; got $(length(cell_values)) values for $(body.ncells) panels.")
+
+    areas = if hasproperty(body, :areas) && length(getproperty(body, :areas)) == body.ncells
+        collect(getproperty(body, :areas))
+    else
+        pnl.calc_areas(body)
+    end
+
+    values = zeros(promote_type(eltype(cell_values), eltype(areas)), size(body.nodes, 2))
+    weights = zeros(eltype(areas), size(body.nodes, 2))
+    for ci in 1:body.ncells
+        area = areas[ci]
+        value = cell_values[ci]
+        for ni in view(body.cells, :, ci)
+            values[ni] += area * value
+            weights[ni] += area
+        end
+    end
+
+    unused = findall(iszero, weights)
+    isempty(unused) || error("Cannot interpolate cell values to nodes; $(length(unused)) nodes have no incident panels.")
+
+    values ./= weights
+    return values
+end
+
 function plot_monitor_loading(spanwise_monitors, labels, b, sectional_qc;
                               to_plot=collect(1:length(spanwise_monitors[1].component_names)),
                               stls=["-", "--"],
@@ -432,6 +491,59 @@ symmetry_laplace = report_spanwise_symmetry("Laplace", spanwise_laplace, b, sect
 @assert symmetry_laplace.center_symmetry <= 1e-12
 @assert symmetry_bernoulli.lift_symmetry <= 1e-8
 
+# Build & solve the negative-half mirrored body up-front so it's available for
+# both the Cp overlay (step 0 diagnostic) and the loading comparison.
+body_negative_mirror = simplewing_mirrored_from_negative(
+    b, ar, tr, twist_root, twist_tip, lambda, gamma;
+    bodytype=bodytype, bodyoptargs=bodyoptargs,
+    airfoil_root=airfoil, airfoil_tip=airfoil,
+    airfoil_path=airfoil_path,
+    rfl_NDIVS=NDIVS_rfl,
+    delim=",",
+    span_NDIVS=NDIVS_span,
+    reference_nodes=body.nodes)
+for i in eachindex(body_negative_mirror.Das)
+    body_negative_mirror.Das[i] .= repeat(wake_direction, 1, size(body_negative_mirror.Das[i], 2))
+end
+negative_mirror_bernoulli = solve_bernoulli_loading!(
+    body_negative_mirror, "negative-half mirror")
+
+if paraview
+    Gi = pnl.get_Gammai(body)
+    gamma_pos = collect(view(body.strength, :, Gi))
+    gamma_neg = collect(view(body_negative_mirror.strength, :, Gi))
+
+    size(body.nodes) == size(body_negative_mirror.nodes) ||
+        error("Cannot compute nodewise gamma difference: node array sizes differ ($(size(body.nodes)) vs $(size(body_negative_mirror.nodes))).")
+    node_mismatch = maximum(abs.(body.nodes .- body_negative_mirror.nodes))
+    println("Max node coordinate mismatch for gamma diagnostic: $(node_mismatch)")
+    node_mismatch <= 1e-10 ||
+        error("Cannot compute nodewise gamma difference: max node coordinate mismatch $(node_mismatch) exceeds 1e-10.")
+
+    gamma_pos_nodes = cell_scalar_to_nodes(body, gamma_pos)
+    gamma_neg_nodes = cell_scalar_to_nodes(body_negative_mirror, gamma_neg)
+    gamma_diff_nodes = gamma_pos_nodes .- gamma_neg_nodes
+
+    abs_gamma_diff_nodes = abs.(gamma_diff_nodes)
+    println("Max abs(gamma_difference_node): $(maximum(abs_gamma_diff_nodes))")
+    println("Mean abs(gamma_difference_node): $(sum(abs_gamma_diff_nodes) / length(abs_gamma_diff_nodes))")
+    println("RMS abs(gamma_difference_node): $(sqrt(sum(abs2, gamma_diff_nodes) / length(gamma_diff_nodes)))")
+
+    triangle_cells = [collect(c) .- 1 for c in eachcol(body.cells)]
+    pnl._write_vtk_points_or_lines(joinpath(save_path, "gamma_difference_nodes"), body.nodes;
+        cells=triangle_cells,
+        point_data=(
+            Dict("field_name" => "gamma_pos_node", "field_data" => gamma_pos_nodes),
+            Dict("field_name" => "gamma_neg_node", "field_data" => gamma_neg_nodes),
+            Dict("field_name" => "gamma_difference_node", "field_data" => gamma_diff_nodes),
+        ),
+        cell_data=(
+            Dict("field_name" => "gamma_pos_cell", "field_data" => gamma_pos),
+        ),
+        override_cell_type=pnl.WriteVTK.VTKCellTypes.VTK_TRIANGLE)
+    println("Saved nodewise gamma-difference VTU to $(save_path)/gamma_difference_nodes.vtu")
+end
+
 if make_plots_cps
     side = 1
     spanposs_cps = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
@@ -440,10 +552,24 @@ if make_plots_cps
     fig1, axs = plot_Cps(body, pressure_bernoulli.pressure[1], spanposs_cps, b, rho, magVinf;
                                 xscaling=ar/b, AOA=AOA,
                                 xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
-                                slicetol=0.013*b, xLE_fn=xLE_fn)
-    fig1.tight_layout()
-    fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps.png"), dpi=150)
-    println("Saved Cp plot to sweptwing_Cps.png")
+                                slicetol=0.013*b, xLE_fn=xLE_fn,
+                                plot_vsp=false,
+                                plot_optargs=(label="+y half mirrored",))
+    plot_Cps(body_negative_mirror, negative_mirror_bernoulli.pressure.pressure[1],
+             spanposs_cps, b, rho, magVinf;
+             _fig=fig1, _axs=axs,
+             xscaling=ar/b, AOA=AOA,
+             xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="--",
+             slicetol=0.013*b, xLE_fn=xLE_fn,
+             plot_exp=false, plot_vsp=false,
+             plot_optargs=(label="-y half mirrored",))
+    for ax in axs
+        ax.set_xlim([-0.1, 1.1])
+        ax.set_ylim([1.0, -0.7])
+    end
+    fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps_mirrored.png"),
+                 dpi=150, bbox_inches="tight")
+    println("Saved Cp overlay plot to sweptwing_Cps_mirrored.png")
 end
 
 if make_plots_loading
@@ -453,20 +579,6 @@ if make_plots_loading
     fig2.tight_layout()
     fig2.savefig(joinpath(@__DIR__, "..", "sweptwing_loading.png"), dpi=150)
     println("Saved spanwise loading plot to sweptwing_loading.png")
-
-    body_negative_mirror = simplewing_mirrored_from_negative(
-        b, ar, tr, twist_root, twist_tip, lambda, gamma;
-        bodytype=bodytype, bodyoptargs=bodyoptargs,
-        airfoil_root=airfoil, airfoil_tip=airfoil,
-        airfoil_path=airfoil_path,
-        rfl_NDIVS=NDIVS_rfl,
-        delim=",",
-        span_NDIVS=NDIVS_span)
-    for i in eachindex(body_negative_mirror.Das)
-        body_negative_mirror.Das[i] .= repeat(wake_direction, 1, size(body_negative_mirror.Das[i], 2))
-    end
-    negative_mirror_bernoulli = solve_bernoulli_loading!(
-        body_negative_mirror, "negative-half mirror")
     if paraview
         pnl.write_vtk(joinpath(save_path,
                       run_name * "_negative_half_mirror_bernoulli_AOA$(aoa_tag)"),
@@ -485,7 +597,7 @@ if make_plots_loading
         to_plot=[1],
         stls=["-", "--"],
         AOA=AOA,
-        ylims=([0.0, 1.1, 0.2],))
+        ylims=([0.0, 0.4, 0.1],))
     fig3.tight_layout()
     fig3.savefig(joinpath(@__DIR__, "..", "sweptwing_loading_mirrored_discretizations.png"), dpi=150)
     println("Saved mirrored spanwise lift plot to sweptwing_loading_mirrored_discretizations.png")

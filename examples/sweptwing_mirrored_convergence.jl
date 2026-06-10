@@ -21,6 +21,8 @@ import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 
 import LinearAlgebra
+import CSV
+import DataFrames: DataFrame
 using Printf
 
 const LA = LinearAlgebra
@@ -272,14 +274,23 @@ function main()
     println("# solver=$(solver_name), source_halves=$(source_half_string), main kerneloffset=$(main_kerneloffset)")
     println("# max_panels=$(max_panels)")
     println("# CLexp=0.238")
+    csv_path = get(ENV, "FLOWPANEL_SWEEP_CSV", "")
+    csv_rows = NamedTuple[]
     for source_half in source_halves
         println("\n# Source half: $(source_half)")
         print_header()
         for (n_rfl, n_span) in cases
-            print_result(solve_case(n_rfl, n_span; kerneloffset=main_kerneloffset,
-                solver_name, source_half))
+            r = solve_case(n_rfl, n_span; kerneloffset=main_kerneloffset,
+                solver_name, source_half)
+            print_result(r)
+            push!(csv_rows, r)
             flush(stdout)
         end
+    end
+    if !isempty(csv_path)
+        mkpath(dirname(csv_path))
+        CSV.write(csv_path, DataFrame(csv_rows))
+        println("\n# Wrote $(length(csv_rows)) rows to $(csv_path)")
     end
 
     if panel_count(kernel_case...) > max_panels
