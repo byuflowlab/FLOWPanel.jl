@@ -64,17 +64,22 @@ read_path = joinpath(pnl.examples_path, "data")
 # te_indices_1 = [9, 175, 127]
 # te_indices_2 = [13, 286, 238]
 
-# msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
-# te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
-# te_indices_2 = [3324, 3284, 1755] .+ 1 # (or 1755 instead of 1711) convert from 0-based to 1-based indexing
-
-msh_file = joinpath(read_path, "dji9443_56_57.msh")
-te_indices_1 = [6370, 6314, 3255] .+ 1 # (or 3255 instead of 3253) convert from 0-based to 1-based indexing
-te_indices_2 = [3117, 3061, 0] .+ 1 # (or 0 instead of 1) convert from 0-based to 1-based indexing
-
-# msh_file = joinpath(read_path, "dji9443_80_81.msh")
-# te_indices_1 = [12898, 12818, 6549] .+ 1 # (or 6549 instead of 6547) convert from 0-based to 1-based indexing
-# te_indices_2 = [3324, 3284, 0] .+ 1 # (or 0 instead of 3) convert from 0-based to 1-based indexing
+rhpc_mesh = lowercase(get(ENV, "RHPC_MESH", "56_57"))
+if rhpc_mesh == "40_40"
+    msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
+    te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
+    te_indices_2 = [3324, 3284, 1755] .+ 1 # (or 1755 instead of 1711) convert from 0-based to 1-based indexing
+elseif rhpc_mesh == "56_57"
+    msh_file = joinpath(read_path, "dji9443_56_57.msh")
+    te_indices_1 = [6370, 6314, 3255] .+ 1 # (or 3255 instead of 3253) convert from 0-based to 1-based indexing
+    te_indices_2 = [3117, 3061, 0] .+ 1 # (or 0 instead of 1) convert from 0-based to 1-based indexing
+elseif rhpc_mesh == "80_81"
+    msh_file = joinpath(read_path, "dji9443_80_81.msh")
+    te_indices_1 = [12898, 12818, 6549] .+ 1 # (or 6549 instead of 6547) convert from 0-based to 1-based indexing
+    te_indices_2 = [3324, 3284, 0] .+ 1 # (or 0 instead of 3) convert from 0-based to 1-based indexing
+else
+    error("Unknown RHPC_MESH=$(repr(rhpc_mesh)); use 40_40, 56_57, or 80_81")
+end
 
 axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is rotated compared to typical rotor convention
 radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
