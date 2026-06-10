@@ -23,12 +23,14 @@ const _cross = LinearAlgebra.cross
 
 envflag(name, default=false) = lowercase(get(ENV, name, string(default))) in ("1", "true", "yes", "on")
 
-run_name        = "sweptwing000"                # Name of this run
+run_name        = "sweptwing000"                # Name of this run; grid tag appended below
 
-save_path       = joinpath("data", run_name)    # Where to save outputs
+save_path       = joinpath("data", run_name)    # Where to save outputs; grid tag appended below
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
 paraview        = envflag("FLOWPANEL_SWEPTWING_VTK", false) # Whether to write VTK
+load_vtk        = envflag("FLOWPANEL_SWEPTWING_LOAD_VTK", false) # Whether to load saved VTK for Cp-only plotting
+snap_cp_slices  = envflag("FLOWPANEL_SWEPTWING_SNAP_CP", false) # Whether to snap Cp slices to control-point rows
 
 # ----------------- SIMULATION PARAMETERS --------------------------------------
 AOA             = 4.2                           # (deg) angle of attack
@@ -59,9 +61,14 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 # end up coarsest and the tips finest, which makes the inner Cp slice
 # (2y/b ≈ 0.04) too under-resolved to plot cleanly. Uniform spacing keeps
 # panel size constant across the span.
-n_span_full     = 24                            # Number of spanwise panels across full span
+n_span_full     = 48                            # Number of spanwise panels across full span
 NDIVS_span      = [(1.0, n_span_full, 1.0, true)]
 
+grid_tag        = "nrf$(n_rfl)_nspan$(n_span_full)"
+run_name        = "sweptwing000_" * grid_tag
+save_path       = joinpath("data", run_name)
+load_run_name   = get(ENV, "FLOWPANEL_SWEPTWING_LOAD_RUN_NAME", run_name)
+load_path       = get(ENV, "FLOWPANEL_SWEPTWING_LOAD_PATH", joinpath("data", load_run_name))
 
 # ----------------- GENERATE BODY ----------------------------------------------
 println("Generating body...")
@@ -175,6 +182,114 @@ end
 Uinfs = repeat(Vinf, 1, body.ncells)
 
 println("Number of panels:\t$(body.ncells)")
+
+function saved_body_vtu_path(path, body_name, idx=0)
+    return joinpath(path, body_name, "$(body_name).$(idx).vtu")
+end
+
+function load_vtu_cell_scalar(path, body_name, field_name, expected_ncells; idx=0)
+    vtu_path = saved_body_vtu_path(path, body_name, idx)
+    isfile(vtu_path) ||
+        error("Required body VTU file not found: $(vtu_path)")
+
+    vtk = pnl.ReadVTK.VTKFile(vtu_path)
+    cell_data = pnl.ReadVTK.get_cell_data(vtk)
+    field_name in keys(cell_data) ||
+        error("Required cell field '$(field_name)' missing from $(vtu_path). Available cell fields: $(collect(keys(cell_data))).")
+
+    values = Vector{Float64}(pnl.ReadVTK.get_data(cell_data[field_name]))
+    length(values) == expected_ncells ||
+        error("Loaded field '$(field_name)' from $(vtu_path) has $(length(values)) values, expected $(expected_ncells).")
+
+    return values
+end
+
+function place_figure_legend_right!(fig, axs)
+    handles = Any[]
+    labels = String[]
+    for ax in axs
+        axis_handles, axis_labels = ax.get_legend_handles_labels()
+        for (handle, label) in zip(axis_handles, axis_labels)
+            label == "_nolegend_" && continue
+            label in labels && continue
+            push!(handles, handle)
+            push!(labels, label)
+        end
+
+        legend = ax.get_legend()
+        legend !== nothing && legend.remove()
+    end
+
+    isempty(handles) && return nothing
+    fig.legend(handles, labels; loc="center left", bbox_to_anchor=(0.80, 0.5),
+               fontsize=10, frameon=false)
+    return nothing
+end
+
+if load_vtk
+    println("Loading saved VTK pressure for Cp-only plotting from $(load_path)/")
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+
+    body_negative_mirror = simplewing_mirrored_from_negative(
+        b, ar, tr, twist_root, twist_tip, lambda, gamma;
+        bodytype=bodytype, bodyoptargs=bodyoptargs,
+        airfoil_root=airfoil, airfoil_tip=airfoil,
+        airfoil_path=airfoil_path,
+        rfl_NDIVS=NDIVS_rfl,
+        delim=",",
+        span_NDIVS=NDIVS_span,
+        reference_nodes=body.nodes)
+    for i in eachindex(body_negative_mirror.Das)
+        body_negative_mirror.Das[i] .= repeat(wake_direction, 1, size(body_negative_mirror.Das[i], 2))
+    end
+    pnl.calc_normals!(body_negative_mirror)
+    pnl.calc_controlpoints!(body_negative_mirror)
+
+    positive_body_name = load_run_name * "_bernoulli_AOA$(aoa_tag)_body1"
+    negative_body_name = load_run_name * "_negative_half_mirror_bernoulli_AOA$(aoa_tag)"
+    pressure_bernoulli_loaded = load_vtu_cell_scalar(load_path, positive_body_name,
+                                                     "gauge pressure", body.ncells)
+    pressure_negative_loaded = load_vtu_cell_scalar(load_path, negative_body_name,
+                                                   "gauge pressure", body_negative_mirror.ncells)
+
+    include(joinpath(pnl.examples_path, "sweptwing_postprocessing.jl"))
+
+    if envflag("FLOWPANEL_SWEPTWING_PLOTS", true)
+        side = 1
+        spanposs_cps = side*parse.(Float64, keys(weber_Cps["$AOA"]))[[2, 4, 5, 7]]
+        xLE_fn = y -> abs(y) * tan(lambda * pi / 180)
+        fig1, axs = plot_Cps(body, pressure_bernoulli_loaded, spanposs_cps, b, rho, magVinf;
+                                    xscaling=ar/b, AOA=AOA,
+                                    xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
+                                    slicetol=0.013*b, xLE_fn=xLE_fn,
+                                    snap_to_span_row=snap_cp_slices,
+                                    show_axis_legend=false,
+                                    plot_vsp=false,
+                                    plot_optargs=(label="+y half mirrored",))
+        plot_Cps(body_negative_mirror, pressure_negative_loaded,
+                 spanposs_cps, b, rho, magVinf;
+                 _fig=fig1, _axs=axs,
+                 xscaling=ar/b, AOA=AOA,
+                 xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="--",
+                 slicetol=0.013*b, xLE_fn=xLE_fn,
+                 snap_to_span_row=snap_cp_slices,
+                 show_axis_legend=false,
+                 plot_exp=false, plot_vsp=false,
+                 plot_optargs=(label="-y half mirrored",))
+        for ax in axs
+            ax.set_xlim([-0.1, 1.1])
+            ax.set_ylim([1.0, -0.7])
+        end
+        place_figure_legend_right!(fig1, axs)
+        fig1.tight_layout(rect=[0, 0, 0.77, 1])
+        fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps_mirrored.png"),
+                     dpi=150, bbox_inches="tight")
+        println("Saved Cp overlay plot to sweptwing_Cps_mirrored.png")
+    end
+
+    exit()
+end
 
 
 # ----------------- CALL SOLVER AND MONITORS -----------------------------------
@@ -553,6 +668,8 @@ if make_plots_cps
                                 xscaling=ar/b, AOA=AOA,
                                 xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
                                 slicetol=0.013*b, xLE_fn=xLE_fn,
+                                snap_to_span_row=snap_cp_slices,
+                                show_axis_legend=false,
                                 plot_vsp=false,
                                 plot_optargs=(label="+y half mirrored",))
     plot_Cps(body_negative_mirror, negative_mirror_bernoulli.pressure.pressure[1],
@@ -561,12 +678,16 @@ if make_plots_cps
              xscaling=ar/b, AOA=AOA,
              xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="--",
              slicetol=0.013*b, xLE_fn=xLE_fn,
+             snap_to_span_row=snap_cp_slices,
+             show_axis_legend=false,
              plot_exp=false, plot_vsp=false,
              plot_optargs=(label="-y half mirrored",))
     for ax in axs
         ax.set_xlim([-0.1, 1.1])
         ax.set_ylim([1.0, -0.7])
     end
+    place_figure_legend_right!(fig1, axs)
+    fig1.tight_layout(rect=[0, 0, 0.77, 1])
     fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps_mirrored.png"),
                  dpi=150, bbox_inches="tight")
     println("Saved Cp overlay plot to sweptwing_Cps_mirrored.png")
@@ -582,7 +703,9 @@ if make_plots_loading
     if paraview
         pnl.write_vtk(joinpath(save_path,
                       run_name * "_negative_half_mirror_bernoulli_AOA$(aoa_tag)"),
-                      body_negative_mirror)
+                      body_negative_mirror, 0, 0.0;
+                      monitors=(negative_mirror_bernoulli.pressure,), i_system=1,
+                      overwrite=true)
         println("Saved VTK for negative-half-mirror case to $(save_path)/")
     end
 
