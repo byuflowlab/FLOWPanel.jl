@@ -1574,7 +1574,7 @@ end
 # RigidWakeBody hook: contributes panel strength
 # to the VTK output produced by the generic write_vtk(name, body::AbstractBody, ...).
 
-function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
+function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx; compress::Bool=true)
 
     # check if there is a wake
     nwakes = 0
@@ -1627,7 +1627,7 @@ function _write_vtk_other_fields!(vtm, name, body::RigidWakeBody, idx)
                 strengths[i] = mu_upper - mu_lower
             end
 
-            WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells) do vtk
+            WriteVTK.vtk_grid(vtm, name * "_tw.$i_surf.$idx.vtu", points, cells; compress) do vtk
                 vtk[strength_label] = strengths
             end
         end

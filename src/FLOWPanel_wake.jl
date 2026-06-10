@@ -498,36 +498,35 @@ struct FilamentWrapper{TS}
     system::TS
 end
 
-function write_vtk(name, wake::PanelWake, idx, t; overwrite=false)
+function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Bool=true)
     # Route block files to a subdirectory named after the PVD
     _parent, _base = splitdir(name)
     subdir = joinpath(_parent, _base)
     mkpath(subdir)
     block_name = joinpath(subdir, _base)
 
-    WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
-        if wake.nwakes[] > 0
-            for i_surf in eachindex(wake.nodes)
-                pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
-                pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
-                WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts_reshaped) do vtk
-                    vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
-                    vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+    vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+    if wake.nwakes[] > 0
+        for i_surf in eachindex(wake.nodes)
+            pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
+            pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+            WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts_reshaped; compress) do vtk
+                vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
+                vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
 
-                    str = view(wake.strength[i_surf], :, 1:wake.nwakes[], :)
-                    vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
-                end
+                str = view(wake.strength[i_surf], :, 1:wake.nwakes[], :)
+                vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
             end
         end
-        pvd[t] = vtm
     end
+    WriteVTK.vtk_save(vtm)
+    _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
 
     # filaments at trailing edge of last panel row
-    write_vtk(name * "_filaments", FilamentWrapper(wake), idx, t; overwrite)
+    write_vtk(name * "_filaments", FilamentWrapper(wake), idx, t; overwrite, compress)
 end
 
-function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwrite=false)
+function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwrite=false, compress::Bool=true)
     wake = filaments.system
     if !wake.overflowed[]
         # no filaments yet — still write an empty PVD entry
@@ -535,10 +534,9 @@ function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwr
         subdir = joinpath(_parent, _base)
         mkpath(subdir)
         block_name = joinpath(subdir, _base)
-        WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-            vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
-            pvd[t] = vtm
-        end
+        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+        WriteVTK.vtk_save(vtm)
+        _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
         return
     end
 
@@ -549,32 +547,31 @@ function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwr
     mkpath(subdir)
     block_name = joinpath(subdir, _base)
 
-    WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+    vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
 
-        for i_surf in eachindex(wake.nodes)
-            n_fils = size(wake.strength[i_surf], 3)
+    for i_surf in eachindex(wake.nodes)
+        n_fils = size(wake.strength[i_surf], 3)
 
-            # build points array (3, 2*n_fils) and VTK_LINE cells
-            points = zeros(eltype(wake.nodes[i_surf]), 3, 2 * n_fils)
-            cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, Vector{Int}}}(undef, n_fils)
-            strengths = zeros(eltype(wake.strength[i_surf]), n_fils)
+        # build points array (3, 2*n_fils) and VTK_LINE cells
+        points = zeros(eltype(wake.nodes[i_surf]), 3, 2 * n_fils)
+        cells = Vector{WriteVTK.MeshCell{WriteVTK.VTKCellTypes.VTKCellType, Vector{Int}}}(undef, n_fils)
+        strengths = zeros(eltype(wake.strength[i_surf]), n_fils)
 
-            for j in 1:n_fils
-                ip = 2 * (j - 1)
-                points[:, ip + 1] .= view(wake.nodes[i_surf], :, i_row + 1, j)
-                points[:, ip + 2] .= view(wake.nodes[i_surf], :, i_row + 1, j + 1)
-                cells[j] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_LINE, [ip + 1, ip + 2])
-                strengths[j] = _final_filament_strength(wake, i_surf, i_row, j)
-            end
-
-            WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vtu", points, cells) do vtk
-                vtk["strength", WriteVTK.VTKCellData()] = strengths
-            end
+        for j in 1:n_fils
+            ip = 2 * (j - 1)
+            points[:, ip + 1] .= view(wake.nodes[i_surf], :, i_row + 1, j)
+            points[:, ip + 2] .= view(wake.nodes[i_surf], :, i_row + 1, j + 1)
+            cells[j] = WriteVTK.MeshCell(WriteVTK.VTKCellTypes.VTK_LINE, [ip + 1, ip + 2])
+            strengths[j] = _final_filament_strength(wake, i_surf, i_row, j)
         end
 
-        pvd[t] = vtm
+        WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vtu", points, cells; compress) do vtk
+            vtk["strength", WriteVTK.VTKCellData()] = strengths
+        end
     end
+
+    WriteVTK.vtk_save(vtm)
+    _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
 end
 
 #--- Wake Shedding Methods ---#
@@ -1066,9 +1063,9 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step, dt))
 end
 
-function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
+function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress::Bool=true)
     # panel wake (includes filaments)
-    write_vtk(name, w.panel_wake, idx, t; overwrite)
+    write_vtk(name, w.panel_wake, idx, t; overwrite, compress)
 
     # particle wake — route block files to subdirectory
     vpm_path, vpm_name = splitdir(name)
@@ -1082,7 +1079,7 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
     cells = [WriteVTK.MeshCell(WriteVTK.PolyData.Verts(), 1:np)]
 
     vtp_filename = particles_block * ".$idx.vtp"
-    vtp = WriteVTK.vtk_grid(vtp_filename, X, cells)
+    vtp = WriteVTK.vtk_grid(vtp_filename, X, cells; compress)
 
     if np > 0
         vtp["gamma", WriteVTK.VTKPointData()] = view(w.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:np)
@@ -1096,10 +1093,9 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false)
         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(view(w.pfield.particles, FLOWVPM.J_INDEX, 1:np), 3, 3, np)
     end
 
-    pvd = WriteVTK.paraview_collection(particles_pvd_name; append=!overwrite)
-    pvd[t] = vtp
-
-    WriteVTK.vtk_save(pvd)
+    WriteVTK.vtk_save(vtp)
+    vtp_relpath = joinpath(vpm_name * "_particles", vpm_name * "_particles.$idx.vtp")
+    _pvd_append!(particles_pvd_name * ".pvd", t, vtp_relpath; overwrite)
 end
 
 requires_hessian(::FLOWVPM.ParticleField) = true

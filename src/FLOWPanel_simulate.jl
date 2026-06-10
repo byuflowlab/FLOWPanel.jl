@@ -450,6 +450,19 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     return nothing
 end
 
+function _clean_monitor_csv_files!(path, name)
+    isnothing(path) && return nothing
+    dir = joinpath(path, "monitors")
+    isdir(dir) || return nothing
+    prefix = "$(name)_monitor"
+    for file in readdir(dir; join=false)
+        if startswith(file, prefix) && endswith(file, ".csv")
+            rm(joinpath(dir, file); force=true)
+        end
+    end
+    return nothing
+end
+
 """
     steady!(systems, frames, uinf; body_solvers, backend=FastMultipoleBackend(...),
             backend_solve=backend, backend_system=backend, monitors=(), i_run=1,
@@ -473,6 +486,8 @@ function steady!(systems, frames, uinf;
         monitors=(),
         i_run::Int=1,
         dt::Real=1.0,
+        clean_files::Bool=true,
+        compress_vtk::Bool=true,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
         body_on_wake::Bool=true,
@@ -504,6 +519,7 @@ function steady!(systems, frames, uinf;
     if !isnothing(path) && !isdir(path)
         mkpath(path)
     end
+    clean_files && i_run == 1 && _clean_monitor_csv_files!(path, name)
 
     for sys in systems_tuple
         calc_normals!(sys)
@@ -522,8 +538,14 @@ function steady!(systems, frames, uinf;
 
     monitor_context = MonitorContext()
     monitor_set_time!(monitor_context, i_step * dt)
-    for monitor in monitors
+    monitor_csv_dir = isnothing(path) ? nothing : joinpath(path, "monitors")
+    for (i_monitor, monitor) in enumerate(monitors)
         _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt)
+        if !isnothing(monitor_csv_dir)
+            write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
+                               monitor_context, systems_tuple, i_step, dt;
+                               overwrite=i_run == 1)
+        end
     end
 
     if !isnothing(path)
@@ -531,7 +553,8 @@ function steady!(systems, frames, uinf;
         for (i, sys) in enumerate(systems_tuple)
             body_name = name * "_body$(i)"
             write_vtk(joinpath(path, body_name), sys, i_step, t;
-                      monitors=monitors, i_system=i, overwrite=i_run==1)
+                      monitors=monitors, i_system=i, overwrite=i_run==1,
+                      compress=compress_vtk)
         end
     end
 
@@ -561,6 +584,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
         start_step::Int=0,
+        clean_files::Bool=true,
+        compress_vtk::Bool=true,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
         body_on_wake::Bool=true,
@@ -595,6 +620,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     if !isnothing(path) && !isdir(path)
         mkpath(path)
     end
+    clean_files && start_step == 0 && _clean_monitor_csv_files!(path, name)
 
     # update control points and normals according to Neumann/Dirichlet BCs
     for sys in systems_tuple
@@ -653,8 +679,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         # downstream monitors and output files.
         monitor_context = MonitorContext()
         monitor_set_time!(monitor_context, t)
-        for monitor in monitors
+        monitor_csv_dir = isnothing(path) ? nothing : joinpath(path, "monitors")
+        for (i_monitor, monitor) in enumerate(monitors)
             _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
+            if !isnothing(monitor_csv_dir)
+                write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
+                                   monitor_context, systems_tuple, i_step, dt;
+                                   overwrite=i_step == start_step)
+            end
         end
 
         #------- save state -------#
@@ -667,19 +699,22 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                     start_step=start_step,
                     set_Das_eta_kinematic=set_Das_eta_kinematic,
                     set_Das_eta_freestream=set_Das_eta_freestream,
-                    set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement)
+                    set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
+                    clean_files=clean_files)
             end
 
             for (i, sys) in enumerate(systems_tuple)
                 body_name = name * "_body$(i)"
                 write_vtk(joinpath(path, body_name), sys, i_step, t;
-                          monitors=monitors, i_system=i, overwrite=i_step==0)
+                          monitors=monitors, i_system=i, overwrite=i_step==0,
+                          compress=compress_vtk)
             end
 
             for (i, w) in enumerate(wakes_tuple)
                 if !isnothing(w)
                     wake_name = name * "_wake$(i)"
-                    write_vtk(joinpath(path, wake_name), w, i_step, t; overwrite=i_step==0)
+                    write_vtk(joinpath(path, wake_name), w, i_step, t;
+                              overwrite=i_step==0, compress=compress_vtk)
                 end
             end
 

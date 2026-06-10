@@ -427,8 +427,55 @@ code.
 - `i_system`  : One-based body index used to select monitor-owned per-body data
 - `overwrite` : Start a fresh PVD file when `true`; append when `false` (default)
 """
+# In-process PVD cache: avoid re-parsing .pvd XML on every write_vtk call.
+# Keyed by absolute PVD path; value is the time-ordered list of dataset entries.
+# Seeded from disk on first touch of an existing .pvd.
+const _PVD_CACHE = Dict{String, Vector{Tuple{Float64, String}}}()
+
+# Mirrors the format `WriteVTK.paraview_collection` emits — extracts the
+# `timestep` and `file` attributes from each `<DataSet>` line.
+function _read_pvd_entries(pvd_path::AbstractString)
+    entries = Tuple{Float64, String}[]
+    for line in eachline(pvd_path)
+        m_t = match(r"timestep=\"([^\"]+)\"", line)
+        m_f = match(r"file=\"([^\"]+)\"", line)
+        if !isnothing(m_t) && !isnothing(m_f)
+            push!(entries, (parse(Float64, m_t.captures[1]), String(m_f.captures[1])))
+        end
+    end
+    return entries
+end
+
+function _write_pvd_from_cache(pvd_path::AbstractString, entries)
+    open(pvd_path, "w") do io
+        println(io, "<?xml version=\"1.0\" encoding=\"utf-8\"?>")
+        println(io, "<VTKFile type=\"Collection\" version=\"1.0\" byte_order=\"LittleEndian\">")
+        println(io, "  <Collection>")
+        for (t, f) in entries
+            println(io, "    <DataSet timestep=\"$(t)\" part=\"0\" file=\"$(f)\"/>")
+        end
+        println(io, "  </Collection>")
+        println(io, "</VTKFile>")
+    end
+end
+
+function _pvd_append!(pvd_path::AbstractString, t::Real, file_relpath::AbstractString;
+                     overwrite::Bool=false)
+    key = abspath(pvd_path)
+    if overwrite
+        _PVD_CACHE[key] = Tuple{Float64, String}[]
+    elseif !haskey(_PVD_CACHE, key)
+        _PVD_CACHE[key] = isfile(pvd_path) ? _read_pvd_entries(pvd_path) :
+                                              Tuple{Float64, String}[]
+    end
+    push!(_PVD_CACHE[key], (Float64(t), String(file_relpath)))
+    _write_pvd_from_cache(pvd_path, _PVD_CACHE[key])
+    return pvd_path
+end
+
 function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
-                   monitors=(), i_system::Int=1, overwrite::Bool=false)
+                   monitors=(), i_system::Int=1, overwrite::Bool=false,
+                   compress::Bool=true)
 
     # Route block files to a subdirectory named after the PVD
     _parent, _base = splitdir(name)
@@ -436,47 +483,46 @@ function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
     mkpath(subdir)
     block_name = joinpath(subdir, _base)
 
-    files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+    vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
 
-        WriteVTK.vtk_grid(vtm, block_name * ".$(idx).vtu", body.nodes, body.vtk_cells) do vtk
+    WriteVTK.vtk_grid(vtm, block_name * ".$(idx).vtu", body.nodes, body.vtk_cells; compress) do vtk
 
-            # --- Common solution fields ---
+        # --- Common solution fields ---
 
-            # normals
-            vtk["normals", VTKCellData()] = body.normals
+        # normals
+        vtk["normals", VTKCellData()] = body.normals
 
-            # Velocity potential  (ncells,)
-            vtk["potential", VTKCellData()] = body.potential
+        # Velocity potential  (ncells,)
+        vtk["potential", VTKCellData()] = body.potential
 
-            # Surface velocity  (3 × ncells)
-            vtk["velocity", VTKCellData()] = body.velocity
+        # Surface velocity  (3 × ncells)
+        vtk["velocity", VTKCellData()] = body.velocity
 
-            # add strength fields
-            for (i,name) in enumerate(strength_names(body))
-                vtk[name, VTKCellData()] = view(body.strength, :, i)
-            end
-
-            field_names = _vtk_body_field_name_allocator(body)
-            for (i_monitor, monitor) in enumerate(monitors)
-                write_vtk_fields!(vtk, monitor, body, i_system, idx, field_names, i_monitor)
-            end
-
-            # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
-            _write_vtk_body_fields!(vtk, body)
+        # add strength fields
+        for (i,name) in enumerate(strength_names(body))
+            vtk[name, VTKCellData()] = view(body.strength, :, i)
         end
-        
-        _write_vtk_other_fields!(vtm, block_name, body, idx)
 
-        pvd[t] = vtm
+        field_names = _vtk_body_field_name_allocator(body)
+        for (i_monitor, monitor) in enumerate(monitors)
+            write_vtk_fields!(vtk, monitor, body, i_system, idx, field_names, i_monitor)
+        end
+
+        # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
+        _write_vtk_body_fields!(vtk, body)
     end
+
+    _write_vtk_other_fields!(vtm, block_name, body, idx; compress)
+
+    files = WriteVTK.vtk_save(vtm)
+    _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
 
     return join(files, ", ")
 end
 
 # Default hook — no extra fields for generic AbstractBody
 _write_vtk_body_fields!(vtk, ::AbstractBody) = nothing
-_write_vtk_other_fields!(vtm, name, body::AbstractBody, idx) = nothing
+_write_vtk_other_fields!(vtm, name, body::AbstractBody, idx; compress::Bool=true) = nothing
 
 function _vtk_stem(filename::AbstractString; path=nothing, num=nothing)
     stem = isnothing(num) ? filename : filename * ".$num"
@@ -490,6 +536,7 @@ function _write_vtk_points_or_lines(filename::AbstractString, points;
                                     path=nothing,
                                     num=nothing,
                                     override_cell_type=nothing,
+                                    compress::Bool=true,
                                     optargs...)
     pts = points isa AbstractMatrix ? points : reduce(hcat, collect(points))
     vtk_cells = if isnothing(cells)
@@ -502,7 +549,7 @@ function _write_vtk_points_or_lines(filename::AbstractString, points;
     end
 
     stem = _vtk_stem(filename; path, num)
-    saved = WriteVTK.vtk_grid(stem * ".vtu", pts, vtk_cells) do vtk
+    saved = WriteVTK.vtk_grid(stem * ".vtu", pts, vtk_cells; compress) do vtk
         for data in point_data
             vtk[data["field_name"], WriteVTK.VTKPointData()] = data["field_data"]
         end

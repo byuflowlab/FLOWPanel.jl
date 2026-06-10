@@ -97,6 +97,30 @@ write_vtk_fields!(vtk, monitor, body, i_system::Int, i_step::Int) = nothing
 write_vtk_fields!(vtk, monitor, body, i_system::Int, i_step::Int,
                   field_names::VTKFieldNameAllocator, i_monitor::Int) = nothing
 
+write_monitor_csv!(monitor, dir::AbstractString, name::AbstractString,
+                   i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                   i_step::Int, dt::Real; overwrite::Bool=false) = nothing
+
+function _monitor_csv_path(dir::AbstractString, name::AbstractString,
+                           i_monitor::Int, stem::AbstractString, i_system::Int)
+    filename = "$(name)_monitor$(lpad(i_monitor, 2, '0'))_$(stem)_system$(i_system).csv"
+    return joinpath(dir, filename)
+end
+
+function _monitor_csv_open(writer::Function, path::AbstractString, i_step::Int,
+                           overwrite::Bool, header::AbstractString)
+    mode = (overwrite || i_step == 0) ? "w" : "a"
+    dir = dirname(path)
+    !isdir(dir) && mkpath(dir)
+    open(path, mode) do io
+        mode == "w" && println(io, header)
+        writer(io)
+    end
+    return nothing
+end
+
+_monitor_csv_bool(x::Bool) = x ? "true" : "false"
+
 """
     PressureBernoulli(rho; unsteady=false, correct_kuttacondition=true, clip=nothing,
                       backend=FastMultipoleBackend(expansion_order=10,
@@ -128,6 +152,7 @@ mutable struct PressureBernoulli{TF, TC, TB} <: AbstractMonitor
     potential_history::Vector{Vector{Float64}}
     probes::Vector{FastMultipole.ProbeSystem{Float64}}
     vtk_fields::Tuple{Vararg{Symbol}}
+    file::Bool
 end
 
 monitor_provides(::PressureBernoulli) = (:P,)
@@ -138,11 +163,12 @@ function PressureBernoulli(rho::Real; unsteady::Bool=false,
                           backend=FastMultipoleBackend(expansion_order=10,
                                                        multipole_acceptance=0.4,
                                                        leaf_size=100),
-                          vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,))
+                          vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,),
+                          file::Bool=true)
     return PressureBernoulli{typeof(rho), typeof(clip), typeof(backend)}(
         rho, unsteady, correct_kuttacondition, clip, backend,
         Vector{Float64}[], Vector{Float64}[], Vector{Float64}[],
-        FastMultipole.ProbeSystem{Float64}[], vtk_fields)
+        FastMultipole.ProbeSystem{Float64}[], vtk_fields, file)
 end
 
 function (m::PressureBernoulli)(systems, wakes,
@@ -377,6 +403,7 @@ stored in the monitor.
 - `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body)
 - `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
 - `L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}` — sparse FV surface Laplacian per body, gauge-fixed at `reference_panel`
+- `pressure_operator::Vector{PressureLaplacianOperator}` — matrix-free FV surface Laplacian per body for CG matvecs
 - `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the selected acceleration form
 - `p::Vector{Vector{Float64}}` — owned pressure solution vector per body (length ncells)
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
@@ -384,6 +411,29 @@ stored in the monitor.
 - `edges::Vector{Matrix{Int}}` — shared interior edges per body (4 × nedges); rows are `(node_a, node_b, panel_i, panel_j)`
 - `workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}` — preallocated Krylov CG workspace per body
 """
+struct PressureLaplacianOperator
+    n::Int
+    reference_panel::Int
+    row_diagonal::Vector{Float64}
+    row_neighbors::Vector{Vector{Int}}
+    row_weights::Vector{Vector{Float64}}
+end
+
+Base.size(A::PressureLaplacianOperator) = (A.n, A.n)
+Base.size(A::PressureLaplacianOperator, d::Int) = d <= 2 ? A.n : 1
+Base.eltype(::Type{PressureLaplacianOperator}) = Float64
+Base.eltype(::PressureLaplacianOperator) = Float64
+LA.issymmetric(::PressureLaplacianOperator) = true
+LA.ishermitian(::PressureLaplacianOperator) = true
+Base.transpose(A::PressureLaplacianOperator) = A
+Base.adjoint(A::PressureLaplacianOperator) = A
+
+(A::PressureLaplacianOperator)(y, x, α, β) = _pressure_laplacian_mul!(y, x, α, β, A)
+LA.mul!(y, A::PressureLaplacianOperator, x) =
+    _pressure_laplacian_mul!(y, x, one(Float64), zero(Float64), A)
+LA.mul!(y, A::PressureLaplacianOperator, x, α, β) =
+    _pressure_laplacian_mul!(y, x, α, β, A)
+
 mutable struct PressureLaplace{TP} <: AbstractMonitor
     rho::Float64
     unsteady::Bool
@@ -399,6 +449,7 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     acceleration_form::Symbol
     velocity_dot::Vector{Matrix{Float64}}
     L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}
+    pressure_operator::Vector{PressureLaplacianOperator}
     b::Vector{Vector{Float64}}
     p::Vector{Vector{Float64}}
     acceleration::Vector{Matrix{Float64}}
@@ -408,6 +459,8 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     u_inertial::Vector{Matrix{Float64}}
     surface_velocity_gradient::Vector{Array{Float64,3}}
     vtk_fields::Tuple{Vararg{Symbol}}
+    last_rebuild::Vector{Bool}
+    file::Bool
 end
 
 monitor_provides(::PressureLaplace) = (:P,)
@@ -427,7 +480,8 @@ function PressureLaplace(bodies, rho::Real;
                          verbose::Bool=false,
                          gradient_mode::Symbol=:raw_hessian,
                          acceleration_form::Symbol=:material_derivative,
-                         vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,))
+                         vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,),
+                         file::Bool=true)
     reference_panel >= 1 || throw(ArgumentError("reference_panel must be at least 1; got $(reference_panel)."))
     gradient_mode in (:raw_hessian, :surface_velocity) || throw(ArgumentError(
         "gradient_mode must be :raw_hessian or :surface_velocity; got $(gradient_mode)."))
@@ -438,6 +492,7 @@ function PressureLaplace(bodies, rho::Real;
     nbodies = length(systems_tuple)
     velocity_dot = Matrix{Float64}[]
     Ls = SparseArrays.SparseMatrixCSC{Float64, Int}[]
+    pressure_operators = PressureLaplacianOperator[]
     bs = Vector{Float64}[]
     ps = Vector{Float64}[]
     acceleration = Matrix{Float64}[]
@@ -446,8 +501,10 @@ function PressureLaplace(bodies, rho::Real;
     workspace = Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}[]
     u_inertial = Matrix{Float64}[]
     surface_velocity_gradient = Array{Float64,3}[]
+    last_rebuild = Bool[]
     sizehint!(velocity_dot, nbodies)
     sizehint!(Ls, nbodies)
+    sizehint!(pressure_operators, nbodies)
     sizehint!(bs, nbodies)
     sizehint!(ps, nbodies)
     sizehint!(acceleration, nbodies)
@@ -456,6 +513,7 @@ function PressureLaplace(bodies, rho::Real;
     sizehint!(workspace, nbodies)
     sizehint!(u_inertial, nbodies)
     sizehint!(surface_velocity_gradient, nbodies)
+    sizehint!(last_rebuild, nbodies)
 
     for body in systems_tuple
         body.ncells > 0 || throw(ArgumentError("PressureLaplace requires bodies with at least one panel."))
@@ -465,26 +523,29 @@ function PressureLaplace(bodies, rho::Real;
         calc_controlpoints!(body)
         body_edges = _pressure_panel_edges(body)
         L = _assemble_pressure_laplacian(body, Int(reference_panel), body_edges)
+        A = _pressure_laplacian_operator(body, Int(reference_panel), body_edges)
         b = zeros(Float64, body.ncells)
         push!(velocity_dot, zeros(Float64, size(body.velocity)))
         push!(Ls, L)
+        push!(pressure_operators, A)
         push!(bs, b)
         push!(ps, zeros(Float64, body.ncells))
         push!(acceleration, zeros(Float64, 3, body.ncells))
         push!(tangential, zeros(Float64, 3, body.ncells))
         push!(edges, body_edges)
-        push!(workspace, Krylov.krylov_workspace(Val(:cg), L, b))
+        push!(workspace, Krylov.krylov_workspace(Val(:cg), A, b))
         push!(u_inertial, zeros(Float64, size(body.velocity)))
         push!(surface_velocity_gradient, zeros(Float64, 3, 3, body.ncells))
+        push!(last_rebuild, false)
     end
     preconditioner = build_pressure_preconditioner(preconditioner, Ls)
 
     return PressureLaplace{typeof(preconditioner)}(
         Float64(rho), unsteady, Float64(atol), Float64(rtol), Int(itmax),
         preconditioner, Int(reference_panel), Float64(reference_pressure),
-        rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, bs, ps,
+        rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, pressure_operators, bs, ps,
         acceleration, tangential,
-        edges, workspace, u_inertial, surface_velocity_gradient, vtk_fields)
+        edges, workspace, u_inertial, surface_velocity_gradient, vtk_fields, last_rebuild, file)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -583,11 +644,15 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
         "PressureLaplace does not support panel-count changes after construction. Reconstruct the monitor for the new body sizes."))
 
     rebuild = m.rebuild_every_step
+    m.last_rebuild[i_body] = rebuild
 
     if rebuild
         m.L[i_body] = _assemble_pressure_laplacian(body, m.reference_panel, m.edges[i_body])
+        m.pressure_operator[i_body] =
+            _pressure_laplacian_operator(body, m.reference_panel, m.edges[i_body])
         rebuild_pressure_preconditioner!(m.preconditioner, m.L[i_body], i_body)
-        m.workspace[i_body] = Krylov.krylov_workspace(Val(:cg), m.L[i_body], m.b[i_body])
+        m.workspace[i_body] =
+            Krylov.krylov_workspace(Val(:cg), m.pressure_operator[i_body], m.b[i_body])
     end
 
     # velocity_dot currently holds -u_old; this call turns it into (u_new - u_old)/dt.
@@ -603,6 +668,26 @@ function _pressure_laplace_body!(m::PressureLaplace, body::AbstractBody,
     end
 
     return m.p[i_body]
+end
+
+function write_monitor_csv!(m::PressureLaplace, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    t = monitor_time(ctx, i_step, dt)
+    for (i_system, body) in enumerate(systems_tuple)
+        i_system <= length(m.p) || continue
+        path = _monitor_csv_path(dir, name, i_monitor, "pressure_laplace", i_system)
+        header = "step,time,system,panels,rebuild,cg_iters,cg_solved"
+        _monitor_csv_open(path, i_step, overwrite, header) do io
+            ws = m.workspace[i_system]
+            println(io, join((i_step, t, i_system, body.ncells,
+                              _monitor_csv_bool(m.last_rebuild[i_system]),
+                              ws.stats.niter,
+                              _monitor_csv_bool(ws.stats.solved)), ","))
+        end
+    end
+    return nothing
 end
 
 function _register_monitor_outputs!(ctx::MonitorContext, m::PressureLaplace, systems_tuple::Tuple)
@@ -674,10 +759,11 @@ end
 
 function _pressure_solve!(m::PressureLaplace, i_body::Int)
     M = pressure_preconditioner_argument(m.preconditioner, i_body)
+    A = m.pressure_operator[i_body]
     if M === nothing
-        Krylov.krylov_solve!(m.workspace[i_body], m.L[i_body], m.b[i_body]; atol=m.atol, rtol=m.rtol, itmax=m.itmax)
+        Krylov.krylov_solve!(m.workspace[i_body], A, m.b[i_body]; atol=m.atol, rtol=m.rtol, itmax=m.itmax)
     else
-        Krylov.krylov_solve!(m.workspace[i_body], m.L[i_body], m.b[i_body]; M, ldiv=true, atol=m.atol, rtol=m.rtol, itmax=m.itmax)
+        Krylov.krylov_solve!(m.workspace[i_body], A, m.b[i_body]; M, ldiv=true, atol=m.atol, rtol=m.rtol, itmax=m.itmax)
     end
     m.p[i_body] .= m.workspace[i_body].x
     return m.p[i_body]
@@ -731,6 +817,72 @@ function _assemble_pressure_laplacian(body::AbstractBody, reference_panel::Int,
     L = SparseArrays.sparse(rows, cols, vals, n, n)
     # Gauge-fix to make L SPD so CG applies; skipped if reference_panel <= 0.
     return reference_panel > 0 ? _pressure_apply_gauge(L, reference_panel) : L
+end
+
+function _pressure_laplacian_operator(body::AbstractBody, reference_panel::Int)
+    return _pressure_laplacian_operator(body, reference_panel, _pressure_panel_edges(body))
+end
+
+function _pressure_laplacian_operator(body::AbstractBody, reference_panel::Int,
+                                      edges::Matrix{Int})
+    n = body.ncells
+    row_diagonal = zeros(Float64, n)
+    row_neighbors = [Int[] for _ in 1:n]
+    row_weights = [Float64[] for _ in 1:n]
+
+    @inbounds for k in axes(edges, 2)
+        edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
+        i == j && continue
+        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+
+        if i != reference_panel
+            row_diagonal[i] += w
+            if j != reference_panel
+                push!(row_neighbors[i], j)
+                push!(row_weights[i], w)
+            end
+        end
+        if j != reference_panel
+            row_diagonal[j] += w
+            if i != reference_panel
+                push!(row_neighbors[j], i)
+                push!(row_weights[j], w)
+            end
+        end
+    end
+
+    if reference_panel > 0
+        row_diagonal[reference_panel] = 1.0
+        empty!(row_neighbors[reference_panel])
+        empty!(row_weights[reference_panel])
+    end
+
+    return PressureLaplacianOperator(
+        n, reference_panel, row_diagonal, row_neighbors, row_weights)
+end
+
+function _pressure_laplacian_mul!(y, x, α, β, A::PressureLaplacianOperator)
+    length(y) == A.n || throw(DimensionMismatch(
+        "PressureLaplace operator output length $(length(y)) does not match $(A.n)."))
+    length(x) == A.n || throw(DimensionMismatch(
+        "PressureLaplace operator input length $(length(x)) does not match $(A.n)."))
+
+    if iszero(β)
+        fill!(y, zero(eltype(y)))
+    else
+        y .*= β
+    end
+
+    @inbounds Threads.@threads for i in 1:A.n
+        acc = A.row_diagonal[i] * x[i]
+        neighbors = A.row_neighbors[i]
+        weights = A.row_weights[i]
+        for k in eachindex(neighbors)
+            acc -= weights[k] * x[neighbors[k]]
+        end
+        y[i] += α * acc
+    end
+    return y
 end
 
 function _pressure_apply_gauge(L, reference_panel::Int)
@@ -1219,7 +1371,7 @@ end
     SpanwiseLoadingMonitor(nbins, i_system; i_frame=-1, components,
                            span_axis=nothing,
                            normalization=NoSectionalNormalization(),
-                           per_length=false, csv_path=nothing, TF=Float64,
+                           per_length=false, file=true, TF=Float64,
                            verbose=false, vtk_fields=(:bin_id,))
 
 Consume distributed panel forces from an earlier force monitor, bin them along a
@@ -1236,7 +1388,7 @@ mutable struct SpanwiseLoadingMonitor{TF, TN} <: AbstractMonitor
     span_axis::SVector{3, TF}
     normalization::TN
     per_length::Bool
-    csv_path::Union{Nothing, String}
+    file::Bool
     verbose::Bool
     vtk_fields::Tuple{Vararg{Symbol}}
     bin_center::Vector{TF}
@@ -1256,7 +1408,7 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
                                 span_axis=nothing,
                                 normalization=NoSectionalNormalization(),
                                 per_length::Bool=false,
-                                csv_path=nothing,
+                                file::Bool=true,
                                 TF=Float64,
                                 verbose::Bool=false,
                                 vtk_fields::Tuple{Vararg{Symbol}}=(:bin_id,))
@@ -1276,10 +1428,9 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
         component_matrix[:, i] .= v
     end
 
-    csv = isnothing(csv_path) ? nothing : String(csv_path)
     return SpanwiseLoadingMonitor{TF, typeof(normalization)}(
         nbins, i_system, i_frame, names, component_matrix, axis, normalization,
-        per_length, csv, verbose, vtk_fields,
+        per_length, file, verbose, vtk_fields,
         zeros(TF, nbins), zeros(TF, nbins),
         zeros(TF, length(vectors), nbins), zeros(TF, length(vectors), nbins),
         zeros(Int, nbins), Int[], zeros(TF, 3, nbins))
@@ -1330,16 +1481,15 @@ function _spanwise_fill_empty_bins!(bin_force::AbstractMatrix, counts::AbstractV
     return bin_force
 end
 
-function _spanwise_write_csv!(m::SpanwiseLoadingMonitor, i_step::Int, t::Real)
-    isnothing(m.csv_path) && return nothing
-    dir = dirname(m.csv_path)
-    !isempty(dir) && dir != "." && !isdir(dir) && mkpath(dir)
-    mode = i_step == 0 ? "w" : "a"
-    open(m.csv_path, mode) do io
-        if i_step == 0
-            println(io, join(("step", "time", "bin", "bin_center", "bin_width", "count",
-                              string.(m.component_names)...), ","))
-        end
+function write_monitor_csv!(m::SpanwiseLoadingMonitor, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "spanwise", m.i_system)
+    header = join(("step", "time", "bin", "bin_center", "bin_width", "count",
+                   string.(m.component_names)...), ",")
+    t = monitor_time(ctx, i_step, dt)
+    _monitor_csv_open(path, i_step, overwrite, header) do io
         for b in 1:m.nbins
             vals = Any[i_step, t, b, m.bin_center[b], m.bin_width[b], m.counts[b]]
             append!(vals, m.load_components[:, b])
@@ -1411,7 +1561,6 @@ function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, syste
                                     systems_tuple, frames, uinf)
     m.load_components .= loads
     m.force_components .= forces
-    _spanwise_write_csv!(m, i_step, monitor_time(ctx, i_step, dt))
 
     if m.verbose
         println("\t\tSpanwiseLoadingMonitor[i_system=$(m.i_system), i_frame=$(m.i_frame), step=$(i_step+1)]:")
@@ -1465,6 +1614,7 @@ mutable struct ForceMonitor{TF, TN} <: AbstractMonitor
     correct_kuttacondition::Bool
     verbose::Bool
     vtk_fields::Tuple{Vararg{Symbol}}
+    file::Bool
 end
 
 monitor_requires(::ForceMonitor) = (:P,)
@@ -1508,6 +1658,7 @@ struct SurfaceVorticityForce{TF, TN} <: AbstractMonitor
     gradient_ar_threshold::Float64
     verbose::Bool
     vtk_fields::Tuple{Vararg{Symbol}}
+    file::Bool
 end
 
 monitor_provides(::SurfaceVorticityForce) = (:F,)
@@ -1521,7 +1672,8 @@ function SurfaceVorticityForce(body::AbstractBody, nt::Int, i_system::Int;
                                gradient_robust::Bool=false,
                                gradient_ar_threshold::Real=10.0,
                                verbose::Bool=false,
-                               vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,))
+                               vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,),
+                               file::Bool=true)
     names = strength_names(body)
     i_strength = something(findfirst(==("gamma"), names),
                             findfirst(==("mu"), names),
@@ -1538,7 +1690,7 @@ function SurfaceVorticityForce(body::AbstractBody, nt::Int, i_system::Int;
     return SurfaceVorticityForce{TF, typeof(normalization)}(
         force, moment, distributed_force, grad_mu, areas, i_system, i_frame, i_strength, TF(rho),
         normalization, correct_kuttacondition, gradient_robust,
-        Float64(gradient_ar_threshold), verbose, vtk_fields)
+        Float64(gradient_ar_threshold), verbose, vtk_fields, file)
 end
 
 _surface_vorticity_te_info(body::AbstractLiftingBody) = view(body.shedding_full, 1:2, :)
@@ -1593,6 +1745,7 @@ struct BoundCirculationMonitor{TF} <: AbstractMonitor
     section_tol::Union{Nothing, TF}
     i_strength::Int
     verbose::Bool
+    file::Bool
 end
 
 function BoundCirculationMonitor(body::AbstractBody, nt::Int, i_system::Int; kwargs...)
@@ -1613,7 +1766,8 @@ function BoundCirculationMonitor(body::AbstractLiftingBody, nt::Int, i_system::I
                                  R::Real,
                                  section_tol=nothing,
                                  TF=Float64,
-                                 verbose::Bool=false)
+                                 verbose::Bool=false,
+                                 file::Bool=true)
     1 <= radial_dimension <= 3 ||
         throw(ArgumentError("BoundCirculationMonitor radial_dimension must be in 1:3; got $(radial_dimension)."))
     R > 0 || throw(ArgumentError("BoundCirculationMonitor requires positive R; got $(R)."))
@@ -1648,13 +1802,33 @@ function BoundCirculationMonitor(body::AbstractLiftingBody, nt::Int, i_system::I
 
     return BoundCirculationMonitor{TF}(
         r_over_R, circulation_te, circulation_slice, valid_section, i_system,
-        i_frame, radial_dimension, TF(R), tol, i_strength, verbose)
+        i_frame, radial_dimension, TF(R), tol, i_strength, verbose, file)
 end
 
 function _bound_circulation_frame_point(body::AbstractBody, node::Integer,
                                         origin_global, R_g2f)
     p = SVector{3}(body.nodes[1, node], body.nodes[2, node], body.nodes[3, node])
     return R_g2f * (p - origin_global)
+end
+
+function write_monitor_csv!(m::BoundCirculationMonitor, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "bound_circulation", m.i_system)
+    header = "step,time,blade,section,r_over_R,circulation_te,circulation_slice"
+    t = monitor_time(ctx, i_step, dt)
+    step_index = i_step + 1
+    _monitor_csv_open(path, i_step, overwrite, header) do io
+        for blade in axes(m.valid_section, 2), section in axes(m.valid_section, 1)
+            m.valid_section[section, blade] || continue
+            println(io, join((i_step, t, blade, section,
+                              m.r_over_R[section, blade],
+                              m.circulation_te[section, blade, step_index],
+                              m.circulation_slice[section, blade, step_index]), ","))
+        end
+    end
+    return nothing
 end
 
 function _bound_circulation_frame_controlpoint(body::AbstractBody, panel::Integer,
@@ -1829,6 +2003,7 @@ struct KuttaJoukowskiForce{TF, TB, TN} <: AbstractMonitor
     velocity_kinematic::Matrix{TF}
     normalization::TN
     verbose::Bool
+    file::Bool
 end
 
 function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
@@ -1837,7 +2012,8 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
                               i_frame::Int=-1,
                               TF=Float64,
                               normalization=NoNormalization(),
-                              verbose::Bool=false)
+                              verbose::Bool=false,
+                              file::Bool=true)
 
     names = strength_names(body)
     i_strength = something(findfirst(==("gamma"), names),
@@ -1873,7 +2049,7 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
     return KuttaJoukowskiForce{TF, typeof(backend), typeof(normalization)}(
         force, i_system, i_frame, i_strength, TF(rho), backend, probes,
         edge_node_a, edge_node_b, panel_of_probe, velocity_kinematic,
-        normalization, verbose)
+        normalization, verbose, file)
 end
 
 function _kutta_joukowski_edge_kinematic_velocity!(
@@ -1892,6 +2068,28 @@ function _kutta_joukowski_edge_kinematic_velocity!(
         velocity_kinematic, probes, i_system, frames, 1,
         zero(SVector{3, TF}), identity)
     return velocity_kinematic
+end
+
+function _write_force_moment_csv!(path::AbstractString, force::AbstractMatrix,
+                                  moment::AbstractMatrix, i_step::Int, t::Real,
+                                  overwrite::Bool)
+    header = "step,time,CFx,CFy,CFz,CMx,CMy,CMz"
+    col = i_step + 1
+    _monitor_csv_open(path, i_step, overwrite, header) do io
+        println(io, join((i_step, t,
+                          force[1, col], force[2, col], force[3, col],
+                          moment[1, col], moment[2, col], moment[3, col]), ","))
+    end
+    return nothing
+end
+
+function write_monitor_csv!(m::SurfaceVorticityForce, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "surface_vorticity_force", m.i_system)
+    return _write_force_moment_csv!(path, m.force, m.moment, i_step,
+                                    monitor_time(ctx, i_step, dt), overwrite)
 end
 
 function _kutta_joukowski_edge_kinematic_velocity!(
@@ -2108,13 +2306,14 @@ function ForceMonitor(nt::Int, i_system::Int;
                        normalization=WingNormalization(TF(rho), TF(Sref), TF(Lref)),
                        correct_kuttacondition::Bool=true,
                        verbose::Bool=false,
-                       vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,))
+                       vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,),
+                       file::Bool=true)
     force = zeros(TF, 3, nt)
     moment = zeros(TF, 3, nt)
     distributed_force = zeros(TF, 3, 0)
     return ForceMonitor{TF, typeof(normalization)}(
         force, moment, distributed_force, i_system, i_frame, normalization,
-        correct_kuttacondition, verbose, vtk_fields)
+        correct_kuttacondition, verbose, vtk_fields, file)
 end
 
 function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wakes,
@@ -2160,6 +2359,29 @@ function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wake
         println("\t\t\tCM = ($(round(CM_norm[1], sigdigits=4)), $(round(CM_norm[2], sigdigits=4)), $(round(CM_norm[3], sigdigits=4)))")
     end
     monitor_register!(ctx, :F, monitor.i_system, monitor.distributed_force)
+    return nothing
+end
+
+function write_monitor_csv!(m::ForceMonitor, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "force", m.i_system)
+    return _write_force_moment_csv!(path, m.force, m.moment, i_step,
+                                    monitor_time(ctx, i_step, dt), overwrite)
+end
+
+function write_monitor_csv!(m::KuttaJoukowskiForce, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "kutta_joukowski_force", m.i_system)
+    header = "step,time,CFx,CFy,CFz"
+    col = i_step + 1
+    _monitor_csv_open(path, i_step, overwrite, header) do io
+        println(io, join((i_step, monitor_time(ctx, i_step, dt),
+                          m.force[1, col], m.force[2, col], m.force[3, col]), ","))
+    end
     return nothing
 end
 

@@ -77,7 +77,7 @@ function _step_dict(frames, i_step::Int, t::Real; uinf=nothing)
 end
 
 function _simulation_metadata_dict(t_range, start_step::Int, set_Das_eta_kinematic,
-        set_Das_eta_freestream, set_Das_min_kinematic_displacement)
+        set_Das_eta_freestream, set_Das_min_kinematic_displacement, clean_files::Bool)
     n_steps = max(length(t_range) - 1, 0)
     dt = length(t_range) > 1 ? float(t_range[2] - t_range[1]) : NaN
     return Dict{String, Any}(
@@ -86,6 +86,7 @@ function _simulation_metadata_dict(t_range, start_step::Int, set_Das_eta_kinemat
         "dt" => dt,
         "n_steps" => n_steps,
         "start_step" => start_step,
+        "clean_files" => clean_files,
         "set_Das_eta_kinematic" => set_Das_eta_kinematic,
         "set_Das_eta_freestream" => set_Das_eta_freestream,
         "set_Das_min_kinematic_displacement" => set_Das_min_kinematic_displacement,
@@ -205,6 +206,7 @@ function _monitor_metadata(m)
             "clip" => m.clip === nothing ? "nothing" : string(m.clip),
             "backend" => _backend_metadata_dict(m.backend),
             "vtk_fields" => collect(string.(m.vtk_fields)),
+            "file" => m.file,
         )
     elseif m isa PressureLaplace
         return Dict{String, Any}(
@@ -222,6 +224,7 @@ function _monitor_metadata(m)
             "gradient_mode" => string(m.gradient_mode),
             "acceleration_form" => string(m.acceleration_form),
             "vtk_fields" => collect(string.(m.vtk_fields)),
+            "file" => m.file,
         )
     elseif m isa ForceMonitor
         return Dict{String, Any}(
@@ -232,6 +235,7 @@ function _monitor_metadata(m)
             "correct_kuttacondition" => m.correct_kuttacondition,
             "verbose" => m.verbose,
             "vtk_fields" => collect(string.(m.vtk_fields)),
+            "file" => m.file,
         )
     elseif m isa SurfaceVorticityForce
         return Dict{String, Any}(
@@ -245,6 +249,7 @@ function _monitor_metadata(m)
             "gradient_ar_threshold" => m.gradient_ar_threshold,
             "verbose" => m.verbose,
             "vtk_fields" => collect(string.(m.vtk_fields)),
+            "file" => m.file,
         )
     elseif m isa SpanwiseLoadingMonitor
         return Dict{String, Any}(
@@ -256,7 +261,7 @@ function _monitor_metadata(m)
             "span_axis" => collect(m.span_axis),
             "normalization" => _monitor_normalization_metadata(m.normalization),
             "per_length" => m.per_length,
-            "csv_path" => m.csv_path === nothing ? "nothing" : m.csv_path,
+            "file" => m.file,
             "verbose" => m.verbose,
             "vtk_fields" => collect(string.(m.vtk_fields)),
         )
@@ -269,6 +274,18 @@ function _monitor_metadata(m)
             "backend" => _backend_metadata_dict(m.backend),
             "normalization" => _monitor_normalization_metadata(m.normalization),
             "verbose" => m.verbose,
+            "file" => m.file,
+        )
+    elseif m isa BoundCirculationMonitor
+        return Dict{String, Any}(
+            "type" => "BoundCirculationMonitor",
+            "i_system" => m.i_system,
+            "i_frame" => m.i_frame,
+            "radial_dimension" => m.radial_dimension,
+            "R" => m.radius,
+            "section_tol" => m.section_tol === nothing ? "nothing" : m.section_tol,
+            "verbose" => m.verbose,
+            "file" => m.file,
         )
     else
         return _metadata_unsupported_dict(typeof(m))
@@ -280,7 +297,8 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         monitors; start_step::Int=0,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
-        set_Das_min_kinematic_displacement=0.0)
+        set_Das_min_kinematic_displacement=0.0,
+        clean_files::Bool=true)
     return Dict{String, Any}(
         "meta" => Dict{String, Any}(
             "schema_version" => 1,
@@ -292,7 +310,7 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         ),
         "simulation" => _simulation_metadata_dict(t_range, start_step,
             set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement),
+            set_Das_min_kinematic_displacement, clean_files),
         "backends" => Dict{String, Any}(
             "wake" => _backend_metadata_dict(backend_wake),
             "system" => _backend_metadata_dict(backend_system),
@@ -311,14 +329,15 @@ function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
         monitors; start_step::Int=0,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
-        set_Das_min_kinematic_displacement=0.0)
+        set_Das_min_kinematic_displacement=0.0,
+        clean_files::Bool=true)
     mkpath(path)
     file = _metadata_toml_path(path, name)
     open(file, "w") do io
         TOML.print(io, _metadata_manifest_dict(name, systems, wakes, frames,
             t_range, body_solvers, backend_wake, backend_solve, backend_system,
             monitors; start_step, set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement))
+            set_Das_min_kinematic_displacement, clean_files))
     end
     return file
 end

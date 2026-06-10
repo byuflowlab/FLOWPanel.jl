@@ -1,7 +1,7 @@
 using Test
 import FLOWPanel as pnl
 import FastMultipole
-using LinearAlgebra: cross, dot, norm
+using LinearAlgebra: cross, dot, mul!, norm
 using SparseArrays
 using StaticArrays: SMatrix, SVector
 
@@ -270,6 +270,23 @@ end
         p_exact[1] = 0.0
         b = L * p_exact
         monitor = pnl.PressureLaplace((body,), 1.0)
+        x = collect(range(-0.4, 0.7; length=body.ncells))
+        @test monitor.pressure_operator[1].n == body.ncells
+        @test monitor.pressure_operator[1].reference_panel == 1
+        @test isapprox(monitor.pressure_operator[1].row_diagonal,
+            [monitor.L[1][i, i] for i in 1:body.ncells]; atol=1e-12)
+        y_op = zeros(body.ncells)
+        mul!(y_op, monitor.pressure_operator[1], x)
+        @test isapprox(y_op, monitor.L[1] * x; atol=1e-12)
+
+        y_scaled = collect(range(0.2, 1.1; length=body.ncells))
+        y_expected = 0.25 .* y_scaled .+ 1.7 .* (monitor.L[1] * x)
+        mul!(y_scaled, monitor.pressure_operator[1], x, 1.7, 0.25)
+        @test isapprox(y_scaled, y_expected; atol=1e-12)
+        y_call = zeros(body.ncells)
+        monitor.pressure_operator[1](y_call, x, 1.0, 0.0)
+        @test isapprox(y_call, monitor.L[1] * x; atol=1e-12)
+
         monitor.b[1] .= b
         pnl._pressure_solve!(monitor, 1)
         @test isapprox(monitor.p[1], p_exact; atol=1e-8)
@@ -304,18 +321,22 @@ end
         body.velocity[1, :] .= 0.2 .* (1:body.ncells)
         pressure((body,), (nothing,), frames, zeros(3), 0, 0.1)
         first_L = pressure.L[1]
+        first_operator = pressure.pressure_operator[1]
         pressure((body,), (nothing,), frames, zeros(3), 1, 0.1)
         @test pressure.L[1] === first_L
+        @test pressure.pressure_operator[1] === first_operator
 
         body.nodes[1, :] .+= 0.2
         body.nodes[2, :] .-= 0.1
         pressure((body,), (nothing,), frames, zeros(3), 2, 0.1)
         @test pressure.L[1] === first_L
+        @test pressure.pressure_operator[1] === first_operator
 
         old = body.nodes[1, 1]
         body.nodes[1, 1] = old + 0.1
         pressure((body,), (nothing,), frames, zeros(3), 3, 0.1)
         @test pressure.L[1] === first_L
+        @test pressure.pressure_operator[1] === first_operator
 
         rebuilding = pnl.PressureLaplace((body,), 1.0;
             reference_panel=1,
@@ -323,8 +344,10 @@ end
         body.velocity[1, :] .= 0.2 .* (1:body.ncells)
         rebuilding((body,), (nothing,), frames, zeros(3), 4, 0.1)
         rebuild_first_L = rebuilding.L[1]
+        rebuild_first_operator = rebuilding.pressure_operator[1]
         rebuilding((body,), (nothing,), frames, zeros(3), 5, 0.1)
         @test rebuilding.L[1] !== rebuild_first_L
+        @test rebuilding.pressure_operator[1] !== rebuild_first_operator
 
         ctx = pnl.MonitorContext()
         pnl.monitor_register!(ctx, :P, 1, rebuilding.p[1])
@@ -417,14 +440,16 @@ end
         pnl._run_monitor!(rotor, ctx, (local_body,), (nothing,), rframes, zeros(3), 0, 0.1)
         @test isapprox(rotor.load_components[1, 1], 2.0; atol=1e-12)
 
-        csv = joinpath(mktempdir(), "span", "loading.csv")
         csvmon = pnl.SpanwiseLoadingMonitor(1, 1;
-            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
-            csv_path=csv)
+            components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]))
+        csvdir = joinpath(mktempdir(), "monitors")
+        csv = joinpath(csvdir, "post_monitor01_spanwise_system1.csv")
         ctx = pnl.MonitorContext()
         pnl.monitor_register!(ctx, :F, 1, [0.0 0.0; 0.0 0.0; 1.0 1.0])
         pnl._run_monitor!(csvmon, ctx, (local_body,), (nothing,), pnl.ReferenceFrame(local_body), zeros(3), 0, 0.1, 1.25)
+        pnl.write_monitor_csv!(csvmon, csvdir, "post", 1, ctx, (local_body,), 0, 0.1; overwrite=true)
         pnl._run_monitor!(csvmon, ctx, (local_body,), (nothing,), pnl.ReferenceFrame(local_body), zeros(3), 1, 0.1, 1.50)
+        pnl.write_monitor_csv!(csvmon, csvdir, "post", 1, ctx, (local_body,), 1, 0.1)
         rows = readlines(csv)
         @test rows[1] == "step,time,bin,bin_center,bin_width,count,lift,drag"
         @test length(rows) == 3
@@ -695,6 +720,72 @@ end
     @testset "SurfaceVorticityForce constructor validation" begin
         body = make_octa_source_body()
         @test_throws ArgumentError pnl.SurfaceVorticityForce(body, 1, 1)
+    end
+
+    @testset "Monitor CSV hooks" begin
+        dir = joinpath(mktempdir(), "monitors")
+
+        body = make_octa_source_body()
+        pressure = zeros(body.ncells)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_set_time!(ctx, 0.0)
+        pnl.monitor_register!(ctx, :P, 1, pressure)
+        force = pnl.ForceMonitor(2, 1; normalization=pnl.NoNormalization())
+        pnl._run_monitor!(force, ctx, (body,), (nothing,), pnl.ReferenceFrame(body), [1.0, 0.0, 0.0], 0, 0.1)
+        pnl.write_monitor_csv!(force, dir, "case", 1, ctx, (body,), 0, 0.1; overwrite=true)
+        pnl.monitor_set_time!(ctx, 0.1)
+        pnl._run_monitor!(force, ctx, (body,), (nothing,), pnl.ReferenceFrame(body), [1.0, 0.0, 0.0], 1, 0.1)
+        pnl.write_monitor_csv!(force, dir, "case", 1, ctx, (body,), 1, 0.1)
+        rows = readlines(joinpath(dir, "case_monitor01_force_system1.csv"))
+        @test rows[1] == "step,time,CFx,CFy,CFz,CMx,CMy,CMz"
+        @test length(rows) == 3
+
+        doublet = make_surface_vorticity_gradient_body()
+        doublet.velocity[1, :] .= 1.0
+        surface = pnl.SurfaceVorticityForce(doublet, 1, 1; normalization=pnl.NoNormalization())
+        surface((doublet,), (nothing,), pnl.ReferenceFrame(doublet), zeros(3), 0, 0.1)
+        pnl.write_monitor_csv!(surface, dir, "case", 2, ctx, (doublet,), 0, 0.1; overwrite=true)
+        rows = readlines(joinpath(dir, "case_monitor02_surface_vorticity_force_system1.csv"))
+        @test rows[1] == "step,time,CFx,CFy,CFz,CMx,CMy,CMz"
+        @test length(rows) == 2
+
+        kj_body = make_plate_vortex_body()
+        kj_body.strength[:, 1] .= [0.8, -0.35]
+        kj = pnl.KuttaJoukowskiForce(kj_body, 1, 1;
+            backend=pnl.DirectBackend(),
+            normalization=pnl.NoNormalization())
+        kj((kj_body,), (nothing,), pnl.ReferenceFrame(kj_body), zeros(3), 0, 0.1)
+        pnl.write_monitor_csv!(kj, dir, "case", 3, ctx, (kj_body,), 0, 0.1; overwrite=true)
+        rows = readlines(joinpath(dir, "case_monitor03_kutta_joukowski_force_system1.csv"))
+        @test rows[1] == "step,time,CFx,CFy,CFz"
+        @test length(rows) == 2
+
+        bound = pnl.BoundCirculationMonitor(kj_body, 1, 1;
+            i_frame=1,
+            radial_dimension=1,
+            R=1.0,
+            section_tol=0.6)
+        bound((kj_body,), (nothing,), pnl.ReferenceFrame(kj_body), zeros(3), 0, 0.1)
+        pnl.write_monitor_csv!(bound, dir, "case", 4, ctx, (kj_body,), 0, 0.1; overwrite=true)
+        rows = readlines(joinpath(dir, "case_monitor04_bound_circulation_system1.csv"))
+        @test rows[1] == "step,time,blade,section,r_over_R,circulation_te,circulation_slice"
+        @test length(rows) == 2
+
+        lap_body = make_skewed_two_panel_body()
+        laplace = pnl.PressureLaplace((lap_body,), 1.0; reference_panel=1)
+        laplace((lap_body,), (nothing,), pnl.ReferenceFrame(lap_body), zeros(3), 0, 0.1)
+        pnl.write_monitor_csv!(laplace, dir, "case", 5, ctx, (lap_body,), 0, 0.1; overwrite=true)
+        rows = readlines(joinpath(dir, "case_monitor05_pressure_laplace_system1.csv"))
+        @test rows[1] == "step,time,system,panels,rebuild,cg_iters,cg_solved"
+        @test occursin(",1,2,false,", rows[2])
+
+        bernoulli = pnl.PressureBernoulli(1.0)
+        pnl.write_monitor_csv!(bernoulli, dir, "case", 6, ctx, (body,), 0, 0.1; overwrite=true)
+        @test !isfile(joinpath(dir, "case_monitor06_pressure_bernoulli_system1.csv"))
+
+        suppressed = pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization(), file=false)
+        pnl.write_monitor_csv!(suppressed, dir, "case", 7, ctx, (body,), 0, 0.1; overwrite=true)
+        @test !isfile(joinpath(dir, "case_monitor07_force_system1.csv"))
     end
 
     @testset "PressureLaplace Bernoulli constant-field comparison" begin

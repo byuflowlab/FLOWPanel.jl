@@ -335,11 +335,66 @@ end
 
     body = make_plate_vortex_body()
     frames = pnl.ReferenceFrame(body)
-    csv = joinpath(mktempdir(), "span_loading.csv")
+    steady_outdir = mktempdir()
+    steady_stale = joinpath(steady_outdir, "monitors", "steadyclean_monitor09_force_system1.csv")
+    mkpath(dirname(steady_stale))
+    write(steady_stale, "stale\n")
+    pnl.steady!(body, frames, uinf;
+        name="steadyclean",
+        path=steady_outdir,
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(),
+        i_run=1,
+        dt=0.1,
+    )
+    @test !isfile(steady_stale)
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    outdir = mktempdir()
+    csv = joinpath(outdir, "monitors", "moncsv_monitor02_spanwise_system1.csv")
+    stale = joinpath(outdir, "monitors", "moncsv_monitor99_force_system1.csv")
+    mkpath(dirname(stale))
+    write(stale, "stale\n")
     provider = SimDistributedForce([0.0 0.0; 0.0 0.0; 1.0 1.0], 1)
     spanwise = pnl.SpanwiseLoadingMonitor(1, 1;
-        components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
-        csv_path=csv)
+        components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]))
+    pnl.simulate!(body, nothing, frames, (frames, systems, wakes, t) -> nothing,
+        t -> uinf, [2.0, 2.25];
+        name="moncsv",
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(provider, spanwise),
+        path=outdir,
+    )
+    rows = readlines(csv)
+    @test startswith(rows[2], "0,2.0,1,")
+    @test startswith(rows[3], "1,2.25,1,")
+    @test !isfile(stale)
+
+    stale_keep = joinpath(outdir, "monitors", "keep_monitor99_force_system1.csv")
+    write(stale_keep, "stale\n")
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    pnl.simulate!(body, nothing, frames, (frames, systems, wakes, t) -> nothing,
+        t -> uinf, [2.0, 2.25];
+        name="keep",
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(provider, spanwise),
+        path=outdir,
+        clean_files=false,
+    )
+    @test isfile(stale_keep)
+
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body)
+    spanwise = pnl.SpanwiseLoadingMonitor(1, 1;
+        components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]))
     pnl.simulate!(body, nothing, frames, (frames, systems, wakes, t) -> nothing,
         t -> uinf, [2.0, 2.25];
         body_solvers=SimNoopSolver(),
@@ -348,7 +403,4 @@ end
         monitors=(provider, spanwise),
         path=nothing,
     )
-    rows = readlines(csv)
-    @test startswith(rows[2], "0,2.0,1,")
-    @test startswith(rows[3], "1,2.25,1,")
 end
