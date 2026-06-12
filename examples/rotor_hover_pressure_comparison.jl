@@ -64,7 +64,7 @@ read_path = joinpath(pnl.examples_path, "data")
 # te_indices_1 = [9, 175, 127]
 # te_indices_2 = [13, 286, 238]
 
-rhpc_mesh = lowercase(get(ENV, "RHPC_MESH", "56_57"))
+rhpc_mesh = lowercase(get(ENV, "RHPC_MESH", "40_40"))
 if rhpc_mesh == "40_40"
     msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
     te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing

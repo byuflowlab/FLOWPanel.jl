@@ -37,7 +37,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
     npos = length(spanposs)
 
     # Plot slices of the wing along the span
-    fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
+    fig = _fig==nothing ? plt.figure(figsize=[9.0, 3.2*ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 
@@ -163,7 +163,7 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
             ax.set_xlabel(L"x/c")
         end
         if axi%2==1
-            ax.set_ylabel(L"Pressure coefficient $C_p$")
+            ax.set_ylabel(L"C_p")
         end
 
         if show_axis_legend && axi==1
@@ -199,7 +199,7 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
     npos = length(spanposs)
 
     # Plot slices of the wing along the span
-    fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
+    fig = _fig==nothing ? plt.figure(figsize=[9.0, 3.2*ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 

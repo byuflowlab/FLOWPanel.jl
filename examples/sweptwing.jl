@@ -28,7 +28,7 @@ run_name        = "sweptwing000"                # Name of this run; grid tag app
 save_path       = joinpath("data", run_name)    # Where to save outputs; grid tag appended below
 airfoil_path    = joinpath(pnl.examples_path, "data") # Where to find airfoil contours
 
-paraview        = envflag("FLOWPANEL_SWEPTWING_VTK", false) # Whether to write VTK
+paraview        = envflag("FLOWPANEL_SWEPTWING_VTK", true) # Whether to write VTK
 load_vtk        = envflag("FLOWPANEL_SWEPTWING_LOAD_VTK", false) # Whether to load saved VTK for Cp-only plotting
 snap_cp_slices  = envflag("FLOWPANEL_SWEPTWING_SNAP_CP", false) # Whether to snap Cp slices to control-point rows
 
@@ -51,7 +51,7 @@ gamma           = 0                             # (deg) dihedral
 airfoil         = "airfoil-rae101.csv"          # Airfoil contour file
 
 # ----- Chordwise discretization
-n_rfl           = 32                            # Control number of chordwise panels
+n_rfl           = 24                            # Control number of chordwise panels
 NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
               (0.50, n_rfl,    1.0, true),
               (0.25, n_rfl, 1/10.0, false)]
@@ -61,7 +61,7 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 # end up coarsest and the tips finest, which makes the inner Cp slice
 # (2y/b ≈ 0.04) too under-resolved to plot cleanly. Uniform spacing keeps
 # panel size constant across the span.
-n_span_full     = 48                            # Number of spanwise panels across full span
+n_span_full     = 24                            # Number of spanwise panels across full span
 NDIVS_span      = [(1.0, n_span_full, 1.0, true)]
 
 grid_tag        = "nrf$(n_rfl)_nspan$(n_span_full)"
@@ -261,7 +261,7 @@ if load_vtk
         xLE_fn = y -> abs(y) * tan(lambda * pi / 180)
         fig1, axs = plot_Cps(body, pressure_bernoulli_loaded, spanposs_cps, b, rho, magVinf;
                                     xscaling=ar/b, AOA=AOA,
-                                    xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
+                                    xlims=[-0.1, 1.1], ylims=[1.0, -1.5], stl="-",
                                     slicetol=0.013*b, xLE_fn=xLE_fn,
                                     snap_to_span_row=snap_cp_slices,
                                     show_axis_legend=false,
@@ -271,7 +271,7 @@ if load_vtk
                  spanposs_cps, b, rho, magVinf;
                  _fig=fig1, _axs=axs,
                  xscaling=ar/b, AOA=AOA,
-                 xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="--",
+                 xlims=[-0.1, 1.1], ylims=[1.0, -1.5], stl="--",
                  slicetol=0.013*b, xLE_fn=xLE_fn,
                  snap_to_span_row=snap_cp_slices,
                  show_axis_legend=false,
@@ -279,10 +279,11 @@ if load_vtk
                  plot_optargs=(label="-y half mirrored",))
         for ax in axs
             ax.set_xlim([-0.1, 1.1])
-            ax.set_ylim([1.0, -0.7])
+            ax.set_ylim([1.0, -1.5])
         end
         place_figure_legend_right!(fig1, axs)
-        fig1.tight_layout(rect=[0, 0, 0.77, 1])
+        fig1.subplots_adjust(left=0.11, right=0.74, bottom=0.11, top=0.95,
+                             wspace=0.18, hspace=0.30)
         fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps_mirrored.png"),
                      dpi=150, bbox_inches="tight")
         println("Saved Cp overlay plot to sweptwing_Cps_mirrored.png")
@@ -293,7 +294,7 @@ end
 
 
 # ----------------- CALL SOLVER AND MONITORS -----------------------------------
-println("Solving body (Bernoulli monitor stack)...")
+println("Solving body (combined Bernoulli + Laplace monitor stack)...")
 
 backend = pnl.FastMultipoleBackend()
 Dhat = Vinf/_norm(Vinf)        # Drag direction
@@ -306,6 +307,8 @@ normalization = pnl.WingNormalization(rho, Sref, c_ref)
 sectional_qc = 0.5*rho*magVinf^2*c_ref
 
 frames = pnl.ReferenceFrame(body)
+
+# Bernoulli post-processing stack
 pressure_bernoulli = pnl.PressureBernoulli(rho)
 force_bernoulli = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
     correct_kuttacondition=false, verbose=false)
@@ -314,12 +317,32 @@ spanwise_bernoulli = pnl.SpanwiseLoadingMonitor(n_span_full, 1;
     span_axis=Shat,
     per_length=true,
     normalization=pnl.NoSectionalNormalization())
-monitors_bernoulli = (pressure_bernoulli, force_bernoulli, spanwise_bernoulli)
+
+# Laplace post-processing stack on the *same* body. Both pressure monitors keep
+# their own storage (`.pressure` vs `.p`) and VTK auto-disambiguates the field
+# names, so the two stacks coexist in a single solve. The Bernoulli trio runs
+# first so each force/spanwise monitor reads the pressure/force from its own
+# immediately-preceding monitor in the tuple ordering below.
+pressure_laplace = pnl.PressureLaplace((body,), rho;
+    reference_panel=1, reference_pressure=0.0, verbose=false,
+    unsteady=false,
+    gradient_mode=:surface_velocity,
+    acceleration_form=:lamb_vector)
+force_laplace = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
+    correct_kuttacondition=false, verbose=false)
+spanwise_laplace = pnl.SpanwiseLoadingMonitor(n_span_full, 1;
+    components=(lift=Lhat, drag=Dhat),
+    span_axis=Shat,
+    per_length=true,
+    normalization=pnl.NoSectionalNormalization())
+
+monitors = (pressure_bernoulli, force_bernoulli, spanwise_bernoulli,
+            pressure_laplace,   force_laplace,   spanwise_laplace)
 
 @time pnl.steady!(body, frames, Vinf;
     body_solvers=pnl.Backslash(body),
     backend=backend,
-    monitors=monitors_bernoulli,
+    monitors=monitors,
     path=paraview ? save_path : nothing,
     name=run_name*"_bernoulli_AOA$(aoa_tag)",
     verbose=false)
@@ -350,31 +373,6 @@ function solve_bernoulli_loading!(body_case, label)
     return (; pressure=pressure_case, force=force_case, spanwise=spanwise_case,
             CL=_dot(F_case, Lhat), CD=_dot(F_case, Dhat))
 end
-
-println("Solving body (Laplace monitor stack)...")
-
-body_l = deepcopy(body)
-frames_l = pnl.ReferenceFrame(body_l)
-pressure_laplace = pnl.PressureLaplace((body_l,), rho;
-    reference_panel=1, reference_pressure=0.0, verbose=false,
-    unsteady=false,
-    gradient_mode=:surface_velocity)
-force_laplace = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
-    correct_kuttacondition=false, verbose=false)
-spanwise_laplace = pnl.SpanwiseLoadingMonitor(n_span_full, 1;
-    components=(lift=Lhat, drag=Dhat),
-    span_axis=Shat,
-    per_length=true,
-    normalization=pnl.NoSectionalNormalization())
-monitors_laplace = (pressure_laplace, force_laplace, spanwise_laplace)
-
-@time pnl.steady!(body_l, frames_l, Vinf;
-    body_solvers=pnl.Backslash(body_l),
-    backend=backend,
-    monitors=monitors_laplace,
-    path=paraview ? save_path : nothing,
-    name=run_name*"_laplace_AOA$(aoa_tag)",
-    verbose=false)
 
 # `WingNormalization` already divides by 0.5 ρ |Vinf|² Sref, so force_laplace.force
 # is in coefficient form. Project onto Lhat/Dhat to recover CL/CD.
@@ -566,9 +564,9 @@ function plot_monitor_loading(spanwise_monitors, labels, b, sectional_qc;
         if xlims!=nothing; ax.set_xticks(xlims[1]:0.25:xlims[2]); end
         if ylims!=nothing; ax.set_yticks(ylims[axi][1]:ylims[axi][3]:ylims[axi][2]); end
 
-        ax.set_xlabel(L"Span position $2y/b$")
-        component_name = string(spanwise_monitors[1].component_names[pi])
-        ax.set_ylabel("Sectional $(component_name) coefficient")
+        ax.set_xlabel(L"2y/b")
+        coeff_symbols = (lift=L"c_l", drag=L"c_d", sideslip=L"c_s")
+        ax.set_ylabel(get(coeff_symbols, spanwise_monitors[1].component_names[pi], L"c"))
 
         if axi==1
             ax.legend(loc="best", fontsize=10, frameon=false, reverse=true)
@@ -666,7 +664,7 @@ if make_plots_cps
     xLE_fn = y -> abs(y) * tan(lambda * pi / 180)
     fig1, axs = plot_Cps(body, pressure_bernoulli.pressure[1], spanposs_cps, b, rho, magVinf;
                                 xscaling=ar/b, AOA=AOA,
-                                xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="-",
+                                xlims=[-0.1, 1.1], ylims=[1.0, -1.5], stl="-",
                                 slicetol=0.013*b, xLE_fn=xLE_fn,
                                 snap_to_span_row=snap_cp_slices,
                                 show_axis_legend=false,
@@ -676,7 +674,7 @@ if make_plots_cps
              spanposs_cps, b, rho, magVinf;
              _fig=fig1, _axs=axs,
              xscaling=ar/b, AOA=AOA,
-             xlims=[-0.1, 1.1], ylims=[1.0, -0.7], stl="--",
+             xlims=[-0.1, 1.1], ylims=[1.0, -1.5], stl="--",
              slicetol=0.013*b, xLE_fn=xLE_fn,
              snap_to_span_row=snap_cp_slices,
              show_axis_legend=false,
@@ -684,10 +682,11 @@ if make_plots_cps
              plot_optargs=(label="-y half mirrored",))
     for ax in axs
         ax.set_xlim([-0.1, 1.1])
-        ax.set_ylim([1.0, -0.7])
+        ax.set_ylim([1.0, -1.5])
     end
     place_figure_legend_right!(fig1, axs)
-    fig1.tight_layout(rect=[0, 0, 0.77, 1])
+    fig1.subplots_adjust(left=0.11, right=0.74, bottom=0.11, top=0.95,
+                         wspace=0.18, hspace=0.30)
     fig1.savefig(joinpath(@__DIR__, "..", "sweptwing_Cps_mirrored.png"),
                  dpi=150, bbox_inches="tight")
     println("Saved Cp overlay plot to sweptwing_Cps_mirrored.png")
