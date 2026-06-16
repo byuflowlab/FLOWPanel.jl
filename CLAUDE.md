@@ -90,6 +90,7 @@ Files are included in this order (reflects the dependency chain):
 - Control points are offset from panel centers along the normal by `CPoffset * characteristiclength(panel)`.
 - `Uinf` passed to `solve` is a 3×ncells matrix (freestream at each control point).
 - The `fields` vector in each body tracks which solution fields have been computed (used by post-processing).
+- **Compute `RigidWakeBody` shedding from the *constructed* cells, not the raw mesh.** With `ensure_winding=true` (default) the constructor calls `ensure_consistent_winding!`, which flips/reorders node indices within `cells` in place (and flips whole components when `watertight=true`). Since `shedding` references panels by cell-local node ordering, shedding computed from raw `cells` (e.g. from `meshes2nodes_cells`) becomes inconsistent with the re-wound cells the solver uses — this does **not** error, but the wake attaches at the wrong edges and the body sheds almost no circulation (observed: rotor-hover CT silently collapsed ~3.6×, 0.0505→0.014). Correct procedure: build a `noshedding` body first, run `calc_shedding_from_seed` on *its* `.nodes`/`.cells`, then rebuild with the shedding (see `examples/rotor_hover_convergence.jl`).
 
 **Monitor hierarchy** (`FLOWPanel_simulate_monitors.jl`):
 

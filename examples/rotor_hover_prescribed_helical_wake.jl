@@ -36,6 +36,7 @@ initial_inflow    = parse(Float64, get(ENV, "INITIAL_INFLOW", "0.08"))
 ct_tol            = parse(Float64, get(ENV, "CT_TOL", "2e-4"))
 sample_r_min      = parse(Float64, get(ENV, "SAMPLE_R_MIN", "0.25"))
 sample_r_max      = parse(Float64, get(ENV, "SAMPLE_R_MAX", "0.95"))
+near_wake_mode    = Symbol(get(ENV, "NEAR_WAKE_MODE", "te"))
 
 # ----- fixed operating point / geometry (DJI9443 40_40, matches audit) -------
 msh_file = joinpath(pnl.examples_path, "data", "dji9443_new_40_40.msh")
@@ -62,7 +63,12 @@ set_Das_min_kinematic_displacement = 0.01 * R
 axial_dimension  = 1
 radial_dimension = 2
 omega_axis       = SVector{3}(-1.0, 0.0, 0.0)
-axial_wake_sign  = -sign(omega_axis[axial_dimension])
+default_helix_winding_sign = -sign(omega_axis[axial_dimension])
+default_axial_wake_sign = -sign(omega_axis[axial_dimension])
+helix_winding_sign = parse(Float64, get(ENV, "HELIX_WINDING_SIGN",
+    string(default_helix_winding_sign)))
+axial_wake_sign = parse(Float64, get(ENV, "WAKE_AXIAL_SIGN",
+    string(default_axial_wake_sign)))
 Vinf             = magVinf * [cosd(AOA), sind(AOA), 0.0]
 Uinf(t)          = Vinf
 omega            = 2 * pi * RPM / 60
@@ -152,27 +158,41 @@ function te_vertices(system, shedding)
     return out
 end
 
-function pin_te_row!(wake, system)
+function validate_near_wake_mode(mode::Symbol)
+    mode in (:te, :das_offset) ||
+        error("Invalid NEAR_WAKE_MODE=$(mode). Expected te or das_offset.")
+    return mode
+end
+
+function near_wake_vertices(system, i_surf; mode)
+    validate_near_wake_mode(mode)
+    out = te_vertices(system, system.shedding[i_surf])
+    if mode == :das_offset
+        out .+= system.Das[i_surf]
+    end
+    return out
+end
+
+function pin_near_wake_row!(wake, system; mode)
     for i_surf in eachindex(wake.nodes)
-        te = te_vertices(system, system.shedding[i_surf])
-        wake.nodes[i_surf][:, 1, :] .= te
+        wake.nodes[i_surf][:, 1, :] .= near_wake_vertices(system, i_surf; mode)
     end
     return nothing
 end
 
-function populate_helical_nodes!(wake, system; induced_inflow_ratio)
+function populate_helical_nodes!(wake, system; induced_inflow_ratio, mode)
     vi = max(induced_inflow_ratio, 0.0) * tip_speed
     for i_surf in eachindex(wake.nodes)
-        te = te_vertices(system, system.shedding[i_surf])
+        seed = near_wake_vertices(system, i_surf; mode)
         nodes = wake.nodes[i_surf]
         fill!(nodes, zero(eltype(nodes)))
         for jrow in 1:(wake.nwakes[] + 1)
             age_revs = (jrow - 1) / rows_per_rev
             theta = 2 * pi * age_revs
-            q = rotation_x(-theta * sign(omega_axis[axial_dimension]))
+            q = rotation_x(theta * helix_winding_sign)
             dx = axial_wake_sign * vi * theta / max(abs(omega), eps())
             for jcol in axes(nodes, 3)
-                r = q * SVector{3}(te[1, jcol], te[2, jcol], te[3, jcol])
+                r = q * SVector{3}(seed[1, jcol], seed[2, jcol], seed[3, jcol])
                 nodes[:, jrow, jcol] .= r .+ SVector{3}(dx, 0.0, 0.0)
             end
         end
@@ -245,7 +265,7 @@ function wake_row_inflow_ratio(wake)
 end
 
 function relax_wake_nodes!(wake, system; relax, pseudo_dt, max_step)
-    pin_te_row!(wake, system)
+    pin_near_wake_row!(wake, system; mode=near_wake_mode)
     total = 0.0
     maxdisp = 0.0
     n = 0
@@ -280,7 +300,7 @@ function relax_wake_nodes!(wake, system; relax, pseudo_dt, max_step)
             n += 1
         end
     end
-    pin_te_row!(wake, system)
+    pin_near_wake_row!(wake, system; mode=near_wake_mode)
     wake.nwakes[] = n_wake_rows
     wake.overflowed[] = true
     return (mean_R = n == 0 ? 0.0 : total / n / R, max_R = maxdisp / R)
@@ -365,13 +385,16 @@ end
 function main()
     wake.nwakes[] = n_wake_rows
     wake.overflowed[] = true
-    populate_helical_nodes!(wake, rotor; induced_inflow_ratio=initial_inflow)
+    populate_helical_nodes!(wake, rotor; induced_inflow_ratio=initial_inflow,
+        mode=near_wake_mode)
     fill!.(wake.strength, 0.0)
-    pin_te_row!(wake, rotor)
+    pin_near_wake_row!(wake, rotor; mode=near_wake_mode)
 
     println("\nBagai/Leishman-style PanelWake relaxation probe - $(mesh_tag), $(RPM) RPM")
     println(@sprintf("  wake %.2f revs, %d rows/rev, %d panel rows, core %.3e m",
         wake_revs, rows_per_rev, wake.nwakes[], wake_core_size))
+    println(@sprintf("  near wake: %s, helix winding sign %.1f, axial wake sign %.1f",
+        string(near_wake_mode), helix_winding_sign, axial_wake_sign))
     println(@sprintf("  relax: wake %.3f, strength %.3f, pseudo dt %.3e s, max node step %.4f R",
         wake_relax, strength_relax, pseudo_dt, max_node_step_R))
     println("  References: steady rigid wake CT ~= 0.0505; VPM ~= 0.062; BEM ~= 0.068; experiment ~= 0.072")
