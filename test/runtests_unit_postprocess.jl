@@ -992,6 +992,118 @@ end
         end
     end
 
+    @testset "compute_mu_gradient! option normalization" begin
+        nodes, cells = make_planar_gradient_mesh()
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+            watertight=false,
+            ensure_winding=false)
+
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body)
+
+        mu = [0.0, 2.0, -1.0, 5.0, 1.5, -3.0, 4.0, -2.5]
+        te_info = zeros(Int, 2, body.ncells)
+
+        @test pnl._normalize_grad_mu_options((; basis=:tri)).basis === :tri
+        @test pnl._normalize_grad_mu_options((; basis=:quad)).basis === :quad
+        @test pnl._normalize_grad_mu_options((; basis=:quad)).quad_grow === true
+        @test pnl._normalize_grad_mu_options((; basis=:quad)).quad_grow_max_depth == 2
+        @test pnl._normalize_grad_mu_options((;); default_basis=:quad).basis === :quad
+        @test pnl._normalize_grad_mu_options((; tri_robust_ar_threshold=12.0)).tri_robust_ar_threshold == 12.0
+        for old_key in (:mode, :robust, :robust_ar_threshold, :bfs_enabled,
+                        :bfs_stop, :bfs_cond_max, :bfs_max_depth,
+                        :bfs_target_healthy, :ar_threshold,
+                        :gradient_quad_consistent)
+            @test_throws ArgumentError pnl._normalize_grad_mu_options(NamedTuple{(old_key,)}((true,)))
+        end
+        @test_throws ArgumentError pnl._normalize_grad_mu_options((; basis=:quad, tri_robust=false))
+        @test_throws ArgumentError pnl._normalize_grad_mu_options((; basis=:quad, tri_robust_ar_threshold=10.0))
+        @test_throws ArgumentError pnl._normalize_grad_mu_options((; basis=:quad, tri_robust_max_depth=4))
+        @test_throws ArgumentError pnl._normalize_grad_mu_options((; basis=:quad, tri_robust_target_healthy=6))
+        @test_throws MethodError pnl.compute_mu_gradient!(zeros(3, body.ncells),
+            body.controlpoints, body.normals, body.cells, body.neighbor, mu, te_info;
+            scale=1.0, nodes=body.nodes, quad_mode=:mu_diff)
+        @test_throws MethodError pnl.compute_mu_gradient!(zeros(3, body.ncells),
+            body.controlpoints, body.normals, body.cells, body.neighbor, mu, te_info;
+            scale=1.0, bad_panel_mask=falses(body.ncells))
+        @test_throws ArgumentError pnl.compute_mu_gradient!(zeros(3, body.ncells),
+            body.controlpoints, body.normals, body.cells, body.neighbor, mu, te_info;
+            scale=1.0, grad_mu_options=(; basis=:quad))
+        @test_throws ArgumentError pnl.compute_mu_gradient!(zeros(3, body.ncells),
+            body.controlpoints, body.normals, body.cells, body.neighbor, mu, te_info;
+            scale=1.0, grad_mu_options=(; basis=:tri, tri_robust=true))
+
+        default_quad = zeros(3, body.ncells)
+        canonical_tri = zeros(3, body.ncells)
+        pnl.compute_mu_gradient!(default_quad, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, nodes=body.nodes)
+        pnl.compute_mu_gradient!(canonical_tri, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, nodes=body.nodes, grad_mu_options=(; basis=:tri))
+        @test !isapprox(default_quad, canonical_tri; atol=1e-12)
+
+        canonical_mu_diff = zeros(3, body.ncells)
+        pnl.compute_mu_gradient!(canonical_mu_diff, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, nodes=body.nodes,
+            grad_mu_options=(; basis=:quad,
+                quad_grow=true, quad_grow_stop=:depth,
+                quad_grow_cond_max=12.0, quad_grow_max_depth=2))
+        @test all(isfinite, canonical_mu_diff)
+
+        canonical_mu_diff_nogrow = zeros(3, body.ncells)
+        pnl.compute_mu_gradient!(canonical_mu_diff_nogrow, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, nodes=body.nodes,
+            grad_mu_options=(; basis=:quad, quad_grow=false))
+        @test all(isfinite, canonical_mu_diff_nogrow)
+
+        bad = falses(body.ncells)
+        bad[1] = true
+        bfs_blocked = zeros(3, body.ncells)
+        bfs_grown = zeros(3, body.ncells)
+        pnl._compute_mu_gradient_masked!(bfs_blocked, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, bad_panel_mask=bad,
+            grad_mu_options=(; basis=:tri, tri_robust_max_depth=0, tri_robust_target_healthy=1))
+        pnl._compute_mu_gradient_masked!(bfs_grown, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0, bad_panel_mask=bad,
+            grad_mu_options=(; basis=:tri, tri_robust_max_depth=4, tri_robust_target_healthy=3))
+        @test bfs_blocked[:, 1] ≈ zeros(3)
+        @test norm(bfs_grown[:, 1]) > 0
+
+        robust_manual = zeros(3, body.ncells)
+        robust_public = zeros(3, body.ncells)
+        ar_mask = pnl.panel_aspect_ratio_mask(body.nodes, body.cells; threshold=1.3)
+        pnl._compute_mu_gradient_masked!(robust_manual, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0,
+            bad_panel_mask=any(ar_mask) ? ar_mask : nothing,
+            nodes=body.nodes,
+            grad_mu_options=(; basis=:tri, tri_robust_max_depth=4, tri_robust_target_healthy=3))
+        pnl.compute_mu_gradient!(robust_public, body.controlpoints, body.normals,
+            body.cells, body.neighbor, mu, te_info;
+            scale=1.0,
+            nodes=body.nodes,
+            grad_mu_options=(; basis=:tri, tri_robust=true, tri_robust_ar_threshold=1.3,
+                tri_robust_max_depth=4, tri_robust_target_healthy=3))
+        @test robust_public ≈ robust_manual
+
+        one_nodes = body.nodes[:, body.cells[:, 1]]
+        one_cells = reshape([1, 2, 3], 3, 1)
+        one_body = pnl.NonLiftingBody{pnl.ConstantSource}(one_nodes, one_cells;
+            watertight=false,
+            ensure_winding=false)
+        pnl.calc_normals!(one_body)
+        pnl.calc_controlpoints!(one_body)
+        @test_throws ArgumentError pnl.compute_mu_gradient!(zeros(3, one_body.ncells),
+            one_body.controlpoints, one_body.normals, one_body.cells,
+            one_body.neighbor, [1.0], zeros(Int, 2, one_body.ncells);
+            scale=1.0, nodes=one_body.nodes, grad_mu_options=(; basis=:quad))
+    end
+
     @testset "compute_surface_velocity_gradient! interior recovery" begin
         nodes, cells = make_planar_gradient_mesh()
         body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;

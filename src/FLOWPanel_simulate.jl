@@ -54,15 +54,17 @@ function _bound_surface_vorticity_te_info(body::AbstractBody)
         zeros(Int, 2, body.ncells)
 end
 
-function _add_bound_surface_vorticity!(systems::Tuple)
+function _add_bound_surface_vorticity!(systems::Tuple; grad_mu_options=(;))
     for body in systems
-        _add_bound_surface_vorticity!(body)
+        _add_bound_surface_vorticity!(body; grad_mu_options)
     end
     return nothing
 end
 
-function _add_bound_surface_vorticity!(body::AbstractBody)
+function _add_bound_surface_vorticity!(body::AbstractBody; grad_mu_options=(;))
     has_grad_mu(body) || return nothing
+    normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
+        default_basis=:tri)
 
     # Accumulate the bound surface vorticity κ = n × ∇sμ into
     # body.induced_vorticity on top of any wake-induced contribution already
@@ -74,7 +76,9 @@ function _add_bound_surface_vorticity!(body::AbstractBody)
         body.cells, body.neighbor,
         view(body.strength, :, get_Gammai(body)),
         _bound_surface_vorticity_te_info(body);
-        scale=-1.0)
+        scale=-1.0,
+        nodes=body.nodes,
+        grad_mu_options=normalized_grad_mu_options)
 
     @inbounds for i in axes(kappa, 2)
         nx, ny, nz = body.normals[1, i], body.normals[2, i], body.normals[3, i]
@@ -288,7 +292,10 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
         diagnose_particle_influence::Bool=false,
-        diagnostic_vertical=(0.0, 0.0, 1.0))
+        diagnostic_vertical=(0.0, 0.0, 1.0),
+        grad_mu_options=(;))
+    normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
+        default_basis=:quad)
     for w in wakes_tuple
         !isnothing(w) && reset!(w)
     end
@@ -404,7 +411,8 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
     solve!(systems, body_solvers; backend=backend_solve)
 
-    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple)
+    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
+        grad_mu_options=normalized_grad_mu_options)
 
     _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
     if !body_on_wake
@@ -443,7 +451,8 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
                 view(body.strength, :, get_Gammai(body)),
                 _bound_surface_vorticity_te_info(body);
                 scale=0.5,
-                nodes=body.nodes)
+                nodes=body.nodes,
+                grad_mu_options=normalized_grad_mu_options)
         end
     end
 
@@ -495,6 +504,7 @@ function steady!(systems, frames, uinf;
         particle_hessian_self::Bool=true,
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
+        grad_mu_options=(;),
         verbose=false
     )
     i_run >= 1 || throw(ArgumentError("i_run must be >= 1, got $(i_run)."))
@@ -534,7 +544,8 @@ function steady!(systems, frames, uinf;
         panel_wake_on_particles,
         particle_hessian_self,
         diagnose_particle_influence,
-        diagnostic_vertical)
+        diagnostic_vertical,
+        grad_mu_options)
 
     monitor_context = MonitorContext()
     monitor_set_time!(monitor_context, i_step * dt)
@@ -595,6 +606,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         diagnose_particle_gamma::Bool=false,
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
+        grad_mu_options=(;),
         verbose=false
     )
     @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
@@ -664,7 +676,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             panel_wake_on_particles,
             particle_hessian_self,
             diagnose_particle_influence,
-            diagnostic_vertical)
+            diagnostic_vertical,
+            grad_mu_options)
 
         #------- other solvers -------#
 

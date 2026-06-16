@@ -299,14 +299,15 @@ println("\nStructured-quad correspondence: $(length(quads)) quads, covering " *
 coverage > 0.99 || @warn "Incomplete quad coverage; uncovered panels excluded from comparison."
 
 # ----------------- QUESTION 1: VELOCITY DECOMPOSITION AT QUAD LEVEL -----------
-function half_jump(body; quad_consistent=true)
+function half_jump(body; basis=:quad)
     jump = zeros(3, body.ncells)
     pnl.compute_mu_gradient!(jump, body.controlpoints, body.normals,
         body.cells, body.neighbor,
         view(body.strength, :, pnl.get_Gammai(body)),
         te_info(body);
         scale=0.5,
-        nodes=quad_consistent ? body.nodes : nothing)
+        nodes=basis === :tri ? nothing : body.nodes,
+        grad_mu_options=(; basis))
     return jump
 end
 
@@ -397,23 +398,23 @@ mu_tri(body) = [sum(mu_nodes[body.cells[k, ci]] for k in 1:3) / 3 for ci in axes
 mu_pos = mu_tri(body_pos)
 mu_neg = mu_tri(body_neg)
 
-function gradient_of(body, mu; quad_consistent)
+function gradient_of(body, mu; basis)
     g = zeros(3, body.ncells)
     pnl.compute_mu_gradient!(g, body.controlpoints, body.normals,
         body.cells, body.neighbor, mu, te_info(body);
         scale=0.5,
-        nodes=body.nodes,
-        quad_consistent=quad_consistent)
+        nodes=basis === :tri ? nothing : body.nodes,
+        grad_mu_options=(; basis))
     return g
 end
 
 println("\n#===== SAME-mu CONTROLLED GRADIENT EXPERIMENT (scale=0.5) =====#")
-for qc in (true, false)
-    gA = gradient_of(body_pos, mu_pos; quad_consistent=qc)
-    gB = gradient_of(body_neg, mu_neg; quad_consistent=qc)
+for basis in (:quad, :tri)
+    gA = gradient_of(body_pos, mu_pos; basis)
+    gB = gradient_of(body_neg, mu_neg; basis)
     s = stats(quad_diffs(gA, gB))
     ref = stats(quad_diffs(gA, zero(gA)))
-    println("  quad_consistent=$(qc): diff mean=$(round(s.mean, sigdigits=5))" *
+    println("  basis=$(basis): diff mean=$(round(s.mean, sigdigits=5))" *
             " rms=$(round(s.rms, sigdigits=5)) max=$(round(s.max, sigdigits=5))" *
             "   (|grad| rms=$(round(ref.rms, sigdigits=5)))")
 end
@@ -444,8 +445,8 @@ function CL_from_pressure(body, P, areas)
     return LinearAlgebra.dot(vec(sum(F, dims=2)) ./ (0.5 * rho * magVinf^2 * Sref), Lhat)
 end
 
-jump_off_pos = half_jump(body_pos; quad_consistent=false)
-jump_off_neg = half_jump(body_neg; quad_consistent=false)
+jump_off_pos = half_jump(body_pos; basis=:tri)
+jump_off_neg = half_jump(body_neg; basis=:tri)
 U_off_pos = body_pos.velocity .- jump_pos .+ jump_off_pos
 U_off_neg = body_neg.velocity .- jump_neg .+ jump_off_neg
 

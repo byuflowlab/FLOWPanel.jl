@@ -16,7 +16,7 @@ AOA = 0.0
 # rho = 1.225
 # rho = 1.071778 # from FLOWUnsteady docs
 rho = 1.179 # from NASA paper
-RPM = 6000
+RPM = parse(Float64, get(ENV, "RPM", "6000"))
 R = 0.119
 shedding_r_over_R = 0.1
 nrevs = parse(Float64, get(ENV, "NREVS", "10"))
@@ -64,7 +64,7 @@ read_path = joinpath(pnl.examples_path, "data")
 # te_indices_1 = [9, 175, 127]
 # te_indices_2 = [13, 286, 238]
 
-rhpc_mesh = lowercase(get(ENV, "RHPC_MESH", "40_40"))
+rhpc_mesh = lowercase(get(ENV, "RHPC_MESH", "80_81"))
 if rhpc_mesh == "40_40"
     msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
     te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
@@ -76,7 +76,7 @@ elseif rhpc_mesh == "56_57"
 elseif rhpc_mesh == "80_81"
     msh_file = joinpath(read_path, "dji9443_80_81.msh")
     te_indices_1 = [12898, 12818, 6549] .+ 1 # (or 6549 instead of 6547) convert from 0-based to 1-based indexing
-    te_indices_2 = [3324, 3284, 0] .+ 1 # (or 0 instead of 3) convert from 0-based to 1-based indexing
+    te_indices_2 = [6351, 6271, 3] .+ 1 # (or 0 instead of 3) convert from 0-based to 1-based indexing
 else
     error("Unknown RHPC_MESH=$(repr(rhpc_mesh)); use 40_40, 56_57, or 80_81")
 end
@@ -122,6 +122,7 @@ function make_shedding_bbox(nodes, seed_nodes, radial_dimension, R, shedding_r_o
 end
 
 # save vtk file to inspect for shedding nodes
+# println("Saving initial at $(save_path)...")
 # vtk_path = joinpath(save_path, "rotor_initial")
 # pnl.write_vtk(vtk_path, rotor)
 # sherlock

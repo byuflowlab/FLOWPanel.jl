@@ -89,6 +89,7 @@ end
         body_solvers=solver,
         backend=pnl.DirectBackend(),
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test solver.backend_seen isa pnl.DirectBackend
 
@@ -99,6 +100,7 @@ end
         body_solvers=solver,
         backend=pnl.DirectBackend(),
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test solver.backend_seen isa pnl.DirectBackend
 
@@ -126,6 +128,7 @@ end
         backend=pnl.DirectBackend(),
         backend_solve=solve_backend,
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test solver.called
     @test solver.backend_seen === solve_backend
@@ -151,6 +154,7 @@ end
         backend_solve=backend_solve,
         backend_system=backend_system,
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test backend_wake.calls == 2
     @test all(!haskey(kwargs, :postcalc) || kwargs[:postcalc] == false for kwargs in backend_wake.kwargs_seen)
@@ -172,6 +176,7 @@ end
         backend_wake=backend_wake,
         backend_system=backend_system,
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test backend_wake.calls == 2
     @test all(kwargs[:postcalc] == true for kwargs in backend_wake.kwargs_seen)
@@ -191,6 +196,7 @@ end
         backend_system=backend_system,
         body_hessian_to_particles=true,
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test all(kwargs[:velocity_gradient][end] == true for kwargs in backend_system.kwargs_seen)
 
@@ -206,6 +212,7 @@ end
         backend_wake=backend_wake,
         particle_hessian_self=false,
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
     @test backend_wake.calls > 2
     @test any(length(kwargs[:velocity_gradient]) == 1 && kwargs[:velocity_gradient][1] == false
@@ -252,6 +259,7 @@ end
         monitors=(recorder,),
         i_run=2,
         dt=0.25,
+        grad_mu_options=(; basis=:tri),
     )
     @test solver.backend_seen === backend_solve
     @test backend_system.calls == 1
@@ -304,6 +312,7 @@ end
         monitors=(pressure, force),
         i_run=2,
         dt=1.0,
+        grad_mu_options=(; basis=:tri),
     )
     @test all(isnan, force.force[:, 1])
     @test all(isfinite, force.force[:, 2])
@@ -329,6 +338,7 @@ end
         monitors=(laplace, recorder),
         i_run=1,
         dt=0.1,
+        grad_mu_options=(; basis=:tri),
     )
     @test body.needs_velocity_gradient[]
     @test recorder.wakes_seen === (nothing,)
@@ -348,6 +358,7 @@ end
         monitors=(),
         i_run=1,
         dt=0.1,
+        grad_mu_options=(; basis=:tri),
     )
     @test !isfile(steady_stale)
 
@@ -369,6 +380,7 @@ end
         backend_system=SimMarkerBackend(),
         monitors=(provider, spanwise),
         path=outdir,
+        grad_mu_options=(; basis=:tri),
     )
     rows = readlines(csv)
     @test startswith(rows[2], "0,2.0,1,")
@@ -388,6 +400,7 @@ end
         monitors=(provider, spanwise),
         path=outdir,
         clean_files=false,
+        grad_mu_options=(; basis=:tri),
     )
     @test isfile(stale_keep)
 
@@ -402,5 +415,6 @@ end
         backend_system=SimMarkerBackend(),
         monitors=(provider, spanwise),
         path=nothing,
+        grad_mu_options=(; basis=:tri),
     )
 end

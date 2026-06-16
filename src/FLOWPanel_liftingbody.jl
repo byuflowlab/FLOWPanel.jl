@@ -22,14 +22,35 @@
 Lifting-surface body with a rigid wake shed from one or more prescribed
 trailing-edge chains.
 
-`shedding[:, i]` contains the information of the i-th edge along which to shed 
-the wake, where `shedding[1, i]` is the linear index of the panel shedding the 
-wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that make 
-the edge. Since the wake is typically shed at the edge between two panels, 
-`shedding[3, i]` is the index of the partner panel (use -1 if none) and 
-`shedding[4:5, i]` are the node indices in that panel that make the edge. The user 
-must ensure that both edges are coincident, and the strength of the wake is equal 
+`shedding[:, i]` contains the information of the i-th edge along which to shed
+the wake, where `shedding[1, i]` is the linear index of the panel shedding the
+wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that make
+the edge. Since the wake is typically shed at the edge between two panels,
+`shedding[3, i]` is the index of the partner panel (use -1 if none) and
+`shedding[4:5, i]` are the node indices in that panel that make the edge. The user
+must ensure that both edges are coincident, and the strength of the wake is equal
 to the difference between the strengths of both panels.
+
+!!! warning "Compute `shedding` from the *constructed* cells, not the raw mesh"
+    With `ensure_winding=true` (the default) the constructor calls
+    `ensure_consistent_winding!`, which **flips/reorders the node indices within
+    `cells` in place** so neighboring panels wind consistently (and flips whole
+    components when `watertight=true` and the outward orientation is reversed).
+    Because `shedding` references panels by their cell-local node ordering, a
+    `shedding` computed from the *raw* mesh `cells` (e.g. straight from
+    `meshes2nodes_cells`) becomes inconsistent with the re-wound `cells` the
+    solver actually uses. This does **not** error — the linear solve still
+    returns a `γ` — but the Kutta condition / wake attaches at the wrong edges
+    and the body sheds almost no circulation (e.g. rotor-hover CT silently
+    collapsed ~3.6×, 0.0505 → 0.014).
+
+    Correct procedure: build a `noshedding` body first so the constructor winds
+    the cells, derive `shedding` from *that body's* `cells`, then rebuild:
+    ```julia
+    base  = RigidWakeBody{E}(nodes, cells, noshedding; watertight=true, DBC)
+    shed  = calc_shedding_from_seed(base.nodes, base.cells, seed_a, seed_b; ...)
+    body  = RigidWakeBody{E}(copy(base.nodes), copy(base.cells), [shed...]; DBC)
+    ```
 """
 mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC}
 

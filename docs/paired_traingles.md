@@ -8,13 +8,28 @@ path used by `PressureLaplace`.
 
 The primary implementation entry point is
 `compute_mu_gradient!(grad_mu, controlpoints, normals, cells, neighbors, mu,
-te_info; scale, bad_panel_mask, nodes, quad_consistent,
-quad_normal_dot_min)`. The user-facing velocity path is
-`calcfield_U!(body_or_bodies, uinf, wakes; gradient_quad_consistent=true)`,
-which passes `body.nodes` so that the paired-triangle reconciliation can run.
+te_info; scale, nodes, grad_mu_options)`. The user-facing
+velocity path is `calcfield_U!(body_or_bodies, uinf, wakes; grad_mu_options)`,
+which passes `body.nodes` for quad reconstruction and robust masking.
 The vector-field analogue is
 `compute_surface_velocity_gradient!(grad_u, u, controlpoints, normals, cells,
-neighbors, te_info; nodes, quad_consistent)`.
+neighbors, te_info; nodes, grad_mu_options)`.
+
+The canonical scalar-gradient option tuple is:
+
+```julia
+grad_mu_options = (;
+    mode=:quad_mu_diff,       # :tri, :quad_grad_avg, or :quad_mu_diff
+    quad_normal_dot_min=cos(pi / 4),
+    bfs_enabled=false,        # only used by :quad_mu_diff agglomerate growth
+    bfs_stop=:cond,           # :cond or :depth, only used when bfs_enabled
+    bfs_cond_max=1e3,         # only used by :quad_mu_diff growth
+    bfs_max_depth=4,          # bad-panel BFS and quad agglomerate growth cap
+    bfs_target_healthy=6,     # bad-panel BFS donor target
+    robust=false,             # enable high-aspect-ratio bad-panel masking
+    robust_ar_threshold=10.0, # aspect-ratio cutoff used when robust=true
+)
+```
 
 ## Motivation
 
@@ -107,8 +122,8 @@ expanded stencil does not deliberately bridge upper and lower surfaces.
 ## Pair Detection
 
 Quad-consistent reconciliation runs only when `nodes` is supplied and
-`quad_consistent=true`. The public velocity path enables this by default through
-`calcfield_U!(...; gradient_quad_consistent=true)`.
+`grad_mu_options.mode` is `:quad_grad_avg` or `:quad_mu_diff`. High-level
+surface-velocity workflows use `:quad_mu_diff` by default.
 
 For each triangle `i`, FLOWPanel selects at most one candidate triangle `j`.
 The selection rules are:
@@ -130,7 +145,7 @@ being reconciled with a neighbor that is a better quad candidate for a different
 panel. The normal threshold prevents strongly folded or unrelated triangles from
 being averaged merely because they share a long edge.
 
-## Paired Reconstruction
+## Quad `:grad_avg` Reconstruction
 
 The paired method does not change the base least-squares solve. FLOWPanel first
 computes each panel's contribution independently, including sign and scale:
@@ -167,6 +182,22 @@ triangles. Unpaired panels, rejected trailing-edge candidates, and candidates
 that fail the normal-alignment or mutual-selection tests retain their original
 least-squares contributions.
 
+## Quad `:mu_diff` Reconstruction
+
+The `:quad_mu_diff` mode uses a propagated pairing pass and then reconstructs
+the gradient from agglomerate-averaged `mu` differences. Each accepted pair is
+treated as one logical quadrilateral agglomerate; unpaired triangles remain
+single-triangle agglomerates. The least-squares stencil is built on neighboring
+agglomerate centroids, with trailing-edge and fold barriers enforced by the
+same edge rules as the local reconstruction.
+
+When `bfs_enabled=true`, the agglomerate stencil may grow by breadth-first
+search on the agglomerate graph. With `bfs_stop=:cond`, growth is attempted only
+for ill-conditioned agglomerate fits and stops once the condition number is at
+or below `bfs_cond_max`, capped by `bfs_max_depth`. With `bfs_stop=:depth`, each
+agglomerate grows up to the available `bfs_max_depth` rings. These growth
+controls are inert for `:tri` and `:quad_grad_avg`.
+
 After this reconciliation pass, `compute_mu_gradient!` accumulates the local
 buffer into the caller's output:
 
@@ -195,17 +226,17 @@ The output convention is
 ```
 
 with each row constrained to the local tangent plane. Supplying `nodes` and
-leaving `quad_consistent=true` enables the paired-triangle reconciliation for
-these component gradients as well, reducing split-direction artifacts before
-the pressure Poisson right-hand side is assembled.
+`grad_mu_options=(; mode=:quad_grad_avg)` enables the paired-triangle
+reconciliation for these component gradients as well, reducing split-direction
+artifacts before the pressure Poisson right-hand side is assembled.
 
 ## Implementation Notes
 
 The paired-triangle helpers are internal implementation details. Users should
 prefer the documented paths:
 
-- call `calcfield_U!(...; gradient_quad_consistent=true)` for the exterior
-  surface-velocity reconstruction used in post-processing;
+- call `calcfield_U!` for the default `:quad_mu_diff` exterior surface-velocity
+  reconstruction used in post-processing;
 - call `compute_mu_gradient!` directly only when constructing custom scalar
   surface-gradient or half-jump workflows;
 - call `compute_surface_velocity_gradient!` for panel-centered gradients of a

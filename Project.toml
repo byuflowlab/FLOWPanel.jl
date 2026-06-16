@@ -4,6 +4,7 @@ version = "1.2.1"
 author = ["Eduardo Alvarez <Edo.AlvarezR@gmail.com>"]
 
 [deps]
+CCBlade = "e1828068-15df-11e9-03e4-ef195ea46fa4"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 FLOWMath = "6cb5d3fb-0fe8-4cc2-bd89-9fe0b19a99d3"
@@ -24,8 +25,10 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 VSPGeom = "9b3f6a95-fce2-4bc5-94a2-f99b39986ea6"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+Xfoil = "19641d66-a62d-11e8-2441-8f57a969a9c4"
 
 [compat]
+CCBlade = "1.0.0"
 CSV = "0.10.16"
 DataFrames = "1.8.1"
 FLOWMath = "1"
@@ -39,4 +42,5 @@ Requires = "1"
 SparseArrays = "1.12.0"
 VSPGeom = "0.6.6"
 WriteVTK = "1"
+Xfoil = "1.1.0"
 julia = "1.10"

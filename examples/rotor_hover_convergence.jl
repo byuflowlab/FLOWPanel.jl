@@ -50,6 +50,23 @@ kernelcutoff = R * 1e-13
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
 
+# Surface-velocity (∇μ) reconstruction options, built from env vars. A key is
+# included only when its env var is set, so anything unset falls back to the
+# production default inside steady!. Valid keys match _normalize_grad_mu_options
+# in src/FLOWPanel_postprocess.jl; bad values throw a clear ArgumentError there.
+function grad_mu_options_from_env()
+    opts = NamedTuple()
+    haskey(ENV, "GRAD_MU_BASIS")               && (opts = merge(opts, (; basis = Symbol(ENV["GRAD_MU_BASIS"]))))
+    haskey(ENV, "GRAD_MU_TRI_ROBUST")          && (opts = merge(opts, (; tri_robust = parse(Bool, ENV["GRAD_MU_TRI_ROBUST"]))))
+    haskey(ENV, "GRAD_MU_QUAD_GROW")           && (opts = merge(opts, (; quad_grow = parse(Bool, ENV["GRAD_MU_QUAD_GROW"]))))
+    haskey(ENV, "GRAD_MU_QUAD_GROW_STOP")      && (opts = merge(opts, (; quad_grow_stop = Symbol(ENV["GRAD_MU_QUAD_GROW_STOP"]))))
+    haskey(ENV, "GRAD_MU_QUAD_GROW_MAX_DEPTH") && (opts = merge(opts, (; quad_grow_max_depth = parse(Int, ENV["GRAD_MU_QUAD_GROW_MAX_DEPTH"]))))
+    haskey(ENV, "GRAD_MU_QUAD_GROW_COND_MAX")  && (opts = merge(opts, (; quad_grow_cond_max = parse(Float64, ENV["GRAD_MU_QUAD_GROW_COND_MAX"]))))
+    return opts
+end
+grad_mu_options = grad_mu_options_from_env()
+grad_mu_tag = haskey(grad_mu_options, :basis) ? string(grad_mu_options.basis) : "default"
+
 axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is rotated compared to typical rotor convention
 radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
 omega_axis = occursin("dji9443", msh_file) ? SVector{3}(-1.0, 0.0, 0.0) : SVector{3}(0.0, 1.0, 0.0)
@@ -167,10 +184,12 @@ force_monitor = pnl.ForceMonitor(1, 1;
     verbose=true)
 
 println("\nSteady solve of $(mesh_tag) ($(rotor.ncells) cells) at $(RPM) RPM...")
+println("  grad_mu_options = $(isempty(grad_mu_options) ? "(default)" : grad_mu_options); kerneloffset_targets = $(kerneloffset_targets)")
 @time pnl.steady!((rotor,), frames, Vinf;
     body_solvers=(pnl.Backslash(rotor),),
     backend,
     monitors=(pressure_bernoulli, force_monitor),
+    grad_mu_options,
     path=save_path,
     name=run_name * "_" * mesh_tag,
     verbose=true)
@@ -180,10 +199,10 @@ println("\nCT (Bernoulli, steady) = $(CT)")
 
 # Accumulate the convergence history across runs, one row per mesh.
 csv_path = joinpath(save_path, "convergence_history.csv")
-header = "mesh,nnodes,ncells,CT"
+header = "mesh,nnodes,ncells,CT,grad_mu_basis,kerneloffset_targets,RPM"
 rows = isfile(csv_path) ? readlines(csv_path)[2:end] : String[]
 filter!(row -> split(row, ",")[1] != mesh_tag, rows)
-push!(rows, "$(mesh_tag),$(size(rotor.nodes, 2)),$(rotor.ncells),$(CT)")
+push!(rows, "$(mesh_tag),$(size(rotor.nodes, 2)),$(rotor.ncells),$(CT),$(grad_mu_tag),$(kerneloffset_targets),$(RPM)")
 sort!(rows, by=row -> parse(Int, split(row, ",")[3]))
 open(csv_path, "w") do io
     println(io, header)

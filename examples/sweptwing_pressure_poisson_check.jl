@@ -165,36 +165,30 @@ end
 
 function explicit_surface_velocity(solved_body, Vinf, backend;
                                    scale::Real=0.5,
-                                   quad_consistent::Bool=true,
-                                   gradient_robust::Bool=false)
+                                   basis::Symbol=:quad,
+                                   tri_robust::Bool=false)
     body = deepcopy(solved_body)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     fill!(body.velocity, 0.0)
     pnl.influence!((body,), (body,), backend; scalar_potential=false, velocity=true)
 
-    mask = nothing
-    if gradient_robust
-        candidate = pnl.panel_aspect_ratio_mask(body.nodes, body.cells)
-        any(candidate) && (mask = candidate)
-    end
     pnl.compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
         body.cells, body.neighbor, view(body.strength, :, pnl.get_Gammai(body)),
         view(body.shedding_full, 1:2, :);
         scale=scale,
-        bad_panel_mask=mask,
-        nodes=quad_consistent ? body.nodes : nothing)
+        nodes=body.nodes,
+        grad_mu_options=basis === :tri ? (; basis, tri_robust) : (; basis))
     pnl.apply_freestream!(body, Vinf)
     return body.velocity
 end
 
 function current_surface_velocity(solved_body, Vinf, backend;
-                                  quad_consistent::Bool=true,
-                                  gradient_robust::Bool=false)
+                                  basis::Symbol=:quad,
+                                  tri_robust::Bool=false)
     body = deepcopy(solved_body)
     pnl.calcfield_U!(body, Vinf; backend,
-        gradient_quad_consistent=quad_consistent,
-        gradient_robust=gradient_robust)
+        grad_mu_options=basis === :tri ? (; basis, tri_robust) : (; basis))
     return body.velocity
 end
 
@@ -212,13 +206,13 @@ function normal_residual(body, velocity, magVinf)
 end
 
 function reconstruction_metrics(case; scale::Real=0.5,
-                                quad_consistent::Bool=true,
-                                gradient_robust::Bool=false)
+                                basis::Symbol=:quad,
+                                tri_robust::Bool=false)
     backend = pnl.DirectBackend()
     U_current = current_surface_velocity(case.body, case.constants.Vinf, backend;
-        quad_consistent, gradient_robust)
+        basis, tri_robust)
     U_explicit = explicit_surface_velocity(case.body, case.constants.Vinf, backend;
-        scale, quad_consistent, gradient_robust)
+        scale, basis, tri_robust)
     d = vec(U_current .- U_explicit)
     mag = [LA.norm(view(U_current .- U_explicit, :, i)) for i in 1:case.body.ncells]
     nrm = LA.norm(U_current)
@@ -230,7 +224,7 @@ function reconstruction_metrics(case; scale::Real=0.5,
         pressure_force_from_velocity(case.body, U_current, case.constants, case.Lhat, case.Dhat)
     CL_explicit, CD_explicit =
         pressure_force_from_velocity(case.body, U_explicit, case.constants, case.Lhat, case.Dhat)
-    return (; scale, quad_consistent, gradient_robust,
+    return (; scale, basis, tri_robust,
         rel=LA.norm(d) / max(nrm, eps()),
         maxdiff=maximum(mag),
         p95=quantile(mag, 0.95),
@@ -256,11 +250,11 @@ end
 function print_reconstruction_table(rows)
     println("\n#===== Surface velocity reconstruction sweep =====#")
     @printf("%5s %-5s %-6s %11s %11s %11s %11s %11s %11s %10s %10s\n",
-        "scale", "quad", "robust", "relU", "max|dU|", "p95|dU|",
+        "scale", "basis", "tri_rb", "relU", "max|dU|", "p95|dU|",
         "nRMS cur", "nRMS exp", "CL cur", "CL exp", "dCL")
     for r in rows
         @printf("%5.2f %-5s %-6s %11.3e %11.3e %11.3e %11.3e %11.3e %+11.5f %+10.5f %+10.5f\n",
-            r.scale, string(r.quad_consistent), string(r.gradient_robust), r.rel,
+            r.scale, string(r.basis), string(r.tri_robust), r.rel,
             r.maxdiff, r.p95, r.normal_rms_current, r.normal_rms_explicit,
             r.CL_current, r.CL_explicit, r.CL_explicit - r.CL_current)
     end
@@ -323,10 +317,11 @@ function main()
         r.pressure == :bernoulli && !r.correct_kutta)
 
     recon_rows = []
-    for quad_consistent in (true, false), gradient_robust in (false, true),
+    for basis in (:quad, :tri), tri_robust in (false, true),
         scale in (0.0, 0.25, 0.5, 0.75, 1.0)
+        basis === :quad && tri_robust && continue
         push!(recon_rows, reconstruction_metrics(baseline;
-            scale, quad_consistent, gradient_robust))
+            scale, basis, tri_robust))
     end
     print_reconstruction_table(recon_rows)
 

@@ -1378,8 +1378,13 @@ Consume distributed panel forces from an earlier force monitor, bin them along a
 span axis in the requested reference frame, and store latest-step sectional
 loading. `components` is a named tuple of unit vectors expressed in the selected
 frame, e.g. `components=(lift=Lhat, drag=Dhat)`.
+
+`select` optionally restricts which panels are binned: pass a predicate
+`cp_frame -> Bool` evaluated on each control point expressed in the selected
+frame (`i_frame`). This is useful to isolate one blade of a multi-blade rotor,
+e.g. `select = cp -> cp[2] > 0`. The default (`nothing`) bins every panel.
 """
-mutable struct SpanwiseLoadingMonitor{TF, TN} <: AbstractMonitor
+mutable struct SpanwiseLoadingMonitor{TF, TN, TS} <: AbstractMonitor
     nbins::Int
     i_system::Int
     i_frame::Int
@@ -1398,6 +1403,7 @@ mutable struct SpanwiseLoadingMonitor{TF, TN} <: AbstractMonitor
     counts::Vector{Int}
     panel_bin_id::Vector{Int}
     bin_force::Matrix{TF}
+    select::TS                      # optional predicate cp_frame -> Bool, or nothing
 end
 
 monitor_requires(::SpanwiseLoadingMonitor) = (:F,)
@@ -1410,6 +1416,7 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
                                 per_length::Bool=false,
                                 file::Bool=true,
                                 TF=Float64,
+                                select=nothing,
                                 verbose::Bool=false,
                                 vtk_fields::Tuple{Vararg{Symbol}}=(:bin_id,))
     nbins > 0 || throw(ArgumentError("SpanwiseLoadingMonitor requires nbins > 0; got $(nbins)."))
@@ -1428,12 +1435,12 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
         component_matrix[:, i] .= v
     end
 
-    return SpanwiseLoadingMonitor{TF, typeof(normalization)}(
+    return SpanwiseLoadingMonitor{TF, typeof(normalization), typeof(select)}(
         nbins, i_system, i_frame, names, component_matrix, axis, normalization,
         per_length, file, verbose, vtk_fields,
         zeros(TF, nbins), zeros(TF, nbins),
         zeros(TF, length(vectors), nbins), zeros(TF, length(vectors), nbins),
-        zeros(Int, nbins), Int[], zeros(TF, 3, nbins))
+        zeros(Int, nbins), Int[], zeros(TF, 3, nbins), select)
 end
 
 function _spanwise_ensure_storage!(m::SpanwiseLoadingMonitor{TF}, ncells::Int) where TF
@@ -1514,20 +1521,25 @@ function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, syste
 
     origin, R_g2f = _spanwise_frame_transform(frames, m.i_frame)
     span_coord = Vector{TF}(undef, body.ncells)
+    selected = Vector{Bool}(undef, body.ncells)
     @inbounds for p in 1:body.ncells
         cp_global = SVector{3, TF}(body.controlpoints[1, p], body.controlpoints[2, p], body.controlpoints[3, p])
         cp_frame = R_g2f * (cp_global - origin)
         span_coord[p] = dot(m.span_axis, cp_frame)
+        selected[p] = m.select === nothing ? true : Bool(m.select(cp_frame))
     end
 
-    smin = minimum(span_coord)
-    smax = maximum(span_coord)
+    any(selected) || throw(ArgumentError(
+        "SpanwiseLoadingMonitor `select` excluded every panel; nothing to bin."))
+    smin = minimum(span_coord[p] for p in 1:body.ncells if selected[p])
+    smax = maximum(span_coord[p] for p in 1:body.ncells if selected[p])
     span = smax - smin
     width = span > sqrt(eps(TF)) ? span / m.nbins : one(TF)
     fill!(m.counts, 0)
     fill!(m.bin_force, zero(TF))
     fill!(m.panel_bin_id, 0)
     @inbounds for p in 1:body.ncells
+        selected[p] || continue
         b = span > sqrt(eps(TF)) ? clamp(floor(Int, (span_coord[p] - smin) / width) + 1, 1, m.nbins) : 1
         m.panel_bin_id[p] = b
         m.counts[b] += 1
@@ -1624,8 +1636,7 @@ monitor_provides(::ForceMonitor) = (:F,)
     SurfaceVorticityForce(body, nt, i_system; rho=1.225, i_frame=-1,
                           TF=Float64, normalization=NoNormalization(),
                           correct_kuttacondition=true,
-                          gradient_robust=false,
-                          gradient_ar_threshold=10.0,
+                          grad_mu_options=(;),
                           verbose=false)
 
 Diagnostic force monitor that reconstructs the surface vortex sheet from the
@@ -1654,8 +1665,7 @@ struct SurfaceVorticityForce{TF, TN} <: AbstractMonitor
     rho::TF
     normalization::TN
     correct_kuttacondition::Bool
-    gradient_robust::Bool
-    gradient_ar_threshold::Float64
+    grad_mu_options::NamedTuple
     verbose::Bool
     vtk_fields::Tuple{Vararg{Symbol}}
     file::Bool
@@ -1669,8 +1679,7 @@ function SurfaceVorticityForce(body::AbstractBody, nt::Int, i_system::Int;
                                TF=Float64,
                                normalization=NoNormalization(),
                                correct_kuttacondition::Bool=true,
-                               gradient_robust::Bool=false,
-                               gradient_ar_threshold::Real=10.0,
+                               grad_mu_options=(;),
                                verbose::Bool=false,
                                vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,),
                                file::Bool=true)
@@ -1687,10 +1696,12 @@ function SurfaceVorticityForce(body::AbstractBody, nt::Int, i_system::Int;
     distributed_force = zeros(TF, 3, body.ncells)
     grad_mu = zeros(Float64, 3, body.ncells)
     areas = calc_areas(body)
+    normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
+        default_basis=:quad)
     return SurfaceVorticityForce{TF, typeof(normalization)}(
         force, moment, distributed_force, grad_mu, areas, i_system, i_frame, i_strength, TF(rho),
-        normalization, correct_kuttacondition, gradient_robust,
-        Float64(gradient_ar_threshold), verbose, vtk_fields, file)
+        normalization, correct_kuttacondition, normalized_grad_mu_options,
+        verbose, vtk_fields, file)
 end
 
 _surface_vorticity_te_info(body::AbstractLiftingBody) = view(body.shedding_full, 1:2, :)
@@ -2227,18 +2238,12 @@ function (m::SurfaceVorticityForce{TF})(systems, wakes,
     fill!(m.grad_mu, 0.0)
     calc_areas!(body, m.areas)
 
-    mask = nothing
-    if m.gradient_robust
-        candidate = panel_aspect_ratio_mask(body.nodes, body.cells;
-                                            threshold=m.gradient_ar_threshold)
-        any(candidate) && (mask = candidate)
-    end
-
     compute_mu_gradient!(m.grad_mu, body.controlpoints, body.normals,
         body.cells, body.neighbor, view(body.strength, :, m.i_strength),
         _surface_vorticity_te_info(body);
         scale=1.0,
-        bad_panel_mask=mask)
+        nodes=body.nodes,
+        grad_mu_options=m.grad_mu_options)
 
     @inbounds for i in 1:body.ncells
         n = SVector{3, Float64}(body.normals[1, i], body.normals[2, i], body.normals[3, i])
