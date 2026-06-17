@@ -11,7 +11,6 @@ using LinearAlgebra: norm
 run_name = get(ENV, "RUN_NAME", "rotor_hover_pressure_comparison")
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
 
-magVinf = 0.0001 # + 10
 AOA = 0.0
 # rho = 1.225
 # rho = 1.071778 # from FLOWUnsteady docs
@@ -29,19 +28,45 @@ spinup_steps = ceil(Int, spinup_duration / dt)
 n_steps = round(Int, nt * nrevs) + spinup_steps
 t_range = range(0.0, step=dt, length=n_steps)
 
-ramp_nrev = 5.0
-ramp_t = ramp_nrev * 60 / RPM
-magVinf_start = 0.0
-cylinder_depth = 4R
+# --- Item 005: staged-startup convecting-freestream pulse ---------------------
+# A four-phase smoothstep profile for magVinf(t), measured in rotor revolutions:
+#   ramp-up   : magVinf_start -> magVinf_peak  over FREESTREAM_RAMP_REVS
+#   hold      : magVinf_peak                    for FREESTREAM_HOLD_REVS
+#   withdraw  : magVinf_peak -> magVinf_end     over FREESTREAM_WITHDRAW_REVS
+#   hover     : magVinf_end                     for the remainder
+# magVinf_peak defaults to ~2x the hover induced velocity v_h = sqrt(T/(2 rho A))
+# (with CT~0.06, R=0.119, RPM=6000: v_h ~ 4.6 m/s) so the freestream initially
+# dominates self-induction and sweeps the shed wake clear, then is slowly
+# withdrawn so wake self-induction sustains the column into hover.
+sec_per_rev = 60 / RPM
+magVinf_start  = parse(Float64, get(ENV, "MAGVINF_START",  "0.0"))
+magVinf_peak   = parse(Float64, get(ENV, "MAGVINF_PEAK",   "10.0"))
+magVinf_end    = parse(Float64, get(ENV, "MAGVINF_END",    "0.0"))
+freestream_ramp_revs     = parse(Float64, get(ENV, "FREESTREAM_RAMP_REVS",     "2.0"))
+freestream_hold_revs     = parse(Float64, get(ENV, "FREESTREAM_HOLD_REVS",     "3.0"))
+freestream_withdraw_revs = parse(Float64, get(ENV, "FREESTREAM_WITHDRAW_REVS", "4.0"))
+settle_revs              = parse(Float64, get(ENV, "SETTLE_REVS",              "4.0"))
+t_ramp_up   = freestream_ramp_revs     * sec_per_rev
+t_hold      = freestream_hold_revs     * sec_per_rev
+t_withdraw  = freestream_withdraw_revs * sec_per_rev
+cylinder_depth = parse(Float64, get(ENV, "TRUNCATION_DEPTH_R", "4")) * R
+
+# Ensure the run is long enough to cover ramp-up + hold + withdraw + a settle
+# tail (so it never ends mid-withdrawal and the plateau ripple is observable).
+schedule_revs = freestream_ramp_revs + freestream_hold_revs +
+    freestream_withdraw_revs + settle_revs
+required_revs = max(nrevs, schedule_revs)
+n_steps = round(Int, nt * required_revs) + spinup_steps
+t_range = range(0.0, step=dt, length=n_steps)
 
 cp_outer=true
 kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
 kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-3")))
 kernelcutoff = R * 1e-13
-p_per_step = 2
-overlap = 3.0
+p_per_step = parse(Int, get(ENV, "P_PER_STEP", "2"))
+overlap = parse(Float64, get(ENV, "OVERLAP", "3.0"))
 particle_shedding = lowercase(get(ENV, "PARTICLE_SHEDDING", "overlap_pps"))
-merge_r_factor = 0.02
+merge_r_factor = parse(Float64, get(ENV, "MERGE_R_FACTOR", "0.02"))
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
@@ -52,10 +77,17 @@ wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", string(kerneloffset_t
 # wake_nu_default = 1.85508e-5 / rho # from FLOWUnsteady docs
 wake_nu_default = 1.69e-5 / rho # from NASA paper
 wake_nu = parse(Float64, get(ENV, "WAKE_NU", string(wake_nu_default)))
+# Item 005 E4: multiplicative bump to the viscous core-spreading rate for the
+# damping sweep (WAKE_NU_FACTOR=3, 10, ...); default 1.0 leaves wake_nu unchanged.
+wake_nu *= parse(Float64, get(ENV, "WAKE_NU_FACTOR", "1.0"))
 # wake_nu = parse(Float64, get(ENV, "WAKE_NU", "1.5e-5"))
 wake_core_beta = parse(Float64, get(ENV, "WAKE_CORE_BETA", "1.5"))
 run_kj = parse(Bool, get(ENV, "RUN_KJ", "false"))
 lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "false"))
+# Item 005 tuning: steady-Bernoulli-only monitor set. Skips both CG pressure
+# solves and the per-step FMM Hessian, so iterations are far cheaper while still
+# giving a CT history to read plateau ripple from.
+bernoulli_only = parse(Bool, get(ENV, "BERNOULLI_ONLY", "false"))
 run_monitors = parse(Bool, get(ENV, "RUN_MONITORS", "true"))
 
 read_path = joinpath(pnl.examples_path, "data")
@@ -85,7 +117,6 @@ axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is ro
 radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
 
 Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [0.0, -cosd(AOA), sind(AOA)]
-Vinf = magVinf * Vinf_direction
 
 msh = GeoIO.load(msh_file).geometry
 nodes, cells = pnl.meshes2nodes_cells(msh)
@@ -234,11 +265,23 @@ wake_rotor = pnl.PanelParticleWake(rotor;
         ))
     )
 
-ramp_magVinf(t) = t <= ramp_t ? magVinf_start + (magVinf - magVinf_start) * (t / ramp_t) : magVinf
-Uinf(t) = ramp_magVinf(t) * Vinf_direction
-# Uinf(t) = magVinf * Vinf_direction
-
 smoothstep(x) = x <= 0 ? zero(x) : x >= 1 ? one(x) : x * x * (3 - 2 * x)
+
+# Item 005: four-phase smoothstep freestream pulse (see parameter block above).
+function magVinf_pulse(t)
+    if t <= t_ramp_up
+        return magVinf_start + (magVinf_peak - magVinf_start) * smoothstep(t_ramp_up > 0 ? t / t_ramp_up : 1.0)
+    elseif t <= t_ramp_up + t_hold
+        return magVinf_peak
+    elseif t <= t_ramp_up + t_hold + t_withdraw
+        s = t_withdraw > 0 ? (t - t_ramp_up - t_hold) / t_withdraw : 1.0
+        return magVinf_peak + (magVinf_end - magVinf_peak) * smoothstep(s)
+    else
+        return magVinf_end
+    end
+end
+Uinf(t) = magVinf_pulse(t) * Vinf_direction
+
 function spinup_fraction(t)
     spinup_revs <= 0 && return 1.0
     return spinup_start_fraction + (1 - spinup_start_fraction) * smoothstep(t / spinup_duration)
@@ -342,6 +385,10 @@ monitors = !run_monitors ? () : run_kj ? (
         pressure_laplace_lamb,
         force_monitor_laplace_lamb,
         bound_circulation,
+    ) : bernoulli_only ? (
+        pressure_bernoulli,
+        force_monitor_bernoulli,
+        bound_circulation,
     ) : (
         pressure_laplace_matderiv,
         force_monitor_laplace_matderiv,
@@ -354,6 +401,16 @@ monitors = !run_monitors ? () : run_kj ? (
 
 if spinup_revs > 0
     println("\nRotor spin-up enabled: $(spinup_revs) nominal revs from $(spinup_start_fraction)×RPM to full RPM")
+end
+let
+    r0 = freestream_ramp_revs
+    r1 = r0 + freestream_hold_revs
+    r2 = r1 + freestream_withdraw_revs
+    println("\nFreestream pulse (revs): ramp-up [0, $(round(r0,digits=2))] -> peak=$(magVinf_peak); " *
+        "hold [$(round(r0,digits=2)), $(round(r1,digits=2))]; " *
+        "withdraw [$(round(r1,digits=2)), $(round(r2,digits=2))] -> end=$(magVinf_end); " *
+        "hover/settle [$(round(r2,digits=2)), $(round(required_revs,digits=2))]")
+    println("Total run length: $(round(required_revs,digits=2)) revs ($(length(t_range)) steps), truncation depth=$(round(cylinder_depth/R,digits=2))R")
 end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical)")
@@ -416,6 +473,25 @@ println("  Bernoulli vs Laplace(∇u):  $(bern_md_rel)")
 println("  Bernoulli vs Laplace(λ):   $(bern_lv_rel)")
 println("  Bernoulli vs KJ:           $(bern_kj_rel)")
 println("  Laplace(∇u) vs Laplace(λ): $(md_lv_rel)")
+
+# Item 005 primary metric: peak-to-peak CT ripple over the final settle window
+# (after the freestream is fully withdrawn), with the residual freestream so a
+# plateau under nonzero convection is not mistaken for hover.
+let
+    settle_window_revs = min(settle_revs, required_revs)
+    k_start = max(1, length(t_range) - round(Int, nt * settle_window_revs) + 1)
+    tail_b  = filter(isfinite, CT_bernoulli[k_start:end])
+    tail_md = filter(isfinite, CT_laplace_md[k_start:end])
+    tail_lv = filter(isfinite, CT_laplace_lv[k_start:end])
+    ptp(v) = isempty(v) ? NaN : maximum(v) - minimum(v)
+    mean(v) = isempty(v) ? NaN : sum(v) / length(v)
+    residual_magVinf = magVinf_pulse(t_range[end])
+    println("\nItem 005 plateau diagnostics (final $(round(settle_window_revs,digits=2)) revs, steps $(k_start):$(length(t_range))):")
+    println("  residual magVinf at readout = $(residual_magVinf)  (hover requires ≈ 0)")
+    println("  CT Bernoulli   plateau mean=$(round(mean(tail_b), sigdigits=5))  peak-to-peak=$(round(ptp(tail_b), sigdigits=4))")
+    println("  CT Laplace(∇u) plateau mean=$(round(mean(tail_md),sigdigits=5))  peak-to-peak=$(round(ptp(tail_md),sigdigits=4))")
+    println("  CT Laplace(λ)  plateau mean=$(round(mean(tail_lv),sigdigits=5))  peak-to-peak=$(round(ptp(tail_lv),sigdigits=4))")
+end
 
 if save_path !== nothing
     isdir(save_path) || mkpath(save_path)

@@ -102,3 +102,101 @@ informative negative tied back to 004's wake-mechanism ablations.
   mistaken for hover.
 - Downstream truncation distance must be validated as non-perturbing to the
   near-disk inflow before its CT is trusted.
+
+---
+
+## 2026-06-17 — Implementation + first tuning loop (QUALIFIED RESULT)
+
+### What was built
+
+`examples/rotor_hover_pressure_comparison.jl` gained the staged-startup machinery
+this track called for (all ENV-driven, defaults leave prior behavior intact except
+the freestream is now a pulse rather than a no-op ramp to `magVinf=0.0001`):
+
+- **Four-phase smoothstep freestream pulse** replacing the old monotonic
+  `ramp_magVinf`: ramp-up → hold → withdraw → hover, in rotor revolutions.
+  Hooks: `MAGVINF_PEAK`, `MAGVINF_END`, `FREESTREAM_RAMP_REVS`,
+  `FREESTREAM_HOLD_REVS`, `FREESTREAM_WITHDRAW_REVS`, `SETTLE_REVS`,
+  `MAGVINF_START`. Reuses the existing `smoothstep`; `Uinf(t)` signature unchanged.
+- **Truncation depth hook** `TRUNCATION_DEPTH_R` (× R) for the `GlobalCylinder`.
+- **Run-length bookkeeping**: total revs = `max(NREVS, ramp+hold+withdraw+settle)`
+  so a run never ends mid-withdrawal; phase boundaries printed at startup.
+- **`BERNOULLI_ONLY`** monitor set (skips both CG pressure solves + the per-step
+  FMM Hessian) for cheaper tuning iterations.
+- **Plateau diagnostics** printed at the end: peak-to-peak CT ripple over the
+  final `SETTLE_REVS` plus the residual `magVinf` at readout.
+- Driver `examples/run_rotor_hover_stable_wake.sh` (withdraw-rate sweep, bash-3.2
+  safe), modeled on the 004 driver.
+
+RPM spin-up used the pre-existing `SPINUP_REVS` / `SPINUP_START_FRACTION`.
+Freestream sign verified correct: the +x pulse convects the wake downstream (same
+axis as the truncation cylinder, opposite the −x thrust); confirmed by particles
+being *retained* inside the downstream `GlobalCylinder` (`keep` deletes anything
+with axial projection outside `[origin, origin+extrude]`).
+
+### Headline finding — startup ring killed; intrinsic hover oscillation persists
+
+Representative run `data/stable_wake_iter4` (40_40, RPM 6000, NT 15, Bernoulli;
+spinup 1.5 rev from 0.4×RPM; pulse peak 5 m/s ≈ v_h, ramp 1 / hold 1 / withdraw
+2.5 / settle 3 rev; `TRUNCATION_DEPTH_R=2`). CT(Bernoulli) vs rev:
+
+| phase (rev) | behavior |
+| --- | --- |
+| spinup+ramp (0–1) | small 0.089 bump at rev 0.2, settles to ~0.047 by rev 1. **No 0.11 overshoot ring** (cf. impulsive baseline). |
+| hold, 5 m/s (1–2) | **flat ~0.055**, peak-to-peak ≈ 0.006 |
+| withdraw 5→0 (2–4.5) | smooth monotonic rise 0.055 → 0.086 (climb→hover re-loading) |
+| settle, magVinf=0 (4.5–8.8) | **non-damping oscillation** 0.086→0.075→0.093→0.082, period ~1.5–2 rev, 2nd peak *higher* than 1st; final-3-rev peak-to-peak **0.0183** |
+
+**Positive:** the staged startup eliminates the impulsive *startup* transient — the
+baseline's CT≈0.11 overshoot followed by a ~6-rev ring (0.11→0.067→0.071→0.061→…)
+is replaced by a smooth approach to a flat ~0.055 band by rev ~1.3 while the
+freestream is held.
+
+**Open question (do NOT overclaim):** withdrawing the freestream did not produce a
+flat plateau in this run — a CT oscillation appears in the settle window. An
+initial read called it "intrinsic / non-damping / growing," but a closer look at
+`stable_wake_iter4` shows a **clean, regular oscillation of period ≈ 3.5 rev**
+riding on a **rising mean** (the withdraw relaxation + the wake column still
+building) and spanning only **~1.3 cycles** — far too few to decide grow vs steady
+vs decay. The run also used aggressive `TRUNCATION_DEPTH_R=2`, which may itself
+shape the oscillation. So whether this is an intrinsic wake instability (which
+would corroborate 002's gain≈1/no-fixed-point picture and route work to 004's
+ablations), a long transient, a truncation artifact, or withdrawal-excited is
+**not yet established**.
+
+**Phase 2 plan** (`plans/20260617_brainstorm_005.md`) characterizes it: a long run
+for period/amplitude consistency & damping; a truncation-depth control (1/2/4); a
+withdraw-gradualness sweep; and then tests the full menu of damping schemes
+(viscous core-spreading↑, stronger SFS, kernel overlap/core growth, resolution;
+then numerical: relaxation, merging, kernel regularization, body-strength
+low-pass) on the best non-oscillating baseline. Driver
+`examples/run_rotor_hover_stable_wake.sh` (EXPERIMENT=e1_long|e2_depth|e3_withdraw|e4_damping).
+
+### Caveats on this run
+
+- Magnitude (~0.085 plateau) is **inflated by the aggressive `TRUNCATION_DEPTH_R=2`**
+  (deletes far-wake downwash → higher CT); not comparable to the 0.062 baseline.
+  The *oscillation* (shape/ripple) is the valid signal, not the level.
+- Settle was only 3 rev and partly overlaps the withdraw relaxation; a looser
+  truncation (≥4R) + slower withdrawal + longer settle would sharpen whether the
+  oscillation amplitude is steady or slowly growing. Not yet run (each full run is
+  ~1–1.5 h wall at this fidelity).
+
+### Tuning path (iterations)
+
+- iter1: peak 8 m/s, spinup_start 0.05 → violent negative-CT *windmilling* during
+  spinup (strong freestream on a near-static rotor). Rejected: raise
+  `SPINUP_START_FRACTION` and/or lower peak.
+- iter2/iter3: spinup_start 0.4, peak 5 m/s → clean positive-CT startup; confirmed
+  flat ~0.051–0.055 through ramp+hold. Slow 5 m/s convection let particle count
+  climb (~140/step, no plateau) → expensive.
+- iter4: shorter schedule + `TRUNCATION_DEPTH_R=2` to finish; revealed the
+  post-withdrawal oscillation above.
+
+### Next iteration (if pursued)
+
+One confirmation run at `TRUNCATION_DEPTH_R≥4`, `FREESTREAM_WITHDRAW_REVS≥6`,
+`SETTLE_REVS≥6` to test (a) whether a slower withdrawal avoids exciting the mode
+and (b) the un-truncated plateau magnitude. Expectation from the above: the mode is
+intrinsic and re-appears regardless — making 004's ablations the actual lever.
+Use `examples/run_rotor_hover_stable_wake.sh` (sweeps the withdraw rate).
