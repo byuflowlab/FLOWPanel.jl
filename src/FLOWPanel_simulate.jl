@@ -603,6 +603,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
         particle_relax::Bool=true,
+        bound_strength_rlx::Real=1.0,
         diagnose_particle_gamma::Bool=false,
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
@@ -646,6 +647,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             set_Das_min_kinematic_displacement)
     end
 
+    # Body bound-circulation low-pass (item 005 E4.8): when bound_strength_rlx < 1
+    # we blend each step's freshly solved strength with the previous (relaxed)
+    # strength, Γ_n = (1-α)Γ_{n-1} + α Γ_solve, to artificially damp the body↔wake
+    # feedback loop. α = 1 (default) is a no-op. State is one buffer per body.
+    apply_bound_rlx = bound_strength_rlx != 1
+    prev_strengths = apply_bound_rlx ? [copy(sys.strength) for sys in systems_tuple] : nothing
+    have_prev_strength = false
+
     # begin simulation
     i_step = start_step
     for t in @view t_range[start_step+1:end]
@@ -678,6 +687,19 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             diagnose_particle_influence,
             diagnostic_vertical,
             grad_mu_options)
+
+        # body bound-circulation low-pass (item 005 E4.8): damp body↔wake feedback
+        # by under-relaxing the solved strength before it is shed into the wake.
+        if apply_bound_rlx
+            α = bound_strength_rlx
+            for (sys, prev) in zip(systems_tuple, prev_strengths)
+                if have_prev_strength
+                    @. sys.strength = (1 - α) * prev + α * sys.strength
+                end
+                prev .= sys.strength
+            end
+            have_prev_strength = true
+        end
 
         #------- other solvers -------#
 

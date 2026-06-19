@@ -200,3 +200,121 @@ One confirmation run at `TRUNCATION_DEPTH_R≥4`, `FREESTREAM_WITHDRAW_REVS≥6`
 and (b) the un-truncated plateau magnitude. Expectation from the above: the mode is
 intrinsic and re-appears regardless — making 004's ablations the actual lever.
 Use `examples/run_rotor_hover_stable_wake.sh` (sweeps the withdraw rate).
+
+---
+
+## 2026-06-19 — Phase 2: characterized the oscillation (RESULT — overcall corrected)
+
+Ran the full Phase 2 campaign (`plans/20260617_brainstorm_005.md`): E1 long run,
+E2 truncation-depth gate, E3 withdraw-rate sweep, E4 13-scheme damping menu. New
+tooling: `examples/analyze_stable_wake_oscillation.jl` (detrends the rising mean
+with a low-order polynomial, peak-picks the residual, reports period consistency +
+per-cycle detrended-amplitude trend). E4.8 (`BOUND_STRENGTH_RLX` body bound-
+circulation low-pass) implemented in `simulate!` (the only new solver code the plan
+required). All runs: 40_40 mesh, RPM 6000, Bernoulli-only, viscous core-spreading +
+SFS ON.
+
+**Bottom line: the earlier "intrinsic / non-damping / GROWING" call was wrong on
+two of three counts.** The post-withdrawal hover signal is a **bounded, regular,
+*steady* limit cycle**, and most of its amplitude in the old `iter4` run was a
+**near-disk wake-truncation artifact**, not wake physics.
+
+### E1 — long run (30 settle revs, depth=1): it's a STEADY limit cycle (Q1/Q3)
+`data/stable_wake_e1_long_e1_long`. The 1-rev boxcar mean reaches a **flat plateau
+~0.0845 by rev ~12** (the rev 0–12 "rise" is a startup/withdraw-reloading hump that
+*decays*, not a slow mode). On the genuinely-settled window (rev 12.9–36.9, **48
+cycles**): raw ptp 0.0189 ≈ detrended ptp 0.0178 (confirming a flat mean), **period
+0.498 ± 0.021 rev** (≈ **2/rev**, i.e. blade passage), **amplitude growth ≈
+−0.00003/cycle ⇒ STEADY limit cycle** — *non-damping* (won't vanish by waiting) but
+*not growing* (not an instability). The original ~3.5-rev "period" was the decaying
+startup hump on a too-short (~1.3-cycle) window, not the settled signal.
+
+### E2 — truncation-depth gate (1/2/4): depth=1 is an ARTIFACT proxy (Q4)
+Matched schedule, 12-rev settle window:
+
+| depth | mean CT | detrended ptp | period (rev) |
+| --- | --- | --- | --- |
+| 1 | 0.0719 | 0.0335 | 0.52 ± 0.03 (clean 2/rev) |
+| 2 | 0.0698 | 0.0122 | 0.83 ± 0.82 |
+| 4 | 0.0609 | 0.0068 | 2.20 ± 1.59 |
+
+Amplitude shrinks **~5×** from depth 1→4, **period scales with depth** (the plan's
+"deletion-front transit time" signature), and mean CT drops toward the more physical
+0.061. ⇒ **The large `iter4`/depth=1 ripple is substantially a near-disk wake-
+truncation artifact; depth=1 is NOT a trustworthy fast proxy.** All subsequent
+characterization was run at **depth ≥ 4R**. Adequate truncation depth is itself the
+single biggest, most *physical* "damper."
+
+### E3 — withdraw-rate sweep (depth=4): gradualness is a (modest) lever (Q2)
+Final-10-rev window:
+
+| config (depth=4) | mean CT | detrended ptp |
+| --- | --- | --- |
+| withdraw 2.5 rev | 0.0601 | 0.0091 |
+| withdraw 6 rev | 0.0602 | 0.0087 |
+| **withdraw 12 rev** | 0.0599 | **0.0042** |
+| spinup-only (no pulse) | 0.0849 | 0.0231 |
+
+Slower withdrawal **shrinks** the settle oscillation (~2× from 2.5→12 rev). The
+pure-spinup control (no freestream pulse) is **worse** on *both* amplitude (0.023)
+and mean (0.085) ⇒ the staged freestream pulse is **beneficial**, it is *not* the
+thing that rings. Mean CT is withdraw-rate-invariant (~0.060) ⇒ a robust hover
+plateau. **Best non-damping baseline = depth=4 + withdraw_12** (detrended ptp 0.0042).
+
+### E4 — damping menu on the depth=4 + withdraw_12 baseline (the deliverable)
+13 schemes, one variable each, final-8-rev window. Baseline detrended ptp **0.00231**
+(≈ **3.8 % of CT 0.060** — already near-flat). Ranked by ptp (smaller = more damping);
+P = physical, N = numerical, D = diagnostic:
+
+| scheme | type | det ptp | Δ vs base | mean CT | reading |
+| --- | --- | --- | --- | --- | --- |
+| sfs_off | D | 0.00079 | −66 % | 0.0594 | **UNRELIABLE** (1.9 cyc, slow mode; not a real reduction) |
+| corebeta_hi (β 1.5→2) | P | 0.00216 | −6 % | 0.0602 | within noise |
+| **baseline** | — | 0.00231 | — | 0.0602 | reference |
+| nu_x10 | P | 0.00234 | +1 % | 0.0599 | within noise |
+| nu_x3 | P | 0.00244 | +6 % | 0.0601 | within noise |
+| merge_aggressive | N | 0.00251 | +9 % | 0.0591 | within noise |
+| bound_rlx α=0.5 (E4.8) | N | 0.00262 | +13 % | 0.0598 | no benefit at this baseline |
+| pps_hi (p/step 2→4) | P/res | 0.00318 | +38 % | 0.0621 | worse (resolution) |
+| relax_off | N | 0.00624 | +170 % | 0.0722 | **worse**; relax-ON stabilizes |
+| sfs_strong | P | 0.00741 | +221 % | 0.0603 | **worse** |
+| nt_hi (NT 18→36) | P/res | 0.01043 | +352 % | 0.0562 | **worse, period stays clean 0.543 ± 0.029** |
+| kernoff_hi | N | 0.01110 | +381 % | 0.0630 | worse |
+| overlap_hi (3→4) | P | 0.02844 | +1131 % | 0.0974 | **breaks the wake** (CT way off) |
+
+**Menu conclusions (physical first, as the plan asked):**
+1. **No tested damper meaningfully *reduces* the ripple.** The baseline is already so
+   flat (~4 % of CT) that the two nominal "reductions" are within measurement noise
+   (`corebeta_hi`, −6 %) or an unreliable few-cycle artifact (`sfs_off`). The real
+   damping was the **physical configuration (truncation depth ≥4R + slow withdrawal)**
+   established in E1–E3 — not any add-on scheme.
+2. **The residual 2/rev limit cycle is PHYSICAL, not under-resolution.** Refining
+   resolution (`nt_hi` NT=36, `pps_hi`) *sharpens/worsens* it while keeping a clean
+   stable period (`nt_hi` 0.543 ± 0.029 rev, the most regular of all 13) — the plan's
+   E4.4 diagnostic ⇒ "**damp, don't fix**." But at ~4 % of CT it is small enough to
+   live with; there is little to damp.
+3. **Several knobs are actively harmful:** `overlap_hi` destroys the wake (mean CT
+   0.097), `relax_off` lets CT drift to 0.072 with 2.7× the ripple, `sfs_strong` and
+   `kernoff_hi` worsen it. Viscous diffusion (`nu_×3/×10`) and core-β are inert here.
+4. **E4.8 `bound_rlx` (α=0.5) gives no benefit** on this baseline (ripple already
+   physical + tiny). The body-strength low-pass would only matter on a baseline with a
+   genuine feedback-driven oscillation; logged as an honest negative for the last-
+   resort numerical knob (code retained behind `BOUND_STRENGTH_RLX`, default off).
+
+### Verdict vs the earlier overcall
+- "intrinsic" → **partly true**: a small 2/rev limit cycle is physical and resolution-
+  robust, but most of the *observed* `iter4` amplitude was a **depth=2 truncation
+  artifact**, removed by going to depth ≥4R.
+- "non-damping" → **true** (steady limit cycle; it does not self-decay).
+- "growing" → **false** (growth ≈ 0 over 48 cycles).
+- Net: at **depth=4 + slow withdrawal** the thrust history *does* settle to a flat
+  ~0.060 plateau with only a ~4 %-of-CT physical 2/rev ripple — close to the item's
+  "stable, non-oscillating plateau" acceptance, achieved by **physical** levers. The
+  remaining ripple is not worth chasing with numerical dampers (all marginal or
+  harmful). Magnitude (0.060 vs 0.068–0.072 ref) remains 002/003/004's concern.
+
+### Reproduce
+`examples/run_rotor_hover_stable_wake.sh` (`EXPERIMENT=e1_long|e2_depth|e3_withdraw|
+e4_damping`); analyze with `examples/analyze_stable_wake_oscillation.jl <run_dir>
+[settle_revs] [rpm]`. Data: `data/stable_wake_e{1,2,3,4}_*`. Best baseline:
+`TRUNCATION_DEPTH_R=4 FREESTREAM_WITHDRAW_REVS=12 SETTLE_REVS≥10`.
