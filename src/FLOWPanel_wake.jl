@@ -498,7 +498,8 @@ struct FilamentWrapper{TS}
     system::TS
 end
 
-function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Bool=true)
+function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Bool=true,
+        filament_name=nothing)
     # Route block files to a subdirectory named after the PVD
     _parent, _base = splitdir(name)
     subdir = joinpath(_parent, _base)
@@ -523,7 +524,8 @@ function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Boo
     _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
 
     # filaments at trailing edge of last panel row
-    write_vtk(name * "_filaments", FilamentWrapper(wake), idx, t; overwrite, compress)
+    write_vtk(isnothing(filament_name) ? name * "_filaments" : filament_name,
+        FilamentWrapper(wake), idx, t; overwrite, compress)
 end
 
 function write_vtk(name, filaments::FilamentWrapper{<:PanelWake}, idx, t; overwrite=false, compress::Bool=true)

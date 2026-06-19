@@ -194,3 +194,454 @@ but this finite uniform helical sheet induces *upwash* (`u_axial < 0`, loading-r
 - A/B the near-wake placement: re-run the strength-response sweep with the first wake row
   offset one step downstream of the TE and check whether the slope drops below 1 and the
   sign of `u_axial` flips to `+x`. If so, that isolates the at-TE pinning as the artifact.
+
+## Near-wake offset / sign A-B results - 2026-06-17
+
+Implemented script-level controls in the diagnostic examples:
+
+- `NEAR_WAKE_MODE=te|das_offset` in `examples/rotor_hover_helical_wake_response.jl`
+  and `examples/rotor_hover_prescribed_helical_wake.jl`.
+- `NEAR_WAKE_MODE=das_offset` seeds the first helical wake row at `TE + body.Das`,
+  matching the production near-wake attachment used by `update_TE!`, rather than exactly
+  on the TE vertices.
+- `HELIX_WINDING_SIGN` and `WAKE_AXIAL_SIGN` env overrides were added to test whether
+  the finite helical sheet's sign/orientation was the dominant issue.
+
+Runs completed:
+
+1. Baseline at-TE placement:
+   `RUN_NAME=/private/tmp/helix_response_te SAVE_VTK=false NEAR_WAKE_MODE=te julia --project examples/rotor_hover_helical_wake_response.jl`
+
+   Result:
+   - `J(Gw)` fit: slope `0.9951`, offset `1.69972e-01`.
+   - Reproduces the old non-contractive failure exactly.
+   - CSV: `/private/tmp/helix_response_te/response_sweep.csv`
+
+2. `Das` near-wake offset:
+   `RUN_NAME=/private/tmp/helix_response_das SAVE_VTK=false NEAR_WAKE_MODE=das_offset julia --project examples/rotor_hover_helical_wake_response.jl`
+
+   Result:
+   - `J(Gw)` fit: slope `0.7918`, offset `1.69972e-01`.
+   - The offset weakens the gauge/pedestal behavior, but does **not** produce a useful
+     self-consistent solution.
+   - The formal fixed point is around `Gw/J0 = 1 / (1 - 0.7918) ~= 4.8`, far beyond the
+     externally imposed alpha range that gives plausible CT.
+   - Representative rows:
+
+| alpha | imposed Gw | solved J | J - Gw | CT(Bern) | wake u_axial |
+| --- | --- | --- | --- | --- | --- |
+| 0.25 | 0.04249 | 0.20362 | 0.16113 | 0.06002 | -1.05 |
+| 0.50 | 0.08499 | 0.23727 | 0.15228 | 0.06941 | -2.10 |
+| 0.75 | 0.12748 | 0.27091 | 0.14343 | 0.07867 | -3.15 |
+| 1.00 | 0.16997 | 0.30456 | 0.13459 | 0.08778 | -4.20 |
+| 2.00 | 0.33995 | 0.43915 | 0.09920 | 0.12282 | -8.40 |
+
+   Interpretation: alpha `0.25-0.75` can make CT look plausible, but only as an
+   externally tuned wake-strength scale. It is not Kutta/self-consistent because solved
+   `J` remains much larger than imposed `Gw` in that range.
+
+3. Axial sign flip with offset:
+   `RUN_NAME=/private/tmp/helix_response_das_axneg SAVE_VTK=false NEAR_WAKE_MODE=das_offset WAKE_AXIAL_SIGN=-1 ALPHA_LIST=0.0,0.5,1.0,2.0 julia --project examples/rotor_hover_helical_wake_response.jl`
+
+   Result:
+   - `J(Gw)` fit: slope `0.8321`, offset `1.69972e-01`.
+   - Signed wake axial velocity stayed negative and loading-reinforcing.
+   - Not a fix.
+   - CSV: `/private/tmp/helix_response_das_axneg/response_sweep.csv`
+
+Current conclusion:
+
+- Moving the first row off the TE helps numerically but does not solve item 002.
+- Smaller alpha is not a convergence fix. It is a prescribed wake-strength calibration:
+  alpha `~0.5` gives CT near the target, but the coupled iteration would continue driving
+  strength upward because the solved TE jump still exceeds the imposed wake strength.
+- Do **not** mark item 002 technically complete yet. No converged CT prediction has been
+  demonstrated.
+
+Recommended next step:
+
+- Stop tuning alpha/relaxation until the theory is clearer.
+- Talk through or review literature for prescribed/free-wake hover formulations that
+  specify how near-wake geometry, Kutta enforcement, wake-strength history, and wake
+  contraction are coupled without creating a doublet gauge pedestal.
+- Specific concepts to check in the literature/theory pass:
+  - Bagai/Leishman-style free-wake relaxation: what variables are relaxed, what is held
+    fixed, and where the first wake row starts relative to the TE.
+  - Rotorcraft prescribed helical wake models with wake contraction: whether circulation is
+    held constant along an entire column or convected as a history of prior shed strengths.
+  - Panel-method wake Kutta treatments for open lifting surfaces: how the wake doublet
+    sheet is coupled to body doublet unknowns without adding a near-singular gauge mode.
+  - Whether the wake should be represented as a vortex filament/sheet history rather than
+    a constant-strength doublet-panel sheet for this hover diagnostic.
+  - Whether a calibrated finite prescribed wake should be explicitly treated as a
+    reduced-order model with fitted alpha, rather than advertised as a converged
+    self-consistent wake solve.
+
+## One-outer inner-convergence sweep - 2026-06-18
+
+Purpose: hold shed strengths fixed through the inner pitch-geometry loop and allow
+exactly one outer strength update, to test whether the wake geometry itself converges
+before doing more strength/geometry coupling.
+
+Current corrected defaults used:
+
+- `ITERATION_MODE=nested_pitch`
+- `HELIX_WINDING_SIGN=-1`
+- `WAKE_AXIAL_SIGN=+1`
+- Near wake pinned at `TE + Das` (`NEAR_WAKE_MODE=das_offset` forced by
+  `nested_pitch`).
+- Fountain hard-stop is based on anchor-relative geometry only: a downstream wake node
+  moving upstream of its own local near-wake anchor, or a wake panel crossing that local
+  anchor plane. Global raw `x < 0` or negative `u_x` alone is only a warning metric,
+  because the two blades and rotated wake columns can produce false positives relative to
+  a global `x=0` plane.
+
+Initial visual-check workflow:
+
+`RUN_NAME=/private/tmp/bl_inner_initial SAVE_VTK=false INITIAL_ONLY=true ITERATION_MODE=nested_pitch WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Result:
+
+- Initial row-2 anchor distance: mean/min/max all `4.1888e-02 R`.
+- Upstream row-2 nodes: `0/72`.
+- Initial body/wake VTK snapshots written under `/private/tmp/bl_inner_initial/`.
+
+One-outer sweep commands:
+
+1. `RUN_NAME=/private/tmp/bl_inner_006 SAVE_VTK=false ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=6 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+2. `RUN_NAME=/private/tmp/bl_inner_012 SAVE_VTK=false ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=12 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+3. `RUN_NAME=/private/tmp/bl_inner_024 SAVE_VTK=false ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Results:
+
+| max inner | stop | inner step | CT(Bern) | CT(Lamb) | max node step/R | min anchor distance/R | anchor crossing | note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 6 | `inner-max` | post | 0.05628 | 0.04918 | 0.0045 | 0.02556 | no | geometry not converged |
+| 12 | `inner-max` | post | 0.05620 | 0.04920 | 0.0045 | 0.00876 | no | geometry not converged; anchor margin shrinking |
+| 24 | `fountain_flow` | 16 | 0.05048 | 0.04427 | 0.0045 | -0.00284 | yes | hard stop before strength update |
+
+Important details:
+
+- The inner convergence criterion is `max_node_step_R < NODE_TOL_R`; with the default
+  `NODE_TOL_R=2e-3`, the inner loop never converged. The max node step stayed pinned near
+  `0.0045 R`.
+- Strengths were held fixed at zero through the inner loops. The `MAX_INNER_ITER=6` and
+  `12` runs then performed the single permitted outer update, giving
+  `mean_abs_gamma=1.416e-02` from candidate `mean_abs_gamma=1.700e-01`.
+- The `MAX_INNER_ITER=24` run found the real "look there first" state before any outer
+  strength update: at inner step 16, `2` downstream nodes were upstream of their local
+  anchors and `4` wake panels crossed an anchor plane. Diagnostic VTK was written under
+  `/private/tmp/bl_inner_024/`:
+  `bl_inner_024_iter16_fountain_outer1_inner16_body1*`,
+  `bl_inner_024_iter16_fountain_outer1_inner16_wake*`, and
+  `bl_inner_024_iter16_fountain_outer1_inner16_wake_filaments*`.
+- Negative raw `u_x` and rows with mean signed upstream velocity appeared in all runs
+  (`6` downstream rows), but this is not by itself the hard-stop criterion. The 24-inner
+  run is the first one that produced anchor-relative geometry crossing.
+
+Conclusion:
+
+Do not run 48-inner or additional outer coupling yet. With corrected signs and `TE + Das`
+near-wake placement, the geometry-only pitch relaxation does not converge while strengths
+are fixed; it walks the wake toward the local anchor plane and crosses it by inner step 16
+on the short 0.25-rev, 12-row/rev wake. The next investigation should inspect the
+`/private/tmp/bl_inner_024` fountain state and the geometry update target/capping logic,
+not tune outer strength coupling.
+
+## Seeded-strength short-wake follow-up - 2026-06-18
+
+User observation: the ParaView wake strength for `/private/tmp/bl_inner_024` was zero.
+That was not a visualization bug. In `nested_pitch`, the first outer iteration holds wake
+strength fixed during the inner geometry loop, and the previous diagnostic started from
+zero strength; the hard-stop happened before the one permitted outer strength update.
+
+Script controls added:
+
+- `FOUNTAIN_TOL_R`: anchor-relative upstream tolerance before declaring fountain
+  crossing. This lets the wake rise slightly upstream of the local anchor plane without
+  stopping immediately. The follow-up used `FOUNTAIN_TOL_R=0.05`.
+- `INITIAL_STRENGTH_MODE=zero|candidate_latest|candidate_constant`.
+  `candidate_constant` first solves the rotor with the initialized wake geometry, reads
+  the solved TE-jump candidate strengths, and fills all active wake rows with those
+  strengths before the nested pitch loop.
+
+Run:
+
+`RUN_NAME=/private/tmp/bl_inner_024_seed_constant_tol05 SAVE_VTK=false FOUNTAIN_TOL_R=0.05 INITIAL_STRENGTH_MODE=candidate_constant ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Result:
+
+- Initial strength seeding was nonzero: candidate mean `1.700e-01`, wake mean
+  `1.700e-01`, wake max `2.295e-01`.
+- The previous zero-strength fountain stop at inner 16 disappeared under the seeded wake
+  plus `0.05 R` fountain tolerance.
+- Inner-loop CT was in the target range and nearly flat but still rising slowly:
+  `CT(Bern) 0.07537` at inner 1 -> `0.07552` at inner 24.
+- Laplace Lamb CT rose from `0.06097` to `0.06148`; row inflow ratio rose from `0.0251`
+  to `0.0265`.
+- `max_node_step_R` stayed pinned at `0.0045`, above `NODE_TOL_R=0.002`, so the geometry
+  did **not** converge.
+- After the single outer strength update, final row:
+  `CT(Bern)=0.07827`, `CT(Lamb)=0.06371`, `CT(vort)=0.09083`, `CT(KJ)=0.05548`,
+  `delta_gamma_rel=0.1367`, `mean_abs_gamma=0.1777`, candidate mean `0.2629`.
+- CSV: `/private/tmp/bl_inner_024_seed_constant_tol05/iteration_table.csv`.
+
+Conclusion:
+
+Starting with a nonzero wake is materially better than the zero-strength inner loop: it
+provides immediate induced velocity, removes the obvious fountain behavior in this short
+test, and gives a plausible CT range. It is still not a converged simulation because the
+geometry residual does not contract below tolerance and the one allowed strength update
+still changes strengths by `13.7%`.
+
+Next staged test after this pause:
+
+Use the same seeded-strength setup and `FOUNTAIN_TOL_R=0.05`, but increase wake extent
+before adding more outer iterations. A reasonable next run is:
+
+`RUN_NAME=/private/tmp/bl_inner_long_seed_constant_tol05 SAVE_VTK=false FOUNTAIN_TOL_R=0.05 INITIAL_STRENGTH_MODE=candidate_constant ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.75 WAKE_ROWS_PER_REV=24 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Primary checks for the longer wake:
+
+- Does `max_node_step_R` begin to contract rather than staying pinned at `0.0045`?
+- Does CT settle instead of drifting upward?
+- Does row inflow remain physically downstream without relying only on a large fountain
+  tolerance?
+- If one outer update remains stable, then try `MAX_OUTER_ITER=2` with the same longer
+  wake before changing relaxation constants.
+
+## Axial advance-ratio pitch seed - 2026-06-18
+
+Question: does a nonzero axial advance ratio make the initialized helical wake closer to a
+streamline and easier to converge, while keeping the wake axisymmetric? This branch tests
+axial inflow only, not edgewise forward flight.
+
+Implementation:
+
+- Added `AXIAL_ADVANCE_RATIO`, default `0.0`, to
+  `examples/rotor_hover_prescribed_helical_wake.jl`.
+- The imposed freestream is now axial:
+  `Vinf = axial_wake_sign * AXIAL_ADVANCE_RATIO * tip_speed` along the rotor axial
+  dimension.
+- The initial helix pitch speed is seeded from freestream convection plus induced inflow:
+  `(AXIAL_ADVANCE_RATIO + INITIAL_INFLOW) * tip_speed`.
+- Startup output now reports axial advance ratio, freestream axial speed, induced seed
+  ratio, and total initial helix pitch ratio.
+- Derivation added in `docs/src/prescribed_helical_wake.md` and linked into
+  `docs/make.jl`.
+
+For the first diagnostic value `AXIAL_ADVANCE_RATIO=0.10` with default
+`INITIAL_INFLOW=0.08`, the total initial helix pitch ratio is `0.18`. With
+`WAKE_ROWS_PER_REV=12`, the row-2 anchor distance starts at
+`2π * 0.18 / 12 = 9.4248e-02 R`, matching the example startup diagnostic.
+
+Smoke run:
+
+`RUN_NAME=/private/tmp/fp_axial_smoke AXIAL_ADVANCE_RATIO=0.10 MAX_OUTER_ITER=1 MAX_INNER_ITER=1 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 SAVE_VTK=false julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Result:
+
+- Startup diagnostics were correct: axial advance ratio `0.1000`, freestream axial speed
+  `6.7293 m/s` (`0.1000 tip`), induced seed `0.0800`, total pitch ratio `0.1800`.
+- Initial row-2 anchor distance: mean/min/max all `9.4248e-02 R`; upstream nodes `0/72`.
+- No fountain crossing in the single inner iteration.
+- Single-iteration residual metrics remained poor:
+  `max_target_residual_R=0.5225`, `capped_node_fraction=1.000`,
+  `max_applied_step_R=0.0045`.
+- Final post-update row: `CT(Bern)=0.03044`, `CT(Lamb)=0.02440`,
+  `CT(vort)=0.03703`, `CT(KJ)=0.03197`, `delta_gamma_rel=0.1336`.
+- CSVs: `/private/tmp/fp_axial_smoke/iteration_table.csv` and
+  `/private/tmp/fp_axial_smoke/row_residual_table.csv`.
+
+Cheap convergence probe started:
+
+`RUN_NAME=/private/tmp/fp_axial_probe AXIAL_ADVANCE_RATIO=0.10 MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.25 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Partial findings before pause request:
+
+- Through inner iteration 14, no fountain crossing occurred.
+- `max_target_residual_R` contracted only slightly, from `0.5225` at inner 1 to `0.5153`
+  at inner 14.
+- `capped_node_fraction` stayed pinned at `1.000`, so every relaxed node was still
+  step-limited.
+- `max_applied_step_R` stayed pinned at `0.0045`.
+- CT stayed nearly flat and low for this axial case: `CT(Bern)≈0.0293`,
+  `CT(Lamb)≈0.0230`, `CT(KJ)≈0.0310`.
+
+Current read:
+
+The axial pitch seed fixes the initial geometric pitch accounting and avoids immediate
+fountain behavior, but it has not yet shown a material convergence improvement. The
+longer-wake diagnostic should wait until the 24-inner cheap probe reaches its natural end
+and the final `row_residual_table.csv` confirms whether any rows drop below full capping.
+
+## Reduced-row seeded probes and debug VTK mode - 2026-06-18
+
+The latest reduced-row probes tested whether making the short seeded wake even smaller
+helps the capped Picard geometry update converge. It does not.
+
+Commands recorded:
+
+1. One wake row:
+   `RUN_NAME=/private/tmp/bl_rows1_seed_constant_tol05 SAVE_VTK=false FOUNTAIN_TOL_R=0.05 INITIAL_STRENGTH_MODE=candidate_constant ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.08333333333333333 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+   Final row:
+   - `CT(Bern)=0.07990`
+   - `CT(Lamb)=0.06808`
+   - `max_target_residual_R=0.4168`
+   - `capped_node_fraction=1.000`
+   - `delta_gamma_rel=0.1398`
+   - Stop reason: `inner-max`
+   - CSV: `/private/tmp/bl_rows1_seed_constant_tol05/iteration_table.csv`
+
+2. Two wake rows:
+   `RUN_NAME=/private/tmp/bl_rows2_seed_constant_tol05 SAVE_VTK=false FOUNTAIN_TOL_R=0.05 INITIAL_STRENGTH_MODE=candidate_constant ITERATION_MODE=nested_pitch MAX_OUTER_ITER=1 MAX_INNER_ITER=24 WAKE_REVS=0.16666666666666666 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+   Final row:
+   - `CT(Bern)=0.07865`
+   - `CT(Lamb)=0.06507`
+   - `max_target_residual_R=0.5108`
+   - `capped_node_fraction=1.000`
+   - `delta_gamma_rel=0.1379`
+   - Stop reason: `inner-max`
+   - CSV: `/private/tmp/bl_rows2_seed_constant_tol05/iteration_table.csv`
+
+Conclusion:
+
+Reducing to one or two wake rows does not fix convergence. Seeded short wakes can produce
+plausible CT, but the current Picard geometry update remains cap-dominated (`100%` of
+relaxed nodes step-limited) and the strength update is still large after the inner loop.
+Do not run longer wakes or more outer iterations until the geometry update is changed.
+
+Diagnostic harness update:
+
+- Added `DEBUG_VTK_EVERY_ITER=true|false` to
+  `examples/rotor_hover_prescribed_helical_wake.jl`, default `false`.
+- When enabled in `nested_pitch`, the script writes one body/wake ParaView time series per
+  outer iteration. Open `<run_name>_body1_iter0001.pvd`,
+  `<run_name>_wake_iter0001.pvd`, and `<run_name>_wake_filaments_iter0001.pvd` for outer
+  iteration 1. Timestep `0` is the original state at the beginning of that outer iteration,
+  before any inner wake-shape update; timesteps `1..N` are the fixed-strength inner
+  wake-shape states. The final solved state after the strength update is written
+  separately without an iteration suffix as
+  `<run_name>_body1.pvd`, `<run_name>_wake.pvd`, and `<run_name>_wake_filaments.pvd`.
+  Coupled-relax debug output uses `<run_name>_body1_iter.pvd` /
+  `<run_name>_wake_iter.pvd`. Fountain/divergence dumps retain their special suffixes.
+- `SAVE_VTK` remains the lower-volume output mode. `DEBUG_VTK_EVERY_ITER=true` is an
+  explicit high-volume diagnostic override and prints a startup warning.
+
+Smoke/parse check:
+
+`RUN_NAME=/private/tmp/bl_debug_smoke SAVE_VTK=false DEBUG_VTK_EVERY_ITER=true MAX_OUTER_ITER=1 MAX_INNER_ITER=2 WAKE_REVS=0.08333333333333333 WAKE_ROWS_PER_REV=12 julia --project examples/rotor_hover_prescribed_helical_wake.jl`
+
+Expected output includes per-iteration body/wake VTK files for inner 1, inner 2, and the
+post-strength update under `/private/tmp/bl_debug_smoke/`.
+
+## Multi-phase wake-solver implementation plan - 2026-06-18
+
+Goal: replace the currently capped Picard-style wake geometry relaxation with a staged,
+testable wake-shape solver path. The first implementation target is still the diagnostic
+example, not a general public FLOWPanel API.
+
+### Phase 0: lock the residual and safeguards
+
+- [ ] Replace the nested-pitch inner loop with frozen-field streamline integration from
+  fixed TE+Das anchors.
+- [ ] Add frame-relative effective velocity using the frozen ReferenceFrame state and
+  document the transform.
+- [ ] Verify the new inner loop leaves wake/body strengths unchanged during geometry
+  iterations.
+- [ ] Run short hover and axial smoke checks before revisiting outer strength coupling.
+- [ ] Define the exact residual to solve first: VSPAero-style arclength alignment,
+  age-marched trapezoidal residual, or both behind a solver option.
+- [ ] Decide which quantities are frozen inside the inner solve: initially `q`, `Γ_w`,
+  and `Δs_e`.
+- [ ] Keep row-1 anchoring, fountain checks, anchor-crossing checks, step caps, and
+  residual-norm rejection as hard globalization constraints.
+- [ ] Add diagnostics needed by all later phases: residual norm, accepted step norm,
+  rejected line-search count, GMRES iterations, and per-row residual summaries.
+
+### Phase 1: one-panel-at-a-time continuation
+
+- [ ] Implement a continuation mode that starts with a single wake panel row/age block,
+  solves it, then adds the next panel row/block and resolves.
+- [ ] Preserve the already-solved upstream rows as the initial condition for each larger
+  wake problem.
+- [ ] Record whether residual contraction improves as wake extent grows compared with
+  solving the full wake at once.
+- [ ] Use this continuation path as the default first test for any new nonlinear solver,
+  because it should reduce the initial residual and improve convergence robustness.
+
+### Phase 2: abstract the wake solver interface
+
+- [ ] Factor the current Picard relaxation into a solver backend with a shared call shape
+  and shared return diagnostics.
+- [ ] Add selectable wake solver modes, initially `:picard`, `:continuation_picard`, and
+  later `:newton_gmres`.
+- [ ] Keep the existing Picard path behaviorally unchanged as the default.
+- [ ] Ensure CSV/logging code consumes solver diagnostics generically instead of depending
+  on Picard-only field names.
+
+### Phase 3a: derive and test the analytic Jv kernel math
+
+- [ ] Derive the analytic Jacobian-vector product for the exact Vatistas finite-core
+  bound-vortex kernel used by `_bound_vortex_velocity`, not only the simplified theory
+  kernel.
+- [ ] Include derivatives with respect to target point and both segment endpoints.
+- [ ] Verify the segment-level derivative against finite differencing over representative
+  endpoint/target configurations, including near-core but non-singular cases.
+- [ ] Document the final derivation in `docs/src/prescribed_helical_wake.md`.
+
+### Phase 3b: implement residual and analytic Jv
+
+- [ ] Implement wake-coordinate packing/unpacking for movable wake nodes only.
+- [ ] Implement residual evaluation for the chosen first residual while preserving pinned
+  near-wake rows.
+- [ ] Implement analytic `Jv` for the residual, including normalized-velocity projection
+  and wake-segment endpoint perturbations.
+- [ ] Verify full residual-level `Jv` against finite differencing and, where practical,
+  AD on small synthetic wakes.
+- [ ] Confirm analytic `Jv` matches the same velocity conventions as current `PanelWake`
+  panel and final-filament influence.
+
+### Phase 4: non-preconditioned matrix-free GMRES
+
+- [ ] Wrap `Jv!` in `LinearOperators.LinearOperator`.
+- [ ] Solve `J δX = -r` with `Krylov.jl` GMRES and no preconditioner.
+- [ ] Add damped Newton updates with line search/trust-region step caps.
+- [ ] Verify the nonlinear residual can be driven down arbitrarily on small synthetic
+  wakes where the residual has a known consistent solution.
+- [ ] Verify residual drops on the rotor diagnostic before using CT as a success metric.
+
+### Phase 5: preconditioner selection and implementation
+
+- [ ] Evaluate preconditioner options after the unpreconditioned path works:
+  block-Jacobi by wake row, local edge/segment block preconditioner, arclength-only
+  diagonal scaling, or approximate lower-triangular age-marching preconditioner.
+- [ ] Choose one preconditioner based on observed GMRES iteration counts and user
+  preference.
+- [ ] Implement only the selected preconditioner first.
+- [ ] Verify it reduces GMRES iterations without changing the accepted nonlinear solution.
+
+### Phase 6: end-to-end solver testing
+
+- [ ] Run the one-panel-at-a-time continuation with `:newton_gmres` on short wakes.
+- [ ] Run the seeded-strength short-wake case and compare residual contraction, cap
+  fraction, CT drift, and anchor/fountain behavior against Picard.
+- [ ] Increase wake extent only after short-wake residual contraction is demonstrated.
+- [ ] Test at least one axial advance-ratio case and one hover case.
+- [ ] Treat success as residual contraction plus stable accepted updates first; CT in the
+  VPM/BEM/experiment range is a secondary validation, not proof of solver correctness.
+
+### Missing risks/checks to keep explicit
+
+- [ ] Globalization is as important as GMRES: line search, step caps, and rejection checks
+  must be implemented before judging convergence.
+- [ ] The analytic Jv must differentiate the code kernel exactly; a theory/code mismatch
+  would make GMRES misleading.
+- [ ] Strength coupling remains a separate outer-loop problem. Do not mix `δΓ_w` into the
+  first Newton unknown vector until geometry-only convergence is proven.
+- [ ] The current wake-sign/upwash issue must remain visible in diagnostics; a better
+  nonlinear solver should not hide a physically wrong residual.
+- [ ] Add docs whenever equations or solver assumptions change, so item 002 remains
+  reproducible.
