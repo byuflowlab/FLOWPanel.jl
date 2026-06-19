@@ -288,11 +288,13 @@ P = physical, N = numerical, D = diagnostic:
    (`corebeta_hi`, −6 %) or an unreliable few-cycle artifact (`sfs_off`). The real
    damping was the **physical configuration (truncation depth ≥4R + slow withdrawal)**
    established in E1–E3 — not any add-on scheme.
-2. **The residual 2/rev limit cycle is PHYSICAL, not under-resolution.** Refining
-   resolution (`nt_hi` NT=36, `pps_hi`) *sharpens/worsens* it while keeping a clean
-   stable period (`nt_hi` 0.543 ± 0.029 rev, the most regular of all 13) — the plan's
-   E4.4 diagnostic ⇒ "**damp, don't fix**." But at ~4 % of CT it is small enough to
-   live with; there is little to damp.
+2. **The residual 2/rev limit cycle is not removed by the tested resolution
+   refinements.** Increasing temporal / particle resolution (`nt_hi` NT=36,
+   `pps_hi`) *sharpens/worsens* it while keeping a clean stable period (`nt_hi`
+   0.543 ± 0.029 rev, the most regular of all 13). This supports treating it as a
+   robust blade-passage-scale wake response for this configuration, rather than an
+   obvious under-resolution artifact. At ~4 % of CT it is small enough to live with;
+   there is little to damp.
 3. **Several knobs are actively harmful:** `overlap_hi` destroys the wake (mean CT
    0.097), `relax_off` lets CT drift to 0.072 with 2.7× the ripple, `sfs_strong` and
    `kernoff_hi` worsen it. Viscous diffusion (`nu_×3/×10`) and core-β are inert here.
@@ -302,9 +304,10 @@ P = physical, N = numerical, D = diagnostic:
    resort numerical knob (code retained behind `BOUND_STRENGTH_RLX`, default off).
 
 ### Verdict vs the earlier overcall
-- "intrinsic" → **partly true**: a small 2/rev limit cycle is physical and resolution-
-  robust, but most of the *observed* `iter4` amplitude was a **depth=2 truncation
-  artifact**, removed by going to depth ≥4R.
+- "intrinsic" → **partly true**: a small 2/rev limit cycle persists under the tested
+  resolution changes and is consistent with a blade-passage-scale wake response, but
+  most of the *observed* `iter4` amplitude was a **depth=2 truncation artifact**,
+  removed by going to depth ≥4R.
 - "non-damping" → **true** (steady limit cycle; it does not self-decay).
 - "growing" → **false** (growth ≈ 0 over 48 cycles).
 - Net: at **depth=4 + slow withdrawal** the thrust history *does* settle to a flat

@@ -27,7 +27,7 @@
 #   e4 (13 jobs):    EXPERIMENT=e4_damping CONCURRENCY=6 THREADS_PER_RUN=6 bash examples/run_rotor_hover_stable_wake.sh
 #
 # Set the best baseline for e4 via env, e.g.
-#   EXPERIMENT=e4_damping TRUNCATION_DEPTH_R=1 FREESTREAM_WITHDRAW_REVS=6 SETTLE_REVS=12 ...
+#   EXPERIMENT=e4_damping TRUNCATION_DEPTH_R=4 FREESTREAM_WITHDRAW_REVS=12 SETTLE_REVS=12 ...
 #
 # Written for stock macOS bash 3.2 (indexed arrays only, no `wait -n`).
 set -euo pipefail
@@ -71,7 +71,7 @@ RECIPE_ENV=(
 # JOB_TABLE entries: "name|ENV1=val ENV2=val" (per-job single-variable overrides).
 case "$EXPERIMENT" in
   e1_long)   # E1: many cycles to judge period consistency + damping (Q1/Q3)
-    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-30.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-1}")
+    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-30.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-4}")
     NT="${NT_OVERRIDE:-12}"
     JOB_TABLE=( "e1_long|" )
     : "${CONCURRENCY:=1}"
@@ -85,7 +85,7 @@ case "$EXPERIMENT" in
     )
     ;;
   e3_withdraw)  # E3: does gentler withdrawal reduce the oscillation? (Q2)
-    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-12.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-1}")
+    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-12.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-4}")
     JOB_TABLE=(
         "withdraw_2p5|FREESTREAM_WITHDRAW_REVS=2.5"
         "withdraw_6|FREESTREAM_WITHDRAW_REVS=6.0"
@@ -96,7 +96,7 @@ case "$EXPERIMENT" in
   e4_damping)  # E4: all damping schemes on the best non-damping baseline
     # Set the best E1-E3 baseline via env (SETTLE_REVS/TRUNCATION_DEPTH_R/
     # FREESTREAM_WITHDRAW_REVS) before running this experiment.
-    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-12.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-1}")
+    RECIPE_ENV+=("SETTLE_REVS=${SETTLE_REVS:-12.0}" "TRUNCATION_DEPTH_R=${TRUNCATION_DEPTH_R:-4}")
     JOB_TABLE=(
         "baseline|"
         "nu_x3|WAKE_NU_FACTOR=3"
