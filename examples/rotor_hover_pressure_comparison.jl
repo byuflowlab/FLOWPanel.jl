@@ -204,6 +204,7 @@ panel_wake_on_particles         = parse(Bool, get(ENV, "PANEL_WAKE_VELOCITY_TO_P
     get(ENV, "PANEL_WAKE_ON_PARTICLES", "true")))
 particle_hessian_self           = parse(Bool, get(ENV, "PARTICLE_HESSIAN_SELF",            "true"))
 particle_relax                  = parse(Bool, get(ENV, "PARTICLE_RELAX",                   "true"))
+bound_strength_rlx              = parse(Float64, get(ENV, "BOUND_STRENGTH_RLX",            "1.0"))  # E4.8 body-strength low-pass (1.0=off)
 diagnose_particle_gamma         = parse(Bool, get(ENV, "DIAGNOSE_PARTICLE_GAMMA",          "false"))
 diagnose_particle_influence     = parse(Bool, get(ENV, "DIAGNOSE_PARTICLE_INFLUENCE",      "false"))
 particle_diagnostic_vertical    = ntuple(i -> i == axial_dimension ? 1.0 : 0.0, 3)
@@ -433,6 +434,7 @@ if !rhpc_setup_only
     panel_wake_on_particles,
     particle_hessian_self,
     particle_relax,
+    bound_strength_rlx,
     diagnose_particle_gamma,
     diagnose_particle_influence,
     diagnostic_vertical=particle_diagnostic_vertical,

@@ -110,9 +110,7 @@ case "$EXPERIMENT" in
         "relax_off|PARTICLE_RELAX=false"
         "merge_aggressive|MERGE_R_FACTOR=0.05"
         "kernoff_hi|KERNELOFFSET_TARGETS=3e-3"
-        # E4.8 body-strength low-pass (BOUND_STRENGTH_RLX) needs a src hook in the
-        # simulate solve loop (see plan); add the job here once implemented:
-        # "bound_rlx|BOUND_STRENGTH_RLX=0.5"
+        "bound_rlx|BOUND_STRENGTH_RLX=0.5"   # E4.8 body-strength low-pass (numerical, last resort)
     )
     ;;
   *)
