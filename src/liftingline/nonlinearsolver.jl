@@ -61,6 +61,7 @@ function solve(self::LiftingLine,
                         solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
                         debug=false,
+                        Dinfs=Uinfs,
                         optargs...
                         )
 
@@ -76,7 +77,7 @@ function solve(self::LiftingLine,
     self.aoas .= aoas_initial_guess
 
     # Update semi-infinite wake to align with freestream
-    calc_Dinfs!(self, Uinfs)
+    calc_Dinfs!(self, Dinfs)
 
     # Precompute self-induced velocity geometric matrix
     calc_Geff!(self; optargs...)

@@ -147,6 +147,7 @@ function run_liftingline(;
                             abstol = 1e-13,  
                             maxiters = 800,
                             ),
+        solve_optargs   = (),
         aoas_initial_guess = alpha,                     # Solver initial guess
         solver_verbose = true,                          # Whether to show solver verbose in unsuccessfull runs
         
@@ -279,7 +280,8 @@ function run_liftingline(;
                                         aoas_initial_guess, 
                                         align_joints_with_Uinfs, 
                                         solver, solver_optargs,
-                                        solver_cache=cache["solver_cache"][NumType]
+                                        solver_cache=cache["solver_cache"][NumType],
+                                        solve_optargs...
                                         )
 
     # Check solver success
