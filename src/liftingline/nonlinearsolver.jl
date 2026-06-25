@@ -62,6 +62,7 @@ function solve(self::LiftingLine,
                         solver_cache=Dict(),
                         debug=false,
                         Dinfs=Uinfs,
+                        update_states=tuple,
                         optargs...
                         )
 
@@ -83,7 +84,8 @@ function solve(self::LiftingLine,
     calc_Geff!(self; optargs...)
 
     # Generate residual function
-    f! = generate_f_residual(self, Uinfs; cache=solver_cache, debug)
+    f! = generate_f_residual(self, Uinfs, update_states; 
+                                        cache=solver_cache, debug)
 
     # Define solver initial guess
     u0 = self.aoas
@@ -98,12 +100,17 @@ function solve(self::LiftingLine,
     # Set solved AOA
     self.aoas .= result.u
 
+    # Update element states from the AOA solution
+    update_states(self.elements_settings, self, self.aoas, Uinfs)
+
     # Calculate Gamma from AOA
     # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
     #       calculating U without iterating on Gamma until convergence.
     #       Just using Uinf might be good enough of an approximation?
-    # calc_Gammas!(self.Gammas, self, self.aoas, self.Us)
-    calc_Gammas!(self.Gammas, self, self.aoas, Uinfs) 
+    # UPDATE: Not needed since we already backtrack Uind from Uinf and the 
+    #       effective AOA?
+    # calc_Gammas!(self.Gammas, self, self.aoas, self.Us, self.elements_settings)
+    calc_Gammas!(self.Gammas, self, self.aoas, Uinfs, self.elements_settings)
 
     # Calculate velocity at lifting-line midpoints
     self.Us .= Uinfs
@@ -129,14 +136,16 @@ function calc_residuals!(residuals::AbstractVector,
                             aoas::AbstractVector, 
                             Gammas::AbstractVector, sigmas::AbstractVector, 
                             Us::AbstractMatrix,
+                            elements_settings::AbstractMatrix,
+                            update_states
                             )
 
     # NOTE: remember to update initial guess aoas and initial state Us before 
     # calling this function
 
     # --------- Steps 1 and 2: input aoa -> lookup cl, convert cl to Gamma -----
-    # calc_Gammas!(Gammas, ll, aoas, Us)
-    calc_Gammas!(Gammas, ll, aoas, Uinfs) # <--- We can use Uinf instead of U to reduce nonlinearity
+    # calc_Gammas!(Gammas, ll, aoas, Us, elements_settings)
+    calc_Gammas!(Gammas, ll, aoas, Uinfs, elements_settings) # <--- We can use Uinf instead of U to reduce nonlinearity
 
     # --------- Step 3: compute inflow velocity U at lifting line --------------
     
@@ -147,7 +156,7 @@ function calc_residuals!(residuals::AbstractVector,
         sweep = calc_sweep(ll, ei)
 
         # Calculate drag coefficient
-        cd = calc_cd(ll.elements[ei], aoas[ei], view(ll.elements_settings, ei, :)...)
+        cd = calc_cd(ll.elements[ei], aoas[ei], view(elements_settings, ei, :)...)
 
         # Project the velocity onto the filament direction
         UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
@@ -257,6 +266,9 @@ function calc_residuals!(residuals::AbstractVector,
 
     end
 
+    # --------- Step 6: update tightly-coupled states --------------
+    update_states(elements_settings, ll, aoas, Uinfs)
+
 end
 
 """
@@ -322,14 +334,15 @@ velocities.
 
 """
 function calc_Gammas!(Gammas::AbstractVector, ll::LiftingLine, 
-                        aoas::AbstractVector, Uinfs::AbstractMatrix)
+                        aoas::AbstractVector, Uinfs::AbstractMatrix,
+                        elements_settings::AbstractMatrix)
 
     for ei in 1:ll.nelements
 
         sweep = calc_sweep(ll, ei)
 
         # Calculate swept sectional cl (C_𝐿Λ in Goates 2022, Eq. (28))
-        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei], view(ll.elements_settings, ei, :)...; claero=true)
+        clΛ = calc_sweptcl(ll.elements[ei], sweep, aoas[ei], view(elements_settings, ei, :)...; claero=true)
 
         # Project the velocity onto the filament direction
         UsΛ = Uinfs[1, ei]*ll.lines[1, ei] + Uinfs[2, ei]*ll.lines[2, ei] + Uinfs[3, ei]*ll.lines[3, ei]
@@ -412,7 +425,8 @@ end
 Generate residual wrapper for NonlinerSolver methods
 """
 function generate_f_residual(ll::LiftingLine, 
-                                Uinfs::AbstractMatrix; cache=Dict(), debug=false)
+                                Uinfs::AbstractMatrix, update_states; 
+                                cache=Dict(), debug=false)
 
     cache[:fcalls] = 0
 
@@ -420,9 +434,11 @@ function generate_f_residual(ll::LiftingLine,
         cache[:residual_rms] = []
     end
 
-    reset_cache(cache, Uinfs)
+    reset_cache(cache, Uinfs, ll.elements_settings)
 
-    function f_residual!(du, u::AbstractVector{T}, p; cache=cache) where T<:Number
+    function f_residual!(du, u::AbstractVector{T}, p; 
+                            cache=cache, update_states=update_states
+                            ) where T<:Number
 
         # Fetch AOAs from input variables
         aoas = u
@@ -435,10 +451,15 @@ function generate_f_residual(ll::LiftingLine,
                             Us = zeros(T, 3, ll.nelements),
                             fcalls = [0],
                             Uinfs,
+                            elements_settings = zeros(T, size(ll.elements_settings)),
                         )
 
             # Set Uinf as the initial velocity
             cache[T].Us .= Uinfs
+
+            # Set initial element settings
+            cache[T].elements_settings .= ll.elements_settings
+
 
         end
 
@@ -449,7 +470,9 @@ function generate_f_residual(ll::LiftingLine,
 
         # Calculate residual
         calc_residuals!(cache[T].residuals, ll, cache[T].Uinfs, 
-                        aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us)
+                        aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us,
+                        cache[T].elements_settings,
+                        update_states)
 
         # Set residual as state
         du .= cache[T].residuals
@@ -464,7 +487,7 @@ function generate_f_residual(ll::LiftingLine,
 
 end
 
-function reset_cache(cache, Uinfs)
+function reset_cache(cache, Uinfs, elements_settings)
 
     for (T, data) in cache
         if T != :fcalls && T != :residual_rms
@@ -474,6 +497,7 @@ function reset_cache(cache, Uinfs)
             data.sigmas .= 0
             data.Uinfs .= Uinfs
             data.Us .= data.Uinfs
+            data.elements_settings .= elements_settings
 
         end
     end
