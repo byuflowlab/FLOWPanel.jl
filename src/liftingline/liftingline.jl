@@ -325,6 +325,7 @@ function remorph!(self::LiftingLine, args...;
                     Uinf=[1, 0, 0],
                     deltasb=self.deltasb,
                     deltajoint=self.deltajoint,
+                    reset_solution=true,
                     optargs...)
 
     # Discretize parameterization
@@ -362,11 +363,13 @@ function remorph!(self::LiftingLine, args...;
     calc_Geff!(self)
 
     # Reset solution
-    self.aoas .= 0
-    self.claeros .= 0
-    self.Gammas .= 0
-    self.sigmas .= 0
-    self.Us .= 0
+    if reset_solution
+        self.aoas .= 0
+        self.claeros .= 0
+        self.Gammas .= 0
+        self.sigmas .= 0
+        self.Us .= 0
+    end
 
     return nothing
 end
