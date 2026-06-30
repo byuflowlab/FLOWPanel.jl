@@ -108,6 +108,21 @@ function make_spanwise_loading_body(ys)
     return body
 end
 
+function make_spanwise_overlap_body()
+    nodes = Float64[
+        0.0 1.0 0.0;
+        0.25 0.75 0.25;
+        0.0 0.0 1.0;
+    ]
+    cells = reshape(Int[1, 2, 3], 3, 1)
+    body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+        watertight=false,
+        ensure_winding=false)
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    return body
+end
+
 function make_surface_vorticity_gradient_body()
     nodes, cells = make_planar_gradient_mesh()
     body = pnl.NonLiftingBody{pnl.ConstantDoublet}(nodes, cells;
@@ -378,6 +393,8 @@ end
         @test_throws ArgumentError pnl.SpanwiseLoadingMonitor(2, 1;
             components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
             span_axis=[0.0, 0.0, 1.0])
+        @test_throws ArgumentError pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0],), binning=:area_clip)
 
         pnl._run_monitor!(monitor, ctx, (body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.1)
         @test monitor.counts == [2, 2]
@@ -390,6 +407,34 @@ end
             components=(lift=[0.0, 0.0, 1.0], drag=[1.0, 0.0, 0.0]),
             span_axis=[0.0, 1.0, 0.0])
         @test isapprox(explicit.span_axis, monitor.span_axis; atol=1e-12)
+
+        overlap_body = make_spanwise_overlap_body()
+        overlap_force = [0.0; 0.0; 10.0;;]
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, overlap_force)
+        overlap = pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0],),
+            span_axis=[0.0, 1.0, 0.0],
+            binning=:span_overlap)
+        pnl._run_monitor!(overlap, ctx, (overlap_body,), (nothing,),
+            pnl.ReferenceFrame(overlap_body), zeros(3), 0, 0.1)
+        @test overlap.counts == [1, 1]
+        @test overlap.panel_bin_id == [1]
+        @test isapprox(overlap.bin_center, [0.375, 0.625]; atol=1e-12)
+        @test isapprox(overlap.force_components[1, :], [5.0, 5.0]; atol=1e-12)
+        @test isapprox(sum(overlap.force_components[1, :]), 10.0; atol=1e-12)
+
+        degenerate = pnl.SpanwiseLoadingMonitor(2, 1;
+            components=(lift=[0.0, 0.0, 1.0],),
+            span_axis=[0.0, 1.0, 0.0],
+            binning=:span_overlap)
+        ctx = pnl.MonitorContext()
+        pnl.monitor_register!(ctx, :F, 1, [0.0; 0.0; 3.0;;])
+        one_panel = make_spanwise_loading_body([0.25])
+        pnl._run_monitor!(degenerate, ctx, (one_panel,), (nothing,),
+            pnl.ReferenceFrame(one_panel), zeros(3), 0, 0.1)
+        @test degenerate.counts == [1, 0]
+        @test degenerate.panel_bin_id == [1]
     end
 
     @testset "SpanwiseLoadingMonitor frame, interpolation, normalization, CSV, VTK" begin

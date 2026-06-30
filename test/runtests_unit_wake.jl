@@ -342,8 +342,37 @@ end
         @test wake.pfield.np == 1
     end
 
+    @testset "RelaxationPlaneFilter validation and frame refresh" begin
+        body = make_plate_vortex_body()
+
+        @test_throws ArgumentError pnl.RelaxationPlaneFilter([0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+        @test_throws ArgumentError pnl.RelaxationPlaneFilter([0.0, 0.0], [1.0, 0.0, 0.0])
+        @test_throws ArgumentError pnl.RelaxationPlaneFilter([0.0, 0.0, 0.0], [Inf, 0.0, 0.0])
+
+        global_filter = pnl.RelaxationPlaneFilter([0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
+        global_wake = pnl.PanelParticleWake(body;
+            relaxation=FLOWVPM.Relaxation(FLOWVPM.relax_correctedpedrizzetti, 1, 0.3, global_filter))
+        pnl.propagate!(global_wake, 0.0; relax=false, step=1)
+
+        frame_filter = pnl.RelaxationPlaneFilter([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]; i_frame=1)
+        frame_wake = pnl.PanelParticleWake(body;
+            relaxation=FLOWVPM.Relaxation(FLOWVPM.relax_correctedpedrizzetti, 1, 0.3, frame_filter))
+        @test_throws ArgumentError pnl.propagate!(frame_wake, 0.0; relax=false, step=1)
+
+        bad_frame_filter = pnl.RelaxationPlaneFilter([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]; i_frame=99)
+        bad_frame_wake = pnl.PanelParticleWake(body;
+            relaxation=FLOWVPM.Relaxation(FLOWVPM.relax_correctedpedrizzetti, 1, 0.3, bad_frame_filter))
+        frames = pnl.ReferenceFrame(body)
+        @test_throws ArgumentError pnl.propagate!(bad_frame_wake, 0.0; relax=false, step=1, frames)
+    end
+
     @testset "Unified wake metadata round trip" begin
         body = make_plate_vortex_body()
+        relaxation = pnl.plane_filtered_relaxation(
+            FLOWVPM.relaxation_correctedpedrizzetti,
+            SVector(0.0, 0.0, -2.0),
+            SVector(0.0, 0.0, -2.0);
+            i_frame=1)
         wake = pnl.PanelParticleWake(body;
             nwakerows=2,
             max_particles=128,
@@ -356,6 +385,7 @@ end
             )),
             viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
             SFS=FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+            relaxation,
         )
         frames = pnl.ReferenceFrame(body)
         path = mktempdir()
@@ -364,12 +394,16 @@ end
 
         metadata = TOML.parsefile(joinpath(path, "run.metadata.toml"))
         @test metadata["wake"][1]["method_trailing"]["type"] == "NoShed"
-        @test metadata["wake"][1]["viscous"]["type"] == "FLOWVPM.CoreSpreading"
-        @test metadata["wake"][1]["SFS"]["type"] == "FLOWVPM.SFS_Cd_twolevel_nobackscatter"
+        @test metadata["wake"][1]["pfield_optargs"]["viscous"]["type"] == "FLOWVPM.CoreSpreading"
+        @test metadata["wake"][1]["pfield_optargs"]["SFS"]["type"] == "FLOWVPM.SFS_Cd_twolevel_nobackscatter"
         @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["type"] == "GlobalCylinder"
         @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["origin"] == [0.0, -1.0, -1.0]
         @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["extrude"] == [2.0, 0.0, 0.0]
         @test metadata["wake"][1]["particle_maintenance"]["trim_policies"][2]["radius"] == 1.5
+        @test metadata["wake"][1]["pfield_optargs"]["relaxation"]["filter"]["type"] == "RelaxationPlaneFilter"
+        @test metadata["wake"][1]["pfield_optargs"]["relaxation"]["filter"]["point"] == [0.0, 0.0, -2.0]
+        @test metadata["wake"][1]["pfield_optargs"]["relaxation"]["filter"]["normal"] == [0.0, 0.0, -1.0]
+        @test metadata["wake"][1]["pfield_optargs"]["relaxation"]["filter"]["i_frame"] == 1
 
         reconstructed = pnl._construct_wakes_from_manifest((body,), metadata)
         @test reconstructed[1] isa pnl.PanelParticleWake
@@ -378,6 +412,11 @@ end
         @test reconstructed[1].particle_maintenance.trim_policies[2] isa pnl.GlobalCylinder
         @test reconstructed[1].particle_maintenance.functional_policies[1] isa pnl.MergeParticles
         @test reconstructed[1].pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+        reconstructed_filter = reconstructed[1].pfield.relaxation.filter
+        @test reconstructed_filter isa pnl.RelaxationPlaneFilter
+        @test reconstructed_filter.point_local == SVector(0.0, 0.0, -2.0)
+        @test reconstructed_filter.normal_local == SVector(0.0, 0.0, -1.0)
+        @test reconstructed_filter.i_frame == 1
 
         step1_frames = pnl.ReferenceFrame(body; ω_axis=SVector(0.0, 1.0, 0.0), ω=1.0)
         step2_frames = pnl.ReferenceFrame(body; ω_axis=SVector(0.0, 1.0, 0.0), ω=2.0)

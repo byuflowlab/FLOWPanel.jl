@@ -167,6 +167,65 @@ function _sfs_manifest(sfs)
     end
 end
 
+function _relaxation_filter_manifest(filter)
+    if filter === FLOWVPM.relax_filter_all
+        return Dict{String, Any}("type" => "all")
+    elseif filter isa RelaxationPlaneFilter
+        return Dict{String, Any}(
+            "type" => "RelaxationPlaneFilter",
+            "point" => collect(filter.point_local),
+            "normal" => collect(filter.normal_local),
+            "i_frame" => filter.i_frame,
+        )
+    else
+        return _metadata_unsupported_dict(typeof(filter))
+    end
+end
+
+function _relaxation_manifest(relaxation::FLOWVPM.Relaxation)
+    # Identify the scheme by its relaxation method function. Pedrizzetti and
+    # CorrectedPedrizzetti share the same Relaxation struct, differing only in
+    # this function, so the method identity is the only reliable discriminator.
+    if relaxation.relax === FLOWVPM.relax_pedrizzetti
+        type = "FLOWVPM.relax_pedrizzetti"
+    elseif relaxation.relax === FLOWVPM.relax_correctedpedrizzetti
+        type = "FLOWVPM.relax_correctedpedrizzetti"
+    elseif relaxation.nsteps_relax < 0
+        type = "none"
+    else
+        type = string(nameof(typeof(relaxation.relax)))
+    end
+    return Dict{String, Any}(
+        "type" => type,
+        "nsteps_relax" => relaxation.nsteps_relax,
+        "rlxf" => relaxation.rlxf,
+        "filter" => _relaxation_filter_manifest(relaxation.filter),
+    )
+end
+
+# Generic per-value serialization for the FLOWVPM particle-field optargs NamedTuple.
+# Scalars pass through; known non-scalar FLOWVPM types get tagged dicts; anything
+# else falls back to an unsupported marker (record-only is acceptable here).
+_vpm_optarg_manifest(val::Union{Bool, Integer, AbstractFloat, AbstractString, Symbol}) = val
+_vpm_optarg_manifest(val::FLOWVPM.Relaxation) = _relaxation_manifest(val)
+_vpm_optarg_manifest(val::FLOWVPM.ViscousScheme) = _viscous_manifest(val)
+function _vpm_optarg_manifest(val)
+    # SFS singletons compare by identity, so route them through _sfs_manifest;
+    # everything else records its type name.
+    if val === FLOWVPM.SFS_default || val === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+        return _sfs_manifest(val)
+    end
+    return _metadata_unsupported_dict(typeof(val))
+end
+
+function _vpm_optargs_manifest(nt::NamedTuple)
+    d = Dict{String, Any}()
+    for (k, v) in pairs(nt)
+        d[string(k)] = _vpm_optarg_manifest(v)
+    end
+    return d
+end
+
 function _body_manifest_dict(body::AbstractBody, i::Int)
     d = Dict{String, Any}(
         "i" => i,
@@ -201,8 +260,10 @@ function _wake_manifest_dict(wake, i::Int)
         d["method_trailing"] = _wake_shedding_manifest(wake.method_trailing)
         d["method_unsteady"] = _wake_shedding_manifest(wake.method_unsteady)
         d["particle_maintenance"] = _particle_maintenance_manifest(wake.particle_maintenance)
-        d["viscous"] = _viscous_manifest(wake.pfield.viscous)
-        d["SFS"] = _sfs_manifest(wake.pfield.SFS)
+        # Resolved FLOWVPM particle-field construction options (viscous, SFS,
+        # relaxation scheme, formulation, kernel). Serialized generically so new
+        # scalar optargs are captured without bespoke code.
+        d["pfield_optargs"] = _vpm_optargs_manifest(wake.pfield_optargs)
     elseif wake isa PanelWake
         d["type"] = "PanelWake"
         d["nwakerows"] = size(wake.nodes[1], 2) - 1
@@ -370,8 +431,13 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
             method_trailing = _deserialize_wake_shedding(get(wmeta, "method_trailing", Dict{String, Any}("type" => "OverlapPPS")))
             method_unsteady = _deserialize_wake_shedding(get(wmeta, "method_unsteady", Dict{String, Any}("type" => "OverlapPPS")))
             particle_maintenance = _deserialize_particle_maintenance(get(wmeta, "particle_maintenance", Dict{String, Any}("type" => "ParticleMaintenance")))
-            viscous = _deserialize_viscous(get(wmeta, "viscous", Dict{String, Any}("type" => "FLOWVPM.Inviscid")))
-            sfs = _deserialize_sfs(get(wmeta, "SFS", Dict{String, Any}("type" => "FLOWVPM.SFS_default")))
+            # FLOWVPM particle-field optargs now live under "pfield_optargs"; fall
+            # back to legacy top-level "viscous"/"SFS" keys for older metadata files.
+            pf_optargs = get(wmeta, "pfield_optargs", wmeta)
+            viscous = _deserialize_viscous(get(pf_optargs, "viscous", Dict{String, Any}("type" => "FLOWVPM.Inviscid")))
+            sfs = _deserialize_sfs(get(pf_optargs, "SFS", Dict{String, Any}("type" => "FLOWVPM.SFS_default")))
+            relaxation = _deserialize_relaxation(get(pf_optargs, "relaxation",
+                Dict{String, Any}("type" => "FLOWVPM.relax_correctedpedrizzetti", "nsteps_relax" => 1, "rlxf" => 0.3)))
             push!(wakes, PanelParticleWake(systems[i];
                 nwakerows=Int(get(wmeta, "nwakerows", 3)),
                 max_particles=Int(get(wmeta, "max_particles", 10000)),
@@ -383,7 +449,8 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
                 particle_maintenance=particle_maintenance,
                 particle_kerneloffset=Float64(get(wmeta, "particle_kerneloffset", NaN)),
                 viscous=viscous,
-                SFS=sfs))
+                SFS=sfs,
+                relaxation=relaxation))
         else
             throw(ArgumentError("Cannot reconstruct replay wake type $(wtype). Provide reconstruct callback."))
         end
@@ -477,6 +544,37 @@ function _deserialize_sfs(meta)
         return FLOWVPM.SFS_default
     else
         return FLOWVPM.SFS_default
+    end
+end
+
+function _deserialize_relaxation_filter(meta)
+    ftype = String(get(meta, "type", "all"))
+    if ftype == "all" || ftype == "FLOWVPM.relax_filter_all"
+        return FLOWVPM.relax_filter_all
+    elseif ftype == "RelaxationPlaneFilter"
+        return RelaxationPlaneFilter(
+            get(meta, "point", [0.0, 0.0, 0.0]),
+            get(meta, "normal", [1.0, 0.0, 0.0]);
+            i_frame=Int(get(meta, "i_frame", 0)))
+    else
+        return FLOWVPM.relax_filter_all
+    end
+end
+
+function _deserialize_relaxation(meta)
+    rtype = String(get(meta, "type", "unsupported"))
+    nsteps = Int(get(meta, "nsteps_relax", 1))
+    rlxf = Float64(get(meta, "rlxf", 0.3))
+    filter = _deserialize_relaxation_filter(get(meta, "filter", Dict{String, Any}("type" => "all")))
+    if rtype == "FLOWVPM.relax_pedrizzetti"
+        return FLOWVPM.Relaxation(FLOWVPM.relax_pedrizzetti, nsteps, rlxf, filter)
+    elseif rtype == "FLOWVPM.relax_correctedpedrizzetti"
+        return FLOWVPM.Relaxation(FLOWVPM.relax_correctedpedrizzetti, nsteps, rlxf, filter)
+    elseif rtype == "none"
+        return FLOWVPM.relaxation_none
+    else
+        # Unknown/legacy metadata: fall back to the PanelParticleWake default.
+        return FLOWVPM.relaxation_correctedpedrizzetti
     end
 end
 

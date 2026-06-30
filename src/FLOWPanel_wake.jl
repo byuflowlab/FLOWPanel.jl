@@ -892,13 +892,104 @@ shed downstream from the trailing edge. Panel wake options, including
 `shed_with_induced_velocity` and `unsteady_filament`, are forwarded to the
 internal [`PanelWake`](@ref).
 """
-struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM} <: AbstractFreeWake
+#------- relaxation spatial filters -------#
+
+"""
+    RelaxationPlaneFilter(point, normal; i_frame=0)
+
+Per-particle predicate for [`FLOWVPM.Relaxation`](@ref) that restricts relaxation to
+the half-space on the side of a plane the `normal` points toward. The plane is
+defined by `point` and `normal` expressed in reference frame `i_frame` (use `0` for
+the global frame). Particle `p` is relaxed when
+`dot(get_X(p) - point_world, normal_world) >= 0`; flipping the sign of `normal`
+relaxes the opposite side instead.
+
+The world-space plane is cached and refreshed once per timestep via
+[`refresh_relaxation_filter!`](@ref) so the per-particle test is a single dot
+product. When `i_frame != 0`, the plane tracks the (possibly moving) frame.
+
+Typical use: relax only particles that have propagated a distance `d` downstream of a
+rotor plane. With the rotor frame origin at the hub and downstream `= -ẑ`, place the
+threshold plane at `-d*ẑ` with `normal = -ẑ`:
+
+    RelaxationPlaneFilter(SVector(0.0,0.0,-d), SVector(0.0,0.0,-1.0); i_frame=i_rotor)
+"""
+mutable struct RelaxationPlaneFilter{TF}
+    point_local::SVector{3,TF}   # point on the plane, in frame i_frame
+    normal_local::SVector{3,TF}  # unit normal; points toward the RELAXED side
+    i_frame::Int                 # 0 ⇒ plane defined in the global frame
+    point_world::SVector{3,TF}   # cached world-space plane point (refreshed per step)
+    normal_world::SVector{3,TF}  # cached world-space plane normal
+end
+
+function RelaxationPlaneFilter(point, normal; i_frame::Int=0)
+    length(point) == 3 || throw(ArgumentError("RelaxationPlaneFilter point must have length 3"))
+    length(normal) == 3 || throw(ArgumentError("RelaxationPlaneFilter normal must have length 3"))
+    p = SVector{3}(float.(point))
+    n = SVector{3}(float.(normal))
+    nrm = LA.norm(n)
+    isfinite(nrm) && nrm > zero(nrm) ||
+        throw(ArgumentError("RelaxationPlaneFilter normal must be nonzero and finite"))
+    n = n / nrm
+    TF = promote_type(eltype(p), eltype(n))
+    p = SVector{3,TF}(p)
+    n = SVector{3,TF}(n)
+    # initialize the world cache to the local definition (exact when i_frame == 0,
+    # and overwritten by refresh_relaxation_filter! for frame-relative planes)
+    return RelaxationPlaneFilter{TF}(p, n, i_frame, p, n)
+end
+
+(f::RelaxationPlaneFilter)(p) =
+    LA.dot(FLOWVPM.get_X(p) .- f.point_world, f.normal_world) >= 0
+
+(f::RelaxationPlaneFilter)(pfield, i::Integer) =
+    LA.dot(FLOWVPM.get_X(pfield, Int(i)) .- f.point_world, f.normal_world) >= 0
+
+FLOWVPM._passes_relaxation_filter(f::RelaxationPlaneFilter, pfield, i::Integer) = f(pfield, i)
+
+"""
+    refresh_relaxation_filter!(filter, frames)
+
+Update a relaxation filter's cached world-space geometry from the current frame tree.
+A no-op for any filter that does not track a frame (the generic fallback), so it is
+safe to call unconditionally each timestep.
+"""
+refresh_relaxation_filter!(::Any, frames) = nothing
+
+function refresh_relaxation_filter!(f::RelaxationPlaneFilter, frames)
+    f.i_frame == 0 && return nothing
+    frames === nothing && throw(ArgumentError("RelaxationPlaneFilter requires frames"))
+    transform = frame_global_transform(frames, f.i_frame)
+    isnothing(transform) &&
+        throw(ArgumentError("RelaxationPlaneFilter references unknown frame index $(f.i_frame)"))
+    o, R = transform
+    f.point_world = R * f.point_local + o
+    f.normal_world = R * f.normal_local
+    return nothing
+end
+
+"""
+    plane_filtered_relaxation(base::FLOWVPM.Relaxation, point, normal; i_frame=0)
+
+Return a copy of relaxation scheme `base` (same method, `rlxf`, and `nsteps_relax`)
+whose per-particle filter is a [`RelaxationPlaneFilter`](@ref). Convenient for
+attaching a spatial filter to a stock scheme, e.g.
+
+    plane_filtered_relaxation(FLOWVPM.relaxation_correctedpedrizzetti,
+        SVector(0.0,0.0,-d), SVector(0.0,0.0,-1.0); i_frame=i_rotor)
+"""
+plane_filtered_relaxation(base::FLOWVPM.Relaxation, point, normal; i_frame::Int=0) =
+    FLOWVPM.Relaxation(base.relax, base.nsteps_relax, base.rlxf,
+                       RelaxationPlaneFilter(point, normal; i_frame))
+
+struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
     method_unsteady::MU                             # particle shedding method
     particle_maintenance::TPM             # particle merge/trim policy chain
     particle_kerneloffset::Float64        # NaN uses source body kerneloffset
+    pfield_optargs::TNT                   # resolved FLOWVPM optargs (for reproduction metadata)
 end
 
 function PanelParticleWake(body::AbstractLiftingBody;
@@ -909,6 +1000,10 @@ function PanelParticleWake(body::AbstractLiftingBody;
         particle_kerneloffset::Real=NaN,
         viscous=FLOWVPM.Inviscid(),
         SFS=FLOWVPM.SFS_default,
+        # Make the relaxation scheme explicit so it is recorded in metadata rather
+        # than silently inherited from FLOWVPM. The default matches the FLOWVPM
+        # ParticleField default (CorrectedPedrizzetti) to preserve prior behavior.
+        relaxation=FLOWVPM.relaxation_correctedpedrizzetti,
         kwargs...)
 
     panel_wake = PanelWake(body; nwakerows, kwargs...)
@@ -918,7 +1013,19 @@ function PanelParticleWake(body::AbstractLiftingBody;
     pfield = FLOWVPM.ParticleField(max_particles, TF;
         viscous,
         fmm=FLOWVPM.FMM(autotune_reg_error=false),
-        SFS)
+        SFS,
+        relaxation)
+
+    # Capture the resolved FLOWVPM construction options for reproduction metadata.
+    # Read back from the live particle field so the recorded values are authoritative
+    # (they reflect actual state, including any FLOWVPM-side defaults).
+    pfield_optargs = (;
+        viscous     = pfield.viscous,
+        SFS         = pfield.SFS,
+        relaxation  = pfield.relaxation,
+        formulation = pfield.formulation,
+        kernel      = pfield.kernel,
+    )
 
     # Infer type params from the actual panel_wake
     WTK = typeof(panel_wake).parameters[1]
@@ -927,8 +1034,8 @@ function PanelParticleWake(body::AbstractLiftingBody;
     if !isnan(particle_kerneloffset)
         body.kerneloffset_targets = Float64(particle_kerneloffset)
     end
-    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady),typeof(maintenance)}(
-        panel_wake, pfield, method_trailing, method_unsteady, maintenance, Float64(particle_kerneloffset)
+    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady),typeof(maintenance),typeof(pfield_optargs)}(
+        panel_wake, pfield, method_trailing, method_unsteady, maintenance, Float64(particle_kerneloffset), pfield_optargs
     )
 end
 
@@ -1051,6 +1158,9 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         println("particle gamma step=$(step) phase=before_euler " *
             _particle_gamma_direction_stats(w.pfield; vertical=diagnostic_vertical))
     end
+
+    # refresh any frame-tracking relaxation filter to the current frame pose
+    refresh_relaxation_filter!(w.pfield.relaxation.filter, frames)
 
     # convect particles
     FLOWVPM._euler(w.pfield, dt; relax)

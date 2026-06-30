@@ -735,7 +735,16 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                     set_Das_eta_kinematic=set_Das_eta_kinematic,
                     set_Das_eta_freestream=set_Das_eta_freestream,
                     set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
-                    clean_files=clean_files)
+                    clean_files=clean_files,
+                    solver_options=(;
+                        particle_relax,
+                        body_on_wake,
+                        panel_wake_on_particles,
+                        particle_hessian_self,
+                        body_hessian_to_particles,
+                        wakerow_no_hessian_to_particles,
+                        bound_strength_rlx,
+                    ))
             end
 
             for (i, sys) in enumerate(systems_tuple)

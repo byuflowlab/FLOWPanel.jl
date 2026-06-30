@@ -338,14 +338,26 @@ end
             )),
             viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
             SFS=FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+            # non-default relaxation so we can verify it round-trips (the
+            # PanelParticleWake default is correctedpedrizzetti)
+            relaxation=FLOWVPM.relaxation_pedrizzetti,
         )
         frames = pnl.ReferenceFrame(body)
         path = mktempdir()
         pnl.write_vtk(joinpath(path, "run_body1"), body, 0, 0.0; overwrite=true)
         pnl.write_vtk(joinpath(path, "run_wake1"), wake, 0, 0.0; overwrite=true)
         pnl._write_metadata_toml(path, "run", (body,), (wake,), frames, [0.0, 0.1],
-            (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
+            (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ();
+            solver_options=(; particle_relax=false, body_on_wake=true, bound_strength_rlx=0.5))
         pnl._append_metadata_step_toml(path, "run", frames, 0, 0.0)
+
+        # the run-affecting simulate! toggles are recorded under [simulation]
+        meta = TOML.parsefile(joinpath(path, "run.metadata.toml"))
+        @test meta["simulation"]["particle_relax"] == false
+        @test meta["simulation"]["body_on_wake"] == true
+        @test meta["simulation"]["bound_strength_rlx"] == 0.5
+        # the relaxation scheme is recorded under the wake's pfield_optargs
+        @test meta["wake"][1]["pfield_optargs"]["relaxation"]["type"] == "FLOWVPM.relax_pedrizzetti"
 
         result = pnl.replay(path, "run"; steps=0, recompute=())
         @test result.wakes[1] isa pnl.PanelParticleWake
@@ -353,6 +365,8 @@ end
         @test result.wakes[1].method_unsteady isa pnl.SigmaOverlap
         @test result.wakes[1].particle_maintenance.trim_policies[2] isa pnl.GlobalCylinder
         @test result.wakes[1].pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+        # relaxation scheme survives the metadata round-trip (not silently reset)
+        @test result.wakes[1].pfield.relaxation.relax === FLOWVPM.relax_pedrizzetti
     end
 
     @testset "particle wake explicit field round trips" begin

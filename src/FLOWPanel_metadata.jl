@@ -77,10 +77,11 @@ function _step_dict(frames, i_step::Int, t::Real; uinf=nothing)
 end
 
 function _simulation_metadata_dict(t_range, start_step::Int, set_Das_eta_kinematic,
-        set_Das_eta_freestream, set_Das_min_kinematic_displacement, clean_files::Bool)
+        set_Das_eta_freestream, set_Das_min_kinematic_displacement, clean_files::Bool;
+        solver_options::NamedTuple=(;))
     n_steps = max(length(t_range) - 1, 0)
     dt = length(t_range) > 1 ? float(t_range[2] - t_range[1]) : NaN
-    return Dict{String, Any}(
+    d = Dict{String, Any}(
         "t_start" => float(first(t_range)),
         "t_stop" => float(last(t_range)),
         "dt" => dt,
@@ -91,6 +92,12 @@ function _simulation_metadata_dict(t_range, start_step::Int, set_Das_eta_kinemat
         "set_Das_eta_freestream" => set_Das_eta_freestream,
         "set_Das_min_kinematic_displacement" => set_Das_min_kinematic_displacement,
     )
+    # Run-affecting simulate! toggles (coupling flags, relaxation on/off, body
+    # strength relaxation). Scalars, recorded so a run can be reproduced.
+    for (k, v) in pairs(solver_options)
+        d[string(k)] = v
+    end
+    return d
 end
 
 function _backend_metadata_dict(backend)
@@ -260,6 +267,7 @@ function _monitor_metadata(m)
             "span_axis" => collect(m.span_axis),
             "normalization" => _monitor_normalization_metadata(m.normalization),
             "per_length" => m.per_length,
+            "binning" => string(m.binning),
             "file" => m.file,
             "verbose" => m.verbose,
             "vtk_fields" => collect(string.(m.vtk_fields)),
@@ -297,7 +305,8 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
-        clean_files::Bool=true)
+        clean_files::Bool=true,
+        solver_options::NamedTuple=(;))
     return Dict{String, Any}(
         "meta" => Dict{String, Any}(
             "schema_version" => 1,
@@ -309,7 +318,7 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         ),
         "simulation" => _simulation_metadata_dict(t_range, start_step,
             set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement, clean_files),
+            set_Das_min_kinematic_displacement, clean_files; solver_options),
         "backends" => Dict{String, Any}(
             "wake" => _backend_metadata_dict(backend_wake),
             "system" => _backend_metadata_dict(backend_system),
@@ -329,14 +338,15 @@ function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
-        clean_files::Bool=true)
+        clean_files::Bool=true,
+        solver_options::NamedTuple=(;))
     mkpath(path)
     file = _metadata_toml_path(path, name)
     open(file, "w") do io
         TOML.print(io, _metadata_manifest_dict(name, systems, wakes, frames,
             t_range, body_solvers, backend_wake, backend_solve, backend_system,
             monitors; start_step, set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement, clean_files))
+            set_Das_min_kinematic_displacement, clean_files, solver_options))
     end
     return file
 end

@@ -1372,6 +1372,7 @@ end
                            span_axis=nothing,
                            normalization=NoSectionalNormalization(),
                            per_length=false, file=true, TF=Float64,
+                           binning=:control_point,
                            verbose=false, vtk_fields=(:bin_id,))
 
 Consume distributed panel forces from an earlier force monitor, bin them along a
@@ -1383,6 +1384,10 @@ frame, e.g. `components=(lift=Lhat, drag=Dhat)`.
 `cp_frame -> Bool` evaluated on each control point expressed in the selected
 frame (`i_frame`). This is useful to isolate one blade of a multi-blade rotor,
 e.g. `select = cp -> cp[2] > 0`. The default (`nothing`) bins every panel.
+
+`binning=:control_point` assigns each selected panel to one bin using its
+control point. `binning=:span_overlap` distributes each selected panel's force
+across every bin overlapped by the panel's vertex-projected span interval.
 """
 mutable struct SpanwiseLoadingMonitor{TF, TN, TS} <: AbstractMonitor
     nbins::Int
@@ -1403,6 +1408,7 @@ mutable struct SpanwiseLoadingMonitor{TF, TN, TS} <: AbstractMonitor
     counts::Vector{Int}
     panel_bin_id::Vector{Int}
     bin_force::Matrix{TF}
+    binning::Symbol
     select::TS                      # optional predicate cp_frame -> Bool, or nothing
 end
 
@@ -1417,11 +1423,14 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
                                 file::Bool=true,
                                 TF=Float64,
                                 select=nothing,
+                                binning::Symbol=:control_point,
                                 verbose::Bool=false,
                                 vtk_fields::Tuple{Vararg{Symbol}}=(:bin_id,))
     nbins > 0 || throw(ArgumentError("SpanwiseLoadingMonitor requires nbins > 0; got $(nbins)."))
     components isa NamedTuple || throw(ArgumentError("components must be a NamedTuple of unit vectors."))
     !isempty(keys(components)) || throw(ArgumentError("components must contain at least one direction."))
+    binning in (:control_point, :span_overlap) ||
+        throw(ArgumentError("SpanwiseLoadingMonitor binning must be :control_point or :span_overlap; got $(binning)."))
 
     names = Tuple(Symbol.(keys(components)))
     vectors = [_spanwise_unit_vector(v, "component $(name)"; TF) for (name, v) in pairs(components)]
@@ -1440,7 +1449,7 @@ function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
         per_length, file, verbose, vtk_fields,
         zeros(TF, nbins), zeros(TF, nbins),
         zeros(TF, length(vectors), nbins), zeros(TF, length(vectors), nbins),
-        zeros(Int, nbins), Int[], zeros(TF, 3, nbins), select)
+        zeros(Int, nbins), Int[], zeros(TF, 3, nbins), binning, select)
 end
 
 function _spanwise_ensure_storage!(m::SpanwiseLoadingMonitor{TF}, ncells::Int) where TF
@@ -1488,6 +1497,65 @@ function _spanwise_fill_empty_bins!(bin_force::AbstractMatrix, counts::AbstractV
     return bin_force
 end
 
+_spanwise_bin_index(s::Real, smin::Real, width::Real, nbins::Int) =
+    clamp(floor(Int, (s - smin) / width) + 1, 1, nbins)
+
+function _spanwise_panel_vertex_range(body::AbstractBody, panel::Integer,
+                                      origin, R_g2f, span_axis)
+    smin = Inf
+    smax = -Inf
+    @inbounds for i_node in axes(body.cells, 1)
+        node = body.cells[i_node, panel]
+        p_global = SVector{3}(body.nodes[1, node], body.nodes[2, node], body.nodes[3, node])
+        p_frame = R_g2f * (p_global - origin)
+        s = dot(span_axis, p_frame)
+        smin = min(smin, s)
+        smax = max(smax, s)
+    end
+    return smin, smax
+end
+
+function _spanwise_accumulate_control_point!(m::SpanwiseLoadingMonitor{TF},
+                                             f_frame, panel::Int, span_coord::TF,
+                                             smin::TF, span::TF, width::TF) where TF
+    b = span > sqrt(eps(TF)) ? _spanwise_bin_index(span_coord, smin, width, m.nbins) : 1
+    m.panel_bin_id[panel] = b
+    m.counts[b] += 1
+    m.bin_force[1, b] += f_frame[1]
+    m.bin_force[2, b] += f_frame[2]
+    m.bin_force[3, b] += f_frame[3]
+    return nothing
+end
+
+function _spanwise_accumulate_overlap!(m::SpanwiseLoadingMonitor{TF}, body::AbstractBody,
+                                       f_frame, panel::Int, span_coord::TF,
+                                       origin, R_g2f, smin::TF, span::TF,
+                                       width::TF) where TF
+    cp_bin = span > sqrt(eps(TF)) ? _spanwise_bin_index(span_coord, smin, width, m.nbins) : 1
+    m.panel_bin_id[panel] = cp_bin
+    pmin, pmax = _spanwise_panel_vertex_range(body, panel, origin, R_g2f, m.span_axis)
+    pspan = pmax - pmin
+    if !(pspan > sqrt(eps(TF))) || !(span > sqrt(eps(TF)))
+        return _spanwise_accumulate_control_point!(
+            m, f_frame, panel, span_coord, smin, span, width)
+    end
+
+    b_first = _spanwise_bin_index(pmin, smin, width, m.nbins)
+    b_last = _spanwise_bin_index(pmax, smin, width, m.nbins)
+    @inbounds for b in b_first:b_last
+        bmin = smin + (b - 1) * width
+        bmax = smin + b * width
+        overlap = min(pmax, bmax) - max(pmin, bmin)
+        overlap > zero(TF) || continue
+        w = overlap / pspan
+        m.counts[b] += 1
+        m.bin_force[1, b] += w * f_frame[1]
+        m.bin_force[2, b] += w * f_frame[2]
+        m.bin_force[3, b] += w * f_frame[3]
+    end
+    return nothing
+end
+
 function write_monitor_csv!(m::SpanwiseLoadingMonitor, dir::AbstractString, name::AbstractString,
                             i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
                             i_step::Int, dt::Real; overwrite::Bool=false)
@@ -1531,8 +1599,20 @@ function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, syste
 
     any(selected) || throw(ArgumentError(
         "SpanwiseLoadingMonitor `select` excluded every panel; nothing to bin."))
-    smin = minimum(span_coord[p] for p in 1:body.ncells if selected[p])
-    smax = maximum(span_coord[p] for p in 1:body.ncells if selected[p])
+    if m.binning == :span_overlap
+        ranges = (_spanwise_panel_vertex_range(body, p, origin, R_g2f, m.span_axis)
+                  for p in 1:body.ncells if selected[p])
+        first_range = first(ranges)
+        smin = first_range[1]
+        smax = first_range[2]
+        for r in ranges
+            smin = min(smin, r[1])
+            smax = max(smax, r[2])
+        end
+    else
+        smin = minimum(span_coord[p] for p in 1:body.ncells if selected[p])
+        smax = maximum(span_coord[p] for p in 1:body.ncells if selected[p])
+    end
     span = smax - smin
     width = span > sqrt(eps(TF)) ? span / m.nbins : one(TF)
     fill!(m.counts, 0)
@@ -1540,14 +1620,15 @@ function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, syste
     fill!(m.panel_bin_id, 0)
     @inbounds for p in 1:body.ncells
         selected[p] || continue
-        b = span > sqrt(eps(TF)) ? clamp(floor(Int, (span_coord[p] - smin) / width) + 1, 1, m.nbins) : 1
-        m.panel_bin_id[p] = b
-        m.counts[b] += 1
         f_global = SVector{3, TF}(F[1, p], F[2, p], F[3, p])
         f_frame = R_g2f * f_global
-        m.bin_force[1, b] += f_frame[1]
-        m.bin_force[2, b] += f_frame[2]
-        m.bin_force[3, b] += f_frame[3]
+        if m.binning == :span_overlap
+            _spanwise_accumulate_overlap!(
+                m, body, f_frame, p, span_coord[p], origin, R_g2f, smin, span, width)
+        else
+            _spanwise_accumulate_control_point!(
+                m, f_frame, p, span_coord[p], smin, span, width)
+        end
     end
 
     for b in 1:m.nbins

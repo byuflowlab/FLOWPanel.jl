@@ -210,6 +210,26 @@ diagnose_particle_influence     = parse(Bool, get(ENV, "DIAGNOSE_PARTICLE_INFLUE
 particle_diagnostic_vertical    = ntuple(i -> i == axial_dimension ? 1.0 : 0.0, 3)
 sfs_off                         = parse(Bool, get(ENV, "SFS_OFF",                          "false"))
 
+# Item 006: optional spatially-filtered relaxation. When RELAX_FILTER_DOWNSTREAM_R is
+# set, apply Pedrizzetti relaxation only to particles that have propagated at least
+# RELAX_FILTER_DOWNSTREAM_R*R downstream (+axial) of the rotor plane, leaving the
+# near-rotor band unrelaxed. Unset/NaN => unfiltered full-wake relaxation (default).
+relax_filter_downstream_R = parse(Float64, get(ENV, "RELAX_FILTER_DOWNSTREAM_R", "NaN"))
+# Relaxation factor (rlxf) of the corrected-Pedrizzetti scheme. Defaults to the FLOWVPM
+# stock value so unset behavior is unchanged; override with RELAX_RLXF.
+stock_relaxation = pnl.FLOWVPM.relaxation_correctedpedrizzetti
+relax_rlxf = parse(Float64, get(ENV, "RELAX_RLXF", string(stock_relaxation.rlxf)))
+base_relaxation = pnl.FLOWVPM.Relaxation(stock_relaxation.relax,
+    stock_relaxation.nsteps_relax, relax_rlxf)
+relaxation_scheme = if isnan(relax_filter_downstream_R)
+    base_relaxation
+else
+    d = relax_filter_downstream_R * R
+    plane_point  = SVector{3,Float64}(ntuple(i -> i == axial_dimension ? d   : 0.0, 3))
+    plane_normal = SVector{3,Float64}(ntuple(i -> i == axial_dimension ? 1.0 : 0.0, 3))
+    pnl.plane_filtered_relaxation(base_relaxation, plane_point, plane_normal; i_frame=1)
+end
+
 sfs_choice = if sfs_off
     pnl.FLOWVPM.noSFS
 elseif sfs_backscatter_signed
@@ -251,6 +271,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
     viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
         beta=wake_core_beta),
     SFS=sfs_choice,
+    relaxation=relaxation_scheme,
     method_trailing,
     method_unsteady=pnl.NoShed(),
     # method_unsteady=pnl.OverlapPPS(1.3, 2),
