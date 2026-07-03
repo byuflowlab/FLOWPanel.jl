@@ -55,9 +55,10 @@ end
 """
     load_state(vtp_path) -> NamedTuple
 
-Read one particle VTP file. Returns `(; X, gamma, sigma, velocity, vorticity, J, np)`
-with `X, gamma, velocity, vorticity` as 3×np, `sigma` as np-vector, `J` as 9×np
-(column-major M[a,b]=∂u_a/∂x_b per particle).
+Read one particle VTP file. Returns `(; X, gamma, sigma, velocity, vorticity, J,
+vol, C, SFS, np)` with `X, gamma, velocity, vorticity, SFS` as 3×np,
+`sigma`, `vol`, `C` as np-vectors, `J` as 9×np (column-major
+M[a,b]=∂u_a/∂x_b per particle). Optional fields default to zeros when absent.
 """
 function load_state(vtp_path::AbstractString)
     isfile(vtp_path) || error("Particle VTP not found: $(vtp_path)")
@@ -74,7 +75,10 @@ function load_state(vtp_path::AbstractString)
     velocity  = Matrix{Float64}(reshape(ReadVTK.get_data(pd["velocity"]), 3, np))
     vorticity = Matrix{Float64}(reshape(ReadVTK.get_data(pd["vorticity"]), 3, np))
     J         = Matrix{Float64}(reshape(ReadVTK.get_data(pd["velocity_gradient"]), 9, np))
-    return (; X, gamma, sigma, velocity, vorticity, J, np)
+    vol = "vol" in keys(pd) ? Vector{Float64}(vec(ReadVTK.get_data(pd["vol"]))) : zeros(Float64, np)
+    C = "C" in keys(pd) ? Vector{Float64}(vec(ReadVTK.get_data(pd["C"]))) : zeros(Float64, np)
+    SFS = "SFS" in keys(pd) ? Matrix{Float64}(reshape(ReadVTK.get_data(pd["SFS"]), 3, np)) : zeros(Float64, 3, np)
+    return (; X, gamma, sigma, velocity, vorticity, J, vol, C, SFS, np)
 end
 
 # ---------------------------------------------------------------------------

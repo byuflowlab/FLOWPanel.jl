@@ -333,11 +333,12 @@ end
             method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
             particle_maintenance=pnl.ParticleMaintenance((
                 pnl.MinGamma(1e-3),
+                pnl.RelativeMinGamma(0.01),
                 pnl.GlobalCylinder([0.0, -1.0, -1.0], [2.0, 0.0, 0.0], 1.5),
                 pnl.MergeParticles(every=2, r=0.4, r_hash=0.3, sigma_relative=false, max_sigma_ratio=1.7, skip_static=false),
             )),
-            viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
-            SFS=FLOWVPM.SFS_Cd_twolevel_nobackscatter,
+            viscous=FLOWVPM.ParticleStrengthExchange{Float64}(1.5e-5),
+            SFS=FLOWVPM.SFS_Cs_nobackscatter,
             # non-default relaxation so we can verify it round-trips (the
             # PanelParticleWake default is correctedpedrizzetti)
             relaxation=FLOWVPM.relaxation_pedrizzetti,
@@ -358,15 +359,119 @@ end
         @test meta["simulation"]["bound_strength_rlx"] == 0.5
         # the relaxation scheme is recorded under the wake's pfield_optargs
         @test meta["wake"][1]["pfield_optargs"]["relaxation"]["type"] == "FLOWVPM.relax_pedrizzetti"
+        @test meta["wake"][1]["pfield_optargs"]["SFS"]["type"] == "FLOWVPM.SFS_Cs_nobackscatter"
+        @test meta["wake"][1]["pfield_optargs"]["viscous"]["type"] == "FLOWVPM.ParticleStrengthExchange"
 
         result = pnl.replay(path, "run"; steps=0, recompute=())
         @test result.wakes[1] isa pnl.PanelParticleWake
         @test result.wakes[1].method_trailing isa pnl.NoShed
         @test result.wakes[1].method_unsteady isa pnl.SigmaOverlap
-        @test result.wakes[1].particle_maintenance.trim_policies[2] isa pnl.GlobalCylinder
-        @test result.wakes[1].pfield.SFS === FLOWVPM.SFS_Cd_twolevel_nobackscatter
+        @test result.wakes[1].particle_maintenance.trim_policies[2] isa pnl.RelativeMinGamma
+        @test result.wakes[1].particle_maintenance.trim_policies[2].fraction ≈ 0.01
+        @test result.wakes[1].particle_maintenance.trim_policies[3] isa pnl.GlobalCylinder
+        @test result.wakes[1].pfield.SFS === FLOWVPM.SFS_Cs_nobackscatter
+        @test result.wakes[1].pfield.viscous isa FLOWVPM.ParticleStrengthExchange
+        @test result.wakes[1].pfield.viscous.nu ≈ 1.5e-5
         # relaxation scheme survives the metadata round-trip (not silently reset)
         @test result.wakes[1].pfield.relaxation.relax === FLOWVPM.relax_pedrizzetti
+
+        wake_threelevel = pnl.PanelParticleWake(body;
+            nwakerows=2,
+            max_particles=128,
+            method_trailing=pnl.NoShed(),
+            method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
+            SFS=FLOWVPM.SFS_Cd_threelevel_nobackscatter,
+        )
+        path_threelevel = mktempdir()
+        pnl.write_vtk(joinpath(path_threelevel, "run_body1"), body, 0, 0.0; overwrite=true)
+        pnl.write_vtk(joinpath(path_threelevel, "run_wake1"), wake_threelevel, 0, 0.0; overwrite=true)
+        pnl._write_metadata_toml(path_threelevel, "run", (body,), (wake_threelevel,), frames, [0.0, 0.1],
+            (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
+        pnl._append_metadata_step_toml(path_threelevel, "run", frames, 0, 0.0)
+
+        result_threelevel = pnl.replay(path_threelevel, "run"; steps=0, recompute=())
+        @test result_threelevel.wakes[1].pfield.SFS === FLOWVPM.SFS_Cd_threelevel_nobackscatter
+
+        @testset "FLOWVPM singleton reflection" begin
+            for n in names(FLOWVPM; all=true)
+                occursin('#', String(n)) && continue
+                isdefined(FLOWVPM, n) || continue
+                obj = getfield(FLOWVPM, n)
+                if obj isa FLOWVPM.SubFilterScale
+                    @test pnl._deserialize_sfs(pnl._sfs_manifest(obj)) === obj
+                end
+            end
+
+            core_wake = pnl.PanelParticleWake(body;
+                nwakerows=2,
+                max_particles=128,
+                method_trailing=pnl.NoShed(),
+                method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
+                viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
+            )
+            path_core = mktempdir()
+            pnl.write_vtk(joinpath(path_core, "run_body1"), body, 0, 0.0; overwrite=true)
+            pnl.write_vtk(joinpath(path_core, "run_wake1"), core_wake, 0, 0.0; overwrite=true)
+            pnl._write_metadata_toml(path_core, "run", (body,), (core_wake,), frames, [0.0, 0.1],
+                (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
+            pnl._append_metadata_step_toml(path_core, "run", frames, 0, 0.0)
+
+            core_meta = TOML.parsefile(joinpath(path_core, "run.metadata.toml"))
+            @test core_meta["wake"][1]["pfield_optargs"]["viscous"]["kernel"] == "FLOWVPM.zeta_fmm"
+            result_core = pnl.replay(path_core, "run"; steps=0, recompute=())
+            @test result_core.wakes[1].pfield.viscous isa FLOWVPM.CoreSpreading
+            @test result_core.wakes[1].pfield.viscous.zeta === FLOWVPM.zeta_fmm
+
+            warned_sfs = @test_logs (:warn,) pnl._deserialize_sfs(Dict{String, Any}("type" => "unsupported"))
+            @test warned_sfs === FLOWVPM.SFS_none
+            @test_throws ArgumentError pnl._resolve_singleton("FLOWVPM.SFS_does_not_exist", FLOWVPM.SubFilterScale)
+            @test_throws ArgumentError pnl._resolve_singleton("FLOWVPM.zeta_fmm", FLOWVPM.SubFilterScale)
+            @test_throws ArgumentError pnl._resolve_singleton("NotVPM.SFS_none", FLOWVPM.SubFilterScale)
+        end
+
+        @testset "metadata migration" begin
+            legacy_path = mktempdir()
+            legacy_wake = pnl.PanelParticleWake(body;
+                nwakerows=2,
+                max_particles=128,
+                method_trailing=pnl.NoShed(),
+                method_unsteady=pnl.SigmaOverlap(0.25, 4.0),
+                viscous=FLOWVPM.CoreSpreading(1.5e-5, 0.01, FLOWVPM.zeta_fmm; beta=1.5),
+                SFS=FLOWVPM.SFS_none,
+            )
+            pnl.write_vtk(joinpath(legacy_path, "run_body1"), body, 0, 0.0; overwrite=true)
+            pnl.write_vtk(joinpath(legacy_path, "run_wake1"), legacy_wake, 0, 0.0; overwrite=true)
+            pnl._write_metadata_toml(legacy_path, "run", (body,), (legacy_wake,), frames, [0.0, 0.1],
+                (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
+            pnl._append_metadata_step_toml(legacy_path, "run", frames, 0, 0.0)
+
+            metadata_file = joinpath(legacy_path, "run.metadata.toml")
+            legacy_meta = TOML.parsefile(metadata_file)
+            wake_meta = legacy_meta["wake"][1]
+            pf_optargs = wake_meta["pfield_optargs"]
+            wake_meta["SFS"] = Dict{String, Any}("type" => "FLOWVPM.noSFS")
+            wake_meta["viscous"] = pf_optargs["viscous"]
+            delete!(pf_optargs, "SFS")
+            delete!(pf_optargs, "viscous")
+            open(metadata_file, "w") do io
+                TOML.print(io, legacy_meta)
+            end
+
+            @test pnl.migrate_metadata_toml(metadata_file) == metadata_file
+            @test isfile(metadata_file * ".bak")
+            migrated = TOML.parsefile(metadata_file)
+            @test !haskey(migrated["wake"][1], "SFS")
+            @test !haskey(migrated["wake"][1], "viscous")
+            @test migrated["wake"][1]["pfield_optargs"]["SFS"]["type"] == "FLOWVPM.SFS_default"
+            @test migrated["wake"][1]["pfield_optargs"]["viscous"]["kernel"] == "FLOWVPM.zeta_fmm"
+
+            migrated_text = read(metadata_file, String)
+            pnl.migrate_metadata_toml(metadata_file; backup=false)
+            @test read(metadata_file, String) == migrated_text
+            migrated_result = pnl.replay(legacy_path, "run"; steps=0, recompute=())
+            @test migrated_result.wakes[1].pfield.SFS === FLOWVPM.SFS_none
+            @test migrated_result.wakes[1].pfield.viscous.zeta === FLOWVPM.zeta_fmm
+        end
     end
 
     @testset "particle wake explicit field round trips" begin

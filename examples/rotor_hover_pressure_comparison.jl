@@ -7,6 +7,17 @@ using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
+import LinearAlgebra
+
+# BLAS threads: honor BLAS_NUM_THREADS, else OMP_NUM_THREADS, else Julia's
+# thread count. Env vars alone are not reliable across BLAS vendors/load
+# order, so set it explicitly here.
+let n = tryparse(Int, get(ENV, "BLAS_NUM_THREADS", get(ENV, "OMP_NUM_THREADS", string(Threads.nthreads()))))
+    if n !== nothing && n > 0
+        LinearAlgebra.BLAS.set_num_threads(n)
+    end
+    println("BLAS threads: $(LinearAlgebra.BLAS.get_num_threads()) (Julia threads: $(Threads.nthreads()))")
+end
 
 run_name = get(ENV, "RUN_NAME", "rotor_hover_pressure_comparison")
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
@@ -199,6 +210,12 @@ panel_wake_hessian_to_particles = parse(Bool, get(ENV, "PANEL_WAKE_HESSIAN_TO_PA
     string(!parse(Bool, get(ENV, "WAKEROW_NO_HESSIAN_TO_PARTICLES", "true")))))
 wakerow_no_hessian_to_particles = !panel_wake_hessian_to_particles
 body_hessian_to_particles       = parse(Bool, get(ENV, "BODY_HESSIAN_TO_PARTICLES",        "false"))
+# Split regularization for the body->particle influence: evaluate the velocity
+# GRADIENT with this (larger) kernel offset while the velocity keeps
+# KERNELOFFSET_TARGETS. NaN disables (single-pass, shared offset). Only active
+# when BODY_HESSIAN_TO_PARTICLES=true. Not strictly physical — smooths the
+# |∇U| bumpiness of piecewise-constant doublet panels felt by nearby particles.
+body_gradient_kerneloffset      = parse(Float64, get(ENV, "BODY_GRADIENT_KERNELOFFSET",    "NaN"))
 body_on_wake                    = parse(Bool, get(ENV, "BODY_ON_WAKE",                     "true"))
 panel_wake_on_particles         = parse(Bool, get(ENV, "PANEL_WAKE_VELOCITY_TO_PARTICLES",
     get(ENV, "PANEL_WAKE_ON_PARTICLES", "true")))
@@ -444,13 +461,28 @@ rhpc_setup_only = parse(Bool, get(ENV, "RHPC_SETUP_ONLY", "false"))
 
 if !rhpc_setup_only
 
-@time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
+# Warm-start mode: RESTART_STEP >= 0 resumes from a previous run's saved state
+# (default: this example's own baseline output) and continues with the CURRENT
+# ENV configuration — the basis for knob-perturbation experiments. The body,
+# wake, and frames objects must be construction-compatible with the restart
+# run (same RHPC_MESH, NT, RPM); construction-time knobs (RELAX_RLXF,
+# KERNELOFFSET_*, ...) and simulate!-kwarg knobs (BODY_HESSIAN_TO_PARTICLES,
+# ...) both take effect in the continuation.
+restart_step = parse(Int, get(ENV, "RESTART_STEP", "-1"))
+restart_name = get(ENV, "RESTART_NAME", "rotor_hover_pressure_comparison")
+restart_path = get(ENV, "RESTART_PATH", joinpath("data", restart_name))
+
+if restart_step >= 0
+
+@time pnl.simulate_warmstart!(systems, wakes, frames, maneuver!, Uinf, t_range;
+    restart_path, restart_name, restart_step,
     set_Das_eta_kinematic=NaN,
     set_Das_min_kinematic_displacement,
     monitors,
     body_solvers, backend, backend_wake,
     wakerow_no_hessian_to_particles,
     body_hessian_to_particles,
+    body_gradient_kerneloffset,
     body_on_wake,
     panel_wake_on_particles,
     particle_hessian_self,
@@ -462,6 +494,30 @@ if !rhpc_setup_only
     verbose=true,
     path=save_path, name,
 )
+
+else
+
+@time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
+    set_Das_eta_kinematic=NaN,
+    set_Das_min_kinematic_displacement,
+    monitors,
+    body_solvers, backend, backend_wake,
+    wakerow_no_hessian_to_particles,
+    body_hessian_to_particles,
+    body_gradient_kerneloffset,
+    body_on_wake,
+    panel_wake_on_particles,
+    particle_hessian_self,
+    particle_relax,
+    bound_strength_rlx,
+    diagnose_particle_gamma,
+    diagnose_particle_influence,
+    diagnostic_vertical=particle_diagnostic_vertical,
+    verbose=true,
+    path=save_path, name,
+)
+
+end
 
 if !run_monitors
     println("\nRUN_MONITORS=false; skipping pressure/force history summary.")

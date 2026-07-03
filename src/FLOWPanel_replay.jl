@@ -92,6 +92,8 @@ end
 function _particle_policy_manifest(policy)
     if policy isa MinGamma
         return Dict{String, Any}("type" => "MinGamma", "threshold" => policy.threshold)
+    elseif policy isa RelativeMinGamma
+        return Dict{String, Any}("type" => "RelativeMinGamma", "fraction" => policy.fraction)
     elseif policy isa MaxGamma
         return Dict{String, Any}("type" => "MaxGamma", "threshold" => policy.threshold)
     elseif policy isa GlobalBox
@@ -124,7 +126,18 @@ function _particle_policy_manifest(policy)
             "max_sigma_ratio" => policy.max_sigma_ratio,
             "skip_static" => policy.skip_static,
         )
+    elseif policy isa SplitParticles
+        return Dict{String, Any}(
+            "type" => "SplitParticles",
+            "every" => policy.every,
+            "verbose" => policy.verbose,
+            # Split options are opaque FLOWVPM objects; record that manual
+            # reconstruction is still required instead of guessing defaults.
+            "opts" => _metadata_unsupported_dict(typeof(policy.opts)),
+        )
     else
+        # Prepared* variants are runtime products of prepare_particle_policy;
+        # manifests record the original unprepared maintenance tuple.
         return _metadata_unsupported_dict(typeof(policy))
     end
 end
@@ -137,16 +150,45 @@ function _particle_maintenance_manifest(maintenance::ParticleMaintenance)
     )
 end
 
+function _singleton_tag(mod::Module, obj)::Union{String, Nothing}
+    for name in names(mod; all=true)
+        occursin('#', String(name)) && continue
+        isdefined(mod, name) || continue
+        getfield(mod, name) === obj && return "$(nameof(mod)).$(name)"
+    end
+    return nothing
+end
+
+function _resolve_singleton(tag::AbstractString, expected::Type)
+    prefix = "FLOWVPM."
+    startswith(tag, prefix) ||
+        throw(ArgumentError("replay: singleton tag \"$(tag)\" must start with \"$(prefix)\"."))
+    sym = Symbol(tag[lastindex(prefix) + 1:end])
+    isdefined(FLOWVPM, sym) ||
+        throw(ArgumentError("replay: FLOWVPM binding for tag \"$(tag)\" does not exist; this may be a FLOWVPM version mismatch. Try migrate_metadata_toml on the metadata file."))
+    x = getfield(FLOWVPM, sym)
+    x isa expected ||
+        throw(ArgumentError("replay: tag \"$(tag)\" resolved to $(typeof(x)), expected $(expected)."))
+    return x
+end
+
 function _viscous_manifest(viscous)
     if viscous isa FLOWVPM.Inviscid
         return Dict{String, Any}("type" => "FLOWVPM.Inviscid", "nu" => viscous.nu)
     elseif viscous isa FLOWVPM.CoreSpreading
+        kernel_tag = _singleton_tag(FLOWVPM, viscous.zeta)
         return Dict{String, Any}(
             "type" => "FLOWVPM.CoreSpreading",
             "nu" => viscous.nu,
             "core_size" => viscous.sgm0,
-            "kernel" => "FLOWVPM.zeta_fmm",
+            "kernel" => isnothing(kernel_tag) ? "FLOWVPM.zeta_fmm" : kernel_tag,
             "beta" => viscous.beta,
+        )
+    elseif viscous isa FLOWVPM.ParticleStrengthExchange
+        return Dict{String, Any}(
+            "type" => "FLOWVPM.ParticleStrengthExchange",
+            "nu" => viscous.nu,
+            "recalculate_vols" => viscous.recalculate_vols,
         )
     elseif viscous === nothing
         return Dict{String, Any}("type" => "nothing")
@@ -156,15 +198,11 @@ function _viscous_manifest(viscous)
 end
 
 function _sfs_manifest(sfs)
-    if sfs === FLOWVPM.SFS_default
-        return Dict{String, Any}("type" => "FLOWVPM.SFS_default")
-    elseif sfs === FLOWVPM.SFS_Cd_twolevel_nobackscatter
-        return Dict{String, Any}("type" => "FLOWVPM.SFS_Cd_twolevel_nobackscatter")
-    elseif sfs === nothing
+    if sfs === nothing
         return Dict{String, Any}("type" => "nothing")
-    else
-        return _metadata_unsupported_dict(typeof(sfs))
     end
+    tag = _singleton_tag(FLOWVPM, sfs)
+    return isnothing(tag) ? _metadata_unsupported_dict(typeof(sfs)) : Dict{String, Any}("type" => tag)
 end
 
 function _relaxation_filter_manifest(filter)
@@ -206,15 +244,13 @@ end
 # Generic per-value serialization for the FLOWVPM particle-field optargs NamedTuple.
 # Scalars pass through; known non-scalar FLOWVPM types get tagged dicts; anything
 # else falls back to an unsupported marker (record-only is acceptable here).
+# _singleton_tag/_resolve_singleton are the reusable mechanism for future
+# FLOWVPM singleton-tag round trips.
 _vpm_optarg_manifest(val::Union{Bool, Integer, AbstractFloat, AbstractString, Symbol}) = val
 _vpm_optarg_manifest(val::FLOWVPM.Relaxation) = _relaxation_manifest(val)
 _vpm_optarg_manifest(val::FLOWVPM.ViscousScheme) = _viscous_manifest(val)
+_vpm_optarg_manifest(val::FLOWVPM.SubFilterScale) = _sfs_manifest(val)
 function _vpm_optarg_manifest(val)
-    # SFS singletons compare by identity, so route them through _sfs_manifest;
-    # everything else records its type name.
-    if val === FLOWVPM.SFS_default || val === FLOWVPM.SFS_Cd_twolevel_nobackscatter
-        return _sfs_manifest(val)
-    end
     return _metadata_unsupported_dict(typeof(val))
 end
 
@@ -471,6 +507,7 @@ function _deserialize_wake_shedding(meta)
     elseif wtype == "nothing"
         return NoShed()
     else
+        @warn "replay: unrecognized wake shedding tag \"$(wtype)\"; falling back to NoShed (result may differ)"
         return NoShed()
     end
 end
@@ -479,6 +516,8 @@ function _deserialize_particle_policy(meta)
     ptype = String(get(meta, "type", "unsupported"))
     if ptype == "MinGamma"
         return MinGamma(Float64(get(meta, "threshold", 0.0)))
+    elseif ptype == "RelativeMinGamma"
+        return RelativeMinGamma(Float64(get(meta, "fraction", 0.0)))
     elseif ptype == "MaxGamma"
         return MaxGamma(Float64(get(meta, "threshold", 0.0)))
     elseif ptype == "GlobalBox"
@@ -519,32 +558,111 @@ function _deserialize_viscous(meta)
     if vtype == "FLOWVPM.Inviscid"
         return FLOWVPM.Inviscid()
     elseif vtype == "FLOWVPM.CoreSpreading"
-        kernel = get(meta, "kernel", "FLOWVPM.zeta_fmm")
-        kernel_fn = kernel == "FLOWVPM.zeta_fmm" ? FLOWVPM.zeta_fmm : FLOWVPM.zeta_fmm
+        kernel_fn = _resolve_singleton(String(get(meta, "kernel", "FLOWVPM.zeta_fmm")), Function)
         return FLOWVPM.CoreSpreading(
             Float64(get(meta, "nu", 0.0)),
             Float64(get(meta, "core_size", 0.0)),
             kernel_fn;
             beta=Float64(get(meta, "beta", 1.5)),
         )
+    elseif vtype == "FLOWVPM.ParticleStrengthExchange"
+        return FLOWVPM.ParticleStrengthExchange{Float64}(
+            Float64(get(meta, "nu", 0.0));
+            recalculate_vols=Bool(get(meta, "recalculate_vols", true)),
+        )
     elseif vtype == "nothing"
         return FLOWVPM.Inviscid()
     else
+        @warn "replay: unrecognized viscous tag \"$(vtype)\"; falling back to Inviscid (result may differ)"
         return FLOWVPM.Inviscid()
     end
 end
 
 function _deserialize_sfs(meta)
     stype = String(get(meta, "type", "unsupported"))
-    if stype == "FLOWVPM.SFS_default"
-        return FLOWVPM.SFS_default
-    elseif stype == "FLOWVPM.SFS_Cd_twolevel_nobackscatter"
-        return FLOWVPM.SFS_Cd_twolevel_nobackscatter
-    elseif stype == "nothing"
-        return FLOWVPM.SFS_default
-    else
-        return FLOWVPM.SFS_default
+    if stype == "nothing" || stype == "unsupported"
+        @warn "replay: unrecognized SFS tag \"$(stype)\"; falling back to SFS_none (result may differ)"
+        return FLOWVPM.SFS_none
     end
+    return _resolve_singleton(stype, FLOWVPM.SubFilterScale)
+end
+
+const _LEGACY_TAG_REMAP = Dict{String, String}()
+
+function _canonicalize_flowvpm_tag(tag::AbstractString, unresolved::Vector{String})
+    startswith(tag, "FLOWVPM.") || return tag
+    resolved_tag = tag
+    try
+        obj = _resolve_singleton(resolved_tag, Any)
+        canonical = _singleton_tag(FLOWVPM, obj)
+        return isnothing(canonical) ? resolved_tag : canonical
+    catch
+        if haskey(_LEGACY_TAG_REMAP, tag)
+            resolved_tag = _LEGACY_TAG_REMAP[tag]
+            try
+                obj = _resolve_singleton(resolved_tag, Any)
+                canonical = _singleton_tag(FLOWVPM, obj)
+                return isnothing(canonical) ? resolved_tag : canonical
+            catch
+            end
+        end
+        push!(unresolved, tag)
+        return tag
+    end
+end
+
+function _canonicalize_metadata_tags!(x, unresolved::Vector{String})
+    if x isa AbstractDict
+        for (k, v) in collect(x)
+            String(k) == "julia_type" && continue
+            if v isa AbstractString
+                x[k] = _canonicalize_flowvpm_tag(v, unresolved)
+            else
+                _canonicalize_metadata_tags!(v, unresolved)
+            end
+        end
+    elseif x isa AbstractVector
+        for i in eachindex(x)
+            v = x[i]
+            if v isa AbstractString
+                x[i] = _canonicalize_flowvpm_tag(v, unresolved)
+            else
+                _canonicalize_metadata_tags!(v, unresolved)
+            end
+        end
+    end
+    return x
+end
+
+"""
+    migrate_metadata_toml(path::AbstractString; backup=true) -> path
+
+Rewrite a replay metadata TOML file to the current layout and canonical FLOWVPM
+binding tags. A backup is written to `path * ".bak"` by default.
+"""
+function migrate_metadata_toml(path::AbstractString; backup=true)
+    data = TOML.parsefile(path)
+    unresolved = String[]
+    for wmeta in get(data, "wake", Any[])
+        wmeta isa AbstractDict || continue
+        pf_optargs = get!(wmeta, "pfield_optargs", Dict{String, Any}())
+        for key in ("viscous", "SFS", "relaxation")
+            if haskey(wmeta, key)
+                haskey(pf_optargs, key) || (pf_optargs[key] = wmeta[key])
+                delete!(wmeta, key)
+            end
+        end
+        _canonicalize_metadata_tags!(wmeta, unresolved)
+    end
+    if !isempty(unresolved)
+        unique_tags = unique(unresolved)
+        throw(ArgumentError("migrate_metadata_toml could not resolve FLOWVPM tags: $(join(unique_tags, ", ")). Add renamed bindings to _LEGACY_TAG_REMAP if needed."))
+    end
+    backup && cp(path, path * ".bak"; force=true)
+    open(path, "w") do io
+        TOML.print(io, data)
+    end
+    return path
 end
 
 function _deserialize_relaxation_filter(meta)

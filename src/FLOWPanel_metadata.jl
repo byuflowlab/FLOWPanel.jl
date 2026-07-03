@@ -294,6 +294,18 @@ function _monitor_metadata(m)
             "verbose" => m.verbose,
             "file" => m.file,
         )
+    elseif m isa CylindricalFieldProbeMonitor
+        return Dict{String, Any}(
+            "type" => "CylindricalFieldProbeMonitor",
+            "i_frame" => m.i_frame,
+            "axial_axis" => string(m.axial_axis),
+            "n_axial" => m.n_axial,
+            "n_radial" => m.n_radial,
+            "n_azimuth" => m.n_azimuth,
+            "save_path" => m.save_path === nothing ? "nothing" : m.save_path,
+            "name" => m.name,
+            "verbose" => m.verbose,
+        )
     else
         return _metadata_unsupported_dict(typeof(m))
     end

@@ -28,7 +28,7 @@ export  solve, save, influence!,
         NoSectionalNormalization, FreestreamSectionalNormalization,
         RotorSectionalNormalization,
         steady!, simulate_warmstart!, initialize_Das!,
-        replay, ReplayResult
+        replay, ReplayResult, migrate_metadata_toml
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA

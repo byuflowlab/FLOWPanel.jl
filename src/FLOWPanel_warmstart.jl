@@ -307,6 +307,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
         verbose=false,
+        optargs...,
     )
     systems_tuple = _systems_tuple(systems)
     wakes_tuple = _wakes_tuple(systems, wakes)
@@ -325,7 +326,15 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     if restart_step < 0
         restart_step = idxs[end]
     end
-    @assert restart_step in idxs "restart_step=$(restart_step) not found in $(body_pvd) (available: $(idxs))"
+    if !(restart_step in idxs)
+        # The PVD manifest can be stale (e.g. overwritten by a later short run
+        # into the same directory) while the per-step files are intact. Trust an
+        # explicit restart_step if its body file exists on disk.
+        probe = joinpath(rpath, rname * "_body1", rname * "_body1.$(restart_step).vtu")
+        isfile(probe) || error("restart_step=$(restart_step) not found in $(body_pvd) " *
+            "(available: $(idxs)) and $(probe) does not exist")
+        @warn "restart_step=$(restart_step) missing from PVD manifest $(body_pvd) (stale manifest?); proceeding because $(probe) exists"
+    end
     @assert restart_step + 1 < length(t_range) "restart_step=$(restart_step) leaves no steps to simulate (t_range has $(length(t_range)) entries)"
 
     if verbose
@@ -363,6 +372,30 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         end
     end
 
+    # 2.5 Frame state: prefer the saved manifest; when the manifest is stale
+    # (missing restart_step — same failure mode as the stale PVD above),
+    # reconstruct the frames by replaying the kinematics exactly as simulate!'s
+    # loop applies them: maneuver! at t_range[i+1], then propagate_kinematics!
+    # with dt = t_range[i+2]-t_range[i+1], for steps 0..restart_step-1, plus
+    # step restart_step's maneuver! (its end-of-step propagate is replayed in
+    # section 5 below). Body-node motion during the replay is harmless — nodes
+    # are overwritten from disk in section 3.
+    frames_loaded = try
+        _load_frame_state_toml!(frames, rpath, rname, restart_step)
+        true
+    catch err
+        verbose && println("simulate_warmstart!: frame state for step $(restart_step) " *
+            "unavailable ($(sprint(showerror, err))); reconstructing by kinematic replay")
+        false
+    end
+    if !frames_loaded
+        for i in 0:(restart_step - 1)
+            maneuver!(frames, systems_tuple, wakes_tuple, t_range[i+1])
+            propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
+        end
+        maneuver!(frames, systems_tuple, wakes_tuple, t_range[restart_step+1])
+    end
+
     # 3. Load on-disk state at restart_step.
     for (i, sys) in enumerate(systems_tuple)
         body_name = rname * "_body$(i)"
@@ -381,7 +414,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         end
     end
 
-    _load_frame_state_toml!(frames, rpath, rname, restart_step)
+    # (frame state was restored/reconstructed in section 2.5 above)
 
     # 4. Refresh derived geometry that wasn't persisted.
     for sys in systems_tuple
@@ -420,6 +453,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
         start_step=restart_step + 1,
         verbose=verbose,
+        optargs...,
     )
 
     return systems, wakes, frames

@@ -968,7 +968,7 @@ Highly stable and reproducible across the settled hover window (per-state CSV in
 | Quantity | mean (340–359) | note |
 | --- | --- | --- |
 | basis ω vs curl-of-J | 0.186 | calibration OK |
-| neighbors / particle | ~22,500 | heavy overlap (σ_med≈0.020, σ_max≈0.052, np≈39,400) |
+| neighbors / particle (within global 4·σ_max) | ~22,500 | truncation-radius count, NOT an overlap count — see 2026-07-02 correction below |
 | diag-dominance (median) | **0.006** | M strongly NON-diagonally-dominant |
 | convective-correction rel size | 0.443 | non-negligible |
 | `r_reduced,phys` | 0.315 | |
@@ -977,6 +977,32 @@ Highly stable and reproducible across the settled hover window (per-state CSV in
 | **`r_sampled,fvpm`** | **0.621** | go/no-go: FLOWVPM-consistency residual |
 
 Per-state cost ~13 s (fused single neighbor pass over a flat CSR cell list).
+
+**2026-07-02 correction — neighbor-count metric.** The ~22,500 figure is the count of
+particles inside the *global* truncation radius `4·σ_max ≈ 0.21` (`analyze` builds one CSR
+cutoff from the max σ, which is a fat-tail outlier: σ is median 0.020, q99 0.035, max 0.052).
+Since the wake bounding box is only ~0.42×0.32×0.31, that ball covers over half the cloud —
+the number measures the truncation radius, not kernel overlap. Re-measured on step 350 with
+pairwise widths (`sqrt(σ_i²+σ_k²)`): median **~7,240** neighbors within 4·σ_eff (any
+meaningful Gram entry), median **~1,180** within 2·σ_eff (strong overlap), and median **1**
+near-coincident partner within 0.25·σ — with **54% of particles having at least one** such
+near-duplicate (nearest-neighbor spacing median h ≈ 0.0046). The physically meaningful
+overlap statement is the ratio **σ_med/h ≈ 4.2 (q90 ≈ 7, max ≈ 21)** — genuinely heavy
+overlap, just not "22k overlapping kernels". Impact audit: all residuals in the table are
+unaffected (an oversized cutoff only *adds* accurate tail contributions), diag-dominance is
+kernel-value-weighted and unaffected, and the cost figure reflects real pair visits. Only the
+interpretation of the neighbor row changes. The 54% near-duplicate fraction is new,
+actionable information: those pairs are literal duplicate basis columns — a trivial,
+identifiable component of the Gram null space, separate from the genuine over-resolution at
+σ/h ≈ 4 that regularization must handle. IMPORTANT: these near-duplicates are **structural,
+not incidental** — two particles are shed per timestep and the pairing is used to build
+vortex filaments out of particles, so immediately merging them is NOT appropriate. The right
+handling is in coefficient space within the solve: the Gram cannot distinguish a
+near-duplicate pair's individual strengths, only their sum, so the physically meaningful
+constraint is to tie the pair's *correction* together (e.g., equal Δ per pair, or Δ that
+preserves the pair's internal strength split) — this removes the trivial null directions
+while leaving the filament-bearing particle structure untouched. Any merging-based overlap
+management (item 012) must be filament-aware.
 
 ### Interpretation / verdict: GO (materially large residual)
 
@@ -1067,7 +1093,263 @@ Recommended sequence:
    modes, item 008 should pivot to explaining why the collocation signal does not
    justify a live solve.
 6. Only after the Galerkin residual and correction are understood, add SFS /
-   `\dot{\sigma}` full-RHS terms and compare against Pedrizzetti or
-   corrected-Pedrizzetti relaxation on the stable-wake cases. A second target run
-   will be supplied by the user. The diagnostic helper is structured for reuse as
-   a live monitor if desired.
+  `\dot{\sigma}` full-RHS terms and compare against Pedrizzetti or
+  corrected-Pedrizzetti relaxation on the stable-wake cases. A second target run
+  will be supplied by the user. The diagnostic helper is structured for reuse as
+  a live monitor if desired.
+
+## 2026-07-02 Galerkin prototype results
+
+Executed the first Galerkin prototype phase from
+`plans/20260702_overlap.md`. New read-only/offline scripts:
+
+- `examples/particle_overlap_galerkin.jl` — shared Gaussian Gram operator,
+  midpoint Galerkin RHS, diagonal-Jacobi PCG, dense sub-cloud helpers.
+- `examples/particle_overlap_subsystem_cond.jl` — dense subsystem conditioning
+  and buffered-interior Cholesky solves.
+- `examples/particle_overlap_galerkin_cg_diag.jl` — full-scale matrix-free PCG
+  diagnostic.
+- `examples/particle_pedrizzetti_vs_galerkin.jl` — offline Pedrizzetti replay
+  scored against the same Galerkin residual and an optimal-scaled direction
+  test.
+
+Important data caveat: the saved `vol` point-data field exists in
+`rotor_hover_pressure_comparison_wake1_particles.350.vtp`, but is all zeros.
+`circulation` is signed and not a valid volume proxy. The Galerkin midpoint
+quadrature therefore used an inverse local partition-sum fallback
+`w_i = 1 / Σ_j ζ_{σ_i}(X_i-X_j)`. This preserves a partition-of-unity style
+calibration, but the absolute residuals should be read as fallback-quadrature
+diagnostics rather than exact stored-volume quadrature.
+
+### Part 1: subsystem conditioning
+
+Step 350, `NP_TARGET=300`, capped buffer size `|B|=|I|` after the plan's buffer
+sanity check found the uncapped effective ring becoming near-global.
+
+| region | min eig | cond | Jacobi-preconditioned cond | interior min eig | solve λ | buffered residual | correction size |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tipvortex | -6.63e-12 | -6.55e16 | -4.22e16 | -1.32e-12 | 1.00e-12 | 1.71e-10 | 1.07e7 |
+| oldwake | 1.11e-11 | 5.05e16 | 1.46e16 | 1.45e-9 | 0 | 9.95e-11 | 8.58e6 |
+
+The dense Gram matrices are symmetric, but the sub-clouds are numerically
+rank-deficient at machine precision. Dense Cholesky can drive the algebraic
+linear residual to ~1e-10 with tiny diagonal jitter in the tip-vortex case, but
+the resulting strength-rate correction is millions of times larger than the
+isolated update. This is a negative result for the explicit unregularized
+subsystem solve as a robust update direction.
+
+### Part 2: full-scale matrix-free PCG
+
+Step 350, SFS off, `cutoff_factor=4`.
+
+- Initial Galerkin residual: `r_G(Γdot0)=0.4504575`.
+- `λ=0`, 3 PCG iterations: `r_G=0.192614`, monotone, correction size `0.7836`.
+- `λ=0`, 20 PCG iterations: `r_G=0.0749947`, non-monotone residual history,
+  correction size `4.2149`.
+- `λ=1e-6`, 20 PCG iterations: unchanged at reported precision
+  (`r_G=0.0749947`, non-monotone, correction size `4.2149`).
+
+The matrix-free solve materially reduces the Galerkin residual by about 6x in
+20 iterations, so the overlap equation is not redundant. However, the residual
+history is not monotone at the tested λ and the correction is large, so the run
+does not yet satisfy the robust-PCG definition from the plan.
+
+### Part 3a: Pedrizzetti closeness
+
+Step 350, SFS on, same fallback Galerkin RHS. Baseline
+`r_G(Γdot0+SFS)=0.5640379`.
+
+| variant | rlxf | direct r_G | optimal-scaled r_G | correction size |
+| --- | ---: | ---: | ---: | ---: |
+| vanilla | 0.00 | 0.5621 | 0.5573 | 0.0043 |
+| vanilla | 0.06 | 0.5936 | 0.5545 | 0.3502 |
+| vanilla | 0.30 | 1.5615 | 0.5549 | 1.7480 |
+| vanilla | 0.60 | 3.0678 | 0.5549 | 3.4953 |
+| vanilla | 1.00 | 5.1240 | 0.5549 | 5.8250 |
+| corrected | 0.00 | 0.5621 | 0.5573 | 0.0043 |
+| corrected | 0.06 | 0.5766 | 0.5484 | 0.3318 |
+| corrected | 0.30 | 1.5537 | 0.5507 | 1.7315 |
+| corrected | 0.60 | 3.1759 | 0.5540 | 3.5849 |
+| corrected | 1.00 | 5.1240 | 0.5549 | 5.8250 |
+
+Direct Pedrizzetti relaxation moves away from the Galerkin equations for
+practical `rlxf` values. Its direction has only a weak best-scaled benefit,
+bottoming near `r_G≈0.548`, far above the PCG result `0.075`. On this metric,
+Pedrizzetti is not a useful proxy for the overlap-consistent Galerkin solve.
+
+### Current verdict
+
+Provisional result: **not robust yet; continue only with regularization and
+quadrature clarification.** The overlap solve is meaningful because PCG reduces
+the full-scale residual substantially, but the dense subsystem spectra are
+machine-rank-deficient, the unregularized Cholesky correction is huge, the
+20-iteration PCG history is non-monotone, and Pedrizzetti relaxation is not
+aligned with the Galerkin residual reduction. Before any live update prototype,
+the next step should resolve the zero-`vol` quadrature issue and sweep stronger
+diagonal regularization values chosen from correction drift, not just residual
+reduction.
+
+## 2026-07-02 Wake-age residual attribution (distortion hypothesis REFUTED)
+
+New script `examples/particle_overlap_age_diag.jl` attributes the full-scale
+Galerkin residual `R = M_G Γ̇⁽⁰⁾ − b_G` of the isolated update across wake-age
+bands: row-restricted residual `r_G(S)=‖R_S‖/‖b_S‖` with the FULL-cloud operator
+(an attribution of the global residual, not a subsystem solve). Age proxy:
+axial-position quantile bands (larger axial = older; proxy only — rollup makes
+age non-monotone near the rotor plane). Secondary banding by σ (merge-history
+proxy). Whole-cloud aggregation reproduces the recorded global
+`r_G(Γ̇⁰)=0.4504575` exactly (step 350, SFS off, cutoff 4, λ=0). CSVs in
+`data/overlap_age_diag/`.
+
+Hypothesis under test (from the classical-convergence discussion): the isolated
+update is exactly consistent along characteristics, and its field residual
+should therefore be *distortion-driven* — small in the young, freshly shed,
+well-ordered wake and growing with age/merge history, in which case remeshing
+(the classical remedy) would be the indicated fix.
+
+**Result: the opposite, stable across steps 350 and 355.**
+
+- Axial profile is U-shaped: **youngest band r_G ≈ 0.64** (33% of residual
+  energy on 16% of RHS energy; near-duplicate fraction 0.89 — the shed-pair
+  birth region), mid-wake floor ≈ 0.32–0.38, oldest band ≈ 0.53 (far-wake
+  truncation edge; the basis is chopped there, so read it with caution).
+- σ profile is **monotone decreasing**: smallest-σ (unmerged, youngest)
+  particles sit at r_G ≈ 0.55 and carry 56% of the residual energy; the
+  largest-σ (most-merged) particles satisfy the projected equation *best*
+  (r_G ≈ 0.24). Caveat: the near-duplicate flag threshold scales with σ
+  (0.25·σ), so `dupfrac` is not a clean merge indicator across σ bands.
+
+Interpretation: the residual is NOT age-accumulated distortion — merged,
+diffused, old particles are the *most* field-consistent, presumably because
+their wide kernels are well-resolved relative to the local velocity gradients.
+The inconsistency is concentrated at **shedding conditions**: fresh small-σ
+particles in the near-rotor sheet, mid-rollup, in shed pairs, with strong
+velocity variation across their supports. Consequences for the remedy fork:
+
+- Remeshing/redistribution (the classical remedy for quadrature breakdown)
+  targets the old wake — which is not where the signal is. It is NOT the
+  indicated fix for this residual.
+- The signal sits exactly where the wake is still filament/sheet-coherent, so
+  the young-wake-restricted overlap solve and the spline/filament
+  representation ideas target the right region, and the shed-pair structure
+  (dupfrac 0.89 in the hottest band) is directly implicated.
+- The far-wake band-10 elevation should be checked against wake-truncation/
+  particle-deletion artifacts before interpreting it physically.
+
+### Relaxation-dose confounder check (same date)
+
+The tested run evolved with corrected Pedrizzetti (rlxf=0.3, every step), so
+old particles have received hundreds of relaxation applications and young ones
+few — the improvement of r_G with age could in principle be relaxation
+*manufacturing* field-consistency cumulatively (reading b), rather than wide
+kernels being better resolved relative to local gradients (reading a). The
+planned rlxf ablation dataset turned out not to exist: despite its name,
+`data/rotor_hover_relax006_full/` is an item-006 run at **rlxf=0.3** (filter
+"all") with **ReformulatedVPM + viscous CoreSpreading** (per its
+metadata.toml), not rlxf=0.06 — the plan doc has been corrected. No saved
+particle run at a different rlxf exists.
+
+The age diagnostic on that run (steps 915, 920 — stable) still discriminates,
+because there σ and age *decouple*: core spreading + merging make σ peak in
+mid-wake (axial bands 6–7, σ_med ≈ 0.028–0.030) while the oldest surviving
+particles (bands 8–10) have *smaller* σ ≈ 0.016–0.022. Result: the residual
+follows **σ, not relaxation dose** — bands 6–7 are the most consistent
+(r_G ≈ 0.26–0.38) while the oldest, most-relaxed bands 8–10 are *worse*
+(r_G ≈ 0.38–0.45) exactly where σ is smaller. The σ-banded profile is monotone
+(0.58 → 0.21) just as in the primary run, replicating across formulation and
+viscous model. Caveat: bands 8–10 there carry ≲0.2% of the RHS energy each, so
+their ratios are noisy; and both runs share rlxf=0.3, so this is a
+dose-vs-σ decoupling argument, not a true ablation.
+
+Verdict: reading (a) — resolution of the kernel relative to the local field
+scale — is supported; cumulative-relaxation manufacture of consistency
+(reading b) is disfavored. In the primary run the young band additionally has
+*large* σ_med (0.023) yet the worst residual, so shedding-region conditions
+(sheet mid-rollup, shed pairs, strong velocity variation across supports)
+dominate there beyond what σ alone predicts. A clean rlxf ablation would need
+a new simulation (e.g. warm-started relax-off continuation); deferred unless
+the item's verdict comes to hinge on it.
+
+### Body/panel-wake strain omission audit (same date)
+
+New script `examples/particle_body_strain_audit.jl` (requires `RHPC_MESH=40_40`
+for this run): rebuilds the example systems with `RHPC_SETUP_ONLY=true`,
+warmstart-loads the solved body + wake at step 350, and evaluates the
+body→particle and panel-wake-row→particle velocity gradients that the run's
+flags omit (`BODY_HESSIAN_TO_PARTICLES=false`,
+`PANEL_WAKE_HESSIAN_TO_PARTICLES=false`), using the same influence machinery
+the live run would have used. Validation gates: total reconstructed induced
+velocity matches saved particle `velocity` to **6.5e-3** relative, and the
+recomputed particle-particle J matches saved J to **1.9e-4** — reload,
+kernel offsets, and kernels verified end-to-end.
+
+**Result: the omitted stretching terms are first-order in the youngest band
+and negligible everywhere else.** With S(J,Γ) the transposed stretching rate,
+per axial band (age proxy):
+
+| band | axial | ‖S_body‖/‖S_part‖ med / q90 / Frob | ‖S_wrow‖/‖S_part‖ med / q90 |
+| --- | --- | --- | --- |
+| 1 (youngest) | −0.006–0.046 | 0.096 / 0.83 / **3.20** | 0.200 / **1.38** |
+| 2 | 0.046–0.108 | 0.014 / 0.06 / 0.02 | 0.047 / 0.19 |
+| 3–10 | >0.108 | ≤0.003 | ≤0.013 |
+
+Global Frobenius ratios are 1.42 (body) and 1.27 (wake rows) — entirely
+band-1-driven. So freshly shed particles, during exactly the steps that set
+tip-vortex rollup, evolve with strength-rate terms omitted that rival or
+exceed (top decile; dominate in the energy norm) the retained particle-only
+stretching, while being advected by the velocity those same sources induce —
+a physically inconsistent mixed model concentrated at the rotor plane.
+
+Consequences: (i) the young-band Galerkin residual (0.64) is measured against
+a particle-only equation whose true counterpart has O(1) missing terms there —
+the age-diagnostic's band-1 number conflates particle-update inconsistency
+with equation-scope truncation; (ii) this is a concrete candidate lever on the
+rotor-hover CT shortfall (items 003/004 routed it to wake modeling) — a
+`BODY_HESSIAN_TO_PARTICLES=true PANEL_WAKE_HESSIAN_TO_PARTICLES=true` run is
+the direct test. Caveats: the wake-row Hessian ablation was originally
+motivated by spurious |∇U|~1/r² edge fields from the ring+filament
+representation (comment in `_steady_aerodynamics!`) — part of the band-1
+wake-row q90 may be that edge artifact rather than physical sheet strain, and
+a live re-enable would need near-field smoothing; the body term has no such
+excuse and is the cleaner half of the finding. CSV:
+`data/overlap_age_diag/rotor_hover_pressure_comparison_step350_body_strain.csv`.
+
+**Follow-up — J_total substituted into both sides of the overlap equation
+(age diag `EXTRA_J` mode): the scope truncation does NOT explain the
+young-band residual.** With `J_total = J_particle + J_body + J_wrow` used in
+both `Γ̇⁰ = S(J_total,Γ)` and the RHS (step 350, SFS off): global r_G
+0.4505 → 0.4618 (slightly worse), band 1 r_G 0.646 → 0.626 (−3%), bands 2–10
+essentially unchanged (band 10 identical). Explanation: an external strain
+field that is smooth on the kernel scale enters the projected equation almost
+consistently — in the equal-J-across-support limit the isolated update is
+exactly consistent — so adding it to both sides nearly cancels in the
+residual. Two consequences: (i) the body/wake-row omission is a **live-physics
+modeling issue** (O(1) missing Γ̇ terms on freshly shed particles → candidate
+CT lever, unchanged by this follow-up) but **not a significant contaminant of
+the overlap-consistency diagnostic**; (ii) the young-band residual is
+therefore genuinely particle-scale — overlap coupling, kernel-vs-gradient
+resolution, and shed-pair irregularity remain the live candidates, and the
+PCG-solution band-resolved residual remains the discriminator among them.
+CSVs: `..._step350_{axial,sigma}_jtotal.csv`.
+
+**Attempted low-rlxf check on `stable_wake_e6_conv_corr0p025_d4_w12_s30`
+(rlxf=0.025 per run name; SFS `Cd_twolevel_nobackscatter` + CoreSpreading
+active): unusable as an ablation.** Findings from the age diagnostic (steps
+400/410/420/425; robust per-row median residuals `rrel_med` added to the
+script for this purpose): (i) the run never settles — np grows to ~27.6k at
+step 410, then the wake collapses to 8.6k by step 425 (consistent with item
+005's low-relaxation destabilization; the collapse is plausibly why the run
+ends at 427); band profiles differ wildly between steps 400 and 410, so there
+is no stable window. (ii) Extreme σ heterogeneity (σ ∈ ~1e-3..0.35, σ/h ≈
+6–12) makes energy-weighted norms meaningless — a single small-σ cluster
+carries ~100% of ‖b_G‖². (iii) The diagnostic RHS omits exactly the physics
+this run has (viscous σ̇ term, SFS), and those omissions grow with σ,
+contaminating the σ-band trend one would want to read. (iv) The typical
+particle sits at per-row relative residual ~0.9–3 *everywhere* — a
+qualitatively different regime from the primary run (~0.3–0.6), so
+cross-run band-trend comparison is not apples-to-apples. Weak qualitative
+note, stated with all the above caveats: at 12× lower rlxf the wake is both
+globally much farther from overlap consistency and unstable — directionally
+consistent with relaxation doing stabilizing work (item 005) — but this
+cannot disentangle dose from σ/viscous/SFS/instability effects. The matched-
+physics warm-started rlxf ablation remains the only airtight instrument.
