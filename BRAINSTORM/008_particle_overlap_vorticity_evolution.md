@@ -1353,3 +1353,35 @@ globally much farther from overlap consistency and unstable — directionally
 consistent with relaxation doing stabilizing work (item 005) — but this
 cannot disentangle dose from σ/viscous/SFS/instability effects. The matched-
 physics warm-started rlxf ablation remains the only airtight instrument.
+
+### 2026-07-03 Matched rlxf ablation (0.3 vs 0.6): dose hypothesis REFUTED
+
+The user supplied two runs of the same configuration family
+(`stable_wake_e7_nt36_rlxf0p3` / `..._rlxf0p6`; nt=36, viscous CoreSpreading +
+SFS active, 1655 steps) differing only in corrected-Pedrizzetti rlxf. Age
+diagnostic on settled steps 1640/1650 of both (SFS off in the diagnostic for
+both — the omitted terms cancel in the *contrast*):
+
+| quantity | rlxf=0.3 | rlxf=0.6 |
+| --- | --- | --- |
+| np | ~34k | ~44k |
+| global r_G(Γ̇⁰) | 0.599 / 0.687 | 0.524 / 0.520 |
+| youngest-band rrel_med | 0.56 / 0.63 | 0.50 / 0.50 (peak in band 2: 0.63/0.61) |
+| mid-wake floor rrel_med | ~0.33–0.41 | ~0.30–0.36 |
+| young→mid gradient ratio | ~1.65 | ~1.5 |
+| σ-band r_G trend | 0.63→0.33 monotone | 0.47→0.32 monotone |
+
+**Doubling the relaxation dose leaves the wake-age residual profile essentially
+unchanged in shape**: young wake worst, mid-wake floor ~0.33 in both, identical
+monotone σ trend, and the young-to-mid gradient does NOT steepen with dose (if
+cumulative relaxation manufactured old-wake consistency, it should have). The
+oldest bands are, if anything, marginally *less* consistent at the higher dose.
+The modest global shift (0.52 vs ~0.6) comes with a structurally different wake
+(np 44k vs 34k — relaxation strength changes shedding/maintenance balance), so
+profile shape, not absolute level, is the valid readout. Together with the
+σ-vs-dose decoupling in `relax006_full`, this closes the confounder: the
+age/σ dependence of the overlap residual is a **resolution effect (kernel width
+vs local field scale), not a relaxation-dose effect**. The wake-age conclusions
+of the 2026-07-02 attribution section stand. CSVs:
+`data/overlap_age_diag/stable_wake_e7_nt36_rlxf0p{3,6}_step{1640,1650}_{axial,sigma}.csv`
+(the 0.3-run CSVs survive the deleted run directory).

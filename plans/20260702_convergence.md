@@ -66,7 +66,17 @@ Knob rationale (established earlier on this branch, recorded in
    backends may not support hessian-only evaluation). NaN disables; only active when
    `BODY_HESSIAN_TO_PARTICLES=true`. Costs one extra body→particles FMM pass per step.
    Recorded in each run's metadata.toml under solver_options.
-4. **Pedrizzetti relaxation, treated as artificial dissipation.** rlxf is a per-step
+4. **Particle merging (`MERGE_PARTICLES`, baseline `true`).** The baseline merges
+   particles every step (`MergeParticles` monitor, `r=0.02R`, `r_hash=0.02R`), which
+   coarse-grains the wake and diffuses vorticity — a candidate CT suppressor. Turning it
+   off (`MERGE_PARTICLES=false`, scenario `merge_off`) keeps every shed particle for the
+   ~154-step continuation; if CT rises, merge-induced diffusion is part of the shortfall.
+   Cost/risk: particle count grows unbounded over the continuation (per-step walltime and
+   memory climb; watch for slowdown, not a hard crash), and un-merged near-duplicate shed
+   pairs are structural, not overlap error (see
+   `project_particle_shed_pairs_overlap`) — do not read a rising np as instability by
+   itself. A finite continuation is short enough that unbounded growth is tolerable.
+5. **Pedrizzetti relaxation, treated as artificial dissipation.** rlxf is a per-step
    blend; the physically meaningful parameter is the rate λ = rlxf/dt (baseline
    λ = 0.3·3600 = 1080 s⁻¹). Convergent, tuning-free procedure: run the halving ladder
    rlxf ∈ {0.3 (=control), 0.15, 0.075} at fixed dt, verify monotone CT(λ) over the
@@ -115,7 +125,8 @@ Knob rationale (established earlier on this branch, recorded in
 Scenarios (driver `SCENARIO_DEFS`): `control` (pure continuation), `bodyhess`,
 `bodyhess_gradoff` (BODY_HESSIAN_TO_PARTICLES=true + BODY_GRADIENT_KERNELOFFSET=4e-3 —
 knob 3), `wakerowhess`, `koff_5e-4`, `koff_2p5e-4` (both with WAKE_CORE_SIZE pinned),
-`rlxf_0p15`, `rlxf_0p075`, `relaxfilter_0p5R`.
+`rlxf_0p15`, `rlxf_0p075`, `relaxfilter_0p5R`, `merge_off` (MERGE_PARTICLES=false —
+knob 4).
 
 **Thread control (verified):** the driver exports `OPENBLAS_NUM_THREADS`,
 `OMP_NUM_THREADS`, `BLAS_NUM_THREADS`, and `JULIA_NUM_THREADS` = THREADS to each
@@ -144,6 +155,7 @@ SCENARIOS=control,bodyhess THREADS=36 julia --project=. examples/rotor_hover_ct_
 # 3. Remaining scenarios (incremental; summary CSV merges across invocations)
 SCENARIOS=bodyhess_gradoff,wakerowhess,koff_5e-4,koff_2p5e-4 THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
 SCENARIOS=rlxf_0p15,rlxf_0p075,relaxfilter_0p5R THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SCENARIOS=merge_off THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
 ```
 
 **Gates, in order (stop and report on failure):**
@@ -215,6 +227,27 @@ waiting. Sanctioned without asking:
   `examples/particle_body_strain_audit.jl` — e.g. run the strain audit on a bodyhess
   output to verify the term is now consistent), and small plotting/summary scripts.
 - Editing the **driver's scenario table and reporting** as needed.
+
+**Second-tier / creative knobs (explore after the primary sweep above).** All three
+already exist as ENV knobs in `examples/rotor_hover_pressure_comparison.jl` — no src work
+needed to try them:
+
+- **Downstream cull plane** `TRUNCATION_DEPTH_R` (default 4). The example installs a
+  `GlobalCylinder([-0.5R,0,0], [TRUNCATION_DEPTH_R·R,0,0], 1.5R)` particle-trim policy
+  (`examples/rotor_hover_pressure_comparison.jl:298`) that removes every particle past a plane
+  `TRUNCATION_DEPTH_R` radii downstream of the rotor. This is a per-step trim applied at
+  construction, so it **takes effect in warm-start continuations** — a legitimate sweep
+  scenario. Deeper truncation retains more wake and, like `merge_off`, tests whether
+  premature wake removal is suppressing CT (but at fixed radial extent 1.5R). Add e.g.
+  `trunc_6R`/`trunc_8R` scenarios; watch np/walltime as with `merge_off`.
+- **Run length / revolutions** `SETTLE_REVS` (total = ramp+hold+withdraw+settle;
+  `NREVS` floor). Already used to set continuation length (§0 base_env sets 5); longer
+  settling tests whether the reported CT is a true plateau. Warm-start-compatible.
+- **Spinup and freestream schedule** `SPINUP_REVS`, `SPINUP_START_FRACTION`,
+  `FREESTREAM_{RAMP,HOLD,WITHDRAW}_REVS`. These shape the **pre-restart** trajectory
+  (steps 0–350) and are therefore baked into the baseline being resumed — they **cannot be
+  tested by warm-start perturbation** and require a fresh cold run (gated on user approval,
+  below). Item 005 is the lineage for these.
 
 Requires checking with the user first: edits to `src/` or to the example's physics, cold
 (non-warmstart) full runs, deleting/overwriting the baseline `rotor_hover_pressure_comparison`

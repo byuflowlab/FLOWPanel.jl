@@ -78,6 +78,9 @@ const SCENARIO_DEFS = [
     "rlxf_0p15"        => Dict("RELAX_RLXF" => "0.15"),
     "rlxf_0p075"       => Dict("RELAX_RLXF" => "0.075"),
     "relaxfilter_0p5R" => Dict("RELAX_FILTER_DOWNSTREAM_R" => "0.5"),
+    # disable particle merging (baseline merges every step at r=0.02R): tests
+    # whether merge-induced vorticity diffusion is suppressing CT
+    "merge_off"        => Dict("MERGE_PARTICLES" => "false"),
 ]
 const SCENARIO_RLXF = Dict("control" => 0.3, "rlxf_0p15" => 0.15, "rlxf_0p075" => 0.075)
 
