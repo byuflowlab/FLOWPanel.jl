@@ -372,28 +372,44 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         end
     end
 
-    # 2.5 Frame state: prefer the saved manifest; when the manifest is stale
-    # (missing restart_step — same failure mode as the stale PVD above),
-    # reconstruct the frames by replaying the kinematics exactly as simulate!'s
-    # loop applies them: maneuver! at t_range[i+1], then propagate_kinematics!
-    # with dt = t_range[i+2]-t_range[i+1], for steps 0..restart_step-1, plus
-    # step restart_step's maneuver! (its end-of-step propagate is replayed in
-    # section 5 below). Body-node motion during the replay is harmless — nodes
-    # are overwritten from disk in section 3.
-    frames_loaded = try
-        _load_frame_state_toml!(frames, rpath, rname, restart_step)
-        true
-    catch err
-        verbose && println("simulate_warmstart!: frame state for step $(restart_step) " *
-            "unavailable ($(sprint(showerror, err))); reconstructing by kinematic replay")
-        false
+    # 2.5 Frame + rotation-carried body state: ALWAYS reconstruct by replaying
+    # the kinematics exactly as simulate!'s loop applies them: maneuver! at
+    # t_range[i+1], then propagate_kinematics! with dt = t_range[i+2]-t_range[i+1],
+    # for steps 0..restart_step-1, plus step restart_step's maneuver! (its
+    # end-of-step propagate is replayed in section 5 below). Body-node motion
+    # during the replay is harmless — nodes are overwritten from disk in
+    # section 3. The replay is REQUIRED even when the frame manifest is intact:
+    # propagate_kinematics! also rotates body-fixed vectors that are not
+    # persisted to disk — notably the trailing-edge shed offsets `Das`
+    # (rotate_Das!), which update_TE! adds to the body TE to place the first
+    # wake row. Loading frames from the manifest alone leaves Das at its
+    # construction-time orientation, misplacing the wake buffer row by O(|Das|)
+    # and corrupting the Kutta condition at the first continued solve.
+    for i in 0:(restart_step - 1)
+        maneuver!(frames, systems_tuple, wakes_tuple, t_range[i+1])
+        propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
     end
-    if !frames_loaded
-        for i in 0:(restart_step - 1)
-            maneuver!(frames, systems_tuple, wakes_tuple, t_range[i+1])
-            propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
+    maneuver!(frames, systems_tuple, wakes_tuple, t_range[restart_step+1])
+
+    # Cross-check the replayed frames against the saved manifest when available
+    # (they should agree to floating-point accuracy; a mismatch means the
+    # continuation was configured differently from the original run).
+    try
+        frames_manifest = deepcopy(frames)
+        _load_frame_state_toml!(frames_manifest, rpath, rname, restart_step)
+        for (fr, fm) in zip(frames, frames_manifest)
+            dev = max(maximum(abs, fr.R .- fm.R), maximum(abs, fr.x .- fm.x))
+            if dev > 1e-8
+                @warn "simulate_warmstart!: replayed frame state deviates from saved manifest (max dev $(dev)); check that maneuver!/t_range match the original run. Using the manifest frame state." maxlog=1
+            end
         end
-        maneuver!(frames, systems_tuple, wakes_tuple, t_range[restart_step+1])
+        # manifest is authoritative for the frames themselves
+        for i in eachindex(frames)
+            frames[i] = frames_manifest[i]
+        end
+    catch err
+        verbose && println("simulate_warmstart!: frame manifest for step $(restart_step) " *
+            "unavailable ($(sprint(showerror, err))); using kinematic-replay frame state")
     end
 
     # 3. Load on-disk state at restart_step.

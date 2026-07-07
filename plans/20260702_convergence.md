@@ -3,9 +3,9 @@
 Stand-alone: a clear-context agent should be able to execute this on a workstation without
 prior conversation. All paths relative to the repo root
 `/Users/ryan/Dropbox/research/projects/FLOWPanel.jl` (or its workstation clone). **Thread
-budget: 36 — every simulation subprocess must run with `-t 36` AND BLAS threads 36; the
+budget: 48 — every simulation subprocess must run with `-t 48` AND BLAS threads 48; the
 driver sets `OPENBLAS_NUM_THREADS`/`OMP_NUM_THREADS`/`JULIA_NUM_THREADS` from its `THREADS`
-env (default 36).**
+env (default 48).**
 
 ## 0. OPERATING RULES — token budget (read first, non-negotiable)
 
@@ -30,7 +30,7 @@ Avoid spending tokens during peak token hours of 7am-1pm MST (background runs ar
 ## 1. Context and goal
 
 Rotor-hover CT under-predicts experiment (~0.072); the settled baseline run
-`data/rotor_hover_pressure_comparison` (RHPC_MESH=40_40, NT=36 ⇒ dt=1/3600 s, RPM=6000,
+`data/rotor_hover_pressure_comparison` (RHPC_MESH=40_40, NT=48 ⇒ dt=1/3600 s, RPM=6000,
 corrected Pedrizzetti rlxf=0.3, 360 steps = 10 revs, freestream fully withdrawn by rev 9)
 reads **CT_bernoulli = 0.06238 (final-rev mean; std 3.8e-4, peak-to-peak 1.2e-3)**;
 CT_laplace_lamb = 0.06213. Items 003/004 route the shortfall to wake modeling. Three knobs
@@ -133,7 +133,7 @@ knob 4).
 subprocess, and the example additionally calls `LinearAlgebra.BLAS.set_num_threads` from
 `BLAS_NUM_THREADS`/`OMP_NUM_THREADS` at startup and prints "BLAS threads: N" to the log —
 so BLAS threading is enforced regardless of BLAS vendor or library load order. Check that
-line in any scenario log to confirm 36/36.
+line in any scenario log to confirm 48/48.
 
 ## 3. Prerequisites on the workstation
 
@@ -147,15 +147,15 @@ line in any scenario log to confirm 36/36.
 
 ```bash
 # 1. Smoke gate (~11-step continuation; also measures per-step walltime)
-SMOKE=true SCENARIOS=control THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SMOKE=true SCENARIOS=control THREADS=48 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
 
 # 2. Continuation-fidelity gate + primary suspect
-SCENARIOS=control,bodyhess THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SCENARIOS=control,bodyhess THREADS=48 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
 
 # 3. Remaining scenarios (incremental; summary CSV merges across invocations)
-SCENARIOS=bodyhess_gradoff,wakerowhess,koff_5e-4,koff_2p5e-4 THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
-SCENARIOS=rlxf_0p15,rlxf_0p075,relaxfilter_0p5R THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
-SCENARIOS=merge_off THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SCENARIOS=bodyhess_gradoff,wakerowhess,koff_5e-4,koff_2p5e-4 THREADS=48 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SCENARIOS=rlxf_0p15,rlxf_0p075,relaxfilter_0p5R THREADS=48 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
+SCENARIOS=merge_off THREADS=48 julia --project=. examples/rotor_hover_ct_knob_sweep.jl
 ```
 
 **Gates, in order (stop and report on failure):**
@@ -163,7 +163,7 @@ SCENARIOS=merge_off THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sw
 1. **Smoke — PASSED locally 2026-07-02** (8 threads): warmstart branch ran, the missing
    frame-state manifest correctly triggered kinematic replay, 11 continuation steps
    completed, CSV parsed. Measured: 9.9 min total of which ~3–4 min is JIT/include/replay
-   startup ⇒ ~35–40 s/step at 8 threads; at 36 threads expect ~10–20 s/step ⇒ **~40–60 min
+   startup ⇒ ~35–40 s/step at 8 threads; at 48 threads expect ~10–20 s/step ⇒ **~40–60 min
    per full scenario (154 steps) + ~5 min startup**. Re-run the smoke on the workstation
    anyway (environment check) and record its per-step time.
 2. **Continuation fidelity — PASSED at smoke scale**: smoke CT_bernoulli = 0.06223 vs
@@ -174,7 +174,7 @@ SCENARIOS=merge_off THREADS=36 julia --project=. examples/rotor_hover_ct_knob_sw
    baseline 0.0621); over a 4-rev scenario this washes out — judge fidelity on Bernoulli.
    If control drifts materially, the warmstart replay is wrong; debug before interpreting
    ANY knob (check the scenario ENV reproduces the baseline construction: RHPC_MESH=40_40,
-   NT=36, RPM=6000).
+   NT=48, RPM=6000).
 3. Then knobs, comparing each scenario's final-rev CT (and std/ptp) against control's
    from the same sweep, not against the baseline.
 

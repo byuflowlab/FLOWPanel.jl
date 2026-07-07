@@ -139,3 +139,52 @@ result that names the remaining lever.
 - If no configuration achieves both halves, that negative result routes back to
   004's wake-mechanism ablations and to whether a fundamentally different wake
   treatment (e.g. the 002 prescribed-helical-wake direction) is required.
+
+## 2026-07-07 — CT knob sweep result (executed 2026-07-03/04): relaxation is the dominant CT suppressor
+
+Full execution of `plans/20260702_convergence.md` on the workstation (14 warm-start
+scenarios + 1 extension; run table `data/rotor_hover_sweeps.md`, analysis
+`data/ct_knob_sweep_notes.md`, machine-readable `data/ct_knob_sweep_summary.csv`).
+Baseline: workstation-regenerated `data/rotor_hover_pressure_comparison` (40_40,
+NT=36, RPM=6000, rlxf=0.3, 360 steps) — a different chaotic realization than the
+local baseline (0.0663 still decaying at rev 10 vs local settled 0.06238), so all
+knob effects were judged against the same-sweep control.
+
+**Headline: Pedrizzetti relaxation at the stock setting (rlxf=0.3, λ=rlxf/dt=1080
+s⁻¹) suppresses hover CT by ≈5.5e-3.** Control continuation plateaus at
+CT_bernoulli 0.06403 ± 2.8e-4; `RELAX_FILTER_DOWNSTREAM_R=0.5` (relaxation only
+≥0.5R downstream), extended to 18 revs so it actually settles, equilibrates at
+**CT ≈ 0.0695** (per-rev means 0.06839 → 0.06928 → 0.06953 → 0.06948 over revs
+14–18). That closes ~70% of the gap to experiment (~0.072) and lands in this
+item's 0.068–0.072 acceptance band.
+
+Supporting structure:
+- rlxf halving ladder (fixed dt): CT(λ=1080)=0.06403, CT(540)=0.06513,
+  CT(270)=0.06576, CT(135)=0.06638 — monotone, ALL stable (rlxf→0 instability did
+  not appear down to 0.0375 over 4.3 revs).
+- Filter-depth: 0.25R→0.06625, 0.5R→0.06727, 1.0R→0.06757 (4.3-rev reads).
+- **Censored-equilibria caveat:** low-relaxation states need ~5–8 hover revs to
+  equilibrate; every 4.3-rev continuation number above is a lower bound, the
+  4-point ladder is non-geometric (increments 1.10, 0.63, 0.62 e-3), and its λ→0
+  Richardson extrapolation (0.0666) is an underestimate. Only the 18-rev extension
+  value (0.0695) is a settled number.
+
+**Exonerated as CT suppressors** (all stable, |ΔCT| ≤ ~2σ = 5.7e-4):
+surface→particle strain restoration (BODY_HESSIAN_TO_PARTICLES,
+PANEL_WAKE_HESSIAN_TO_PARTICLES, and both combined — see 008 closure note),
+KERNELOFFSET_TARGETS (5e-4, 2.5e-4), MERGE_PARTICLES=false.
+
+**Infrastructure finding:** warm-start restarts were silently broken when the
+metadata frame manifest is intact — `Das` TE shed vectors rotate with the body
+(`rotate_Das!`) but are not persisted, so manifest-path restores left them at t=0
+orientation, misplacing the first wake row and blowing up the Kutta condition
+(Γ_TE +40% at the first continued step, CT diverging ~−0.03/step). Fixed
+(UNCOMMITTED as of 2026-07-07) in `src/FLOWPanel_warmstart.jl` §2.5: always
+reconstruct kinematics by replay; manifest is now a cross-check. Replay unit tests
+89/89; smoke gate passed (warm-start control reproduced baseline tail to 2.3e-4).
+The fix is REQUIRED for any warm-start work — do not revert.
+
+**Next step (plan `plans/20260707_rotor_hover.md`):** full cold run with
+RELAX_FILTER_DOWNSTREAM_R=0.5, 17 revs, targeting a stable 2-rev plateau near
+0.072; sanctioned follow-ups include settled filter-depth points (1.0R, 2.0R),
+filter+reduced-rlxf combos, and deeper truncation.
