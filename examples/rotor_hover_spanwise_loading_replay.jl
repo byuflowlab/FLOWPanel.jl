@@ -9,7 +9,7 @@ import FLOWPanel as pnl
 import CSV
 import DataFrames
 using DataFrames: DataFrame
-using LinearAlgebra: dot, norm
+using LinearAlgebra: cross, dot, norm
 import PythonPlot as plt
 using Printf: @printf, @sprintf
 using Statistics: mean, median, quantile
@@ -246,6 +246,7 @@ end
 
 mutable struct SpanwiseReplayBinning
     blade_dirs::Vector{SVector{3, Float64}}
+    tan_dirs::Vector{SVector{3, Float64}}
     e_axial::SVector{3, Float64}
     thrust_dir::SVector{3, Float64}
     radius::Float64
@@ -259,8 +260,8 @@ end
 mutable struct SpanwiseReplaySnapshot <: pnl.AbstractMonitor
     source::Symbol
     binning::SpanwiseReplayBinning
-    values::Array{Float64, 3}
-    counts::Array{Int, 3}
+    values::Array{Float64, 4}
+    counts::Array{Int, 4}
 end
 
 monitor_requires(::SpanwiseReplaySnapshot) = (:F,)
@@ -269,8 +270,8 @@ monitor_provides(::SpanwiseReplaySnapshot) = ()
 function SpanwiseReplaySnapshot(source::Symbol, binning::SpanwiseReplayBinning, nt::Int)
     nblades = length(binning.blade_dirs)
     return SpanwiseReplaySnapshot(source, binning,
-        fill(NaN, nt, nblades, binning.nbins),
-        zeros(Int, nt, nblades, binning.nbins))
+        fill(NaN, nt, nblades, binning.nbins, 2),
+        zeros(Int, nt, nblades, binning.nbins, 2))
 end
 
 function _run_monitor!(m::SpanwiseReplaySnapshot, ctx::pnl.MonitorContext,
@@ -286,8 +287,8 @@ function _run_monitor!(m::SpanwiseReplaySnapshot, ctx::pnl.MonitorContext,
         m.binning.r_max .= r_max
     end
     origin, R_g2f = frame_transform(frames, m.binning.i_frame)
-    sums = zeros(Float64, length(m.binning.blade_dirs), m.binning.nbins)
-    counts = zeros(Int, length(m.binning.blade_dirs), m.binning.nbins)
+    sums = zeros(Float64, length(m.binning.blade_dirs), m.binning.nbins, 2)
+    counts = zeros(Int, length(m.binning.blade_dirs), m.binning.nbins, 2)
 
     @inbounds for p in 1:body.ncells
         cp = SVector{3, Float64}(body.controlpoints[1, p], body.controlpoints[2, p], body.controlpoints[3, p])
@@ -303,6 +304,7 @@ function _run_monitor!(m::SpanwiseReplaySnapshot, ctx::pnl.MonitorContext,
         f = SVector{3, Float64}(F[1, p], F[2, p], F[3, p])
         f_frame = R_g2f * f
         thrust = dot(f_frame, m.binning.thrust_dir)
+        tangential = dot(f_frame, m.binning.tan_dirs[blade])
         if m.binning.binning == :span_overlap
             pmin = Inf
             pmax = -Inf
@@ -323,23 +325,26 @@ function _run_monitor!(m::SpanwiseReplaySnapshot, ctx::pnl.MonitorContext,
                     bmax = r0 + bin * width_blade
                     overlap = min(pmax, bmax) - max(pmin, bmin)
                     overlap > 0 || continue
-                    sums[blade, bin] += (overlap / pspan) * thrust
-                    counts[blade, bin] += 1
+                    w = overlap / pspan
+                    sums[blade, bin, 1] += w * thrust
+                    sums[blade, bin, 2] += w * tangential
+                    counts[blade, bin, :] .+= 1
                 end
                 continue
             end
         end
         bin = clamp(floor(Int, (r - r0) / width_blade) + 1, 1, m.binning.nbins)
-        sums[blade, bin] += thrust
-        counts[blade, bin] += 1
+        sums[blade, bin, 1] += thrust
+        sums[blade, bin, 2] += tangential
+        counts[blade, bin, :] .+= 1
     end
 
     out_i = i_step + 1
-    @inbounds for blade in axes(sums, 1), bin in axes(sums, 2)
-        counts[blade, bin] == 0 && continue
+    @inbounds for blade in axes(sums, 1), bin in axes(sums, 2), comp in axes(sums, 3)
+        counts[blade, bin, comp] == 0 && continue
         width_blade = (m.binning.r_max[blade] - m.binning.r_min[blade]) / m.binning.nbins
-        m.values[out_i, blade, bin] = sums[blade, bin] / width_blade
-        m.counts[out_i, blade, bin] = counts[blade, bin]
+        m.values[out_i, blade, bin, comp] = sums[blade, bin, comp] / width_blade
+        m.counts[out_i, blade, bin, comp] = counts[blade, bin, comp]
     end
     return nothing
 end
@@ -394,17 +399,31 @@ function finite_quantiles(v)
             quantile(vals, 0.75), maximum(vals), length(vals))
 end
 
+function tangential_sign(rows)
+    torque = 0.0
+    for row in rows
+        ft = row.median_dFtdr_total_equiv
+        if isfinite(ft)
+            torque += row.r_m * ft * row.bin_width_m
+        end
+    end
+    return torque < 0 ? -1.0 : 1.0
+end
+
 function write_stats_csv(path, snapshots, sources, window_idxs, R, blade_count)
     rows = NamedTuple[]
     for source in sources
         snap = snapshots[source]
         nbins = snap.binning.nbins
+        source_rows = NamedTuple[]
         for blade in axes(snap.values, 2), bin in 1:nbins
             width = (snap.binning.r_max[blade] - snap.binning.r_min[blade]) / nbins
             r_m = snap.binning.r_min[blade] + (bin - 0.5) * width
-            vals = snap.values[window_idxs, blade, bin]
-            μ, lo, q25, med, q75, hi, ns = finite_quantiles(vals)
-            push!(rows, (;
+            thrust_vals = snap.values[window_idxs, blade, bin, 1]
+            tangential_vals = snap.values[window_idxs, blade, bin, 2]
+            μ, lo, q25, med, q75, hi, ns = finite_quantiles(thrust_vals)
+            ftμ, ftlo, ftq25, ftmed, ftq75, fthi, _ = finite_quantiles(tangential_vals)
+            push!(source_rows, (;
                 source=String(source), blade, bin,
                 r_over_R=r_m / R,
                 r_m,
@@ -422,7 +441,36 @@ function write_stats_csv(path, snapshots, sources, window_idxs, R, blade_count)
                 median_dTdr_total_equiv=blade_count * med,
                 q75_dTdr_total_equiv=blade_count * q75,
                 max_dTdr_total_equiv=blade_count * hi,
+                mean_dFtdr_blade=ftμ,
+                min_dFtdr_blade=ftlo,
+                q25_dFtdr_blade=ftq25,
+                median_dFtdr_blade=ftmed,
+                q75_dFtdr_blade=ftq75,
+                max_dFtdr_blade=fthi,
+                mean_dFtdr_total_equiv=blade_count * ftμ,
+                min_dFtdr_total_equiv=blade_count * ftlo,
+                q25_dFtdr_total_equiv=blade_count * ftq25,
+                median_dFtdr_total_equiv=blade_count * ftmed,
+                q75_dFtdr_total_equiv=blade_count * ftq75,
+                max_dFtdr_total_equiv=blade_count * fthi,
             ))
+        end
+        sgn = tangential_sign(source_rows)
+        for row in source_rows
+            push!(rows, merge(row, (;
+                mean_dFtdr_blade=sgn * row.mean_dFtdr_blade,
+                min_dFtdr_blade=sgn > 0 ? row.min_dFtdr_blade : -row.max_dFtdr_blade,
+                q25_dFtdr_blade=sgn > 0 ? row.q25_dFtdr_blade : -row.q75_dFtdr_blade,
+                median_dFtdr_blade=sgn * row.median_dFtdr_blade,
+                q75_dFtdr_blade=sgn > 0 ? row.q75_dFtdr_blade : -row.q25_dFtdr_blade,
+                max_dFtdr_blade=sgn > 0 ? row.max_dFtdr_blade : -row.min_dFtdr_blade,
+                mean_dFtdr_total_equiv=sgn * row.mean_dFtdr_total_equiv,
+                min_dFtdr_total_equiv=sgn > 0 ? row.min_dFtdr_total_equiv : -row.max_dFtdr_total_equiv,
+                q25_dFtdr_total_equiv=sgn > 0 ? row.q25_dFtdr_total_equiv : -row.q75_dFtdr_total_equiv,
+                median_dFtdr_total_equiv=sgn * row.median_dFtdr_total_equiv,
+                q75_dFtdr_total_equiv=sgn > 0 ? row.q75_dFtdr_total_equiv : -row.q25_dFtdr_total_equiv,
+                max_dFtdr_total_equiv=sgn > 0 ? row.max_dFtdr_total_equiv : -row.min_dFtdr_total_equiv,
+            )))
         end
     end
     df = DataFrame(rows)
@@ -602,9 +650,10 @@ monitor_factory = (systems, wakes, frames, t_range) -> begin
        has_duplicate_blade_dirs(blade_dirs)
         blade_dirs = fallback_blade_dirs(length(body.shedding), axial_dimension, radial_dimension)
     end
+    tan_dirs = [cross(e_axial, d) / norm(cross(e_axial, d)) for d in blade_dirs]
     r_min = fill(NaN, length(blade_dirs))
     r_max = fill(NaN, length(blade_dirs))
-    binning = SpanwiseReplayBinning(blade_dirs, e_axial, thrust_dir, R,
+    binning = SpanwiseReplayBinning(blade_dirs, tan_dirs, e_axial, thrust_dir, R,
         r_min, r_max, nbins, 1, spanwise_binning)
     nt = length(t_range)
 
@@ -612,7 +661,7 @@ monitor_factory = (systems, wakes, frames, t_range) -> begin
         return pnl.SpanwiseLoadingMonitor(nbins, 1;
             i_frame=1,
             span_axis=unit_axis(radial_dimension),
-            components=(thrust=thrust_dir,),
+            components=(thrust=thrust_dir, tangential=tan_dirs[1]),
             per_length=true,
             binning=spanwise_binning,
             normalization=pnl.NoSectionalNormalization(),

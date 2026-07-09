@@ -6,8 +6,9 @@
 ## placed after the Bernoulli, Laplace-lamb, and SurfaceVorticity force monitors.
 ##
 ## A single blade is isolated with select=cp->cp[2]>0 in the rotor frame, so the
-## monitor's linear binning (span along +y, thrust along the rotation axis -x) is
-## correct. The last revolution is averaged and overlaid on the CCBlade BEM
+## monitor's linear binning (span along +y, thrust along the rotation axis -x,
+## torque-consuming tangential load along +z) is correct. The last revolution is
+## averaged and overlaid on the CCBlade BEM
 ## spanwise loading (data/rotor_hover_ccblade/, produced by rotor_hover_ccblade.jl).
 ##
 ## Defaults: RPM=5400, full 10-rev / 36-step run (360 steps). For a quick local
@@ -49,7 +50,7 @@ one_blade = cp -> cp[2] > 0
 make_span() = pnl.SpanwiseLoadingMonitor(nbins, 1;
     i_frame=1,
     span_axis=[0.0, 1.0, 0.0],
-    components=(thrust=[-1.0, 0.0, 0.0],),
+    components=(thrust=[-1.0, 0.0, 0.0], tangential=[0.0, 0.0, 1.0]),
     per_length=true,
     select=one_blade,
     verbose=false)
@@ -93,38 +94,52 @@ length(span_csvs) == 3 || error("Expected 3 spanwise monitor CSVs in $(monitors_
 # Ascending monitorNN order matches the tuple order: bernoulli, laplace_lamb, surface_vorticity.
 method_labels = ["bernoulli", "laplace_lamb", "surface_vorticity"]
 
-"Average the last `nrev_steps` steps of a spanwise monitor CSV; return (r_over_R, dTdr_per_blade)."
+"Average the last `nrev_steps` steps of a spanwise monitor CSV; return per-blade loads."
 function average_last_rev(csv_path, nrev_steps)
     df = CSV.read(csv_path, DataFrame)
+    (:thrust in propertynames(df) && :tangential in propertynames(df)) ||
+        error("Spanwise CSV $(csv_path) must contain thrust and tangential columns")
     laststep = maximum(df.step)
     firststep = max(minimum(df.step), laststep - nrev_steps + 1)
     win = df[(df.step .>= firststep) .& (df.step .<= laststep), :]
     bins = sort(unique(win.bin))
-    rR = Float64[]; dTdr = Float64[]
+    rR = Float64[]; dTdr = Float64[]; dFtdr = Float64[]
     for b in bins
         sub = win[win.bin .== b, :]
         push!(rR, sum(sub.bin_center) / DataFrames.nrow(sub) / R)
         push!(dTdr, sum(sub.thrust) / DataFrames.nrow(sub))   # per-blade dT/dr [N/m]
+        push!(dFtdr, sum(sub.tangential) / DataFrames.nrow(sub))   # per-blade dFt/dr [N/m]
     end
-    return rR, dTdr
+    return (; r_over_R=rR, dTdr, dFtdr)
 end
 
-panel = Dict{String,Tuple{Vector{Float64},Vector{Float64}}}()
-for (label, csv) in zip(method_labels, span_csvs)
-    rR, dTdr = average_last_rev(joinpath(monitors_dir, csv), nt)
-    # Sign convention: report dT/dr > 0 for thrust. Flip if the net integral is negative.
-    if sum(dTdr) < 0
-        dTdr = -dTdr
+function signed_tangential(rR, dFtdr)
+    r = rR .* R
+    torque = 0.0
+    for i in 1:length(r)-1
+        torque += 0.5 * (r[i] * dFtdr[i] + r[i+1] * dFtdr[i+1]) * (r[i+1] - r[i])
     end
-    panel[label] = (rR, dTdr)
+    return torque < 0 ? -dFtdr : dFtdr
+end
+
+panel = Dict{String,NamedTuple}()
+for (label, csv) in zip(method_labels, span_csvs)
+    avg = average_last_rev(joinpath(monitors_dir, csv), nt)
+    # Sign convention: report dT/dr > 0 for thrust. Flip if the net integral is negative.
+    dTdr = sum(avg.dTdr) < 0 ? -avg.dTdr : avg.dTdr
+    dFtdr = signed_tangential(avg.r_over_R, avg.dFtdr)
+    panel[label] = (; r_over_R=avg.r_over_R, dTdr, dFtdr)
 end
 
 # consolidated panel CSV (total = both-blade = per-blade x NBLADES, to match BEM dTdr_total)
-ref_rR = panel["bernoulli"][1]
+ref_rR = panel["bernoulli"].r_over_R
 panel_csv = DataFrame(r_over_R = ref_rR,
-    dTdr_total_bernoulli         = NBLADES .* panel["bernoulli"][2],
-    dTdr_total_laplace_lamb      = NBLADES .* panel["laplace_lamb"][2],
-    dTdr_total_surface_vorticity = NBLADES .* panel["surface_vorticity"][2])
+    dTdr_total_bernoulli         = NBLADES .* panel["bernoulli"].dTdr,
+    dTdr_total_laplace_lamb      = NBLADES .* panel["laplace_lamb"].dTdr,
+    dTdr_total_surface_vorticity = NBLADES .* panel["surface_vorticity"].dTdr,
+    dFtdr_total_bernoulli         = NBLADES .* panel["bernoulli"].dFtdr,
+    dFtdr_total_laplace_lamb      = NBLADES .* panel["laplace_lamb"].dFtdr,
+    dFtdr_total_surface_vorticity = NBLADES .* panel["surface_vorticity"].dFtdr)
 panel_csv_path = joinpath(save_path, "rotor_hover_panel_spanwise_loading.csv")
 CSV.write(panel_csv_path, panel_csv)
 println("\nWrote $(panel_csv_path)")
@@ -133,7 +148,8 @@ println("\nWrote $(panel_csv_path)")
 n_rev = RPM / 60
 ct_ref = rho * n_rev^2 * (2 * R)^4
 for label in method_labels
-    rR, dTdr = panel[label]
+    rR = panel[label].r_over_R
+    dTdr = panel[label].dTdr
     r = rR .* R
     T = 0.0
     for i in 1:length(r)-1
@@ -144,16 +160,17 @@ end
 
 # ---- overlay plot: BEM (per ncrit) + panel (3 methods) ----
 fig, ax = plt.subplots(figsize=(7, 5))
-bem_files = isdir(bem_dir) ? sort(filter(f -> occursin("rotor_hover_ccblade_sectional_ncrit", f) && endswith(f, ".csv"), readdir(bem_dir))) : String[]
+bem_files = isdir(bem_dir) ? sort(filter(f -> occursin("rotor_hover_ccblade_sectional_", f) && endswith(f, ".csv"), readdir(bem_dir))) : String[]
 for f in bem_files
     df = CSV.read(joinpath(bem_dir, f), DataFrame)
-    ncrit = replace(replace(f, "rotor_hover_ccblade_sectional_ncrit" => ""), ".csv" => "")
+    polar = replace(replace(f, "rotor_hover_ccblade_sectional_" => ""), ".csv" => "")
     ax.plot(df.r_over_R, df.dTdr_total, "-"; linewidth=1.0, alpha=0.7,
-            label="BEM ncrit=$(ncrit)")
+            label="BEM $(polar)")
 end
 isempty(bem_files) && @warn "No CCBlade sectional CSVs found in $(bem_dir); run rotor_hover_ccblade.jl first for the overlay."
 for (label, ls) in zip(method_labels, ("-o", "-s", "-^"))
-    rR, dTdr = panel[label]
+    rR = panel[label].r_over_R
+    dTdr = panel[label].dTdr
     ax.plot(rR, NBLADES .* dTdr, ls; linewidth=2.0, markersize=3, label="panel $(label)")
 end
 ax.set_xlabel("r/R"); ax.set_ylabel("dT/dr (both blades) [N/m]")

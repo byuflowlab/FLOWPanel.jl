@@ -148,6 +148,8 @@ To avoid filling the disk across repeated iterations, **write each new run over 
 
 When the user explicitly wants to preserve a previous run for comparison, ask before overwriting and offer to `mv` the old directory aside.
 
-## Response Style
+## Response Preferences
 
 When you respond to prompts, if you ever need to ask me questions where I decide between possible options (not including asking permissions to perform shell commands), and you suspect any of the option will be token-heavy, also include a brief estimate of the token count required as a fraction of my 5-hour limit.
+
+When in plan mode, default to preparing a plan with enough context that a new agent with clean context doesn't have to waste tokens by reading other files. Save the plan to file, tell me where it is saved, and stop so I can run with a new agent with clear context. If you don't think this would save any tokens in the long run, ask me if I would like you to prepare a plan for you to implement without clearing context.

@@ -23,7 +23,7 @@ using LinearAlgebra: norm
 
 # ------------------------------------------------------------------ inputs ----
 const CST_CSV   = get(ENV, "CST_CSV", joinpath(@__DIR__, "..", "dji9443_brainstorm_item003.csv"))
-const SAVE_PATH = joinpath(@__DIR__, "..", "data", "rotor_hover_ccblade")
+const SAVE_PATH = get(ENV, "SAVE_PATH", joinpath(@__DIR__, "..", "data", "rotor_hover_ccblade"))
 
 # Geometry / operating point (see rotor_hover_convergence.jl)
 const RPM   = parse(Float64, get(ENV, "RPM", "5400"))
@@ -45,23 +45,58 @@ const THETA_SIGN = parse(Float64, get(ENV, "THETA_SIGN", "-1.0"))
 # Whether to include Mach (Prandtl-Glauert) in the XFOIL solves.
 const USE_MACH = parse(Bool, get(ENV, "USE_MACH", "true"))
 
-# XFOIL transition parameter (e^N critical amplification factor). Higher ncrit =
-# later transition / quieter inflow (9 = clean-tunnel default, 14 = very quiet).
-# Polars are rebuilt per ncrit so the BEM CT can be compared across values.
-const NCRIT_LIST = let s = get(ENV, "NCRIT_LIST", "")
-    isempty(s) ? [1, 4, 9, 14] : parse.(Int, split(s, ','))
+# XFOIL viscous-sweep controls. The inviscid ncrit=0 path intentionally keeps
+# using direct solve_alpha calls with cd=0.
+const XFOIL_ITER = parse(Int, get(ENV, "XFOIL_ITER", "200"))
+const XFOIL_NPAN = parse(Int, get(ENV, "XFOIL_NPAN", "140"))
+const XFOIL_PERCUSSIVE = parse(Bool, get(ENV, "XFOIL_PERCUSSIVE", "true"))
+
+# Multiplier on the section Reynolds numbers fed to XFOIL (Mach stays physical).
+# RE_SCALE=10 probes how much of the viscous CT spread is a low-Re artifact.
+const RE_SCALE = parse(Float64, get(ENV, "RE_SCALE", "1.0"))
+
+# Suffix inserted before the extension of every output filename (e.g. "_re10x").
+const SUFFIX = get(ENV, "SUFFIX", "")
+
+function outpath(base)
+    stem, ext = splitext(base)
+    return joinpath(SAVE_PATH, stem * SUFFIX * ext)
 end
 
+const RE_TAG = RE_SCALE == 1 ? "" : @sprintf(", Re x%g", RE_SCALE)
+
+# XFOIL transition parameter (e^N critical amplification factor). Higher ncrit =
+# later transition / quieter inflow (9 = clean-tunnel default, 14 = very quiet).
+# ncrit=0 is the inviscid XFOIL solve, recorded as cd=0.
+# Polars are rebuilt per ncrit so the BEM CT can be compared across values.
+const NCRIT_LIST = let s = get(ENV, "NCRIT_LIST", "")
+    isempty(s) ? [0, 1, 4, 9, 14] : parse.(Int, split(s, ','))
+end
+
+# Optional mixed-polar peer: lift from one XFOIL polar set and drag from another.
+const RUN_MIXED = parse(Bool, get(ENV, "RUN_MIXED", "false"))
+const MIX_CL_NCRIT = parse(Int, get(ENV, "MIX_CL_NCRIT", "0"))
+const MIX_CL_RESCALE = parse(Float64, get(ENV, "MIX_CL_RESCALE", "1.0"))
+const MIX_CD_NCRIT = parse(Int, get(ENV, "MIX_CD_NCRIT", "4"))
+const MIX_CD_RESCALE = parse(Float64, get(ENV, "MIX_CD_RESCALE", "10.0"))
+
 # Climb velocities [m/s] to evaluate. Hover is approximated with a tiny nonzero
-# Vc (pure Vx=0 is degenerate in BEM). Add nonzero entries to build a J sweep
-# (J = Vc / (n D)) once experimental advance-ratio data is identified.
+# Vc (pure Vx=0 is degenerate in BEM). Vc=1e-3 avoids the spurious high-induction
+# root that Vc=1e-4 can trigger in near-hover cd=0 solves. Add nonzero entries
+# to build a J sweep (J = Vc / (n D)) once experimental advance-ratio data is identified.
 const VC_LIST = let s = get(ENV, "VC_LIST", "")
-    isempty(s) ? [0.0001, 1.0, 2.0, 4.0] : parse.(Float64, split(s, ','))
+    isempty(s) ? [0.001, 1.0, 2.0, 4.0] : parse.(Float64, split(s, ','))
 end
 
 # Reference values for plotting context.
 const CT_PANEL = 0.0506
 const CT_EXPERIMENT = 0.072
+
+polar_label(ncrit::Integer) = ncrit == 0 ? "inviscid" : "ncrit$(ncrit)"
+polar_legend(ncrit::Integer) = ncrit == 0 ? "inviscid" : "ncrit=$(ncrit)"
+rescale_token(rescale::Real) = isinteger(rescale) ? string(Int(rescale)) : replace(@sprintf("%g", rescale), "." => "p")
+rescale_suffix(rescale::Real) = rescale == 1 ? "" : "re$(rescale_token(rescale))x"
+rescale_legend(rescale::Real) = rescale == 1 ? "" : "@$(rescale_token(rescale))xRe"
 
 # ------------------------------------------------- CST reconstruction ---------
 # Ported from examples/rotor_hover_scan/process_scan.jl (lines 508-534).
@@ -99,40 +134,62 @@ end
 
 # --------------------------------------------------- XFOIL polar helper -------
 """
-Run a robust XFOIL alpha sweep on (x, y) at the given Reynolds/Mach. Sweeps
-outward from alpha=0 in both directions reusing the previous boundary-layer
-solution; reinitializes on a failed point. Returns sorted (alpha_deg, cl, cd)
-for converged points only.
+Run a robust XFOIL alpha sweep on (x, y) at the given Reynolds/Mach. The
+inviscid ncrit=0 path keeps the direct solve_alpha behavior with cd=0; viscous
+polars use Xfoil.alpha_sweep so Xfoil.jl can retry failed points. Returns
+sorted (alpha_deg, cl, cd) for converged points only, plus the sorted list of
+alphas that failed to converge.
 """
 function xfoil_polar(x, y, re, mach; alpha_max=20.0, alpha_min=-12.0, dalpha=0.5,
-                     iter=100, ncrit=9)
-    Xfoil.set_coordinates(x, y)
-    Xfoil.pane()
+                     iter=XFOIL_ITER, npan=XFOIL_NPAN, ncrit=9,
+                     percussive_maintenance=XFOIL_PERCUSSIVE)
+    alpha_grid = collect(alpha_min:dalpha:alpha_max)
 
-    results = Dict{Float64,Tuple{Float64,Float64}}()
+    if ncrit == 0
+        Xfoil.set_coordinates(x, y)
+        Xfoil.pane()
 
-    sweep_branch = function (alphas)
-        first = true
-        for a in alphas
-            cl, cd, _, _, conv = Xfoil.solve_alpha(a, re; mach=mach, iter=iter,
-                                                   ncrit=ncrit, reinit=first)
-            first = false
-            if conv && isfinite(cl) && isfinite(cd)
-                results[a] = (cl, cd)
-            else
-                # reinitialize for the next angle so one bad point doesn't poison the branch
-                first = true
+        results = Dict{Float64,Tuple{Float64,Float64}}()
+        failed = Float64[]
+
+        sweep_branch = function (alphas)
+            for a in alphas
+                cl, _ = Xfoil.solve_alpha(a; mach=mach)
+                if isfinite(cl)
+                    results[a] = (cl, 0.0)
+                else
+                    push!(failed, a)
+                end
             end
         end
+
+        sweep_branch(0.0:dalpha:alpha_max)
+        sweep_branch(0.0:-dalpha:alpha_min)
+
+        # alpha=0 is attempted by both branches; keep failures that never converged
+        filter!(a -> !haskey(results, a), failed)
+        sort!(unique!(failed))
+
+        αs = sort!(collect(keys(results)))
+        cls = [results[a][1] for a in αs]
+        cds = [results[a][2] for a in αs]
+        return αs, cls, cds, failed
+    else
+        cls_all, cds_all, _, _, converged = Xfoil.alpha_sweep(
+            x, y, alpha_grid, re; mach=mach, iter=iter, npan=npan,
+            ncrit=ncrit, percussive_maintenance=percussive_maintenance,
+            reinit=false, zeroinit=true)
+
+        good = Bool[
+            converged[i] && isfinite(cls_all[i]) && isfinite(cds_all[i])
+            for i in eachindex(alpha_grid)
+        ]
+        αs = alpha_grid[good]
+        cls = cls_all[good]
+        cds = cds_all[good]
+        failed = alpha_grid[.!good]
+        return αs, cls, cds, failed
     end
-
-    sweep_branch(0.0:dalpha:alpha_max)
-    sweep_branch(0.0:-dalpha:alpha_min)
-
-    αs = sort!(collect(keys(results)))
-    cls = [results[a][1] for a in αs]
-    cds = [results[a][2] for a in αs]
-    return αs, cls, cds
 end
 
 # ------------------------------------------------------------------ main ------
@@ -173,45 +230,105 @@ println("  using $(nsec) sections, r/R in [$(round(minimum(sec_r)/R, digits=3)),
 cr75 = FLOWMath.linear(sec_r, sec_chord, 0.75R) / R
 
 # Per-section hover Reynolds/Mach (independent of ncrit; W ~ tangential speed).
-sec_Re = zeros(nsec)
+sec_Re_base = zeros(nsec)
 sec_Mach = zeros(nsec)
 for i in 1:nsec
     W = OMEGA * sec_r[i]                       # hover inflow ~ tangential speed
-    sec_Re[i] = RHO * W * sec_chord[i] / MU
+    sec_Re_base[i] = RHO * W * sec_chord[i] / MU
     sec_Mach[i] = USE_MACH ? clamp(W / ASOUND, 0.0, 0.6) : 0.0
 end
 
 rotor = Rotor(RHUB, R, B; precone=0.0, turbine=false)
 
+specs = [(label=polar_label(n),
+          legend=polar_legend(n),
+          cl_ncrit=n, cl_rescale=RE_SCALE, cd_ncrit=n, cd_rescale=RE_SCALE,
+          ncrit=n)
+         for n in NCRIT_LIST]
+
+if RUN_MIXED
+    mixed_label = "mixed_cl-" * polar_label(MIX_CL_NCRIT) * rescale_suffix(MIX_CL_RESCALE) *
+                  "_cd-" * polar_label(MIX_CD_NCRIT) * rescale_suffix(MIX_CD_RESCALE)
+    mixed_legend = "cl " * polar_legend(MIX_CL_NCRIT) * rescale_legend(MIX_CL_RESCALE) *
+                   " + cd " * polar_legend(MIX_CD_NCRIT) * rescale_legend(MIX_CD_RESCALE)
+    push!(specs, (label=mixed_label, legend=mixed_legend,
+                  cl_ncrit=MIX_CL_NCRIT, cl_rescale=MIX_CL_RESCALE,
+                  cd_ncrit=MIX_CD_NCRIT, cd_rescale=MIX_CD_RESCALE,
+                  ncrit=-1))
+end
+
 radial_rows = DataFrame()
-ct_rows = DataFrame(ncrit=Int[], Vc=Float64[], J=Float64[], T=Float64[], Q=Float64[],
-                    CT=Float64[], CQ=Float64[], eff=Float64[])
+ct_rows = DataFrame(polarset=String[], ncrit=Int[], Vc=Float64[], J=Float64[],
+                    T=Float64[], Q=Float64[], CT=Float64[], CQ=Float64[], eff=Float64[])
 
-# Converged XFOIL lift-polar data per (ncrit, section), kept for plotting/CSV.
-# polar_data[ncrit][i] = (alpha_deg, cl, cd) for the converged sweep points.
-polar_data = Dict{Int,Vector{NamedTuple{(:alpha_deg, :cl, :cd),Tuple{Vector{Float64},Vector{Float64},Vector{Float64}}}}}()
+# Converged polar data per named polar set, kept for plotting/CSV.
+# polar_data[label][i] = (alpha_deg, cl, cd) for the converged sweep points.
+polar_data = Dict{String,Vector{NamedTuple{(:alpha_deg, :cl, :cd),Tuple{Vector{Float64},Vector{Float64},Vector{Float64}}}}}()
 
-# Build polars and run the BEM op-point sweep once per ncrit. Polars are built
-# once per (section, ncrit) at hover Re and reused across the J sweep.
-for ncrit in NCRIT_LIST
-    println("\n=== ncrit = $(ncrit) ===")
+# XFOIL alphas that failed to converge, per (ncrit, Re rescale, section).
+failure_rows = DataFrame(ncrit=Int[], rescale=Float64[], section=Int[], r_over_R=Float64[],
+                         Re=Float64[], Mach=Float64[], alpha_deg=Float64[])
+
+# Raw XFOIL sweep cache. A mixed polar can reuse one set's cl and another set's cd
+# without rerunning XFOIL or duplicating failure rows.
+sweep_cache = Dict{Tuple{Int,Float64},Vector{NamedTuple{(:alpha_deg, :cl, :cd, :failed),Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}}}()
+
+function get_sweeps!(ncrit, rescale)
+    key = (ncrit, rescale)
+    if haskey(sweep_cache, key)
+        return sweep_cache[key]
+    end
+
+    label = polar_label(ncrit) * rescale_suffix(rescale)
+    legend = polar_legend(ncrit) * rescale_legend(rescale)
+    println("\n=== XFOIL sweep $(legend) ===")
     println("Generating XFOIL polars (Re from hover inflow W = Omega*r)...")
-    airfoils = Vector{Any}(undef, nsec)
-    polar_data[ncrit] = Vector{NamedTuple{(:alpha_deg, :cl, :cd),Tuple{Vector{Float64},Vector{Float64},Vector{Float64}}}}(undef, nsec)
+    sweeps = Vector{NamedTuple{(:alpha_deg, :cl, :cd, :failed),Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}}(undef, nsec)
     for i in 1:nsec
-        re = sec_Re[i]; mach = sec_Mach[i]
-        αs, cls, cds = xfoil_polar(sec_x[i], sec_y[i], re, mach; ncrit=ncrit)
-        @printf("  section %2d  r/R=%.3f  Re=%6.0f  M=%.2f  -> %d converged points\n",
-                i, sec_r[i]/R, re, mach, length(αs))
+        re = rescale * sec_Re_base[i]; mach = sec_Mach[i]
+        αs, cls, cds, failed = xfoil_polar(sec_x[i], sec_y[i], re, mach;
+                                           ncrit=ncrit, iter=XFOIL_ITER,
+                                           npan=XFOIL_NPAN,
+                                           percussive_maintenance=XFOIL_PERCUSSIVE)
+        @printf("  section %2d  r/R=%.3f  Re=%6.0f  M=%.2f  -> %d converged, %d failed\n",
+                i, sec_r[i]/R, re, mach, length(αs), length(failed))
+        for a in failed
+            push!(failure_rows, (ncrit, rescale, i, sec_r[i]/R, re, mach, a))
+        end
         if length(αs) < 4
             error("Section $i (r/R=$(round(sec_r[i]/R,digits=3))) produced too few converged " *
-                  "XFOIL points ($(length(αs))) at ncrit=$(ncrit). Try lowering alpha range or USE_MACH=false.")
+                  "XFOIL points ($(length(αs))) for $(legend). Try lowering alpha range or USE_MACH=false.")
         end
-        polar_data[ncrit][i] = (alpha_deg=αs, cl=cls, cd=cds)
+        sweeps[i] = (alpha_deg=αs, cl=cls, cd=cds, failed=failed)
+    end
+    sweep_cache[key] = sweeps
+    return sweeps
+end
+
+# Build polars and run the BEM op-point sweep once per named polar set. XFOIL
+# sweeps are cached by (ncrit, Re rescale) and reused across mixed/pure consumers.
+for spec in specs
+    println("\n=== $(spec.legend) ===")
+    clsweeps = get_sweeps!(spec.cl_ncrit, spec.cl_rescale)
+    cdsweeps = get_sweeps!(spec.cd_ncrit, spec.cd_rescale)
+
+    airfoils = Vector{Any}(undef, nsec)
+    polar_data[spec.label] = Vector{NamedTuple{(:alpha_deg, :cl, :cd),Tuple{Vector{Float64},Vector{Float64},Vector{Float64}}}}(undef, nsec)
+    for i in 1:nsec
+        re = spec.cl_rescale * sec_Re_base[i]; mach = sec_Mach[i]
+        clsweep = clsweeps[i]
+        cdsweep = cdsweeps[i]
+        αs, cls = clsweep.alpha_deg, clsweep.cl
+        cds = (spec.cl_ncrit == spec.cd_ncrit && spec.cl_rescale == spec.cd_rescale) ?
+              clsweep.cd :
+              [FLOWMath.linear(cdsweep.alpha_deg, cdsweep.cd,
+                               clamp(a, first(cdsweep.alpha_deg), last(cdsweep.alpha_deg)))
+               for a in αs]
+        polar_data[spec.label][i] = (alpha_deg=αs, cl=cls, cd=cds)
         # extrapolate to +/-180 deg (Viterna expects radians) and build the airfoil
         a_ext, cl_ext, cd_ext = viterna(deg2rad.(αs), cls, cds, cr75)
         airfoils[i] = AlphaAF(a_ext, cl_ext, cd_ext,
-                              @sprintf("dji9443 r/R=%.3f Re=%.0f ncrit=%d", sec_r[i]/R, re, ncrit),
+                              @sprintf("dji9443 r/R=%.3f Re=%.0f %s", sec_r[i]/R, re, spec.label),
                               re, mach)
     end
 
@@ -224,89 +341,110 @@ for ncrit in NCRIT_LIST
         outs = solve.(Ref(rotor), sections, ops)
         T, Q = thrusttorque(rotor, sections, outs)
         eff, CT, CQ = nondim(T, Q, Vc, OMEGA, RHO, rotor, "propeller")
-        push!(ct_rows, (ncrit, Vc, J, T, Q, CT, CQ, eff))
+        push!(ct_rows, (spec.label, spec.ncrit, Vc, J, T, Q, CT, CQ, eff))
         @printf("  Vc=%7.4f m/s  J=%.4f  T=%8.4f N  CT=%.5f  CQ=%.6f\n", Vc, J, T, CT, CQ)
 
         for i in 1:nsec
             o = outs[i]
             Γ = 0.5 * o.W * sec_chord[i] * o.cl
-            push!(radial_rows, (; ncrit, Vc, J, r=sec_r[i], r_over_R=sec_r[i]/R,
+            push!(radial_rows, (; polarset=spec.label, ncrit=spec.ncrit, Vc, J,
+                                r=sec_r[i], r_over_R=sec_r[i]/R,
                                 chord=sec_chord[i], twist_rad=sec_theta[i],
-                                Re=sec_Re[i], Mach=sec_Mach[i],
+                                Re=spec.cl_rescale * sec_Re_base[i], Mach=sec_Mach[i],
                                 alpha_deg=rad2deg(o.alpha), phi_deg=rad2deg(o.phi),
                                 cl=o.cl, cd=o.cd, a=o.a, ap=o.ap, u=o.u, v=o.v,
-                                W=o.W, Np=o.Np, Tp=o.Tp, Gamma=Γ); promote=true)
+                                W=o.W, Np=o.Np, Tp=o.Tp, F=o.F, Gamma=Γ); promote=true)
         end
     end
 end
 
 # ------------------------------------------------------------------ output ----
-radial_csv = joinpath(SAVE_PATH, "rotor_hover_ccblade_radial.csv")
-ct_csv     = joinpath(SAVE_PATH, "rotor_hover_ccblade_CT_vs_J.csv")
+radial_csv = outpath("rotor_hover_ccblade_radial.csv")
+ct_csv     = outpath("rotor_hover_ccblade_CT_vs_J.csv")
 CSV.write(radial_csv, radial_rows)
 CSV.write(ct_csv, ct_rows)
 println("\nWrote $(radial_csv)")
 println("Wrote $(ct_csv)")
 
+# XFOIL failure report (attempted alphas that never converged)
+failures_csv = outpath("rotor_hover_ccblade_xfoil_failures.csv")
+CSV.write(failures_csv, failure_rows)
+println("Wrote $(failures_csv)")
+if size(failure_rows, 1) > 0
+    println("XFOIL failure summary (failed alphas out of 65 attempted per section):")
+    for key in sort(collect(keys(sweep_cache)); by=x -> (x[1], x[2]))
+        ncrit, rescale = key
+        sub = failure_rows[(failure_rows.ncrit .== ncrit) .& (failure_rows.rescale .== rescale), :]
+        worst = isempty(sub.section) ? "-" :
+            join(["$(s) (x$(count(==(s), sub.section)))"
+                  for s in sort(unique(sub.section))], ", ")
+        @printf("  %-15s: %3d failed solves; sections: %s\n",
+                polar_label(ncrit) * rescale_suffix(rescale), size(sub, 1), worst)
+    end
+else
+    println("XFOIL failure summary: all attempted solves converged.")
+end
+
 # long-format polar data (the converged XFOIL points fed to CCBlade, pre-Viterna)
-polar_rows = DataFrame(ncrit=Int[], section=Int[], r_over_R=Float64[], Re=Float64[],
-                       Mach=Float64[], alpha_deg=Float64[], cl=Float64[], cd=Float64[])
-for ncrit in NCRIT_LIST, i in 1:nsec
-    p = polar_data[ncrit][i]
+polar_rows = DataFrame(polarset=String[], ncrit=Int[], section=Int[], r_over_R=Float64[],
+                       Re=Float64[], Mach=Float64[], alpha_deg=Float64[], cl=Float64[], cd=Float64[])
+for spec in specs, i in 1:nsec
+    p = polar_data[spec.label][i]
     for k in eachindex(p.alpha_deg)
-        push!(polar_rows, (ncrit, i, sec_r[i]/R, sec_Re[i], sec_Mach[i],
+        push!(polar_rows, (spec.label, spec.ncrit, i, sec_r[i]/R,
+                           spec.cl_rescale * sec_Re_base[i], sec_Mach[i],
                            p.alpha_deg[k], p.cl[k], p.cd[k]))
     end
 end
-polar_csv = joinpath(SAVE_PATH, "rotor_hover_ccblade_polars.csv")
+polar_csv = outpath("rotor_hover_ccblade_polars.csv")
 CSV.write(polar_csv, polar_rows)
 println("Wrote $(polar_csv)")
 
 # hover operating point (smallest |Vc|) used for the sectional/spanwise comparison
 Vc_hover = VC_LIST[argmin(abs.(VC_LIST))]
 
-# ---- per-ncrit hover sectional CSVs (for the panel-vs-BEM spanwise comparison) ----
+# ---- per-polar-set hover sectional CSVs (for the panel-vs-BEM spanwise comparison) ----
 # dTdr_total = B * Np is the total (both-blade) thrust per unit radius [N/m]; Np is
 # CCBlade's per-blade normal force per unit length.
-for ncrit in NCRIT_LIST
-    sub = radial_rows[(radial_rows.ncrit .== ncrit) .& (radial_rows.Vc .== Vc_hover), :]
+for spec in specs
+    sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
     sect = DataFrame(r_over_R=sub.r_over_R, r_m=sub.r, chord_m=sub.chord,
                      alpha_deg=sub.alpha_deg, phi_deg=sub.phi_deg,
                      W=sub.W, u=sub.u, v=sub.v, Np=sub.Np, Tp=sub.Tp,
                      dTdr_total=B .* sub.Np, Gamma=sub.Gamma)
-    fname = joinpath(SAVE_PATH, "rotor_hover_ccblade_sectional_ncrit$(ncrit).csv")
+    fname = outpath("rotor_hover_ccblade_sectional_$(spec.label).csv")
     CSV.write(fname, sect)
     println("Wrote $(fname)")
 end
 
-# ---- BEM spanwise loading plot (dT/dr total vs r/R, one line per ncrit) ----
+# ---- BEM spanwise loading plot (dT/dr total vs r/R, one line per polar set) ----
 let fig_ax = plt.subplots(figsize=(6, 4))
     fig, ax = fig_ax
-    for ncrit in NCRIT_LIST
-        sub = radial_rows[(radial_rows.ncrit .== ncrit) .& (radial_rows.Vc .== Vc_hover), :]
-        ax.plot(sub.r_over_R, B .* sub.Np, "-o"; markersize=3, label="ncrit=$(ncrit)")
+    for spec in specs
+        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
+        ax.plot(sub.r_over_R, B .* sub.Np, "-o"; markersize=3, label=spec.legend)
     end
     ax.set_xlabel("r/R"); ax.set_ylabel("dT/dr (both blades) [N/m]")
-    ax.set_title(@sprintf("BEM spanwise loading, RPM=%.0f, hover", RPM))
+    ax.set_title(@sprintf("BEM spanwise loading, RPM=%.0f, hover%s", RPM, RE_TAG))
     ax.grid(true); ax.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(joinpath(SAVE_PATH, "rotor_hover_ccblade_spanwise_loading.png"), dpi=150)
+    fig.tight_layout(); fig.savefig(outpath("rotor_hover_ccblade_spanwise_loading.png"), dpi=150)
     plt.close()
 end
 
 # ---- plots ----
-# Radial plots are drawn at hover (smallest Vc), one line per ncrit, to isolate
+# Radial plots are drawn at hover (smallest Vc), one line per polar set, to isolate
 # the transition-parameter effect without an 8-curve Vc x ncrit tangle.
 function plot_radial(col, ylabel, fname)
     fig, ax = plt.subplots(figsize=(6, 4))
-    for ncrit in NCRIT_LIST
-        sub = radial_rows[(radial_rows.ncrit .== ncrit) .& (radial_rows.Vc .== Vc_hover), :]
+    for spec in specs
+        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
         ax.plot(sub.r_over_R, sub[!, col], "-o"; markersize=3,
-                label="ncrit=$(ncrit)")
+                label=spec.legend)
     end
     ax.set_xlabel("r/R"); ax.set_ylabel(ylabel)
-    ax.set_title(@sprintf("hover (Vc=%.4f m/s)", Vc_hover))
+    ax.set_title(@sprintf("hover (Vc=%.4f m/s)%s", Vc_hover, RE_TAG))
     ax.grid(true); ax.legend(fontsize=7)
-    fig.tight_layout(); fig.savefig(joinpath(SAVE_PATH, fname), dpi=150)
+    fig.tight_layout(); fig.savefig(outpath(fname), dpi=150)
     plt.close()
 end
 
@@ -316,12 +454,12 @@ plot_radial(:u,        "Axial induced velocity u [m/s]", "radial_induced_velocit
 plot_radial(:Gamma,    "Circulation Gamma [m^2/s]",   "radial_circulation.png")
 
 # ---- lift-polar plots (cl vs alpha; converged XFOIL data, pre-Viterna) ----
-# (1) one figure per ncrit: all sections, colored by r/R.
+# (1) one figure per polar set: all sections, colored by r/R.
 cmap = plt.matplotlib.cm.viridis
-for ncrit in NCRIT_LIST
+for spec in specs
     fig, ax = plt.subplots(figsize=(6, 4.5))
     for i in 1:nsec
-        p = polar_data[ncrit][i]
+        p = polar_data[spec.label][i]
         ax.plot(p.alpha_deg, p.cl, "-"; color=cmap((sec_r[i]/R - sec_r[1]/R) /
                 (sec_r[end]/R - sec_r[1]/R)), linewidth=1.0)
     end
@@ -329,50 +467,64 @@ for ncrit in NCRIT_LIST
             norm=plt.matplotlib.colors.Normalize(vmin=sec_r[1]/R, vmax=sec_r[end]/R))
     fig.colorbar(sm; ax=ax, label="r/R")
     ax.set_xlabel("alpha [deg]"); ax.set_ylabel("cl")
-    ax.set_title("Lift polars used (XFOIL, ncrit=$(ncrit))")
+    ax.set_title("Lift polars used ($(spec.legend)$(RE_TAG))")
     ax.grid(true)
-    fig.tight_layout(); fig.savefig(joinpath(SAVE_PATH, "polars_cl_ncrit$(ncrit).png"), dpi=150)
+    fig.tight_layout(); fig.savefig(outpath("polars_cl_$(spec.label).png"), dpi=150)
     plt.close()
 end
 
 # (2) representative sections (nearest r/R = 0.25, 0.5, 0.75, 0.95): cl vs alpha,
-# one line per ncrit, to show the transition-parameter sensitivity directly.
+# one line per polar set, to show the transition-parameter sensitivity directly.
 rep_targets = [0.25, 0.50, 0.75, 0.95]
 rep_idx = [argmin(abs.(sec_r ./ R .- t)) for t in rep_targets]
 fig, axs = plt.subplots(2, 2; figsize=(9, 7))
 for (sp, i) in enumerate(rep_idx)
     ax = axs[(sp - 1) ÷ 2, (sp - 1) % 2]   # row-major indexing into the 2x2 array
-    for ncrit in NCRIT_LIST
-        p = polar_data[ncrit][i]
-        ax.plot(p.alpha_deg, p.cl, "-o"; markersize=2, label="ncrit=$(ncrit)")
+    for spec in specs
+        p = polar_data[spec.label][i]
+        ax.plot(p.alpha_deg, p.cl, "-o"; markersize=2, label=spec.legend)
     end
-    ax.set_title(@sprintf("r/R=%.2f  Re=%.0f", sec_r[i]/R, sec_Re[i]))
+    ax.set_title(@sprintf("r/R=%.2f", sec_r[i]/R))
     ax.set_xlabel("alpha [deg]"); ax.set_ylabel("cl"); ax.grid(true); ax.legend(fontsize=7)
 end
-fig.tight_layout(); fig.savefig(joinpath(SAVE_PATH, "polars_cl_vs_ncrit.png"), dpi=150)
+fig.tight_layout(); fig.savefig(outpath("polars_cl_vs_ncrit.png"), dpi=150)
 plt.close()
 
-# CT vs J, one line per ncrit
+# (3) representative sections: cd vs alpha, matching the cl sensitivity figure.
+fig, axs = plt.subplots(2, 2; figsize=(9, 7))
+for (sp, i) in enumerate(rep_idx)
+    ax = axs[(sp - 1) ÷ 2, (sp - 1) % 2]
+    for spec in specs
+        p = polar_data[spec.label][i]
+        ax.plot(p.alpha_deg, p.cd, "-o"; markersize=2, label=spec.legend)
+    end
+    ax.set_title(@sprintf("r/R=%.2f", sec_r[i]/R))
+    ax.set_xlabel("alpha [deg]"); ax.set_ylabel("cd"); ax.grid(true); ax.legend(fontsize=7)
+end
+fig.tight_layout(); fig.savefig(outpath("polars_cd_vs_ncrit.png"), dpi=150)
+plt.close()
+
+# CT vs J, one line per polar set
 fig, ax = plt.subplots(figsize=(6, 4))
-for ncrit in NCRIT_LIST
-    sub = ct_rows[ct_rows.ncrit .== ncrit, :]
-    ax.plot(sub.J, sub.CT, "-o"; label="CCBlade BEM (ncrit=$(ncrit))")
+for spec in specs
+    sub = ct_rows[ct_rows.polarset .== spec.label, :]
+    ax.plot(sub.J, sub.CT, "-o"; label="CCBlade BEM ($(spec.legend))")
 end
 ax.axhline(CT_PANEL; color="k", linestyle="--", label=@sprintf("panel %.4f", CT_PANEL))
 ax.axhline(CT_EXPERIMENT; color="gray", linestyle=":", label=@sprintf("experiment %.3f", CT_EXPERIMENT))
 ax.set_xlabel("advance ratio J = Vc/(nD)"); ax.set_ylabel("CT = T/(rho n^2 D^4)")
 ax.grid(true); ax.legend(fontsize=8)
-fig.tight_layout(); fig.savefig(joinpath(SAVE_PATH, "CT_vs_J.png"), dpi=150)
+fig.tight_layout(); fig.savefig(outpath("CT_vs_J.png"), dpi=150)
 plt.close()
 
 # ---- summary ----
 println("\n" * "="^60)
-println("Hover (Vc=$(Vc_hover) m/s) CCBlade CT by ncrit:")
-for ncrit in NCRIT_LIST
-    sub = ct_rows[(ct_rows.ncrit .== ncrit) .& (ct_rows.Vc .== Vc_hover), :]
+println("Hover (Vc=$(Vc_hover) m/s) CCBlade CT by polar set:")
+for spec in specs
+    sub = ct_rows[(ct_rows.polarset .== spec.label) .& (ct_rows.Vc .== Vc_hover), :]
     ct = sub.CT[1]
-    @printf("  ncrit=%2d:  CT = %.5f   (BEM/panel = %.3f, BEM/exp = %.3f)\n",
-            ncrit, ct, ct/CT_PANEL, ct/CT_EXPERIMENT)
+    @printf("  %-35s:  CT = %.5f   (BEM/panel = %.3f, BEM/exp = %.3f)\n",
+            spec.label, ct, ct/CT_PANEL, ct/CT_EXPERIMENT)
 end
 @printf("  reference:  panel CT = %.5f,  experiment CT = %.5f\n", CT_PANEL, CT_EXPERIMENT)
 println("="^60)
