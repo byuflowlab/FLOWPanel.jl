@@ -120,12 +120,13 @@ end
 # ============================================================
 # EXPERIMENT SETUP
 # ============================================================
-run_names = ["wing2_33x21.msh", "surface_21x33.msh"]
-# run_names = ["wing_small.msh", "surface_small.msh"]
+# run_names = ["wing3.msh", "surf501000.msh"]
+# run_names = ["wing_first.msh", "surface_first.msh"]
+run_names = ["wing_double.msh", "surface_second.msh"]
 files = [joinpath(pnl.examples_path, "wing_aileron", n) for n in run_names]
 
 AOAs = [
--9.58790170132325  
+-9.58790170132325 
 -7.841209829867704 
 -5.988657844990541 
 -4.136105860113403 
@@ -143,6 +144,8 @@ AOAs = [
 16.400756143667294 
 18.465028355387517 
 ]
+
+# AOAs = [0.0]
 
 m = 0.0254
 magVinf = 117.3 * 12 * m
@@ -162,12 +165,12 @@ rts = [0.0, 10.0]
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 bodytype = pnl.RigidWakeBody{kernel}
 
-out_file = joinpath(pnl.examples_path, "wing_aileron", "timing_summary.csv")
+out_file = joinpath(pnl.examples_path, "wing_aileron", "runs_plot.csv")
 
 # ============================================================
 # SOLVER RUNNER (WRITES DIRECTLY)
 # ============================================================
-function run_solver(io, name, solver_builder, AOAs, experimental)
+function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool=false)
 
     CLs = Float64[]
     t_build_total = 0.0
@@ -178,7 +181,8 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
     println("Running $name")
 
     sq_error = 0.0
-    tol = 3e-2
+    m = 0.0254
+    tol = 1e-1
 
     for (i, (AOA, expCL)) in enumerate(zip(AOAs, experimental_CL))
 
@@ -186,15 +190,15 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
 
         #------------------- GENERATE END PLATES ----------------------------------------------
     
-        left_center = [12.0*0.5*0.0254, -b/2 * m - tol, 0.0]
+        left_center = [12.0*0.5*m, -b/2 * m - tol, 0.0]
         left_normal = [0.0, 1.0, 0.0]
-        left_radius = 12.0 * 5 * m
-        left_plate = pnl.FlatGround(left_center, left_normal, left_radius; panel_length=12.0*0.25*0.0254)
-        right_center = [12.0*0.5*0.0254, b/2* m + tol, 0.0]
+        left_radius = 12.0 * 0.1
+        left_plate = pnl.FlatGround(left_center, left_normal, left_radius; panel_length=12.0*0.4*m)
+        right_center = [12.0*0.5*m, b/2* m + tol, 0.0]
         right_normal = [0.0, -1.0, 0.0]
-        right_radius = 12.0 * 5 * m    
-        right_plate = pnl.FlatGround(right_center, right_normal, right_radius; panel_length=12.0*0.25*0.0254)
-
+        right_radius = 12.0 * 0.1
+        right_plate = pnl.FlatGround(right_center, right_normal, right_radius; panel_length=12.0*0.4*m)
+        println(left_plate.ncells + right_plate.ncells)
         bodies = tuple([
             generate_body(file, chord, b, bodytype;
                 translate=tr,
@@ -210,7 +214,7 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
             pnl.apply_freestream!(body, Vinf)
         end
 
-        @show p = sum(b.ncells for b in bodies)
+        @show p = sum(b.ncells for b in bodies) 
 
         solver = solver_builder(bodies)
 
@@ -224,7 +228,9 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
 
         if i == 1
             nps_tot = sum(b.ncells for b in bodies)
+        end
 
+        if i == 1 && paraview
             filestr1 = pnl.write_vtk(joinpath("examples", "wing_val"), bodies[1], 0, 0.0)
             files1 = split(filestr1, ", ")
             pvd1 = first(filter(f -> endswith(f, ".pvd"), files1))
@@ -252,12 +258,6 @@ function run_solver(io, name, solver_builder, AOAs, experimental)
         )
     end
 
-    rms = sqrt(sq_error / length(AOAs))
-
-    write(io,
-        "$name,SUMMARY,$rms,$nps_tot,$t_build_total,$t_solve_total,$(t_build_total + t_solve_total)\n"
-    )
-
 end
 
 # ============================================================
@@ -280,9 +280,7 @@ experimental = [
  14.230623818525515  1.4759894459102951
  15.077504725897917  1.528759894459108
  16.400756143667294  1.3308707124010595
- 18.465028355387517  1.2807387862796877
 ]
-
 
 is_new_file = !isfile(out_file) || filesize(out_file) == 0
 
@@ -295,36 +293,52 @@ open(out_file, "a") do io
     #     bodies -> pnl.BackslashCoupled(bodies), AOAs, experimental
     # )
 
-    run_solver(io, "BackslashIterative",
-        bodies -> tuple(
-            pnl.Backslash(bodies[1]),
-            pnl.Backslash(bodies[2]),
-            pnl.Backslash(bodies[3]),pnl.Backslash(bodies[4])
-        ), AOAs, experimental
-    )
+    # run_solver(io, "BackslashIterative",
+    #     bodies -> tuple(
+    #         pnl.Backslash(bodies[1]),
+    #         pnl.Backslash(bodies[2]),
+    #         pnl.Backslash(bodies[3]),pnl.Backslash(bodies[4])
+    #     ), AOAs, experimental
+    # )
+
+    # try
+    #     run_solver(io, "KrylovSolver",
+    #         bodies -> tuple(
+    #             pnl.KrylovSolver(bodies[1]),
+    #             pnl.KrylovSolver(bodies[2]),
+    #             pnl.KrylovSolver(bodies[3]),
+    #             pnl.KrylovSolver(bodies[4])
+    #         ), AOAs, experimental
+    #     )
+    # catch e
+    #     println("Error running KrylovSolver")
+    # end
+
+    # try
+    #     run_solver(io, "KrylovSolver-FMM",
+    #         bodies -> tuple(
+    #             pnl.KrylovSolver(bodies[1]; backend=pnl.FastMultipoleBackend()),
+    #             pnl.KrylovSolver(bodies[2]; backend=pnl.FastMultipoleBackend()),
+    #             pnl.KrylovSolver(bodies[3]; backend=pnl.FastMultipoleBackend()),
+    #             pnl.KrylovSolver(bodies[4]; backend=pnl.FastMultipoleBackend()),
+    #         ), AOAs, experimental
+    #     )
+    # catch e
+    #     println("Error running KrylovSolver-FMM: ")
+    # end
+
+    # try
+    #     run_solver(io, "FGSSolver",
+    #         bodies -> tuple(
+    #             pnl.FGSSolver(bodies[1]; leaf_size=10000),
+    #             pnl.FGSSolver(bodies[2]; leaf_size=10000),
+    #             pnl.FGSSolver(bodies[3]; leaf_size=10000),
+    #             pnl.FGSSolver(bodies[4]; leaf_size=10000),
+    #         ), AOAs, experimental
+    #     )
+    # catch e
+    #     println("Error running FGSSolver: ", e)
+    # end
 end
-    # run_solver(io, "KrylovSolver",
-    #     bodies -> tuple(
-    #         pnl.KrylovSolver(bodies[1]),
-    #         pnl.KrylovSolver(bodies[2]),
-    #         pnl.KrylovSolver(bodies[3]),
-    #         pnl.KrylovSolver(bodies[4])
-    #     )
-    # )
-
-    # run_solver(io, "KrylovSolver-FMM",
-    #     bodies -> tuple(
-    #         pnl.KrylovSolver(bodies[1]; backend=pnl.FastMultipoleBackend()),
-    #         pnl.KrylovSolver(bodies[2]; backend=pnl.FastMultipoleBackend())
-    #     )
-    # )
-
-    # run_solver(io, "FGSSolver",
-    #     bodies -> tuple(
-    #         pnl.FGSSolver(bodies[1]; leaf_size=10000),
-    #         pnl.FGSSolver(bodies[2]; leaf_size=10000)
-    #     ), AOAs
-    # )
-# end
 
 println("Saved results to: ", out_file)

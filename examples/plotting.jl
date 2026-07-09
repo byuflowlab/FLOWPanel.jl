@@ -92,7 +92,7 @@ cl_exp  = CL_exp[:,2]
 
 # --- Plot ---
 scatter(aoa_c, cl_c, label="Coupled", lw=2, grid=false, symbol=:diamond)
-scatter!(aoa_i, cl_i, label="Iterative", lw=2, ls=:dash, symbol=:circle)
+# scatter!(aoa_i, cl_i, label="Iterative", lw=2, ls=:dash, symbol=:circle)
 scatter!(aoa_exp, cl_exp, label="Experimental", ms=4, symbol=:triangle)
 
 xlabel!("AOA (deg)")
