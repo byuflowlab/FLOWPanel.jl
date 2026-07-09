@@ -188,3 +188,132 @@ The fix is REQUIRED for any warm-start work — do not revert.
 RELAX_FILTER_DOWNSTREAM_R=0.5, 17 revs, targeting a stable 2-rev plateau near
 0.072; sanctioned follow-ups include settled filter-depth points (1.0R, 2.0R),
 filter+reduced-rlxf combos, and deeper truncation.
+
+## Results (2026-07-08): 0.5R-filter cold run — no plateau; stable limit cycle, cycle-mean CT = 0.0680
+
+Cold run `rotor_hover_relaxfilter0p5_cold` (17 revs) + four warm-start extensions
+(`_ext`…`_ext4`, +3 revs each, revs 17→29; all warm-starts on the replay-fix
+warmstart path). All five runs stable: no NaN, per-rev std ≤ 4.5e-4. Full tables in
+`data/rotor_hover_sweeps.md` ("Cold run" section).
+
+**Headline: the 0.5R-filtered configuration does not converge to a plateau — it
+settles into a slow, stable limit cycle of CT_bernoulli:**
+
+- post-withdrawal dip 0.0660 (rev ~12) → peak **0.0695** (rev ~18) → trough
+  **0.0666** (rev ~23) → second peak **0.0696** (rev ~27) → declining again at
+  rev 29. Period ~9–9.5 revs, amplitude ±1.5e-3.
+- **Cycle-mean over one full period (revs 18–27): CT = 0.0680** (per-rev means
+  0.06920, 0.06823, 0.06710, 0.06698, 0.06665, 0.06686, 0.06800, 0.06910,
+  0.06960; within-rev std ≤ 4.5e-4).
+- The previously quoted "settled CT ≈ 0.0695" (18-rev extension read) was taken
+  near the oscillation *peak* — a 2-rev window anywhere on this cycle biases the
+  read by up to ±1.5e-3. **All low-relaxation hover CT numbers must be quoted as
+  cycle-means over ≥1 period (~10 revs).** The strict 2-rev plateau gate can
+  never fire for this config.
+- Laplace cross-check (COLD run only, rev 16–17): matderiv 0.07165, lamb 0.06813
+  — bracket Bernoulli; no red flag. Extension Laplace columns ignored
+  (warm-start ∂u/∂t corruption).
+
+**Deliverable line:** stable at CT = 0.0680 ± 0.0015 (limit cycle, revs 18–29);
+gap to experiment (0.072) ≈ 4.0e-3.
+
+The oscillation is plausibly a physical/numerical hover wake breathing mode
+(periodic accumulation and shedding of the starting-vortex-like structure below
+the rotor) that stock relaxation was previously damping along with the thrust.
+
+**Follow-ups in flight** (warm-start perturbations from ext4 step 1043 = rev 29,
++5 revs each, judged against the 0.0680 cycle-mean): filter depth 1.0R (running
+2026-07-08), then 2.0R, RELAX_RLXF ∈ {0.15, 0.075} @ 0.5R, TRUNCATION_DEPTH_R
+∈ {6, 8}. Next-lever recommendation pending those results.
+
+## Results (2026-07-09): follow-up sweep closed — depth is the only lever, saturates at 2.0R; best CT = 0.0686 (cycle-mean)
+
+Six warm-start perturbations from the 0.5R-baseline rev-29 state (step 1043), +5
+revs each (plus a +5-rev extension of the winner); all stable, no NaN. Tables in
+`data/rotor_hover_sweeps.md` ("Follow-ups" section).
+
+- **Filter depth is the only active lever** and its phase-matched 5-rev means
+  were 0.0672 (0.5R) → 0.0683 (1.0R) → 0.0691 (2.0R) → 0.0691 (4.0R): the depth
+  curve **saturates at ≈2.0R**. Deeper filters raise within-rev noise 2–3×
+  (std up to 1.4e-3) but stay stable.
+- **Null knobs** (each within +0.1e-3 of baseline, tight std): RELAX_RLXF=0.15
+  in the damped ≥0.5R region (⇒ far-field relaxation *strength* irrelevant;
+  0.075 skipped), TRUNCATION_DEPTH_R=6 (⇒ far-wake retention irrelevant;
+  8 skipped).
+- **Methodology correction:** the 2.0R extension (revs 34→39) shows the same
+  ~9-rev limit cycle (amplitude ±1.7e-3), and its **true full-cycle mean is
+  CT = 0.0686** (revs 29–39) — the phase-matched +1.9e-3 estimate was inflated
+  because the knob change itself excites the cycle. Judge every knob on a
+  ≥1-period cycle-mean, never a 5-rev window.
+
+**Deliverable:** baseline (0.5R filter): stable at **CT = 0.0680 ± 0.0015**
+(limit cycle, revs 18–27); best relaxation configuration (2.0R filter):
+**CT = 0.0686 ± 0.0017** (revs 29–39); **gap to experiment 0.072 ≈ 3.4e-3**.
+Relaxation-side knobs are exhausted — the remaining ~5% thrust deficit is not
+recoverable by relaxation scheduling.
+
+**Next-lever recommendation (needs user approval):** spatial/azimuthal
+resolution — RHPC_MESH refinement beyond 40_40 and/or NT>36 (smaller dt) — since
+the deficit persists with an essentially undamped, untruncated wake; secondarily,
+a cold run at 2.0R to remove the warm-start-transient caveat on the 0.0686
+number (~1 day walltime).
+
+## Results (2026-07-09, later): replay post-processing of the 2.0R cycle — monitor spread brackets the gap; hub is not a factor
+
+Post-processed the saved revs-29–39 chain (no re-simulation; `pnl.replay` +
+saved per-panel pressures; only the new Kutta–Joukowski cross-check needed
+N-body work). New `select` panel-mask option added to
+`ForceMonitor`/`KuttaJoukowskiForce` for hub exclusion (r < 0.1R, 1220/7288
+panels). Full table in `data/rotor_hover_sweeps.md` ("Replay post-processing");
+plot + CSV in `data/rotor_hover_replay2p0_forces/`. Replayed CT reproduces the
+original runs' CSVs to 1e-12 (loader/integration validated).
+
+Cycle means, revs 30–39: **Laplace(Du/Dt) 0.0713 ± 0.0015**, Bernoulli
+0.0685 ± 0.0013, Laplace(lamb) 0.0665 ± 0.0012, KJ rev-means 0.060–0.063.
+Hub ΔCT ≤ +2e-4 on all pressure monitors (−1.7e-3 on KJ edges).
+
+Two conclusions that update the convergence picture:
+
+1. **The "gap to experiment" is monitor-dependent and the monitors bracket
+   0.072.** The material-derivative Laplace pressure lands within 1e-3 of the
+   reference; the cross-monitor spread (~4.8e-3) exceeds the Bernoulli-based
+   deficit (3.4e-3). The remaining shortfall is therefore within
+   pressure-recovery uncertainty, not clearly a wake/relaxation deficiency.
+2. **Hub exclusion is a dead end** for closing the gap (≤ +0.35% of CT).
+
+KJ diagnostic: instantaneous signal is unusable (fixed-azimuth ±0.1–0.2 1/rev
+spikes from probes near the first wake row); per-rev means are tight and sit
+~7e-3 below Bernoulli.
+
+**Deliverable line:** settled 2.0R cycle, revs 30–39, cycle-mean CT ± std:
+Laplace(Du/Dt) 0.0713 ± 0.0015 (gap −0.7e-3), Bernoulli 0.0685 ± 0.0013
+(gap −3.5e-3), Laplace(lamb) 0.0665 ± 0.0012 (gap −5.5e-3), KJ ~0.061–0.063;
+hub contribution ≤ +2e-4 (pressure) / −1.7e-3 (KJ).
+
+## Results (2026-07-09, later still): spanwise loading percentiles for the settled 2.0R cycle
+
+Replayed the same revs-30–39 window (steps 1080:1403, 324 samples) through
+per-source (Laplace Du/Dt / Laplace lamb / Bernoulli) spanwise binning of the
+saved panel pressures — zero N-body work, ~75 s. Script:
+`examples/rotor_hover_spanwise_replay2p0.jl`; outputs (stats CSV + median/
+IQR/min–max percentile plot per source, 35 bins/blade) in
+`data/rotor_hover_replay2p0_forces/spanwise/`.
+
+- Binned dT/dr integrates back to the forces-replay CT cycle-means at ratio
+  1.0000 for all three sources (self-consistency of binner + integration).
+- Blade 1 / blade 2 medians overlay indistinguishably — settled axisymmetric
+  hover confirmed at the loading-distribution level, not just in total CT.
+- All sources peak at r/R ≈ 0.76–0.78; the matderiv-vs-Bernoulli CT excess
+  accumulates over the outboard half. Laplace variants have wide min–max
+  scatter (and a small negative median dip) inboard of r/R ≈ 0.3 where bins
+  are hub-influenced; Bernoulli is tight everywhere.
+
+## Cross-reference: monitor reliability study (2026-07-09)
+
+The three-monitor CT spread quoted throughout this document is resolved in
+`BRAINSTORM/007_pressure_monitor_reliability.md`: steady Bernoulli (0.0685) is
+the defensible cycle-mean estimate, cross-validated to 1.2e-4 by the ω-free
+Laplace form; the matderiv excess (+2.9e-3) rides on normal-residual velocity
+content at near-singular hub/tip panels, and the lamb deficit (−1.8e-3) is
+entirely the quad-basis bound-κ injection. The −5% gap to experiment 0.072 is
+physics/discretization, not monitor choice.

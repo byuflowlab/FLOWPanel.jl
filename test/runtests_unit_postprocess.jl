@@ -948,6 +948,104 @@ end
         @test !isapprox(doublet_laplace.b[1], surface_only_rhs; atol=1e-12)
     end
 
+    @testset "PressureLaplace lamb_vorticity variants" begin
+        body = make_skewed_two_panel_body()
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.2;
+            lamb_vorticity=:unknown)
+        @test_throws ArgumentError pnl.PressureLaplace((body,), 1.2;
+            kappa_basis=:unknown)
+
+        # :hessian_curl flips the Hessian requirement even for the lamb form.
+        hess = pnl.PressureLaplace((body,), 1.2; acceleration_form=:lamb_vector,
+            lamb_vorticity=:hessian_curl)
+        @test pnl.monitor_requires_body_hessian(hess)
+        @test pnl.monitor_requires_induced_vorticity(hess)
+        base = pnl.PressureLaplace((body,), 1.2; acceleration_form=:lamb_vector)
+        @test base.lamb_vorticity == :induced
+        @test !pnl.monitor_requires_body_hessian(base)
+
+        # Baseline :induced ingests body.induced_vorticity verbatim, so the RHS
+        # is bit-identical to the pre-kwarg behavior.
+        for p in 1:body.ncells
+            body.velocity[:, p] .= [0.4 + 0.05p, -0.15, 0.1p]
+        end
+        body.induced_vorticity[1, :] .= 0.3
+        body.induced_vorticity[3, :] .= -0.8
+        pnl._pressure_rhs_from_lamb_vector!(base.b[1], base, body, 1, nothing)
+        @test base.omega_used[1] == body.induced_vorticity
+
+        # Source-only body: kappa == 0, so :no_bound == :induced and
+        # :bound_only gives an omega-free RHS.
+        nob = pnl.PressureLaplace((body,), 1.2; acceleration_form=:lamb_vector,
+            lamb_vorticity=:no_bound)
+        pnl._pressure_rhs_from_lamb_vector!(nob.b[1], nob, body, 1, nothing)
+        @test isapprox(nob.b[1], base.b[1]; atol=1e-14)
+        bnd = pnl.PressureLaplace((body,), 1.2; acceleration_form=:lamb_vector,
+            lamb_vorticity=:bound_only)
+        pnl._pressure_rhs_from_lamb_vector!(bnd.b[1], bnd, body, 1, nothing)
+        @test all(iszero, bnd.omega_used[1])
+
+        # Doublet body: kappa != 0 and the variants decompose additively:
+        # omega(:no_bound) + omega(:bound_only) == omega(:induced).
+        doublet_body = make_skewed_two_panel_doublet_body()
+        doublet_body.velocity .= 0.0
+        doublet_body.velocity[1, :] .= 0.7
+        doublet_body.induced_vorticity .= 0.0
+        doublet_body.induced_vorticity[2, :] .= 0.4     # fake wake-induced part
+        pnl._add_bound_surface_vorticity!(doublet_body) # += kappa (tri basis)
+        # kappa_basis must match the basis used to accumulate kappa above.
+        variants = Dict(sym => pnl.PressureLaplace((doublet_body,), 1.2;
+                acceleration_form=:lamb_vector, lamb_vorticity=sym,
+                kappa_basis=:tri)
+            for sym in (:induced, :no_bound, :bound_only))
+        for m in values(variants)
+            pnl._pressure_rhs_from_lamb_vector!(m.b[1], m, doublet_body, 1, nothing)
+        end
+        @test !all(iszero, variants[:bound_only].omega_used[1])
+        @test isapprox(variants[:no_bound].omega_used[1] .+ variants[:bound_only].omega_used[1],
+            variants[:induced].omega_used[1]; atol=1e-12)
+        # and :no_bound recovers exactly the fake wake-induced part
+        @test isapprox(variants[:no_bound].omega_used[1][2, :], fill(0.4, doublet_body.ncells);
+            atol=1e-12)
+        @test isapprox(variants[:no_bound].omega_used[1][[1, 3], :],
+            zeros(2, doublet_body.ncells); atol=1e-12)
+
+        # :hessian_curl reads the antisymmetric part of body.velocity_gradient
+        # (+ kappa, zero for the source body).
+        body.velocity_gradient .= 0.0
+        for p in 1:body.ncells
+            body.velocity_gradient[2, 1, p] = 0.5   # d(u2)/d(x1)
+            body.velocity_gradient[1, 2, p] = -0.25 # d(u1)/d(x2)
+        end
+        hc = pnl.PressureLaplace((body,), 1.2; acceleration_form=:lamb_vector,
+            lamb_vorticity=:hessian_curl)
+        pnl._pressure_rhs_from_lamb_vector!(hc.b[1], hc, body, 1, nothing)
+        @test isapprox(hc.omega_used[1][3, :], fill(0.75, body.ncells); atol=1e-14)
+        @test isapprox(hc.omega_used[1][1:2, :], zeros(2, body.ncells); atol=1e-14)
+    end
+
+    @testset "PressureLaplace project_edge_du" begin
+        body = make_skewed_two_panel_body()
+        raw = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
+        @test !raw.project_edge_du
+        proj = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            project_edge_du=true)
+
+        # Velocity difference purely along the edge-averaged normal: the
+        # projected variant drops the whole convective term (b == 0), the raw
+        # variant picks it up through urel . du (panels are skewed, so the
+        # tangent-projected urel is not orthogonal to the averaged normal).
+        edge_a, edge_b, i, j = raw.edges[1][:, 1]
+        nbar = body.normals[:, i] .+ body.normals[:, j]
+        nbar ./= norm(nbar)
+        body.velocity .= 0.0
+        body.velocity[:, j] .= 0.8 .* nbar
+        pnl._pressure_rhs_from_edge_material_derivative!(raw.b[1], raw, body, 1, nothing)
+        pnl._pressure_rhs_from_edge_material_derivative!(proj.b[1], proj, body, 1, nothing)
+        @test isapprox(proj.b[1], zeros(body.ncells); atol=1e-12)
+        @test !isapprox(raw.b[1], zeros(body.ncells); atol=1e-12)
+    end
+
     @testset "PressureLaplace unsteady toggle" begin
         body_steady = make_skewed_two_panel_body()
         body_unsteady = make_skewed_two_panel_body()

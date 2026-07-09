@@ -80,6 +80,7 @@ end
 
 function run_pressure_case(; builder::Symbol, n_rfl::Int, n_span::Int,
                            pressure::Symbol, gradient_mode::Symbol=:raw_hessian,
+                           acceleration_form::Symbol=:material_derivative,
                            correct_kutta::Bool=false, bodyoptargs=(;))
     body, c = build_sweptwing(; builder, n_rfl, n_span, bodyoptargs)
     backend = pnl.DirectBackend()
@@ -92,7 +93,8 @@ function run_pressure_case(; builder::Symbol, n_rfl::Int, n_span::Int,
     pressure_monitor = pressure == :bernoulli ?
         pnl.PressureBernoulli(c.rho; correct_kuttacondition=correct_kutta) :
         pnl.PressureLaplace((body,), c.rho; reference_panel=1,
-            reference_pressure=0.0, gradient_mode=gradient_mode, verbose=false)
+            reference_pressure=0.0, gradient_mode=gradient_mode,
+            acceleration_form=acceleration_form, verbose=false)
     force_monitor = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
         correct_kuttacondition=correct_kutta, verbose=false)
 
@@ -108,6 +110,7 @@ function run_pressure_case(; builder::Symbol, n_rfl::Int, n_span::Int,
         force_coefficients_from_pressure(body, p, c, Lhat, Dhat; correct_kutta)
     Fmon = force_monitor.force[:, 1]
     return (; builder, n_rfl, n_span, panels=body.ncells, pressure, gradient_mode,
+        acceleration_form,
         correct_kutta, body, constants=c, Lhat, Dhat, pressure_field=copy(p),
         CL=LA.dot(Fmon, Lhat), CD=LA.dot(Fmon, Dhat),
         CL_direct, CD_direct,
@@ -334,4 +337,6 @@ function main()
     @printf "rho cancels in CL when pressure and force normalization both use rho consistently.\n"
 end
 
-main()
+# Allow other scripts to include this file for its helpers without triggering
+# the full diagnostic sweep.
+get(ENV, "SWEPTWING_POISSON_MAIN", "true") == "true" && main()
