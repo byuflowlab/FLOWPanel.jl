@@ -1385,3 +1385,17 @@ vs local field scale), not a relaxation-dose effect**. The wake-age conclusions
 of the 2026-07-02 attribution section stand. CSVs:
 `data/overlap_age_diag/stable_wake_e7_nt36_rlxf0p{3,6}_step{1640,1650}_{axial,sigma}.csv`
 (the 0.3-run CSVs survive the deleted run directory).
+
+## 2026-07-07 — Closure note: omitted-strain terms exonerated as CT suppressors
+
+The 2026-07-03/04 knob sweep (plans/20260702_convergence.md; results
+`data/rotor_hover_sweeps.md`) ran the strain-restoration scenarios as warm-start
+continuations at 40_40/NT=36: `bodyhess` (BODY_HESSIAN_TO_PARTICLES=true,
+ΔCT=−4.2e-4), `bodyhess_gradoff` (+BODY_GRADIENT_KERNELOFFSET=4e-3, −8.2e-4),
+`wakerowhess` (PANEL_WAKE_HESSIAN_TO_PARTICLES=true, +5.9e-4), and the fully
+consistent `bodyhess_wakerow` (both, −1.8e-4) — **all stable over 4.3 revs (the
+instability expectation did not materialize) and all CT-null or marginal (≤~3σ,
+mixed sign)**. Despite the young-wake strain term measuring 3.2× the retained term
+(energy norm), restoring it does not move CT toward experiment at this
+resolution. For CT purposes this item's strain hypothesis is closed; the shortfall
+is carried by relaxation (see BRAINSTORM/006 2026-07-07 section).

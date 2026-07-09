@@ -512,8 +512,12 @@ function plot_source(path, stats, source::Symbol, ccblade)
     end
     ax.set_xlabel("r/R")
     ax.set_ylabel("dT/dr total-equivalent [N/m]")
-    ax.set_title(source == :laplace_lamb ? "PressureLaplace Lamb spanwise loading" :
-                                      "PressureBernoulli spanwise loading")
+    source_titles = Dict(
+        :laplace_matderiv => "PressureLaplace Du/Dt",
+        :laplace_lamb => "PressureLaplace Lamb",
+        :bernoulli => "PressureBernoulli",
+    )
+    ax.set_title(get(source_titles, source, String(source)) * " spanwise loading")
     ax.grid(true, alpha=0.35)
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -609,6 +613,8 @@ function make_force_monitor_factory(force_store, rho, radius,
         return Tuple(monitors)
     end
 end
+
+if parse(Bool, get(ENV, "SPANWISE_REPLAY_RUN", "true"))
 
 run_name = get(ENV, "RUN_NAME", "rotor_hover_pressure_comparison")
 save_path = get(ENV, "SAVE_PATH", joinpath("data", run_name))
@@ -781,3 +787,5 @@ println("Wrote $(bernoulli_plot)")
 finite_cols = [:mean_dTdr_blade, :q25_dTdr_blade, :median_dTdr_blade, :q75_dTdr_blade]
 all(all(isfinite, skipmissing(stats[!, c])) for c in finite_cols) ||
     @warn "Some spanwise statistic columns contain non-finite values; inspect bins with n_samples=0."
+
+end # SPANWISE_REPLAY_RUN guard

@@ -61,18 +61,25 @@ function _add_bound_surface_vorticity!(systems::Tuple; grad_mu_options=(;))
     return nothing
 end
 
-function _add_bound_surface_vorticity!(body::AbstractBody; grad_mu_options=(;))
-    has_grad_mu(body) || return nothing
+"""
+    _bound_surface_vorticity!(out, body; grad_mu_options=(;))
+
+Write the bound surface vorticity κ = n × ∇sμ of `body` into `out`
+(3 × ncells, overwritten). `out` is zeroed and returned unchanged for bodies
+without a doublet/Gamma strength (`has_grad_mu(body) == false`).
+"""
+function _bound_surface_vorticity!(out::AbstractMatrix, body::AbstractBody;
+        grad_mu_options=(;))
+    fill!(out, zero(eltype(out)))
+    has_grad_mu(body) || return out
     normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
         default_basis=:tri)
 
-    # Accumulate the bound surface vorticity κ = n × ∇sμ into
-    # body.induced_vorticity on top of any wake-induced contribution already
-    # there. Build κ in a scratch buffer so compute_mu_gradient! (which writes
-    # ∇μ, not accumulates) does not clobber existing values.
-    TF = eltype(body.induced_vorticity)
-    kappa = zeros(TF, 3, body.ncells)
-    compute_mu_gradient!(kappa, body.controlpoints, body.normals,
+    # Build ∇sμ in a scratch buffer so compute_mu_gradient! (which writes,
+    # not accumulates) does not clobber caller state, then form n × ∇sμ.
+    TF = eltype(out)
+    grad_mu = zeros(TF, 3, body.ncells)
+    compute_mu_gradient!(grad_mu, body.controlpoints, body.normals,
         body.cells, body.neighbor,
         view(body.strength, :, get_Gammai(body)),
         _bound_surface_vorticity_te_info(body);
@@ -80,16 +87,43 @@ function _add_bound_surface_vorticity!(body::AbstractBody; grad_mu_options=(;))
         nodes=body.nodes,
         grad_mu_options=normalized_grad_mu_options)
 
-    @inbounds for i in axes(kappa, 2)
+    @inbounds for i in axes(grad_mu, 2)
         nx, ny, nz = body.normals[1, i], body.normals[2, i], body.normals[3, i]
-        gx = kappa[1, i]
-        gy = kappa[2, i]
-        gz = kappa[3, i]
-        body.induced_vorticity[1, i] += ny * gz - nz * gy
-        body.induced_vorticity[2, i] += nz * gx - nx * gz
-        body.induced_vorticity[3, i] += nx * gy - ny * gx
+        gx = grad_mu[1, i]
+        gy = grad_mu[2, i]
+        gz = grad_mu[3, i]
+        out[1, i] = ny * gz - nz * gy
+        out[2, i] = nz * gx - nx * gz
+        out[3, i] = nx * gy - ny * gx
     end
 
+    return out
+end
+
+"""
+    _axpy_bound_surface_vorticity!(out, body, a; grad_mu_options=(;))
+
+Accumulate `a * κ` (κ = n × ∇sμ) into `out` (3 × ncells).
+"""
+function _axpy_bound_surface_vorticity!(out::AbstractMatrix, body::AbstractBody,
+        a::Real; grad_mu_options=(;))
+    has_grad_mu(body) || return out
+    kappa = zeros(eltype(out), 3, body.ncells)
+    _bound_surface_vorticity!(kappa, body; grad_mu_options)
+    @inbounds out .+= a .* kappa
+    return out
+end
+
+_add_bound_surface_vorticity_into!(out::AbstractMatrix, body::AbstractBody; optargs...) =
+    _axpy_bound_surface_vorticity!(out, body, 1; optargs...)
+_subtract_bound_surface_vorticity!(out::AbstractMatrix, body::AbstractBody; optargs...) =
+    _axpy_bound_surface_vorticity!(out, body, -1; optargs...)
+
+function _add_bound_surface_vorticity!(body::AbstractBody; grad_mu_options=(;))
+    # Accumulate the bound surface vorticity κ = n × ∇sμ into
+    # body.induced_vorticity on top of any wake-induced contribution already
+    # there.
+    _add_bound_surface_vorticity_into!(body.induced_vorticity, body; grad_mu_options)
     return nothing
 end
 

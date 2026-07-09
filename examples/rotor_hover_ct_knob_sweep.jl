@@ -81,8 +81,21 @@ const SCENARIO_DEFS = [
     # disable particle merging (baseline merges every step at r=0.02R): tests
     # whether merge-induced vorticity diffusion is suppressing CT
     "merge_off"        => Dict("MERGE_PARTICLES" => "false"),
+    # --- 2026-07-04 follow-ups (plan §6), guided by first-sweep results ---
+    # relaxfilter_0p5R was the strongest knob (+3.2e-3 vs control): sweep the
+    # filter depth to test for a CT plateau (plateau = relaxation-free CT)
+    "relaxfilter_0p25R" => Dict("RELAX_FILTER_DOWNSTREAM_R" => "0.25"),
+    "relaxfilter_1p0R"  => Dict("RELAX_FILTER_DOWNSTREAM_R" => "1.0"),
+    # rlxf ladder monotone and 0.075 stable (lowest std of the sweep): extend
+    # one more halving to tighten the λ→0 Richardson extrapolation
+    "rlxf_0p0375"       => Dict("RELAX_RLXF" => "0.0375"),
+    # both strain halves individually stable: run the fully-consistent
+    # configuration (complete surface+wake-row strain restored to particles)
+    "bodyhess_wakerow"  => Dict("BODY_HESSIAN_TO_PARTICLES" => "true",
+                                "PANEL_WAKE_HESSIAN_TO_PARTICLES" => "true"),
 ]
-const SCENARIO_RLXF = Dict("control" => 0.3, "rlxf_0p15" => 0.15, "rlxf_0p075" => 0.075)
+const SCENARIO_RLXF = Dict("control" => 0.3, "rlxf_0p15" => 0.15, "rlxf_0p075" => 0.075,
+                           "rlxf_0p0375" => 0.0375)
 
 function run_scenario(name, overrides)
     run_name = "ct_knob_$(name)"

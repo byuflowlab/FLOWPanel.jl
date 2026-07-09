@@ -399,6 +399,9 @@ stored in the monitor.
 - `verbose::Bool` — when `true`, prints per-step rebuild status and panel count to stdout
 - `gradient_mode::Symbol` — `:raw_hessian` for the current Hessian path or `:surface_velocity` for a surface reconstruction of the final velocity field
 - `acceleration_form::Symbol` — `:material_derivative` for the direct acceleration edge form or `:lamb_vector` for the Lamb-vector decomposition
+- `lamb_vorticity::Symbol` — vorticity fed to the `:lamb_vector` RHS: `:induced` (default; `body.induced_vorticity` as accumulated by the solver = wake-induced curl + bound-sheet κ), `:no_bound` (induced − κ), `:bound_only` (κ alone), or `:hessian_curl` (curl of the FastMultipole velocity Hessian + κ)
+- `kappa_basis::Symbol` — μ-gradient basis used when the monitor itself computes κ for the `lamb_vorticity` variants (`:quad` default, matching what `simulate!`/`replay` accumulate into `body.induced_vorticity`; `:tri` available for sensitivity studies — the rotor-hover lamb CT was observed to move by ~2.5e-3 between the two)
+- `project_edge_du::Bool` — when `true`, project the `:material_derivative` edge velocity difference Δu off the edge-averaged normal (diagnostic variant; default `false` preserves the raw-Δu behavior)
 - `velocity_dot::Vector{Matrix{Float64}}` — rolling buffer; initialized to zero, then between calls holds `-u_inertial_old` with `u_inertial = tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body); during a call becomes `(u_inertial_new - u_inertial_old) / dt`
 - `u_inertial::Vector{Matrix{Float64}}` — scratch buffer for the inertial fluid velocity `tangent(body.velocity) + body.velocity_kinematic` (3 × ncells per body)
 - `surface_velocity_gradient::Vector{Array{Float64,3}}` — scratch buffer for `∇ₛu_inertial` in `:surface_velocity` mode (3 × 3 × ncells per body)
@@ -447,6 +450,9 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     verbose::Bool
     gradient_mode::Symbol
     acceleration_form::Symbol
+    lamb_vorticity::Symbol
+    kappa_basis::Symbol
+    project_edge_du::Bool
     velocity_dot::Vector{Matrix{Float64}}
     L::Vector{SparseArrays.SparseMatrixCSC{Float64, Int}}
     pressure_operator::Vector{PressureLaplacianOperator}
@@ -457,6 +463,7 @@ mutable struct PressureLaplace{TP} <: AbstractMonitor
     edges::Vector{Matrix{Int}}
     workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}
     u_inertial::Vector{Matrix{Float64}}
+    omega_used::Vector{Matrix{Float64}}
     surface_velocity_gradient::Vector{Array{Float64,3}}
     vtk_fields::Tuple{Vararg{Symbol}}
     last_rebuild::Vector{Bool}
@@ -465,7 +472,8 @@ end
 
 monitor_provides(::PressureLaplace) = (:P,)
 monitor_requires_body_hessian(m::PressureLaplace) =
-    m.gradient_mode == :raw_hessian && m.acceleration_form == :material_derivative
+    (m.gradient_mode == :raw_hessian && m.acceleration_form == :material_derivative) ||
+    (m.acceleration_form == :lamb_vector && m.lamb_vorticity == :hessian_curl)
 monitor_requires_induced_vorticity(m::PressureLaplace) = m.acceleration_form == :lamb_vector
 
 function PressureLaplace(bodies, rho::Real;
@@ -480,6 +488,9 @@ function PressureLaplace(bodies, rho::Real;
                          verbose::Bool=false,
                          gradient_mode::Symbol=:raw_hessian,
                          acceleration_form::Symbol=:material_derivative,
+                         lamb_vorticity::Symbol=:induced,
+                         kappa_basis::Symbol=:quad,
+                         project_edge_du::Bool=false,
                          vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,),
                          file::Bool=true)
     reference_panel >= 1 || throw(ArgumentError("reference_panel must be at least 1; got $(reference_panel)."))
@@ -487,6 +498,10 @@ function PressureLaplace(bodies, rho::Real;
         "gradient_mode must be :raw_hessian or :surface_velocity; got $(gradient_mode)."))
     acceleration_form in (:material_derivative, :lamb_vector) || throw(ArgumentError(
         "acceleration_form must be :material_derivative or :lamb_vector; got $(acceleration_form)."))
+    lamb_vorticity in (:induced, :no_bound, :bound_only, :hessian_curl) || throw(ArgumentError(
+        "lamb_vorticity must be :induced, :no_bound, :bound_only, or :hessian_curl; got $(lamb_vorticity)."))
+    kappa_basis in (:quad, :tri) || throw(ArgumentError(
+        "kappa_basis must be :quad or :tri; got $(kappa_basis)."))
     systems_tuple = _systems_tuple(bodies)
     isempty(systems_tuple) && throw(ArgumentError("PressureLaplace requires at least one body."))
     nbodies = length(systems_tuple)
@@ -500,6 +515,7 @@ function PressureLaplace(bodies, rho::Real;
     edges = Matrix{Int}[]
     workspace = Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}[]
     u_inertial = Matrix{Float64}[]
+    omega_used = Matrix{Float64}[]
     surface_velocity_gradient = Array{Float64,3}[]
     last_rebuild = Bool[]
     sizehint!(velocity_dot, nbodies)
@@ -512,6 +528,7 @@ function PressureLaplace(bodies, rho::Real;
     sizehint!(edges, nbodies)
     sizehint!(workspace, nbodies)
     sizehint!(u_inertial, nbodies)
+    sizehint!(omega_used, nbodies)
     sizehint!(surface_velocity_gradient, nbodies)
     sizehint!(last_rebuild, nbodies)
 
@@ -535,6 +552,7 @@ function PressureLaplace(bodies, rho::Real;
         push!(edges, body_edges)
         push!(workspace, Krylov.krylov_workspace(Val(:cg), A, b))
         push!(u_inertial, zeros(Float64, size(body.velocity)))
+        push!(omega_used, zeros(Float64, 3, body.ncells))
         push!(surface_velocity_gradient, zeros(Float64, 3, 3, body.ncells))
         push!(last_rebuild, false)
     end
@@ -543,9 +561,10 @@ function PressureLaplace(bodies, rho::Real;
     return PressureLaplace{typeof(preconditioner)}(
         Float64(rho), unsteady, Float64(atol), Float64(rtol), Int(itmax),
         preconditioner, Int(reference_panel), Float64(reference_pressure),
-        rebuild_every_step, verbose, gradient_mode, acceleration_form, velocity_dot, Ls, pressure_operators, bs, ps,
+        rebuild_every_step, verbose, gradient_mode, acceleration_form,
+        lamb_vorticity, kappa_basis, project_edge_du, velocity_dot, Ls, pressure_operators, bs, ps,
         acceleration, tangential,
-        edges, workspace, u_inertial, surface_velocity_gradient, vtk_fields, last_rebuild, file)
+        edges, workspace, u_inertial, omega_used, surface_velocity_gradient, vtk_fields, last_rebuild, file)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -924,6 +943,40 @@ function _pressure_rhs!(m::PressureLaplace, body::AbstractBody, i_body::Int)
     end
 end
 
+# Select which surface vorticity the lamb-vector RHS ingests. The baseline
+# (:induced) copies body.induced_vorticity (wake-induced curl + bound-sheet
+# kappa, as accumulated by simulate!/replay) and is bit-identical to the
+# pre-kwarg behavior; the other variants isolate individual contributions for
+# reliability studies.
+function _pressure_fill_omega_used!(m::PressureLaplace, body::AbstractBody, i_body::Int)
+    omega = m.omega_used[i_body]
+    # kappa_basis must match the basis used when κ was accumulated into
+    # body.induced_vorticity (simulate!/replay default: :quad) or the
+    # :no_bound decomposition would subtract a different κ than was added.
+    kappa_options = (; basis=m.kappa_basis)
+    if m.lamb_vorticity == :induced
+        copyto!(omega, body.induced_vorticity)
+    elseif m.lamb_vorticity == :no_bound
+        copyto!(omega, body.induced_vorticity)
+        _subtract_bound_surface_vorticity!(omega, body; grad_mu_options=kappa_options)
+    elseif m.lamb_vorticity == :bound_only
+        _bound_surface_vorticity!(omega, body; grad_mu_options=kappa_options)
+    elseif m.lamb_vorticity == :hessian_curl
+        # curl(u) from the FastMultipole Hessian (layout G[k, l, i]), plus the
+        # bound-sheet kappa that the Hessian of off-sheet sources cannot see.
+        G = body.velocity_gradient
+        @inbounds for i in axes(omega, 2)
+            omega[1, i] = G[3, 2, i] - G[2, 3, i]
+            omega[2, i] = G[1, 3, i] - G[3, 1, i]
+            omega[3, i] = G[2, 1, i] - G[1, 2, i]
+        end
+        _add_bound_surface_vorticity_into!(omega, body; grad_mu_options=kappa_options)
+    else
+        throw(ArgumentError("Unknown PressureLaplace lamb_vorticity $(m.lamb_vorticity)."))
+    end
+    return omega
+end
+
 function _pressure_apply_reference_pressure_rhs!(b::AbstractVector,
                                                  reference_panel::Int,
                                                  reference_pressure::Real,
@@ -974,6 +1027,22 @@ function _pressure_rhs_from_edge_material_derivative!(b::AbstractVector, m::Pres
         du1 = body.velocity[1, j] - body.velocity[1, i]
         du2 = body.velocity[2, j] - body.velocity[2, i]
         du3 = body.velocity[3, j] - body.velocity[3, i]
+        if m.project_edge_du
+            # Project the raw velocity difference off the edge-averaged normal
+            # so the convective term is purely tangential (diagnostic variant
+            # isolating the projection asymmetry vs the lamb-vector form).
+            nb1 = nx_i + nx_j
+            nb2 = ny_i + ny_j
+            nb3 = nz_i + nz_j
+            nbmag = sqrt(nb1 * nb1 + nb2 * nb2 + nb3 * nb3)
+            if nbmag > eps(Float64)
+                nb1, nb2, nb3 = nb1 / nbmag, nb2 / nbmag, nb3 / nbmag
+                du_n = du1 * nb1 + du2 * nb2 + du3 * nb3
+                du1 -= du_n * nb1
+                du2 -= du_n * nb2
+                du3 -= du_n * nb3
+            end
+        end
         convective_edge_dot_r = urel1 * du1 + urel2 * du2 + urel3 * du3
 
         flux = rho * w * (udot_edge_dot_r + convective_edge_dot_r)
@@ -994,6 +1063,7 @@ function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
     rho = m.rho
     reference_panel = m.reference_panel
     reference_pressure = m.reference_pressure
+    omega_used = _pressure_fill_omega_used!(m, body, i_body)
     fill!(b, 0.0)
 
     @inbounds for k in axes(edges, 2)
@@ -1011,8 +1081,8 @@ function _pressure_rhs_from_lamb_vector!(b::AbstractVector, m::PressureLaplace,
                 (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
         end
 
-        wx_i, wy_i, wz_i = body.induced_vorticity[1, i], body.induced_vorticity[2, i], body.induced_vorticity[3, i]
-        wx_j, wy_j, wz_j = body.induced_vorticity[1, j], body.induced_vorticity[2, j], body.induced_vorticity[3, j]
+        wx_i, wy_i, wz_i = omega_used[1, i], omega_used[2, i], omega_used[3, i]
+        wx_j, wy_j, wz_j = omega_used[1, j], omega_used[2, j], omega_used[3, j]
         wx = 0.5 * (wx_i + wx_j)
         wy = 0.5 * (wy_i + wy_j)
         wz = 0.5 * (wz_i + wz_j)
@@ -1694,10 +1764,19 @@ therefore appear **before** this monitor in the `monitors` tuple passed to
 must return a `(CF_norm, CM_norm)` tuple.  The default is `WingNormalization`
 which divides by `0.5 ρ |U∞|² Sref` (and `… Lref` for moments).
 
+`select` optionally restricts which panels contribute to the integrated force
+and moment: pass a predicate `cp_frame -> Bool` evaluated on each control point
+expressed in `frames[i_frame]` (global coordinates if `i_frame < 0`), e.g.
+`select = cp -> sqrt(cp[2]^2 + cp[3]^2) > 0.1R` to exclude a rotor hub.
+Excluded panels have their columns of `distributed_force` zeroed before
+integration (so VTK output reflects the exclusion too). The mask is computed on
+first use and cached while `ncells` is unchanged — the body is assumed rigid in
+the selected frame. Default `nothing` includes every panel.
+
 If `verbose=true`, the normalized CF and CM for each step are printed to stdout
 with a single `\\t` indent.
 """
-mutable struct ForceMonitor{TF, TN} <: AbstractMonitor
+mutable struct ForceMonitor{TF, TN, TS} <: AbstractMonitor
     force::Matrix{TF}
     moment::Matrix{TF}
     distributed_force::Matrix{TF}
@@ -1708,10 +1787,33 @@ mutable struct ForceMonitor{TF, TN} <: AbstractMonitor
     verbose::Bool
     vtk_fields::Tuple{Vararg{Symbol}}
     file::Bool
+    select::TS                      # optional predicate cp_frame -> Bool, or nothing
+    select_mask::Vector{Bool}       # cached per-panel mask (empty until first use)
 end
 
 monitor_requires(::ForceMonitor) = (:P,)
 monitor_provides(::ForceMonitor) = (:F,)
+
+"""
+    _monitor_select_mask!(mask, select, body, frames, i_frame)
+
+Fill `mask` with `select(cp_frame)` evaluated on each control point expressed
+in `frames[i_frame]` (global coordinates if `i_frame < 0`). The body is assumed
+rigid in the selected frame, so callers may cache the result while `ncells` is
+unchanged.
+"""
+function _monitor_select_mask!(mask::Vector{Bool}, select, body::AbstractBody,
+                               frames, i_frame::Int)
+    resize!(mask, body.ncells)
+    origin, R_g2f = _spanwise_frame_transform(frames, i_frame)
+    @inbounds for p in 1:body.ncells
+        cp_global = SVector{3, Float64}(body.controlpoints[1, p],
+                                        body.controlpoints[2, p],
+                                        body.controlpoints[3, p])
+        mask[p] = Bool(select(R_g2f * (cp_global - origin)))
+    end
+    return mask
+end
 
 """
     SurfaceVorticityForce(body, nt, i_system; rho=1.225, i_frame=-1,
@@ -2057,7 +2159,8 @@ end
 """
     KuttaJoukowskiForce(body, nt, i_system; rho=1.225, backend=DirectBackend(),
                         i_frame=-1, TF=Float64,
-                        normalization=NoNormalization(), verbose=false)
+                        normalization=NoNormalization(), select=nothing,
+                        verbose=false)
 
 Diagnostic force monitor that integrates the Kutta–Joukowski force on each panel
 edge and reports the **force on the body**:
@@ -2078,10 +2181,17 @@ If `i_frame < 0`, force is reported in global coordinates. Otherwise the summed
 force is rotated into the coordinate system of `frames[i_frame]`, matching
 `ForceMonitor`.
 
+`select` optionally restricts which panels contribute: pass a predicate
+`cp_frame -> Bool` evaluated on each control point expressed in
+`frames[i_frame]` (global coordinates if `i_frame < 0`). Edges belonging to
+excluded panels are skipped in the summation. The mask is computed on first use
+and cached while `ncells` is unchanged — the body is assumed rigid in the
+selected frame. Default `nothing` includes every panel.
+
 If `verbose=true`, the normalized CF for each step is printed to stdout with a
 single `\\t` indent.
 """
-struct KuttaJoukowskiForce{TF, TB, TN} <: AbstractMonitor
+struct KuttaJoukowskiForce{TF, TB, TN, TS} <: AbstractMonitor
     force::Matrix{TF}
     i_system::Int
     i_frame::Int
@@ -2096,6 +2206,8 @@ struct KuttaJoukowskiForce{TF, TB, TN} <: AbstractMonitor
     normalization::TN
     verbose::Bool
     file::Bool
+    select::TS                      # optional predicate cp_frame -> Bool, or nothing
+    select_mask::Vector{Bool}       # cached per-panel mask (empty until first use)
 end
 
 function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
@@ -2105,6 +2217,7 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
                               TF=Float64,
                               normalization=NoNormalization(),
                               verbose::Bool=false,
+                              select=nothing,
                               file::Bool=true)
 
     names = strength_names(body)
@@ -2138,10 +2251,10 @@ function KuttaJoukowskiForce(body::AbstractBody, nt::Int, i_system::Int;
     force = zeros(TF, 3, nt)
     velocity_kinematic = zeros(TF, 3, n_probes)
 
-    return KuttaJoukowskiForce{TF, typeof(backend), typeof(normalization)}(
+    return KuttaJoukowskiForce{TF, typeof(backend), typeof(normalization), typeof(select)}(
         force, i_system, i_frame, i_strength, TF(rho), backend, probes,
         edge_node_a, edge_node_b, panel_of_probe, velocity_kinematic,
-        normalization, verbose, file)
+        normalization, verbose, file, select, Bool[])
 end
 
 function _kutta_joukowski_edge_kinematic_velocity!(
@@ -2277,8 +2390,14 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
     # circulation γ in fluid velocity V is F_body = ρ γ (V × Δs) = -ρ γ (Δs × V).
     # The opposite sign (ρ γ Δs × V) is the force on the fluid; we report
     # body-side force here to match the pressure-integral ForceMonitor convention.
+    if m.select !== nothing && length(m.select_mask) != body.ncells
+        _monitor_select_mask!(m.select_mask, m.select, body, frames, m.i_frame)
+    end
+    use_mask = m.select !== nothing
+
     Fsum = zero(SVector{3, TF})
     @inbounds for k in eachindex(m.edge_node_a)
+        use_mask && !m.select_mask[m.panel_of_probe[k]] && continue
         a = m.edge_node_a[k]; b = m.edge_node_b[k]
         Δs = SVector{3, TF}(
             body.nodes[1, b] - body.nodes[1, a],
@@ -2393,13 +2512,14 @@ function ForceMonitor(nt::Int, i_system::Int;
                        correct_kuttacondition::Bool=true,
                        verbose::Bool=false,
                        vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,),
+                       select=nothing,
                        file::Bool=true)
     force = zeros(TF, 3, nt)
     moment = zeros(TF, 3, nt)
     distributed_force = zeros(TF, 3, 0)
-    return ForceMonitor{TF, typeof(normalization)}(
+    return ForceMonitor{TF, typeof(normalization), typeof(select)}(
         force, moment, distributed_force, i_system, i_frame, normalization,
-        correct_kuttacondition, verbose, vtk_fields, file)
+        correct_kuttacondition, verbose, vtk_fields, file, select, Bool[])
 end
 
 function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wakes,
@@ -2416,6 +2536,20 @@ function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wake
     fill!(monitor.distributed_force, zero(eltype(monitor.distributed_force)))
     calcfield_F!(monitor.distributed_force, body, calc_areas(body), body.normals, pressure;
                  correct_kuttacondition=monitor.correct_kuttacondition)
+
+    if monitor.select !== nothing
+        if length(monitor.select_mask) != body.ncells
+            _monitor_select_mask!(monitor.select_mask, monitor.select, body,
+                                  frames, monitor.i_frame)
+        end
+        @inbounds for p in 1:body.ncells
+            if !monitor.select_mask[p]
+                monitor.distributed_force[1, p] = zero(eltype(monitor.distributed_force))
+                monitor.distributed_force[2, p] = zero(eltype(monitor.distributed_force))
+                monitor.distributed_force[3, p] = zero(eltype(monitor.distributed_force))
+            end
+        end
+    end
 
     # total force in global frame
     Ftot = calcfield_Ftot(body, monitor.distributed_force)

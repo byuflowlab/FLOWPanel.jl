@@ -46,14 +46,14 @@ export TRUNCATION_DEPTH_R=4
 export NREVS=10                    # below schedule total; required_revs drives length (~28 rev)
 
 # --- Item 006 R/2 downstream relaxation filter, ON for both runs ------------
-export RELAX_FILTER_DOWNSTREAM_R=0.5
+export RELAX_FILTER_DOWNSTREAM_R=0.125
 
 run_case () {
   local rlxf="$1"
   local tag="$2"
-  local run_name="rotor_hover_relax006_nt72_filt_${tag}"
+  local run_name="rotor_hover_relax006_nt72_filt${RELAX_FILTER_DOWNSTREAM_R}_${tag}"
   echo "==============================================================="
-  echo "Run: $run_name  (RELAX_RLXF=$rlxf, RELAX_FILTER_DOWNSTREAM_R=0.5, THREADS=$THREADS)"
+  echo "Run: $run_name  (RELAX_RLXF=$rlxf, RELAX_FILTER_DOWNSTREAM_R=$RELAX_FILTER_DOWNSTREAM_R, THREADS=$THREADS)"
   echo "Start: $(date)"
   echo "==============================================================="
   rm -rf "data/${run_name}"

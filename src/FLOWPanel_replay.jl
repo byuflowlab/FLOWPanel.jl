@@ -806,7 +806,8 @@ function _monitor_replay_requirements(monitors)
     return req
 end
 
-function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, fields::AbstractSet, backend_wake, backend_system)
+function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, fields::AbstractSet, backend_wake, backend_system;
+        grad_mu_options=(;))
     if (:velocity in fields) || (:potential in fields) || (:velocity_gradient in fields) || (:induced_vorticity in fields)
         recompute_velocity = :velocity in fields
         recompute_potential = :potential in fields
@@ -837,8 +838,16 @@ function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, f
         end
         # Mirror simulate!: add κ = n × ∇sμ on top of the wake-induced curl
         # before the body-on-body pass, so replay produces the same
-        # induced_vorticity = wake_induced + κ that simulate! does.
-        recompute_induced_vorticity && _add_bound_surface_vorticity!(systems)
+        # induced_vorticity = wake_induced + κ that simulate! does. simulate!
+        # normalizes its grad_mu_options with default_basis=:quad
+        # (_steady_aerodynamics!), so the same default is applied here — the
+        # bare _add_bound_surface_vorticity! default is :tri, which was
+        # observed to shift the replayed lamb-vector CT by ~2.5e-3 (4%) on the
+        # rotor-hover case relative to the pressures the original simulation
+        # wrote.
+        recompute_induced_vorticity && _add_bound_surface_vorticity!(systems;
+            grad_mu_options=_normalize_grad_mu_options(grad_mu_options;
+                default_basis=:quad))
         if recompute_velocity || recompute_velocity_gradient || recompute_induced_vorticity
             influence!(systems, systems, backend_system; precalc=false,
                 scalar_potential=false,
@@ -918,7 +927,7 @@ end
     replay(path, run_name; monitors=(), monitor_factory=nothing, reconstruct=nothing,
            recompute=(:auto,), Uinf=t -> FastMultipole.SVector{3, Float64}(0.0, 0.0, 0.0),
            backend=FastMultipoleBackend(), backend_wake=backend,
-           backend_system=backend, steps=:all, verbose=false)
+           backend_system=backend, steps=:all, grad_mu_options=(;), verbose=false)
 
 Load saved VTK body/wake/frame state and run monitors for selected saved steps
 without solving, propagating wakes, shedding wakes, or advancing kinematics.
@@ -933,6 +942,7 @@ function replay(path::AbstractString, run_name::AbstractString;
         backend_wake=backend,
         backend_system=backend,
         steps=:all,
+        grad_mu_options=(;),
         verbose=false)
     timesteps, idxs, selected = _selected_replay_steps(path, run_name, steps)
     metadata = _read_metadata_toml(path, run_name)
@@ -962,6 +972,13 @@ function replay(path::AbstractString, run_name::AbstractString;
     t_range = [timesteps[findfirst(==(idx), idxs)] for idx in selected]
     monitors = isnothing(monitor_factory) ? monitors : monitor_factory(systems, wakes, frames, t_range)
     req = _monitor_replay_requirements(monitors)
+    # An unsteady PressureBernoulli converts the panel-following Dphi/Dt into an
+    # Eulerian phi_dot using velocity_kinematic, which the loaded-fields fast
+    # path never populates unless a recompute already refreshed it. Refresh the
+    # kinematic sidecars explicitly in that case (see also the equivalent
+    # trigger inside _recompute_replay_fields!).
+    needs_kinematic_sidecars = any(
+        m -> m isa PressureBernoulli && m.unsteady, monitors)
     rset = _recompute_set(recompute)
     auto = :auto in rset
     forced = auto ? Set{Symbol}() : rset
@@ -997,7 +1014,12 @@ function replay(path::AbstractString, run_name::AbstractString;
             isempty(missing) || throw(ArgumentError("Replay missing required monitor fields and recompute is disabled for them: $(join(missing, ", "))."))
         end
 
-        _recompute_replay_fields!(systems, wakes, frames, uinf, to_recompute, backend_wake, backend_system)
+        _recompute_replay_fields!(systems, wakes, frames, uinf, to_recompute, backend_wake, backend_system;
+            grad_mu_options)
+        if needs_kinematic_sidecars && !(:velocity in to_recompute) &&
+                !(:velocity_gradient in to_recompute) && !(:induced_vorticity in to_recompute)
+            _refresh_replay_kinematic_sidecars!(systems, frames)
+        end
 
         monitor_context = MonitorContext()
         provided = Set{Symbol}()

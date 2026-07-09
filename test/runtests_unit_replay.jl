@@ -222,9 +222,12 @@ end
             ω_axis=pnl.FastMultipole.SVector{3}(0.0, 0.0, 1.0),
             ω=2.0)
 
+        # tri basis: the replay default (:quad, mirroring simulate!) has empty
+        # stencils on this minimal plate fixture
         pnl._recompute_replay_fields!((body,), (nothing,), frames,
             pnl.FastMultipole.SVector{3,Float64}(0.0, 0.0, 0.0),
-            Set([:induced_vorticity]), pnl.DirectBackend(), pnl.DirectBackend())
+            Set([:induced_vorticity]), pnl.DirectBackend(), pnl.DirectBackend();
+            grad_mu_options=(; basis=:tri))
 
         @test body.velocity ≈ loaded_velocity
         @test any(!iszero, body.velocity_kinematic)
