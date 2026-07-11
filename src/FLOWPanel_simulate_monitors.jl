@@ -1483,6 +1483,7 @@ mutable struct SpanwiseLoadingMonitor{TF, TN, TS} <: AbstractMonitor
 end
 
 monitor_requires(::SpanwiseLoadingMonitor) = (:F,)
+monitor_provides(::SpanwiseLoadingMonitor) = (:sectional_F,)
 
 function SpanwiseLoadingMonitor(nbins::Int, i_system::Int;
                                 i_frame::Int=-1,
@@ -1729,6 +1730,14 @@ function _run_monitor!(m::SpanwiseLoadingMonitor{TF}, ctx::MonitorContext, syste
         println("\t\tSpanwiseLoadingMonitor[i_system=$(m.i_system), i_frame=$(m.i_frame), step=$(i_step+1)]:")
         println("\t\t\tspan range = ($(round(smin, sigdigits=4)), $(round(smax, sigdigits=4)))")
     end
+
+    # Publish the raw (dimensional, frame-coords) sectional binning so downstream
+    # monitors (e.g. DragPolarMonitor) can work in physical units, bypassing the
+    # normalization applied to load_components/force_components above.
+    monitor_register!(ctx, :sectional_F, m.i_system,
+        (bin_center = m.bin_center, bin_width = m.bin_width,
+         bin_force = m.bin_force, panel_bin_id = m.panel_bin_id,
+         counts = m.counts, span_axis = m.span_axis, i_frame = m.i_frame))
     return nothing
 end
 
@@ -1789,9 +1798,14 @@ mutable struct ForceMonitor{TF, TN, TS} <: AbstractMonitor
     file::Bool
     select::TS                      # optional predicate cp_frame -> Bool, or nothing
     select_mask::Vector{Bool}       # cached per-panel mask (empty until first use)
+    source::Symbol                  # :pressure (compute F from :P) or :context_force (read :F)
 end
 
-monitor_requires(::ForceMonitor) = (:P,)
+# The requires-trait is instance-dependent: a :pressure ForceMonitor computes its
+# own force from an upstream pressure field (:P), while a :context_force
+# ForceMonitor integrates a per-panel force field an upstream monitor registered
+# as :F (e.g. DragPolarMonitor's inviscid+drag container).
+monitor_requires(m::ForceMonitor) = m.source === :pressure ? (:P,) : (:F,)
 monitor_provides(::ForceMonitor) = (:F,)
 
 """
@@ -2513,13 +2527,16 @@ function ForceMonitor(nt::Int, i_system::Int;
                        verbose::Bool=false,
                        vtk_fields::Tuple{Vararg{Symbol}}=(:distributed_force,),
                        select=nothing,
-                       file::Bool=true)
+                       file::Bool=true,
+                       source::Symbol=:pressure)
+    source in (:pressure, :context_force) || throw(ArgumentError(
+        "ForceMonitor source must be :pressure or :context_force; got $(source)."))
     force = zeros(TF, 3, nt)
     moment = zeros(TF, 3, nt)
     distributed_force = zeros(TF, 3, 0)
     return ForceMonitor{TF, typeof(normalization), typeof(select)}(
         force, moment, distributed_force, i_system, i_frame, normalization,
-        correct_kuttacondition, verbose, vtk_fields, file, select, Bool[])
+        correct_kuttacondition, verbose, vtk_fields, file, select, Bool[], source)
 end
 
 function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wakes,
@@ -2528,14 +2545,23 @@ function _run_monitor!(monitor::ForceMonitor, ctx::MonitorContext, systems, wake
     !isnothing(t) && monitor_set_time!(ctx, t)
     systems_tuple = _systems_tuple(systems)
     body = systems_tuple[monitor.i_system]
-    pressure = monitor_field(ctx, :P, monitor.i_system)
 
     if size(monitor.distributed_force) != (3, body.ncells)
         monitor.distributed_force = zeros(eltype(monitor.force), 3, body.ncells)
     end
-    fill!(monitor.distributed_force, zero(eltype(monitor.distributed_force)))
-    calcfield_F!(monitor.distributed_force, body, calc_areas(body), body.normals, pressure;
-                 correct_kuttacondition=monitor.correct_kuttacondition)
+    if monitor.source === :context_force
+        # Integrate a per-panel force field an upstream monitor registered as :F.
+        F = monitor_field(ctx, :F, monitor.i_system)
+        size(F) == (3, body.ncells) || throw(ArgumentError(
+            "ForceMonitor(source=:context_force) requires distributed force with " *
+            "size (3, $(body.ncells)); got $(size(F))."))
+        copyto!(monitor.distributed_force, F)
+    else
+        pressure = monitor_field(ctx, :P, monitor.i_system)
+        fill!(monitor.distributed_force, zero(eltype(monitor.distributed_force)))
+        calcfield_F!(monitor.distributed_force, body, calc_areas(body), body.normals, pressure;
+                     correct_kuttacondition=monitor.correct_kuttacondition)
+    end
 
     if monitor.select !== nothing
         if length(monitor.select_mask) != body.ncells
@@ -2625,5 +2651,444 @@ function write_vtk_fields!(vtk, m::ForceMonitor, body, i_system::Int, i_step::In
     i_system == m.i_system || return nothing
     size(m.distributed_force) == (3, body.ncells) || return nothing
     vtk[_vtk_monitor_field_name!(field_names, "F", m, i_monitor), VTKCellData()] = m.distributed_force
+    return nothing
+end
+
+"""
+    DragPolarMonitor(nt, i_system, polar, chord; i_frame=-1, rho=1.0,
+                     inflow_method=:both, backend=DirectBackend(),
+                     n_probe=16, probe_radius_chords=1.0, TF=Float64,
+                     file=true, verbose=false)
+
+Add sectional viscous (profile-drag) forces from an airfoil drag polar on top of
+the inviscid panel loading. Consumes the per-panel force `:F` and the raw
+sectional binning `:sectional_F` produced by an upstream `ForceMonitor` and
+`SpanwiseLoadingMonitor`, and **re-registers `:F`** as a new per-panel force
+container equal to the inviscid force plus the panel-distributed drag. Place a
+`ForceMonitor(...; source=:context_force)` after this monitor to integrate total
+thrust/torque including drag.
+
+`polar` is a callable `cd = polar(cl, span_coord)` and `chord` a callable
+`c = chord(span_coord)`, both taking the span coordinate in frame units (the
+same units as the span axis, e.g. meters). `cl` is passed as the magnitude of
+the in-plane sectional lift coefficient.
+
+For each span bin the monitor determines the effective in-plane inflow direction
+two ways and compares them:
+- `:surface` — area-weighted average of `body.velocity` (the body-relative
+  apparent fluid velocity `V_induced + U∞ − V_kinematic`) over the bin's panels;
+- `:probe` — average of the induced+freestream−kinematic velocity over a ring of
+  `n_probe` off-body probe points (radius `probe_radius_chords × chord`) placed
+  in the section plane centred on the quarter-chord, evaluated with `backend`.
+
+`inflow_method` selects which drives the drag magnitude: `:surface`, `:probe`,
+or `:both` (default; uses the probe inflow and records the surface inflow purely
+for the comparison stored in `inflow_angle_diff`).
+
+The lift direction is the in-plane part of the sectional force; the drag
+direction is perpendicular to lift, in the section plane, signed to point mostly
+along the inflow.
+"""
+mutable struct DragPolarMonitor{TF, TB, TP, TC} <: AbstractMonitor
+    i_system::Int
+    i_frame::Int
+    rho::TF
+    nt::Int
+    polar::TP
+    chord::TC
+    inflow_method::Symbol
+    backend::TB
+    n_probe::Int
+    probe_radius_chords::TF
+    probes::FastMultipole.ProbeSystem{TF}
+    velocity_kinematic::Matrix{TF}
+    initialized::Bool
+    nbins::Int
+    # --- per-bin state (frame coords unless noted), sized on first call ---
+    distributed_force::Matrix{TF}   # 3 × ncells GLOBAL: upstream :F + panel-distributed drag
+    drag_force::Matrix{TF}          # 3 × nbins sectional viscous force (frame coords, per bin)
+    lift_dir::Matrix{TF}            # 3 × nbins
+    drag_dir_surface::Matrix{TF}    # 3 × nbins
+    drag_dir_probe::Matrix{TF}      # 3 × nbins
+    inflow_surface::Matrix{TF}      # 3 × nbins in-plane inflow (frame coords, with magnitude)
+    inflow_probe::Matrix{TF}        # 3 × nbins
+    qc_frame::Matrix{TF}            # 3 × nbins quarter-chord (frame coords)
+    n_probe_skipped::Vector{Int}    # nbins probes dropped for being too near the surface
+    # --- histories ---
+    inflow_angle_diff::Matrix{TF}   # nbins × nt angle (deg) between surface & probe inflow
+    cl_history::Matrix{TF}          # nbins × nt
+    cd_history::Matrix{TF}          # nbins × nt
+    bin_center_history::Vector{TF}  # nbins span coordinate of the last call
+    force::Matrix{TF}               # 3 × nt viscous-only total force (frame coords, dimensional)
+    moment::Matrix{TF}              # 3 × nt viscous-only total moment about frame origin
+    file::Bool
+    verbose::Bool
+end
+
+monitor_requires(::DragPolarMonitor) = (:F, :sectional_F)
+monitor_provides(::DragPolarMonitor) = (:F,)
+
+function DragPolarMonitor(nt::Int, i_system::Int, polar, chord;
+                          i_frame::Int=-1, rho::Real=1.0,
+                          inflow_method::Symbol=:both,
+                          backend::AbstractBackend=DirectBackend(),
+                          n_probe::Int=16,
+                          probe_radius_chords::Real=1.0,
+                          TF=Float64, file::Bool=true, verbose::Bool=false)
+    inflow_method in (:surface, :probe, :both) || throw(ArgumentError(
+        "DragPolarMonitor inflow_method must be :surface, :probe, or :both; got $(inflow_method)."))
+    n_probe > 2 || throw(ArgumentError("DragPolarMonitor requires n_probe > 2; got $(n_probe)."))
+    empty_probes = FastMultipole.ProbeSystem(0, TF)
+    z3 = zeros(TF, 3, 0)
+    return DragPolarMonitor{TF, typeof(backend), typeof(polar), typeof(chord)}(
+        i_system, i_frame, TF(rho), nt, polar, chord, inflow_method, backend,
+        n_probe, TF(probe_radius_chords), empty_probes, zeros(TF, 3, 0),
+        false, 0,
+        z3, copy(z3), copy(z3), copy(z3), copy(z3), copy(z3), copy(z3), copy(z3),
+        Int[],
+        zeros(TF, 0, 0), zeros(TF, 0, 0), zeros(TF, 0, 0), TF[],
+        zeros(TF, 3, nt), zeros(TF, 3, nt), file, verbose)
+end
+
+@inline function _dp_normalize(v::SVector{3, TF}) where TF
+    n = norm(v)
+    return n > sqrt(eps(TF)) ? v / n : zero(SVector{3, TF})
+end
+
+function _dragpolar_frame_transform(frames, i_frame::Int, ::Type{TF}) where TF
+    if i_frame < 0
+        origin = zero(SVector{3, TF})
+        R_f2g = SMatrix{3, 3, TF, 9}(1, 0, 0, 0, 1, 0, 0, 0, 1)
+        return origin, R_f2g
+    end
+    origin_global, R_f2g = frame_global_transform(frames, i_frame)
+    return SVector{3, TF}(origin_global), SMatrix{3, 3, TF, 9}(R_f2g)
+end
+
+function _dragpolar_ensure_storage!(m::DragPolarMonitor{TF}, nbins::Int, ncells::Int) where TF
+    if !m.initialized || m.nbins != nbins
+        m.nbins = nbins
+        m.drag_force        = zeros(TF, 3, nbins)
+        m.lift_dir          = zeros(TF, 3, nbins)
+        m.drag_dir_surface  = zeros(TF, 3, nbins)
+        m.drag_dir_probe    = zeros(TF, 3, nbins)
+        m.inflow_surface    = zeros(TF, 3, nbins)
+        m.inflow_probe      = zeros(TF, 3, nbins)
+        m.qc_frame          = zeros(TF, 3, nbins)
+        m.n_probe_skipped   = zeros(Int, nbins)
+        m.bin_center_history = zeros(TF, nbins)
+        m.inflow_angle_diff = fill(TF(NaN), nbins, m.nt)
+        m.cl_history        = fill(TF(NaN), nbins, m.nt)
+        m.cd_history        = fill(TF(NaN), nbins, m.nt)
+        m.probes            = FastMultipole.ProbeSystem(nbins * m.n_probe, TF)
+        m.velocity_kinematic = zeros(TF, 3, nbins * m.n_probe)
+        m.initialized = true
+    end
+    if size(m.distributed_force) != (3, ncells)
+        m.distributed_force = zeros(TF, 3, ncells)
+    end
+    return nothing
+end
+
+# In-plane projector: drop the component along the (unit) span axis.
+@inline _dp_inplane(v::SVector{3, TF}, span_axis::SVector{3, TF}) where TF =
+    v - dot(v, span_axis) * span_axis
+
+# Most-separated pair of a bin's panel nodes, projected to the bin-center span
+# station. Returns the two endpoints in frame coordinates and their distance.
+function _dragpolar_chord_endpoints(body, panels::AbstractVector{<:Integer},
+                                    origin, R_g2f, span_axis::SVector{3, TF},
+                                    bin_center::TF) where TF
+    pts = SVector{3, TF}[]
+    seen = Set{Int}()
+    @inbounds for p in panels
+        for i_node in axes(body.cells, 1)
+            node = body.cells[i_node, p]
+            node in seen && continue
+            push!(seen, node)
+            x = R_g2f * (SVector{3, TF}(body.nodes[1, node], body.nodes[2, node],
+                                        body.nodes[3, node]) - origin)
+            # project onto the bin-center plane (normal = span_axis)
+            x = x - (dot(x, span_axis) - bin_center) * span_axis
+            push!(pts, x)
+        end
+    end
+    length(pts) >= 2 || return (zero(SVector{3, TF}), zero(SVector{3, TF}), zero(TF))
+    best = zero(TF); ia = 1; ib = 2
+    @inbounds for i in 1:length(pts)-1, j in i+1:length(pts)
+        d = norm(pts[i] - pts[j])
+        if d > best
+            best = d; ia = i; ib = j
+        end
+    end
+    return pts[ia], pts[ib], best
+end
+
+# Drag direction: perpendicular to lift, in the section plane, pointing mostly
+# along the in-plane inflow. Falls back to span × lift when the inflow is nearly
+# parallel to lift (degenerate).
+function _dragpolar_drag_dir(v_inflow_ip::SVector{3, TF}, lhat::SVector{3, TF},
+                             span_axis::SVector{3, TF}) where TF
+    vhat = _dp_normalize(v_inflow_ip)
+    resid = vhat - dot(vhat, lhat) * lhat
+    if norm(resid) > sqrt(eps(TF))
+        return _dp_normalize(resid)
+    end
+    fallback = _dp_normalize(cross(span_axis, lhat))
+    return dot(fallback, vhat) >= 0 ? fallback : -fallback
+end
+
+function _run_monitor!(m::DragPolarMonitor{TF}, ctx::MonitorContext, systems, wakes,
+                       frames::AbstractVector{<:ReferenceFrame},
+                       uinf, i_step::Int, dt::Real, t=nothing) where TF
+    !isnothing(t) && monitor_set_time!(ctx, t)
+    systems_tuple = _systems_tuple(systems)
+    body = systems_tuple[m.i_system]
+    sec = monitor_field(ctx, :sectional_F, m.i_system)
+    F_up = monitor_field(ctx, :F, m.i_system)
+    size(F_up) == (3, body.ncells) || throw(ArgumentError(
+        "DragPolarMonitor requires distributed force with size (3, $(body.ncells)); got $(size(F_up))."))
+
+    nbins = length(sec.bin_center)
+    _dragpolar_ensure_storage!(m, nbins, body.ncells)
+    col = i_step + 1
+
+    origin, R_f2g = _dragpolar_frame_transform(frames, m.i_frame, TF)
+    R_g2f = transpose(R_f2g)
+    span_axis = _dp_normalize(SVector{3, TF}(sec.span_axis[1], sec.span_axis[2], sec.span_axis[3]))
+    areas = calc_areas(body)
+
+    # panels per bin
+    bin_panels = [Int[] for _ in 1:nbins]
+    @inbounds for p in 1:body.ncells
+        b = sec.panel_bin_id[p]
+        (1 <= b <= nbins) && push!(bin_panels[b], p)
+    end
+
+    do_probe = m.inflow_method in (:probe, :both)
+
+    # --- Phase 1: surface inflow + section geometry per populated bin ---
+    fill!(m.inflow_surface, zero(TF))
+    fill!(m.qc_frame, zero(TF))
+    fill!(m.n_probe_skipped, 0)
+    populated = falses(nbins)
+    chat = [zero(SVector{3, TF}) for _ in 1:nbins]   # in-plane chord unit dir
+    nhat = [zero(SVector{3, TF}) for _ in 1:nbins]   # in-plane normal-to-chord unit dir
+    @inbounds for b in 1:nbins
+        panels = bin_panels[b]
+        isempty(panels) && continue
+        populated[b] = true
+        bc = TF(sec.bin_center[b])
+        m.bin_center_history[b] = bc
+
+        # area-weighted surface inflow (frame coords), in-plane
+        vacc = zero(SVector{3, TF}); asum = zero(TF)
+        for p in panels
+            a = TF(areas[p])
+            v = R_g2f * SVector{3, TF}(body.velocity[1, p], body.velocity[2, p], body.velocity[3, p])
+            vacc += a * v; asum += a
+        end
+        v_surf = asum > 0 ? vacc / asum : zero(SVector{3, TF})
+        v_surf_ip = _dp_inplane(v_surf, span_axis)
+        m.inflow_surface[:, b] .= v_surf_ip
+
+        # chord geometry
+        e1, e2, cgeom = _dragpolar_chord_endpoints(body, panels, origin, R_g2f, span_axis, bc)
+        if cgeom > sqrt(eps(TF))
+            infl_dir = _dp_normalize(v_surf_ip)
+            # leading edge = endpoint further upstream (smaller projection on inflow)
+            le, te = dot(e1, infl_dir) <= dot(e2, infl_dir) ? (e1, e2) : (e2, e1)
+            qc = le + TF(0.25) * (te - le)
+            m.qc_frame[:, b] .= qc
+            ch = _dp_normalize(_dp_inplane(te - le, span_axis))
+            chat[b] = ch
+            nhat[b] = _dp_normalize(cross(span_axis, ch))
+        end
+    end
+
+    # fill empty bins' geometry/inflow from nearest populated bin
+    @inbounds for b in 1:nbins
+        populated[b] && continue
+        nearest = 0; bestdist = typemax(Int)
+        for bb in 1:nbins
+            populated[bb] || continue
+            d = abs(bb - b)
+            if d < bestdist; bestdist = d; nearest = bb; end
+        end
+        nearest == 0 && continue
+        m.inflow_surface[:, b] .= m.inflow_surface[:, nearest]
+        m.qc_frame[:, b] .= m.qc_frame[:, nearest]
+        m.bin_center_history[b] = TF(sec.bin_center[b])
+        chat[b] = chat[nearest]; nhat[b] = nhat[nearest]
+    end
+
+    # --- Phase 2: probe inflow ---
+    if do_probe && any(populated)
+        zero_v = zero(SVector{3, TF}); zero_h = zero(SMatrix{3, 3, TF, 9})
+        @inbounds for b in 1:nbins
+            bc = m.bin_center_history[b]
+            radius = m.probe_radius_chords * TF(m.chord(bc))
+            qc = SVector{3, TF}(m.qc_frame[1, b], m.qc_frame[2, b], m.qc_frame[3, b])
+            cb = chat[b]; nb = nhat[b]
+            for kk in 1:m.n_probe
+                θ = TF(2π) * (kk - 1) / m.n_probe
+                x_frame = qc + radius * (cos(θ) * cb + sin(θ) * nb)
+                idx = (b - 1) * m.n_probe + kk
+                m.probes.position[idx] = origin + R_f2g * x_frame
+                m.probes.gradient[idx] = zero_v
+                m.probes.scalar_potential[idx] = zero(TF)
+                m.probes.hessian[idx] = zero_h
+            end
+        end
+
+        _kutta_joukowski_edge_kinematic_velocity!(m.velocity_kinematic, m.probes, m.i_system, frames)
+
+        wake_sources = _collect_wake_sources(wakes)
+        all_sources = (systems_tuple..., wake_sources...)
+        old_offsets = [sys.kerneloffset for sys in systems_tuple]
+        try
+            for (i, sys) in pairs(systems_tuple)
+                sys.kerneloffset = i == m.i_system ? sys.kerneloffset_panel : sys.kerneloffset_targets
+            end
+            influence!((m.probes,), all_sources, m.backend;
+                       precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
+        finally
+            for (sys, offset) in zip(systems_tuple, old_offsets)
+                sys.kerneloffset = offset
+            end
+        end
+
+        uinf_sv = SVector{3, TF}(uinf[1], uinf[2], uinf[3])
+        fill!(m.inflow_probe, zero(TF))
+        @inbounds for b in 1:nbins
+            populated[b] || continue
+            panels = bin_panels[b]
+            radius = m.probe_radius_chords * TF(m.chord(m.bin_center_history[b]))
+            skip_r = TF(0.1) * radius / m.probe_radius_chords   # 0.1 * chord
+            vacc = zero(SVector{3, TF}); nused = 0; nskip = 0
+            for kk in 1:m.n_probe
+                idx = (b - 1) * m.n_probe + kk
+                pos = m.probes.position[idx]
+                # drop probes that fall too close to the bin's surface
+                dmin = typemax(TF)
+                for p in panels
+                    cp = SVector{3, TF}(body.controlpoints[1, p], body.controlpoints[2, p], body.controlpoints[3, p])
+                    dmin = min(dmin, norm(pos - cp))
+                end
+                if dmin < skip_r
+                    nskip += 1
+                    continue
+                end
+                v = m.probes.gradient[idx] + uinf_sv -
+                    SVector{3, TF}(m.velocity_kinematic[1, idx], m.velocity_kinematic[2, idx], m.velocity_kinematic[3, idx])
+                vacc += v; nused += 1
+            end
+            m.n_probe_skipped[b] = nskip
+            v_probe = nused > 0 ? R_g2f * (vacc / nused) : zero(SVector{3, TF})
+            m.inflow_probe[:, b] .= _dp_inplane(v_probe, span_axis)
+        end
+        # fill empty bins from nearest populated
+        @inbounds for b in 1:nbins
+            populated[b] && continue
+            nearest = 0; bestdist = typemax(Int)
+            for bb in 1:nbins
+                populated[bb] || continue
+                d = abs(bb - b)
+                if d < bestdist; bestdist = d; nearest = bb; end
+            end
+            nearest != 0 && (m.inflow_probe[:, b] .= m.inflow_probe[:, nearest])
+        end
+    end
+
+    # --- Phase 3: drag per bin, panel distribution, histories ---
+    copyto!(m.distributed_force, F_up)
+    Ftot = zero(SVector{3, TF}); Mtot = zero(SVector{3, TF})
+    @inbounds for b in 1:nbins
+        Fb = SVector{3, TF}(sec.bin_force[1, b], sec.bin_force[2, b], sec.bin_force[3, b])
+        Fb_ip = _dp_inplane(Fb, span_axis)
+        lift_mag = norm(Fb_ip)
+        lhat = _dp_normalize(Fb_ip)
+        m.lift_dir[:, b] .= lhat
+
+        v_surf_ip = SVector{3, TF}(m.inflow_surface[1, b], m.inflow_surface[2, b], m.inflow_surface[3, b])
+        v_probe_ip = SVector{3, TF}(m.inflow_probe[1, b], m.inflow_probe[2, b], m.inflow_probe[3, b])
+        dhat_surf = _dragpolar_drag_dir(v_surf_ip, lhat, span_axis)
+        m.drag_dir_surface[:, b] .= dhat_surf
+        dhat_probe = do_probe ? _dragpolar_drag_dir(v_probe_ip, lhat, span_axis) : zero(SVector{3, TF})
+        m.drag_dir_probe[:, b] .= dhat_probe
+
+        # comparison angle (deg) between the two inflow directions
+        if do_probe && norm(v_surf_ip) > sqrt(eps(TF)) && norm(v_probe_ip) > sqrt(eps(TF))
+            cang = clamp(dot(_dp_normalize(v_surf_ip), _dp_normalize(v_probe_ip)), -one(TF), one(TF))
+            m.inflow_angle_diff[b, col] = acosd(cang)
+        end
+
+        # choose inflow driving the drag magnitude
+        v_use = m.inflow_method === :surface ? v_surf_ip : v_probe_ip
+        dhat_use = m.inflow_method === :surface ? dhat_surf : dhat_probe
+        mag = norm(v_use)
+        q = TF(0.5) * m.rho * mag^2
+        c = TF(m.chord(m.bin_center_history[b]))
+        w = TF(sec.bin_width[b])
+        denom = q * c * w
+        cl = denom > sqrt(eps(TF)) ? lift_mag / denom : zero(TF)
+        cd = TF(m.polar(cl, m.bin_center_history[b]))
+        m.cl_history[b, col] = cl
+        m.cd_history[b, col] = cd
+
+        Db = denom * cd * dhat_use   # frame coords
+        m.drag_force[:, b] .= Db
+        Ftot += Db
+        qc = SVector{3, TF}(m.qc_frame[1, b], m.qc_frame[2, b], m.qc_frame[3, b])
+        Mtot += cross(qc, Db)
+
+        # distribute drag over the bin's panels, area-weighted, in global coords
+        panels = bin_panels[b]
+        if !isempty(panels)
+            asum = zero(TF)
+            for p in panels; asum += TF(areas[p]); end
+            if asum > 0
+                Db_g = R_f2g * Db
+                for p in panels
+                    frac = TF(areas[p]) / asum
+                    m.distributed_force[1, p] += Db_g[1] * frac
+                    m.distributed_force[2, p] += Db_g[2] * frac
+                    m.distributed_force[3, p] += Db_g[3] * frac
+                end
+            end
+        end
+    end
+
+    m.force[:, col] .= Ftot
+    m.moment[:, col] .= Mtot
+
+    if m.verbose
+        totdrag = sqrt(Ftot[1]^2 + Ftot[2]^2 + Ftot[3]^2)
+        angs = filter(!isnan, m.inflow_angle_diff[:, col])
+        meanang = isempty(angs) ? NaN : sum(angs) / length(angs)
+        println("\t\tDragPolarMonitor[i_system=$(m.i_system), step=$(col)]:")
+        println("\t\t\t|F_drag| = $(round(totdrag, sigdigits=4)), mean inflow angle diff = $(round(meanang, sigdigits=4)) deg")
+    end
+
+    monitor_register!(ctx, :F, m.i_system, m.distributed_force)
+    return nothing
+end
+
+function write_monitor_csv!(m::DragPolarMonitor, dir::AbstractString, name::AbstractString,
+                            i_monitor::Int, ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    path = _monitor_csv_path(dir, name, i_monitor, "dragpolar", m.i_system)
+    header = "step,time,bin,bin_center,cl,cd,Dx,Dy,Dz,angle_diff_deg,n_probe_skipped"
+    t = monitor_time(ctx, i_step, dt)
+    col = i_step + 1
+    _monitor_csv_open(path, i_step, overwrite, header) do io
+        for b in 1:m.nbins
+            println(io, join((i_step, t, b, m.bin_center_history[b],
+                              m.cl_history[b, col], m.cd_history[b, col],
+                              m.drag_force[1, b], m.drag_force[2, b], m.drag_force[3, b],
+                              m.inflow_angle_diff[b, col], m.n_probe_skipped[b]), ","))
+        end
+    end
     return nothing
 end
