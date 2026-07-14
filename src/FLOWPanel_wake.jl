@@ -74,15 +74,20 @@ requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 
 """
     PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100,
-        shed_with_induced_velocity=true, unsteady_filament=true)
+        shed_with_induced_velocity=true, unsteady_filament=true,
+        include_final_filament=true)
     PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100,
-        shed_with_induced_velocity=true, unsteady_filament=true)
+        shed_with_induced_velocity=true, unsteady_filament=true,
+        include_final_filament=true)
 
 Wake model that stores a panelized wake sheet behind one or more shedding-edge
 chains. Set `shed_with_induced_velocity=false` to convect the first wake row
 with freestream only when forming newly shed panels. Set
 `unsteady_filament=false` to make the final-edge filament cancel the current
 last wake row instead of representing the shifted-out previous row.
+Set `include_final_filament=false` for a strictly finite, panel-only wake whose
+sources all expose scalar potential (for example a ConstantDoublet pressure
+oracle); wake-length convergence must then be checked explicitly.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
@@ -94,6 +99,7 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     overflowed::Array{Bool, 0}
     shed_with_induced_velocity::Bool
     unsteady_filament::Bool
+    include_final_filament::Bool
 end
 
 """
@@ -111,12 +117,13 @@ end
 Return the wake source systems used by the active influence backend.
 """
 function get_sources(wake::PanelWake)
-    return (wake, FilamentWrapper(wake))
+    return wake.include_final_filament ?
+        (wake, FilamentWrapper(wake)) : (wake,)
 end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
         core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true,
-        unsteady_filament=true
+        unsteady_filament=true, include_final_filament=true
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
@@ -142,6 +149,7 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     return PanelWake{kernel, dim, TF}(
         nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
         Bool(shed_with_induced_velocity), Bool(unsteady_filament),
+        Bool(include_final_filament),
     )
 end
 

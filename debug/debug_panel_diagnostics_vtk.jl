@@ -23,7 +23,7 @@ import FLOWPanel as pnl
 using LinearAlgebra: norm, dot
 using WriteVTK
 
-include(joinpath(pnl.examples_path, "simple_wing_capped_dirichlet.jl"))
+include(joinpath(pnl.examples_path, "simple_wing_capped_pressure_comparison.jl"))
 
 cross3(a, b) = [a[2]*b[3] - a[3]*b[2],
                 a[3]*b[1] - a[1]*b[3],
@@ -99,8 +99,11 @@ function write_diagnostics(; meshfile=joinpath(pnl.examples_path, "data", "wing_
 
     mkpath(out_dir)
 
-    body, Vinf = build_simple_wing_capped_dirichlet(; meshfile, AOA, magVinf, kernel_offset)
-    solve_simple_wing_capped_dirichlet!(body, :backslash; backend)
+    body = build_pressure_comparison_wing(; kernel_offset)
+    Vinf = magVinf .* [cosd(AOA), 0.0, sind(AOA)]
+    set_pressure_comparison_wake!(body, Vinf)
+    pnl.steady!(body, pnl.ReferenceFrame(body), Vinf;
+        body_solvers=pnl.Backslash(body), backend, verbose=false)
 
     body.needs_velocity_gradient[] = true
     body.velocity .= 0.0

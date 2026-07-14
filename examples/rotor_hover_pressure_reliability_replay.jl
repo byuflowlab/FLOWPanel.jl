@@ -1,5 +1,7 @@
 #=##############################################################################
 # DESCRIPTION (T2+T3 of plans/20260709_pressure_monitor_reliability.md)
+#   Lamb-vector cases in this audit are deprecated diagnostic channels only;
+#   they are not validation candidates or production pressure methods.
 #   Single replay pass over the settled 2.0R rotor-hover cycle that recomputes
 #   the pressure monitors with lamb-vector ingredient swaps, a projected-du
 #   material-derivative variant, and a steady/unsteady Bernoulli pair, so the

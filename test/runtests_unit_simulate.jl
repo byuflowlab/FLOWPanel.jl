@@ -328,7 +328,8 @@ end
 
     body = make_plate_vortex_body()
     frames = pnl.ReferenceFrame(body)
-    laplace = pnl.PressureLaplace((body,), 1.0; reference_panel=1)
+    laplace = pnl.PressureLaplace((body,), 1.0; reference_panel=1,
+        gradient_mode=:corrected_hessian)
     recorder = SimWakeRecorder()
     @test !body.needs_velocity_gradient[]
     pnl.steady!(body, frames, uinf;

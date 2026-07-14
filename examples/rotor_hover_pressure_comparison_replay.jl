@@ -2,6 +2,7 @@
 ##
 ## Replays VTK output from rotor_hover_pressure_comparison.jl and reruns
 ## pressure/force monitors without advancing the simulation.
+## Any Lamb-vector variants below are deprecated diagnostic channels only.
 
 import FLOWPanel as pnl
 using Dates
@@ -544,15 +545,15 @@ function (m::LaplaceRHSComparison)(systems, wakes, frames, uinf, i_step::Int, dt
     step = i_step + 1
     time = m.t_range[step]
 
-    pnl._pressure_velocity_dot!(m.raw, body, 1, dt)
+    pnl._pressure_fill_inertial_surface_velocity!(m.raw.u_inertial[1], body)
+    pnl._pressure_velocity_dot!(m.raw, body, 1, i_step, dt)
     pnl._pressure_material_acceleration!(m.raw, body, 1)
     log_rhs_components!(m.state, step, time, :raw_hessian, edge_rhs_components(m.raw, body, 1))
-    pnl._pressure_store_negative_velocity!(m.raw, body, 1)
 
-    pnl._pressure_velocity_dot!(m.surface, body, 1, dt)
+    pnl._pressure_fill_inertial_surface_velocity!(m.surface.u_inertial[1], body)
+    pnl._pressure_velocity_dot!(m.surface, body, 1, i_step, dt)
     pnl._pressure_material_acceleration!(m.surface, body, 1)
     log_rhs_components!(m.state, step, time, :surface_velocity, edge_rhs_components(m.surface, body, 1))
-    pnl._pressure_store_negative_velocity!(m.surface, body, 1)
 
     return nothing
 end

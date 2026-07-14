@@ -794,7 +794,6 @@ function _monitor_replay_requirements(monitors)
         union!(req, Symbol.(monitor_requires(m)))
         if m isa PressureBernoulli
             push!(req, :velocity)
-            m.unsteady && push!(req, :potential)
         elseif m isa PressureLaplace
             push!(req, :velocity)
             monitor_requires_body_hessian(m) && push!(req, :velocity_gradient)

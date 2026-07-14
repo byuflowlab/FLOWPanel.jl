@@ -16,7 +16,7 @@ using LinearAlgebra: norm, dot
 using Statistics: median, quantile
 using Printf
 
-include(joinpath(pnl.examples_path, "simple_wing_capped_dirichlet.jl"))
+include(joinpath(pnl.examples_path, "simple_wing_capped_pressure_comparison.jl"))
 
 function panel_aspect_ratios(body)
     AR = zeros(body.ncells)
@@ -81,9 +81,11 @@ function run_sweep(; meshfile=joinpath(pnl.examples_path, "data", "wing_ar4_naca
     println("-"^length(header))
 
     for k_off in kernel_offsets
-        body, Vinf = build_simple_wing_capped_dirichlet(;
-            meshfile, AOA, magVinf, kernel_offset=k_off)
-        solve_simple_wing_capped_dirichlet!(body, :backslash; backend)
+        body = build_pressure_comparison_wing(; kernel_offset=k_off)
+        Vinf = magVinf .* [cosd(AOA), 0.0, sind(AOA)]
+        set_pressure_comparison_wake!(body, Vinf)
+        pnl.steady!(body, pnl.ReferenceFrame(body), Vinf;
+            body_solvers=pnl.Backslash(body), backend, verbose=false)
 
         body.needs_velocity_gradient[] = true
         body.velocity .= 0.0

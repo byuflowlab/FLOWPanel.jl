@@ -393,6 +393,7 @@ force_monitor_laplace_matderiv = pnl.ForceMonitor(length(t_range), 1;
     correct_kuttacondition=p_correct_kuttacondition_flag,
     verbose=true)
 
+# DIAGNOSTIC ONLY: deprecated Lamb mode is retained for this historical comparison.
 pressure_laplace_lamb = pnl.PressureLaplace(rotor, rho;
     acceleration_form=:lamb_vector, verbose=true)
 force_monitor_laplace_lamb = pnl.ForceMonitor(length(t_range), 1;

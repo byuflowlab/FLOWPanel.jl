@@ -15,7 +15,7 @@ import GeoIO
 using LinearAlgebra: norm, dot
 using Printf
 
-include(joinpath(pnl.examples_path, "simple_wing_capped_dirichlet.jl"))
+include(joinpath(pnl.examples_path, "simple_wing_capped_pressure_comparison.jl"))
 
 const MESHFILE = joinpath(pnl.examples_path, "data", "naca0012_nc101_nw26.msh")
 
@@ -152,8 +152,11 @@ function main()
     println("#===== BC comparison on $(basename(MESHFILE)) =====#")
 
     # Dirichlet body (built once, then deep-copied per case)
-    body_dir1, Vinf_dir = build_simple_wing_capped_dirichlet(; meshfile=MESHFILE)
-    solve_simple_wing_capped_dirichlet!(body_dir1, :backslash; backend)
+    body_dir1 = build_pressure_comparison_wing()
+    Vinf_dir = 56.0 .* [cosd(5.88), 0.0, sind(5.88)]
+    set_pressure_comparison_wake!(body_dir1, Vinf_dir)
+    pnl.steady!(body_dir1, pnl.ReferenceFrame(body_dir1), Vinf_dir;
+        body_solvers=pnl.Backslash(body_dir1), backend, verbose=false)
 
     body_dir2 = deepcopy(body_dir1)
 

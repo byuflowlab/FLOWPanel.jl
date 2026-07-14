@@ -5,12 +5,23 @@ using LinearAlgebra: cross, dot, mul!, norm
 using SparseArrays
 using StaticArrays: SMatrix, SVector
 
+if !isdefined(@__MODULE__, :compare_pressure_models)
+    include(joinpath(@__DIR__, "..", "examples",
+        "simple_wing_capped_pressure_comparison.jl"))
+end
+
 if !isdefined(@__MODULE__, :make_octa_source_body)
     include("test_helpers.jl")
 end
 
 struct PostprocessVectorPotentialDummy end
 FastMultipole.has_vector_potential(::PostprocessVectorPotentialDummy) = true
+
+struct PostprocessVectorWake <: pnl.AbstractFreeWake
+    source::PostprocessVectorPotentialDummy
+end
+pnl.get_sources(w::PostprocessVectorWake) = (w.source,)
+pnl._scalar_potential_sources(::PostprocessVectorWake) = ()
 
 function make_planar_gradient_mesh()
     nodes = Float64[
@@ -38,16 +49,6 @@ function make_postprocess_seeded_te_mesh()
         1 2 2 3;
     ]
     return nodes, cells
-end
-
-function expected_negative_tangent_velocity(body)
-    expected = similar(body.velocity)
-    for p in 1:body.ncells
-        n = body.normals[:, p]
-        u = body.velocity[:, p]
-        expected[:, p] .= -(u .- dot(u, n) .* n .+ body.velocity_kinematic[:, p])
-    end
-    return expected
 end
 
 function make_skewed_two_panel_body()
@@ -169,31 +170,73 @@ function rotated_bound_body(body, R)
 end
 
 @testset verbose=true "Postprocess" begin
+    @testset "Procedural capped-wing pressure comparison" begin
+        chord, span = 1.0, 4.0
+        nodes, cells = pressure_comparison_wing_mesh(chord, span;
+            thickness=0.15, n_span=2, n_airfoil=21, n_endcap=3)
+        @test pnl.iswatertight(nodes, cells) == (true, Int[])
+        area2 = [norm(cross(
+            nodes[:, cells[2, i]] - nodes[:, cells[1, i]],
+            nodes[:, cells[3, i]] - nodes[:, cells[1, i]]))
+            for i in axes(cells, 2)]
+        @test minimum(area2) > 100 * eps(Float64) * chord^2
+
+        body = build_pressure_comparison_wing(; chord, span,
+            n_span=2, n_airfoil=21, n_endcap=3)
+        @test body.ncells == 152
+        @test size(body.shedding[1]) == (6, 2)
+        te_y = Float64[]
+        for col in axes(body.shedding[1], 2)
+            panel = body.shedding[1][1, col]
+            edge_nodes = body.cells[body.shedding[1][2:3, col], panel]
+            @test all(body.nodes[1, edge_nodes] .≈ chord)
+            append!(te_y, body.nodes[2, edge_nodes])
+        end
+        @test collect(extrema(te_y)) ≈ [-span / 2, span / 2]
+
+        levels = (
+            (name="coarse", n_span=2, n_airfoil=21, n_endcap=3),
+            (name="fine", n_span=4, n_airfoil=41, n_endcap=5),
+        )
+        coarse, fine = run_pressure_refinement(; levels)
+        @test fine.pressure_rel_error <= max(coarse.pressure_rel_error, 1e-8)
+        @test fine.force_rel_error <= max(coarse.force_rel_error, 1e-7)
+        @test fine.pressure_rel_error < 3e-2
+        @test fine.force_rel_error < 2e-3
+        @test fine.gradient_mode == :edge_difference
+        @test fine.acceleration_form == :material_derivative
+
+        default_levels = PRESSURE_COMPARISON_LEVELS
+        @test [(l.n_span, l.n_airfoil, l.n_endcap) for l in default_levels] ==
+              [(2, 21, 3), (4, 41, 5), (8, 81, 7)]
+        @test [build_pressure_comparison_wing(; n_span=l.n_span,
+                    n_airfoil=l.n_airfoil, n_endcap=l.n_endcap).ncells
+               for l in default_levels] == [152, 624, 2216]
+        overridden = compare_pressure_models(; chord=2.0, aspect_ratio=9.0,
+            span=6.0, n_span=2, n_airfoil=21, n_endcap=3)
+        @test overridden.aspect_ratio == 3.0
+        @test overridden.reference_area == 12.0
+    end
+
     @testset "PressureBernoulli unsteady monitor-owned phi_dot" begin
         body = make_octa_source_body()
-        uinf_old = [1.0, 0.0, 0.0]
-        uinf_new = [1.2, -0.1, 0.05]
-        dt = 0.2
         w = [0.3, -0.2, 0.1]
-        for p in 1:body.ncells
-            body.velocity_kinematic[:, p] .= w
-            body.velocity[:, p] .= uinf_new .- w
-        end
-
         monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend=pnl.DirectBackend())
         pnl._pressure_bernoulli_ensure_storage!(monitor, (body,))
-        for p in 1:body.ncells
-            monitor.potential_history[1][p] = -dot(uinf_old, body.controlpoints[:, p])
+        us = ([1.0, 0.0, 0.0], [1.2, -0.1, 0.05], [1.5, 0.2, -0.1])
+        dts = (0.2, 0.3, 0.4)
+        phis = [dot(u, body.controlpoints[:, p]) for u in us, p in 1:body.ncells]
+        for (step, u) in enumerate(us)
+            body.velocity_kinematic .= w
+            body.velocity .= u .- w
+            pnl._pressure_bernoulli_phi_dot!(monitor, body, 1, (), u, step - 1, dts[step])
         end
-
-        phi_dot = pnl._pressure_bernoulli_phi_dot!(monitor, body, 1, (), uinf_new, dt)
         for p in 1:body.ncells
-            phi_old = dot(uinf_old, body.controlpoints[:, p])
-            phi_new = dot(uinf_new, body.controlpoints[:, p])
-            expected = (phi_new - phi_old) / dt - dot(w, uinf_new)
-            @test isapprox(phi_dot[p], expected; atol=1e-12)
-            @test isapprox(monitor.potential_history[1][p], -phi_new; atol=1e-12)
+            expected_D = pnl._variable_bdf2(phis[3,p], phis[2,p], phis[1,p], dts[2], dts[1])
+            @test isapprox(monitor.phi_dot[1][p], expected_D - dot(w, us[3]); atol=1e-12)
+            @test isapprox(monitor.potential_history[1][p], phis[3,p]; atol=1e-12)
         end
+        @test isempty(pnl.PressureBernoulli(1.0).potential_history)
 
         scalar_sources = pnl._filter_scalar_potential_sources((body, PostprocessVectorPotentialDummy()))
         @test scalar_sources == (body,)
@@ -207,6 +250,46 @@ end
         @test steady_from_nothing == steady_from_zero
     end
 
+
+    @testset "PressureBernoulli steady inertial projected trace" begin
+        body = make_octa_source_body()
+        body.velocity .= 0.0
+        body.velocity_kinematic .= 0.0
+        for p in 1:body.ncells
+            body.velocity[:,p] .= [0.4, -0.2, 0.1] .+ 7.0 .* body.normals[:,p]
+            body.velocity_kinematic[:,p] .= [0.3, 0.1, -0.2]
+        end
+        monitor = pnl.PressureBernoulli(1.0; backend=pnl.DirectBackend(),
+            correct_kuttacondition=false)
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), [1.0, 0.0, 0.0], 0, 1.0)
+        expected = similar(body.velocity)
+        pnl._pressure_fill_inertial_surface_velocity!(expected, body)
+        @test monitor.inertial_velocity[1] == expected
+        raw_pressure = zeros(body.ncells)
+        pnl.calcfield_P!(raw_pressure, body, body.velocity, 1.0, 1.0, nothing;
+            correct_kuttacondition=false)
+        @test !isapprox(monitor.pressure[1], raw_pressure; atol=1e-12)
+    end
+
+    @testset "Unsteady history order and particle warning" begin
+        # Variable-step BDF2 differentiates quadratics exactly.
+        h, hp = 0.3, 0.2
+        f(t) = 2t^2 - 3t + 1
+        @test isapprox(pnl._variable_bdf2(f(1.0), f(1-h), f(1-h-hp), h, hp), 1.0; atol=1e-14)
+
+        # Cubic truncation error is second order on equal-step refinement.
+        cubic_error(h) = abs(pnl._variable_bdf2(1.0, (1-h)^3, (1-2h)^3, h, h) - 3.0)
+        @test isapprox(cubic_error(0.1) / cubic_error(0.05), 4.0; rtol=1e-10)
+
+        body = make_octa_source_body()
+        wake = PostprocessVectorWake(PostprocessVectorPotentialDummy())
+        monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend=pnl.DirectBackend())
+        frames = pnl.ReferenceFrame(body)
+        @test_logs (:warn, r"excludes vortex-particle") monitor((body,), (wake,), frames, zeros(3), 0, 0.1)
+        @test_logs monitor((body,), (wake,), frames, zeros(3), 1, 0.1)
+        @test all(isfinite, monitor.pressure[1])
+    end
+
     @testset "PressureLaplace monitor" begin
         body = make_octa_source_body()
         monitor = pnl.PressureLaplace((body,), 1.2; reference_panel=1, reference_pressure=0.0)
@@ -214,13 +297,16 @@ end
         @test pnl.monitor_provides(monitor) == (:P,)
         @test !monitor.unsteady
         @test monitor.acceleration_form == :material_derivative
-        @test pnl.monitor_requires_body_hessian(monitor)
+        @test monitor.gradient_mode == :edge_difference
+        @test !pnl.monitor_requires_body_hessian(monitor)
+        @test pnl.monitor_requires_induced_vorticity(monitor)
         @test pnl.audit_monitors((monitor, pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization()))) !== nothing
         @test_throws ArgumentError pnl.PressureLaplace(1.0)
         @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; gradient_mode=:unknown)
         @test_throws ArgumentError pnl.PressureLaplace((body,), 1.0; acceleration_form=:unknown)
 
-        lamb = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+        lamb = @test_logs (:warn, r"deprecated") pnl.PressureLaplace((body,), 1.2;
+            reference_panel=1, gradient_mode=:edge_difference,
             acceleration_form=:lamb_vector)
         @test lamb.acceleration_form == :lamb_vector
         @test !pnl.monitor_requires_body_hessian(lamb)
@@ -229,13 +315,13 @@ end
         body.velocity .= 0.0
         body.velocity[1, :] .= 1.0
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
-        @test isapprox(monitor.velocity_dot[1], expected_negative_tangent_velocity(body); atol=1e-12)
+        @test isempty(monitor.velocity_dot)
         @test all(isfinite, monitor.p[1])
 
         body.velocity[1, :] .+= 0.5
         body.velocity[2, :] .-= 0.25
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 1, 0.25)
-        @test isapprox(monitor.velocity_dot[1], expected_negative_tangent_velocity(body); atol=1e-12)
+        @test isempty(monitor.velocity_dot)
     end
 
     @testset "PressureLaplace surface velocity gradient mode" begin
@@ -250,8 +336,6 @@ end
         body.velocity[1, :] .= 0.3
         body.velocity[2, :] .= -0.1
         body.velocity_gradient .= NaN
-        monitor.velocity_dot[1] .= expected_negative_tangent_velocity(body)
-
         monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
 
         @test all(isfinite, monitor.p[1])
@@ -263,7 +347,6 @@ end
             gradient_mode=:surface_velocity,
             acceleration_form=:lamb_vector)
         body.velocity_gradient .= NaN
-        lamb.velocity_dot[1] .= expected_negative_tangent_velocity(body)
         lamb((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.25)
         @test all(isfinite, lamb.p[1])
         @test all(isfinite, lamb.surface_velocity_gradient[1])
@@ -284,7 +367,8 @@ end
         p_exact = collect(range(0.0, 1.0; length=body.ncells))
         p_exact[1] = 0.0
         b = L * p_exact
-        monitor = pnl.PressureLaplace((body,), 1.0)
+        monitor = pnl.PressureLaplace((body,), 1.0;
+            gradient_mode=:corrected_hessian)
         x = collect(range(-0.4, 0.7; length=body.ncells))
         @test monitor.pressure_operator[1].n == body.ncells
         @test monitor.pressure_operator[1].reference_panel == 1
@@ -841,9 +925,10 @@ end
         body_l.velocity .= body_b.velocity
 
         laplace = pnl.PressureLaplace((body_l,), 1.0; reference_panel=1)
-        laplace.velocity_dot[1] .= expected_negative_tangent_velocity(body_l)
         p_b_raw = zeros(body_b.ncells)
-        pnl.calcfield_P!(p_b_raw, body_b, body_b.velocity, 1.0, 1.0, zeros(body_b.ncells);
+        u_b = similar(body_b.velocity)
+        pnl._pressure_fill_inertial_surface_velocity!(u_b, body_b)
+        pnl.calcfield_P!(p_b_raw, body_b, u_b, 1.0, 1.0, zeros(body_b.ncells);
             correct_kuttacondition=false)
         laplace((body_l,), (nothing,), pnl.ReferenceFrame(body_l), [1.0, 0.0, 0.0], 0, 0.1)
 
@@ -1024,26 +1109,61 @@ end
         @test isapprox(hc.omega_used[1][1:2, :], zeros(2, body.ncells); atol=1e-14)
     end
 
-    @testset "PressureLaplace project_edge_du" begin
+    @testset "PressureLaplace rotational edge correction" begin
         body = make_skewed_two_panel_body()
-        raw = pnl.PressureLaplace((body,), 1.2; reference_panel=1)
-        @test !raw.project_edge_du
-        proj = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
-            project_edge_du=true)
+        edge = pnl.PressureLaplace((body,), 1.2; reference_panel=1,
+            gradient_mode=:edge_difference)
+        @test !pnl.monitor_requires_body_hessian(edge)
+        @test pnl.monitor_requires_induced_vorticity(edge)
+        body.velocity[1, :] .= 0.7
+        body.velocity[2, :] .= -0.2
+        pnl._pressure_fill_inertial_surface_velocity!(edge.u_inertial[1], body)
+        body.induced_vorticity .= 0.0
+        pnl._pressure_rhs_from_edge_material_derivative!(edge.b[1], edge, body, 1, nothing)
+        symmetric_rhs = copy(edge.b[1])
+        body.induced_vorticity[3, :] .= 1.0
+        pnl._pressure_rhs_from_edge_material_derivative!(edge.b[1], edge, body, 1, nothing)
+        @test !isapprox(edge.b[1], symmetric_rhs; atol=1e-12)
 
-        # Velocity difference purely along the edge-averaged normal: the
-        # projected variant drops the whole convective term (b == 0), the raw
-        # variant picks it up through urel . du (panels are skewed, so the
-        # tangent-projected urel is not orthogonal to the averaged normal).
-        edge_a, edge_b, i, j = raw.edges[1][:, 1]
-        nbar = body.normals[:, i] .+ body.normals[:, j]
-        nbar ./= norm(nbar)
-        body.velocity .= 0.0
-        body.velocity[:, j] .= 0.8 .* nbar
-        pnl._pressure_rhs_from_edge_material_derivative!(raw.b[1], raw, body, 1, nothing)
-        pnl._pressure_rhs_from_edge_material_derivative!(proj.b[1], proj, body, 1, nothing)
-        @test isapprox(proj.b[1], zeros(body.ncells); atol=1e-12)
-        @test !isapprox(raw.b[1], zeros(body.ncells); atol=1e-12)
+        # For a nonsymmetric manufactured gradient, the corrected contraction
+        # recovers r'Gq; naive q'du alone generally recovers q'Gr instead.
+        G = [0.2 1.1 0.0; -0.4 0.3 0.0; 0.0 0.0 0.0]
+        q = [0.7, -0.2, 0.0]
+        edge_a, edge_b, i, j = edge.edges[1][:,1]
+        for p in 1:body.ncells
+            edge.u_inertial[1][:,p] .= G * body.controlpoints[:,p]
+            body.velocity[:,p] .= q
+        end
+        omega_manufactured =
+            [G[3,2] - G[2,3], G[1,3] - G[3,1], G[2,1] - G[1,2]]
+        body.induced_vorticity .= omega_manufactured
+        pnl._pressure_rhs_from_edge_material_derivative!(edge.b[1], edge,
+            body, 1, nothing)
+        r = body.controlpoints[:,j] - body.controlpoints[:,i]
+        qi = q - dot(q, body.normals[:,i]) * body.normals[:,i]
+        qj = q - dot(q, body.normals[:,j]) * body.normals[:,j]
+        qedge = 0.5 * (qi + qj)
+        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
+        corrected = edge.rho * w * dot(r, G * qedge)
+        naive = edge.rho * w * dot(qedge, G * r)
+        nonreference_value = i == edge.reference_panel ? -edge.b[1][j] : edge.b[1][i]
+        @test nonreference_value ≈ corrected atol=1e-12
+        @test !isapprox(corrected, naive; atol=1e-12)
+
+        nodes, cells = make_planar_gradient_mesh()
+        doublet = pnl.NonLiftingBody{pnl.ConstantDoublet}(nodes, cells;
+            watertight=false, ensure_winding=false)
+        pnl.calc_normals!(doublet); pnl.calc_controlpoints!(doublet)
+        doublet.strength[:,1] .= range(-1.0, 1.0; length=doublet.ncells)
+        wake_curl = repeat([0.2, -0.3, 0.4], 1, doublet.ncells)
+        pnl._bound_surface_vorticity!(doublet.induced_vorticity, doublet;
+            grad_mu_options=(; basis=:quad))
+        doublet.induced_vorticity .+= wake_curl
+        edge_doublet = pnl.PressureLaplace((doublet,), 1.0;
+            gradient_mode=:edge_difference)
+        omega = pnl._pressure_fill_edge_exterior_vorticity!(edge_doublet,
+            doublet, 1)
+        @test isapprox(omega, wake_curl; atol=1e-12)
     end
 
     @testset "PressureLaplace unsteady toggle" begin
@@ -1057,15 +1177,92 @@ end
         steady = pnl.PressureLaplace((body_steady,), 1.0; reference_panel=1)
         unsteady = pnl.PressureLaplace((body_unsteady,), 1.0; reference_panel=1,
             unsteady=true)
-        steady.velocity_dot[1] .= 0.0
-        unsteady.velocity_dot[1] .= 0.0
-
         steady((body_steady,), (nothing,), pnl.ReferenceFrame(body_steady), zeros(3), 0, 0.25)
         unsteady((body_unsteady,), (nothing,), pnl.ReferenceFrame(body_unsteady), zeros(3), 0, 0.25)
 
-        @test isapprox(steady.velocity_dot[1], expected_negative_tangent_velocity(body_steady); atol=1e-12)
-        @test isapprox(unsteady.velocity_dot[1], expected_negative_tangent_velocity(body_unsteady); atol=1e-12)
-        @test !isapprox(steady.b[1], unsteady.b[1]; atol=1e-12)
+        @test isempty(steady.velocity_dot)
+        @test isapprox(unsteady.velocity_dot[1], zeros(size(body_unsteady.velocity)); atol=1e-12)
+        @test isapprox(steady.b[1], unsteady.b[1]; atol=1e-12)
+
+        body_unsteady.velocity[1, :] .+= 0.4
+        unsteady((body_unsteady,), (nothing,), pnl.ReferenceFrame(body_unsteady), zeros(3), 1, 0.5)
+        @test !isapprox(unsteady.velocity_dot[1], zeros(size(body_unsteady.velocity)); atol=1e-12)
+
+        # Reusing a monitor from an earlier/nonconsecutive step safely reseeds.
+        body_unsteady.velocity[2, :] .+= 0.7
+        unsteady((body_unsteady,), (nothing,), pnl.ReferenceFrame(body_unsteady), zeros(3), 0, 0.25)
+        @test isapprox(unsteady.velocity_dot[1], zeros(size(body_unsteady.velocity)); atol=1e-12)
+    end
+
+    @testset "PressureLaplace ALE rotation, final projection, and jump gradient" begin
+        nodes, cells = make_planar_gradient_mesh()
+        body = pnl.NonLiftingBody{pnl.ConstantSource}(nodes, cells;
+            watertight=false, ensure_winding=false)
+        pnl.calc_normals!(body); pnl.calc_controlpoints!(body)
+        monitor = pnl.PressureLaplace((body,), 1.0;
+            gradient_mode=:corrected_hessian)
+
+        # Manufactured translating-grid ALE field: a = D_g u + Gq.
+        translating = pnl.PressureLaplace((body,), 1.0; unsteady=true,
+            gradient_mode=:corrected_hessian)
+        Dg = [0.3, -0.4, 0.5]
+        Gm = [0.2 -0.1 0.7; 0.6 0.3 -0.2; -0.4 0.8 0.1]
+        q = [0.9, -0.25, 0.0]
+        translating.velocity_dot[1] .= Dg
+        body.velocity .= q
+        body.velocity_kinematic .= [0.2, 0.1, -0.3]
+        for p in 1:body.ncells
+            body.velocity_gradient[:,:,p] .= Gm
+        end
+        pnl._pressure_fill_inertial_surface_velocity!(translating.u_inertial[1], body)
+        pnl._pressure_material_acceleration!(translating, body, 1)
+        expected_ale = Dg + Gm * q
+        @test all(isapprox.(translating.acceleration[1], expected_ale; atol=1e-12))
+        @test all(isapprox.(translating.tangential[1][1:2,:],
+            expected_ale[1:2]; atol=1e-12))
+        @test all(abs.(translating.tangential[1][3,:]) .< 1e-12)
+
+        # Uniform inertial velocity on a rotating grid has zero spatial
+        # gradient. body.angular_velocity must not be added to the Hessian.
+        Ω = [0.0, 0.0, 2.0]
+        uI = [0.4, -0.3, 0.0]
+        body.angular_velocity .= Ω
+        for p in 1:body.ncells
+            w = cross(Ω, body.controlpoints[:,p])
+            body.velocity_kinematic[:,p] .= w
+            body.velocity[:,p] .= uI .- w
+        end
+        body.velocity_gradient .= 0.0
+        pnl._pressure_fill_inertial_surface_velocity!(monitor.u_inertial[1], body)
+        pnl._pressure_material_acceleration!(monitor, body, 1)
+        @test isapprox(monitor.acceleration[1], zeros(size(body.velocity)); atol=1e-12)
+
+        # A normal component is retained while forming G*q, then removed once
+        # from the completed acceleration.
+        body.velocity_kinematic .= 0.0
+        body.velocity .= 0.0
+        body.velocity[1,:] .= 1.0
+        body.velocity_gradient .= 0.0
+        body.velocity_gradient[:,1,:] .= reshape([1.0, 2.0, 3.0], 3, 1)
+        pnl._pressure_fill_inertial_surface_velocity!(monitor.u_inertial[1], body)
+        pnl._pressure_material_acceleration!(monitor, body, 1)
+        @test all(abs.(monitor.tangential[1][3,:]) .< 1e-12)
+        @test all(isapprox.(monitor.tangential[1][1,:], 1.0; atol=1e-12))
+        @test all(isapprox.(monitor.tangential[1][2,:], 2.0; atol=1e-12))
+
+        doublet = pnl.NonLiftingBody{pnl.ConstantDoublet}(nodes, cells;
+            watertight=false, ensure_winding=false)
+        pnl.calc_normals!(doublet); pnl.calc_controlpoints!(doublet)
+        # Nonconstant paired-triangle μ data produces a nonuniform half-jump.
+        doublet.strength[:,1] .= [0.0, 2.0, -1.0, 5.0, 1.5, -3.0, 4.0, -2.5]
+        doublet.velocity .= 0.0; doublet.velocity[1,:] .= 0.6
+        doublet.velocity_gradient .= 0.0
+        jump_monitor = pnl.PressureLaplace((doublet,), 1.0;
+            gradient_mode=:corrected_hessian)
+        pnl._pressure_fill_inertial_surface_velocity!(jump_monitor.u_inertial[1], doublet)
+        pnl._pressure_material_acceleration!(jump_monitor, doublet, 1)
+        @test any(abs.(jump_monitor.jump_velocity_gradient[1]) .> 1e-10)
+        @test any(abs.(jump_monitor.acceleration[1]) .> 1e-10)
     end
 
     @testset "compute_mu_gradient! interior recovery" begin

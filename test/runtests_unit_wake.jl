@@ -56,6 +56,17 @@ end
         @test wake_freestream.nodes[1][:, 2, 1] ≈ dt .* (uinf .+ induced_downstream)
     end
 
+    @testset "PanelWake optional final filament" begin
+        body = make_plate_vortex_body()
+        default_wake = pnl.PanelWake(body; nwakerows=2)
+        panel_only = pnl.PanelWake(body; nwakerows=2,
+            include_final_filament=false)
+        @test length(pnl.get_sources(default_wake)) == 2
+        @test pnl.get_sources(panel_only) == (panel_only,)
+        @test default_wake.include_final_filament
+        @test !panel_only.include_final_filament
+    end
+
     @testset "PanelParticleWake forwards shedding velocity option" begin
         body = make_plate_vortex_body()
         wake = pnl.PanelParticleWake(body; shed_with_induced_velocity=false)

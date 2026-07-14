@@ -18,12 +18,34 @@ import LinearAlgebra: cross, dot, norm
 import Printf: @printf, @sprintf
 import Statistics: mean
 import TOML
+using LaTeXStrings
 
 const DEFAULT_PITCHING_WING_PATH = joinpath("data", "pitching_wing")
 const PITCHING_WING_NAME = "pitching_wing"
 const PITCHING_WING_CONFIG_FILE = PITCHING_WING_NAME * ".config.toml"
 const PITCHING_WING_PRESSURE_STATE_FILE = PITCHING_WING_NAME * ".pressure_state.csv"
 const FT_TO_M = 0.3048
+
+function _resolve_pitching_wing_dimensions(c_ft::Real, aspect_ratio::Real,
+        span_ft::Union{Nothing,Real}, semispan_ft::Union{Nothing,Real})
+    c_ft > 0 || throw(ArgumentError("c_ft must be positive; got $(c_ft)"))
+    aspect_ratio > 0 || throw(ArgumentError(
+        "aspect_ratio must be positive; got $(aspect_ratio)"))
+    !isnothing(span_ft) && !isnothing(semispan_ft) && throw(ArgumentError(
+        "Specify at most one of span_ft and the legacy semispan_ft keyword."))
+    resolved_span_ft = if !isnothing(span_ft)
+        float(span_ft)
+    elseif !isnothing(semispan_ft)
+        2 * float(semispan_ft)
+    else
+        float(aspect_ratio) * float(c_ft)
+    end
+    resolved_span_ft > 0 || throw(ArgumentError(
+        "resolved span must be positive; got $(resolved_span_ft) ft"))
+    return (; c=c_ft * FT_TO_M, b=resolved_span_ft * FT_TO_M,
+        span_ft=resolved_span_ft, semispan_ft=resolved_span_ft / 2,
+        aspect_ratio=resolved_span_ft / c_ft)
+end
 
 function naca00xx_contour(n::Integer=121; thickness::Real=0.15)
     n >= 21 || throw(ArgumentError("naca00xx_contour requires at least 21 points"))
@@ -312,7 +334,7 @@ end
 
 function plot_pitching_wing_static_polar(rows, section_eta; path=DEFAULT_PITCHING_WING_PATH)
     plt = Core.eval(@__MODULE__, :(begin
-        import GeometricTools: PyPlot as pitching_wing_plt
+        import PythonPlot as pitching_wing_plt
         pitching_wing_plt
     end))
 
@@ -327,33 +349,35 @@ function _plot_pitching_wing_static_polar(plt, rows, section_eta, path)
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
     for (i, eta) in pairs(section_eta)
         ax.plot(alpha, [row.section_cl[i] for row in rows], "-o";
+            color="C$(i - 1)",
             linewidth=1.5,
             markersize=3,
-            label=@sprintf("eta = %.4g", eta),
+            label=L"$\eta = %$(round(eta, sigdigits=4))$",
         )
     end
-    ax.set_xlabel("alpha [deg]")
-    ax.set_ylabel("sectional c_l")
+    ax.set_xlabel(L"$\alpha$ (deg)")
+    ax.set_ylabel(L"c_\ell")
     ax.grid(true, alpha=0.35)
     ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(section_path, dpi=170)
-    plt.close(fig)
+    plt.pyplot.close(fig)
 
     CL_path = joinpath(path, "pitching_wing_CL_polar.png")
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
     ax.plot(alpha, [row.CL for row in rows], "-o";
+        color="C0",
         linewidth=1.5,
         markersize=3,
-        label="C_L",
+        label=L"C_L",
     )
-    ax.set_xlabel("alpha [deg]")
-    ax.set_ylabel("C_L")
+    ax.set_xlabel(L"$\alpha$ (deg)")
+    ax.set_ylabel(L"C_L")
     ax.grid(true, alpha=0.35)
     ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(CL_path, dpi=170)
-    plt.close(fig)
+    plt.pyplot.close(fig)
 
     return (; section_cl=section_path, CL=CL_path)
 end
@@ -381,7 +405,9 @@ function _pitching_wing_config(setup)
         "format_version" => 2,
         "geometry" => Dict(
             "semispan_ft" => float(setup.semispan_ft),
+            "span_ft" => float(setup.span_ft),
             "c_ft" => float(setup.c_ft),
+            "aspect_ratio" => float(setup.aspect_ratio),
             "n_span" => Int(setup.n_span),
             "n_airfoil" => Int(setup.n_airfoil),
             "n_endcap" => Int(setup.n_endcap),
@@ -400,6 +426,7 @@ function _pitching_wing_config(setup)
             "dt" => float(setup.dt),
         ),
         "wake" => Dict(
+            "model" => String(setup.wake_model),
             "das_chord_fraction" => float(setup.das_chord_fraction),
             "das" => float(setup.das),
             "panel_wake_rows" => Int(setup.panel_wake_rows),
@@ -561,7 +588,7 @@ function _write_pitching_wing_pressure_state(path, monitor, i_step)
     return filename
 end
 
-function _seed_pitching_wing_pressure_history!(monitor, body, path, restart_step)
+function _seed_pitching_wing_pressure_history!(monitor, body, path, restart_step, t_range)
     pnl._load_body_vtk!(body, path, PITCHING_WING_NAME * "_body1", restart_step)
     pnl._pressure_bernoulli_ensure_storage!(monitor, (body,))
     filename = joinpath(path, PITCHING_WING_PRESSURE_STATE_FILE)
@@ -578,13 +605,20 @@ function _seed_pitching_wing_pressure_history!(monitor, body, path, restart_step
             "Pitching-wing pressure state is for step $(saved_step), but VTK restart step is $(restart_step)."))
         monitor.potential_history[1][i] = parse(Float64, fields[2])
     end
+    # Restart safely with one valid sample: the next call uses backward Euler,
+    # then BDF2 resumes. Use the known interval after the restart sample rather
+    # than the truncated run's final-step fallback dt.
+    monitor.history_count[1] = 1
+    monitor.previous_dt[1] = t_range[restart_step + 2] - t_range[restart_step + 1]
+    monitor.older_dt[1] = NaN
+    monitor.last_step[1] = restart_step
     return monitor
 end
 
 function plot_pitching_wing_convergence(t_range, period, CL_history, section_eta,
                                          section_history; path=DEFAULT_PITCHING_WING_PATH)
     plt = Core.eval(@__MODULE__, :(begin
-        import GeometricTools: PyPlot as pitching_wing_convergence_plt
+        import PythonPlot as pitching_wing_convergence_plt
         pitching_wing_convergence_plt
     end))
     return Base.invokelatest(_plot_pitching_wing_convergence, plt, collect(t_range) ./ period,
@@ -611,28 +645,131 @@ function _plot_pitching_wing_convergence(plt, cycles, CL_history, section_eta, s
     mkpath(path)
     CL_path = joinpath(path, "pitching_wing_CL_vs_cycle.png")
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
-    ax.plot(data.cycles, data.CL; linewidth=1.3)
-    ax.set_xlabel("t/T")
-    ax.set_ylabel("C_L")
+    ax.plot(data.cycles, data.CL; color="C0", linewidth=1.3)
+    ax.set_xlabel(L"t/T")
+    ax.set_ylabel(L"C_L")
     ax.grid(true, alpha=0.35)
     fig.tight_layout()
     fig.savefig(CL_path, dpi=170)
-    plt.close(fig)
+    plt.pyplot.close(fig)
 
     section_path = joinpath(path, "pitching_wing_section_cl_vs_cycle.png")
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
-    for series in data.sections
-        ax.plot(data.cycles, series.cl; linewidth=1.3,
-            label=@sprintf("eta = %.4g", series.eta))
+    for (i, series) in pairs(data.sections)
+        ax.plot(data.cycles, series.cl; color="C$(i - 1)", linewidth=1.3,
+            label=L"$\eta = %$(round(series.eta, sigdigits=4))$")
     end
-    ax.set_xlabel("t/T")
-    ax.set_ylabel("sectional c_l")
+    ax.set_xlabel(L"t/T")
+    ax.set_ylabel(L"c_\ell")
     ax.grid(true, alpha=0.35)
     ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(section_path, dpi=170)
-    plt.close(fig)
+    plt.pyplot.close(fig)
     return (; CL=CL_path, section_cl=section_path)
+end
+
+# Split a run of α values into monotonic sweeps (mirrors
+# `_pitching_wing_exp_sweep_ranges` in data/pitching_wing_exp/load.jl so the
+# example matches the experimental hysteresis plots without coupling to it).
+function _alpha_sweep_ranges(alpha)
+    n = length(alpha)
+    n <= 1 && return [1:max(n, 1)]
+    ranges = UnitRange{Int}[]
+    start_idx = 1
+    last_sign = 0
+    for i in 2:n
+        step = alpha[i] - alpha[i - 1]
+        sign_step = step > 0 ? 1 : step < 0 ? -1 : 0
+        sign_step == 0 && continue
+        if last_sign != 0 && sign_step != last_sign
+            push!(ranges, start_idx:(i - 1))
+            start_idx = i - 1
+        end
+        last_sign = sign_step
+    end
+    push!(ranges, start_idx:n)
+    return ranges
+end
+
+# Indices of the last `n_loops` full cycles, always excluding the first
+# (startup) cycle: matched cycles superimpose only once the limit cycle has
+# settled, so a clean loop is itself evidence of convergence.
+function _pitching_wing_last_cycles_window(t_range, period, n_loops)
+    n_loops >= 1 || throw(ArgumentError("n_loops must be positive; got $(n_loops)"))
+    t_end = last(t_range)
+    tol = 1e-9 * max(abs(t_end), 1.0)
+    lower = max(period, t_end - n_loops * period) - tol
+    return findall(t -> t >= lower, t_range)
+end
+
+# α-hysteresis loops for the last `n_loops` full cycles (startup cycle always
+# excluded), styled like the experimental curves in
+# data/pitching_wing_exp/load.jl: one color per η, solid = increasing α /
+# dashed = decreasing α. The color/η legend lives in the left panel and the
+# black solid/dashed direction key in the right panel. Overlaying the final two
+# cycles (the default) lets a coincident loop double as a convergence check.
+function plot_pitching_wing_hysteresis(t_range, period, alpha_history, CL_history,
+        section_eta, section_history; path=DEFAULT_PITCHING_WING_PATH, n_loops::Integer=2)
+    plt = Core.eval(@__MODULE__, :(begin
+        import PythonPlot as pitching_wing_hysteresis_plt
+        pitching_wing_hysteresis_plt
+    end))
+    return Base.invokelatest(_plot_pitching_wing_hysteresis, plt, collect(t_range),
+        float(period), collect(alpha_history), collect(CL_history),
+        collect(section_eta), section_history, path, Int(n_loops))
+end
+
+function _plot_pitching_wing_hysteresis(plt, t_range, period, alpha_history,
+        CL_history, section_eta, section_history, path, n_loops)
+    mkpath(path)
+    window = _pitching_wing_last_cycles_window(t_range, period, n_loops)
+    alpha = alpha_history[window]
+    CL = CL_history[window]
+    sweeps = _alpha_sweep_ranges(alpha)
+
+    hysteresis_path = joinpath(path, "pitching_wing_hysteresis.png")
+    fig, axs = plt.subplots(1, 2; figsize=(11.0, 4.6), squeeze=false)
+    ax_section = axs[0, 0]
+    ax_CL = axs[0, 1]
+
+    for (i, eta) in pairs(section_eta)
+        cl = section_history[i, window]
+        for range in sweeps
+            increasing = length(range) < 2 || alpha[last(range)] >= alpha[first(range)]
+            ax_section.plot(alpha[range], cl[range];
+                color="C$(i - 1)", linestyle=increasing ? "-" : "--",
+                marker="o", markersize=3, label=nothing)
+        end
+    end
+    ax_section.set_xlabel(L"$\alpha$ (deg)")
+    ax_section.set_ylabel(L"c_\ell")
+    ax_section.grid(true, alpha=0.35)
+    ax_section.legend(handles=[plt.matplotlib.lines.Line2D([], [];
+        color="C$(i - 1)", marker="o", markersize=3,
+        label=L"$\eta = %$(round(eta, sigdigits=4))$")
+        for (i, eta) in pairs(section_eta)], fontsize=9)
+
+    for range in sweeps
+        increasing = length(range) < 2 || alpha[last(range)] >= alpha[first(range)]
+        ax_CL.plot(alpha[range], CL[range];
+            color="black", linestyle=increasing ? "-" : "--",
+            marker="o", markersize=3, label=nothing)
+    end
+    ax_CL.set_xlabel(L"$\alpha$ (deg)")
+    ax_CL.set_ylabel(L"C_L")
+    ax_CL.grid(true, alpha=0.35)
+    ax_CL.legend(handles=[
+        plt.matplotlib.lines.Line2D([], []; color="black", linestyle="-",
+            label=L"increasing $\alpha$"),
+        plt.matplotlib.lines.Line2D([], []; color="black", linestyle="--",
+            label=L"decreasing $\alpha$"),
+    ], fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(hysteresis_path, dpi=170)
+    plt.pyplot.close(fig)
+    return hysteresis_path
 end
 
 mutable struct SectionLiftHistoryMonitor{TF, TS} <: pnl.AbstractMonitor
@@ -671,7 +808,9 @@ function _finite_summary(values)
 end
 
 function run_pitching_wing_static_polar(;
-        semispan_ft::Real=5.0,
+        semispan_ft::Union{Nothing,Real}=nothing,
+        span_ft::Union{Nothing,Real}=nothing,
+        aspect_ratio::Real=4.0,
         c_ft::Real=1.0,
         v_inf_ft_s::Real=330.2,
         rho::Real=1.225,
@@ -688,8 +827,8 @@ function run_pitching_wing_static_polar(;
         plot_path=path,
         backend=pnl.FastMultipoleBackend(expansion_order=8, multipole_acceptance=0.4, leaf_size=40),
     )
-    c = c_ft * FT_TO_M
-    b = 2 * semispan_ft * FT_TO_M
+    dims = _resolve_pitching_wing_dimensions(c_ft, aspect_ratio, span_ft, semispan_ft)
+    c, b = dims.c, dims.b
     U = v_inf_ft_s * FT_TO_M
     Sref = b * c
     rows = NamedTuple[]
@@ -754,7 +893,9 @@ function run_pitching_wing_static_polar(;
 end
 
 function prepare_pitching_wing(;
-        semispan_ft::Real=5.0,
+        semispan_ft::Union{Nothing,Real}=nothing,
+        span_ft::Union{Nothing,Real}=nothing,
+        aspect_ratio::Real=4.0,
         c_ft::Real=1.0,
         v_inf_ft_s::Real=330.2,
         rho::Real=1.225,
@@ -771,9 +912,10 @@ function prepare_pitching_wing(;
         n_airfoil::Integer=161,
         n_endcap::Integer=9,
         n_section_bins::Integer=max(2 * n_span, 20),
-        panel_wake_rows::Integer=1,
+        panel_wake_rows::Union{Nothing,Integer}=nothing,
         max_particles::Integer=20000,
         wake_length_spans::Union{Nothing,Real}=2.0,
+        wake_model::Symbol=:panel,
         endcap::Symbol=:round,
         save_vtk::Bool=true,
         path=DEFAULT_PITCHING_WING_PATH,
@@ -781,8 +923,10 @@ function prepare_pitching_wing(;
         plot_static_polar::Bool=false,
         backend=pnl.FastMultipoleBackend(expansion_order=8, multipole_acceptance=0.4, leaf_size=40),
     )
-    c = c_ft * FT_TO_M
-    b = 2 * semispan_ft * FT_TO_M
+    wake_model in (:panel, :particle) || throw(ArgumentError(
+        "wake_model must be :panel or :particle; got $(wake_model)"))
+    dims = _resolve_pitching_wing_dimensions(c_ft, aspect_ratio, span_ft, semispan_ft)
+    c, b = dims.c, dims.b
     if !isnothing(wake_length_spans)
         isfinite(wake_length_spans) && wake_length_spans > 0 || throw(ArgumentError(
             "wake_length_spans must be positive and finite, or nothing to disable trimming; " *
@@ -809,6 +953,11 @@ function prepare_pitching_wing(;
     frames = pitching_wing_frame(wing, pivot, alpha_mean)
     Uinf(t) = SVector{3}(U, 0.0, 0.0)
     das = das_chord_fraction * c
+    resolved_panel_wake_rows = isnothing(panel_wake_rows) ?
+        (isnothing(wake_length) ? 100 : max(1, ceil(Int, wake_length / das))) :
+        Int(panel_wake_rows)
+    resolved_panel_wake_rows >= 1 || throw(ArgumentError(
+        "panel_wake_rows must be positive; got $(panel_wake_rows)"))
     set_wake_Das!(wing, Uinf(first(t_range)); magnitude=das)
     Lhat = SVector{3}(0.0, 0.0, 1.0)
     Dhat = SVector{3}(1.0, 0.0, 0.0)
@@ -832,18 +981,25 @@ function prepare_pitching_wing(;
         return nothing
     end
 
-    particle_maintenance = isnothing(wake_downstream_boundary) ?
-        pnl.ParticleMaintenance() :
-        pnl.ParticleMaintenance(pnl.FrameBox(1,
-            SVector(-Inf, -Inf, -Inf),
-            SVector(wake_downstream_boundary, Inf, Inf)))
-    wake = pnl.PanelParticleWake(wing;
-        nwakerows=panel_wake_rows,
-        max_particles=max_particles,
-        method_trailing=pnl.OverlapPPS(1.3, 2),
-        method_unsteady=pnl.OverlapPPS(1.3, 2),
-        particle_maintenance,
-    )
+    wake = if wake_model == :panel
+        # A ConstantDoublet PanelWake has a scalar potential, making unsteady
+        # Bernoulli a complete irrotational reference for pressure validation.
+        pnl.PanelWake(wing; nwakerows=resolved_panel_wake_rows,
+            include_final_filament=false)
+    else
+        particle_maintenance = isnothing(wake_downstream_boundary) ?
+            pnl.ParticleMaintenance() :
+            pnl.ParticleMaintenance(pnl.FrameBox(1,
+                SVector(-Inf, -Inf, -Inf),
+                SVector(wake_downstream_boundary, Inf, Inf)))
+        pnl.PanelParticleWake(wing;
+            nwakerows=resolved_panel_wake_rows,
+            max_particles=max_particles,
+            method_trailing=pnl.OverlapPPS(1.3, 2),
+            method_unsteady=pnl.OverlapPPS(1.3, 2),
+            particle_maintenance,
+        )
+    end
     solver = pnl.Backslash(wing)
     normalization = pnl.WingNormalization(rho, Sref, c)
 
@@ -881,7 +1037,9 @@ function prepare_pitching_wing(;
         section_monitor,
         static_polar = include_static_polar,
         setup = (;
-            semispan_ft,
+            semispan_ft=dims.semispan_ft,
+            span_ft=dims.span_ft,
+            aspect_ratio=dims.aspect_ratio,
             c_ft,
             v_inf_ft_s,
             rho,
@@ -899,8 +1057,9 @@ function prepare_pitching_wing(;
             n_airfoil,
             n_endcap,
             n_section_bins,
-            panel_wake_rows,
+            panel_wake_rows=resolved_panel_wake_rows,
             max_particles,
+            wake_model,
             wake_length_spans,
             wake_length,
             wake_downstream_boundary,
@@ -908,6 +1067,7 @@ function prepare_pitching_wing(;
             c,
             b,
             Sref,
+            reference_area=Sref,
             U,
             omega,
             period,
@@ -953,7 +1113,7 @@ function _run_pitching_wing(;
             setup.section_eta, restart_step)
         force_monitor.force[3, 1:restart_step+1] .= prior.CL
         section_monitor.cl[:, 1:restart_step+1] .= prior.section
-        _seed_pitching_wing_pressure_history!(pressure_monitor, wing, setup.path, restart_step)
+        _seed_pitching_wing_pressure_history!(pressure_monitor, wing, setup.path, restart_step, t_range)
     else
         _clear_pitching_wing_output!(setup.csv_path)
         _write_pitching_wing_config(setup.csv_path, requested_config)
@@ -1020,6 +1180,9 @@ function _run_pitching_wing(;
     _write_pitching_wing_pressure_state(csv_dir, pressure_monitor, length(t_range) - 1)
     plot_paths = plot_convergence ? plot_pitching_wing_convergence(t_range, setup.period,
         CL_history, setup.section_eta, section_history; path=csv_dir) : ()
+    hysteresis_path = plot_convergence ? plot_pitching_wing_hysteresis(t_range,
+        setup.period, alpha_history, CL_history, setup.section_eta, section_history;
+        path=csv_dir) : nothing
 
     post_transient = findall(t -> t >= setup.period, collect(t_range))
     CL_mean = isempty(post_transient) ? NaN : mean(CL_history[post_transient])
@@ -1031,13 +1194,17 @@ function _run_pitching_wing(;
     @printf("  CL peak-to-peak after first cycle = %.8g\n", CL_pp)
     println("  CL history: $(_finite_summary(CL_history))")
     println("  Wrote unsteady CSV: $(csv_path)")
-    plot_convergence && println("  Wrote convergence plots: $(plot_paths.CL), $(plot_paths.section_cl)")
+    if plot_convergence
+        println("  Wrote convergence plots: $(plot_paths.CL), $(plot_paths.section_cl)")
+        println("  Wrote hysteresis plot: $(hysteresis_path)")
+    end
     if !isnothing(setup.path)
         println("  Wrote VTK output under: $(setup.path)")
     end
 
     return merge(sim, (; static, alpha_history, CL_history, section_history,
                         CL_mean, CL_pp, csv_path, convergence_plot_paths=plot_paths,
+                        hysteresis_plot_path=hysteresis_path,
                         restarted=restart, restart_step))
 end
 

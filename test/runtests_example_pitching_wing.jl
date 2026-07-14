@@ -37,10 +37,19 @@ end
     @test sim.setup.c_per_dt == 0.05
     @test sim.setup.das_chord_fraction == 0.05
     @test sim.setup.dt * sim.setup.U / sim.setup.c ≈ 0.05
+    @test sim.setup.aspect_ratio == 4.0
+    @test sim.setup.span_ft == 4.0
+    @test sim.setup.reference_area == sim.setup.c * sim.setup.b
+    @test sim.wake isa pnl.PanelWake
+    @test !pnl._bernoulli_has_excluded_sources((sim.wake,))
     @test all(Das -> all(col -> norm(col) ≈ 0.05 * sim.setup.c, eachcol(Das)),
         sim.wing.Das)
 
-    default_policy = only(sim.wake.particle_maintenance.trim_policies)
+    particle = prepare_pitching_wing(;
+        n_cycles=0.01, n_span=1, n_airfoil=21, n_endcap=5,
+        include_static_polar=false, save_vtk=false, backend=pnl.DirectBackend(),
+        wake_model=:particle)
+    default_policy = only(particle.wake.particle_maintenance.trim_policies)
     @test default_policy isa pnl.FrameBox
     @test default_policy.i_frame == 1
     @test default_policy.xmin == SVector(-Inf, -Inf, -Inf)
@@ -53,7 +62,7 @@ end
     custom = prepare_pitching_wing(;
         n_cycles=0.01, n_span=1, n_airfoil=21, n_endcap=5,
         include_static_polar=false, save_vtk=false, backend=pnl.DirectBackend(),
-        wake_length_spans=3.5)
+        wake_length_spans=3.5, wake_model=:particle)
     custom_policy = only(custom.wake.particle_maintenance.trim_policies)
     @test custom_policy.xmax[1] ≈
         custom.setup.c * (1 - custom.setup.pivot_chord_fraction) + 3.5 * custom.setup.b
@@ -62,7 +71,7 @@ end
     untrimmed = prepare_pitching_wing(;
         n_cycles=0.01, n_span=1, n_airfoil=21, n_endcap=5,
         include_static_polar=false, save_vtk=false, backend=pnl.DirectBackend(),
-        wake_length_spans=nothing)
+        wake_length_spans=nothing, wake_model=:particle)
     @test isempty(untrimmed.wake.particle_maintenance.trim_policies)
     @test isnothing(untrimmed.setup.wake_length)
     @test isnothing(untrimmed.setup.wake_downstream_boundary)
@@ -107,6 +116,8 @@ end
 
     config = _pitching_wing_config(sim.setup)
     @test config["wake"]["wake_length_spans"] == 2.0
+    @test config["wake"]["model"] == "panel"
+    @test config["geometry"]["aspect_ratio"] == 4.0
     @test config["wake"]["wake_length_m"] == 2 * sim.setup.b
     @test config["wake"]["downstream_boundary_from_pivot_m"] ==
         sim.setup.wake_downstream_boundary

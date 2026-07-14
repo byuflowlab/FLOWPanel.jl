@@ -44,6 +44,7 @@ function run_both_forms(body, frames, Vinf, rho, normalization)
         verbose=false, file=false)
     fm_mat = pnl.ForceMonitor(1, 1; i_frame=-1, normalization,
         correct_kuttacondition=false, verbose=false, file=false, vtk_fields=())
+    # DIAGNOSTIC ONLY: deprecated Lamb mode is the subject of this asymmetry audit.
     pl_lamb = pnl.PressureLaplace((body,), rho; reference_panel=1,
         reference_pressure=0.0, acceleration_form=:lamb_vector,
         verbose=false, file=false)

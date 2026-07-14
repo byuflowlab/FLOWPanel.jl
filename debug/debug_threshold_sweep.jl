@@ -5,7 +5,7 @@ import FLOWPanel as pnl
 using LinearAlgebra: norm, dot
 using Printf
 
-include(joinpath(pnl.examples_path, "simple_wing_capped_dirichlet.jl"))
+include(joinpath(pnl.examples_path, "simple_wing_capped_pressure_comparison.jl"))
 
 function expected_negative_tangent_velocity(body)
     expected = similar(body.velocity)
@@ -21,8 +21,11 @@ function run_one(; thresh, AOA=5.88, magVinf=56.0, rho=1.225,
                    backend=pnl.DirectBackend(), dt=1.0,
                    meshfile=joinpath(pnl.examples_path, "data", "wing_ar4_naca0016_5.msh"))
 
-    body_ref, Vinf = build_simple_wing_capped_dirichlet(; meshfile, AOA, magVinf)
-    solve_simple_wing_capped_dirichlet!(body_ref, :backslash; backend)
+    body_ref = build_pressure_comparison_wing()
+    Vinf = magVinf .* [cosd(AOA), 0.0, sind(AOA)]
+    set_pressure_comparison_wake!(body_ref, Vinf)
+    pnl.steady!(body_ref, pnl.ReferenceFrame(body_ref), Vinf;
+        body_solvers=pnl.Backslash(body_ref), backend, verbose=false)
 
     body_ref.needs_velocity_gradient[] = true
     body_ref.velocity .= 0.0

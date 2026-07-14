@@ -4,6 +4,7 @@
 ## Bernoulli and PressureLaplace(lamb_vector) pressure/force/spanwise monitor
 ## chains, selects a converged averaging window, and writes per-blade spanwise
 ## loading statistics against CCBlade ncrit=4.
+## The Lamb-vector chain is deprecated and retained only as a historical diagnostic.
 
 import FLOWPanel as pnl
 import CSV

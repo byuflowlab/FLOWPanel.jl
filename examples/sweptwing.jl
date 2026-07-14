@@ -326,8 +326,8 @@ spanwise_bernoulli = pnl.SpanwiseLoadingMonitor(n_span_full, 1;
 pressure_laplace = pnl.PressureLaplace((body,), rho;
     reference_panel=1, reference_pressure=0.0, verbose=false,
     unsteady=false,
-    gradient_mode=:surface_velocity,
-    acceleration_form=:lamb_vector)
+    gradient_mode=:corrected_hessian,
+    acceleration_form=:material_derivative)
 force_laplace = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
     correct_kuttacondition=false, verbose=false)
 spanwise_laplace = pnl.SpanwiseLoadingMonitor(n_span_full, 1;

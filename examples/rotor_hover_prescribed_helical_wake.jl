@@ -1092,6 +1092,7 @@ function run_steady_with_explicit_wake!(system, wake, frames, iteration; write_s
     force = pnl.ForceMonitor(1, 1; i_frame=1,
         normalization=pnl.RotorNormalization(rho, 2 * R, 1),
         correct_kuttacondition=false, verbose=false, file=false)
+    # DIAGNOSTIC ONLY: deprecated Lamb mode has no complete ALE surface derivation.
     pressure_laplace_lamb = pnl.PressureLaplace((system,), rho;
         unsteady=false, acceleration_form=:lamb_vector, file=false)
     force_laplace_lamb = pnl.ForceMonitor(1, 1; i_frame=1,

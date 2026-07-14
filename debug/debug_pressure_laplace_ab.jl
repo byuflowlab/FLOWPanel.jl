@@ -166,12 +166,11 @@ end
 function main()
     backend = pnl.DirectBackend()
     rho = 1.225
-    body_ref, Vinf = build_simple_wing_capped_dirichlet(;
-        meshfile=joinpath(pnl.examples_path, "data", "wing_ar4_naca0016_5.msh"),
-        AOA=5.88,
-        magVinf=56.0,
-    )
-    solve_simple_wing_capped_dirichlet!(body_ref, :backslash; backend)
+    body_ref = build_pressure_comparison_wing()
+    Vinf = 56.0 .* [cosd(5.88), 0.0, sind(5.88)]
+    set_pressure_comparison_wake!(body_ref, Vinf)
+    pnl.steady!(body_ref, pnl.ReferenceFrame(body_ref), Vinf;
+        body_solvers=pnl.Backslash(body_ref), backend, verbose=false)
     prepare_pressure_state!(body_ref, Vinf; backend)
 
     body_b = deepcopy(body_ref)
