@@ -11,8 +11,19 @@
 
 set -euo pipefail
 THREADS=48
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+cd "$REPO_ROOT"
 RUN_DIR=data/rotor_axial_j0187_ccblade
 mkdir -p "$RUN_DIR"
+
+# This source geometry is intentionally not substituted: using a different CST
+# file would invalidate the intended panel/CCBlade comparison.
+export CST_CSV="${CST_CSV:-$REPO_ROOT/examples/rotor_hover_scan/processed/dji9443_brainstorm_item003.csv}"
+if [[ ! -f "$CST_CSV" ]]; then
+    echo "ERROR: required DJI 9443 CST input is missing: $CST_CSV" >&2
+    echo "Copy examples/rotor_hover_scan/processed/dji9443_brainstorm_item003.csv into the checkout, or submit with CST_CSV=/path/to/the/file." >&2
+    exit 2
+fi
 
 # module load julia/<site-version>
 export OMP_NUM_THREADS="$THREADS"

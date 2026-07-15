@@ -22,7 +22,8 @@ using Printf: @printf, @sprintf
 using LinearAlgebra: norm
 
 # ------------------------------------------------------------------ inputs ----
-const CST_CSV   = get(ENV, "CST_CSV", joinpath(@__DIR__, "..", "dji9443_brainstorm_item003.csv"))
+const CST_CSV   = get(ENV, "CST_CSV", joinpath(@__DIR__, "rotor_hover_scan", "processed",
+                                                  "dji9443_brainstorm_item003.csv"))
 const SAVE_PATH = get(ENV, "SAVE_PATH", joinpath(@__DIR__, "..", "data", "rotor_hover_ccblade"))
 
 # Geometry / operating point (see rotor_hover_convergence.jl)

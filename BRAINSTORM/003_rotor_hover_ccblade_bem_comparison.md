@@ -56,7 +56,7 @@ BYU `bigmem` constraint); it is intentionally not submitted by an agent.
 
 ## Results (2026-07-07)
 
-Implemented in `examples/rotor_hover_ccblade.jl`; outputs in `data/rotor_hover_ccblade/`. CCBlade BEM was built from the *same* CST blade geometry (`dji9443_brainstorm_item003.csv`, 25 sections), RPM=5400, ρ=1.179, B=2, R=0.119, with XFOIL section polars generated at the local hover Reynolds/Mach (Re≈10k–54k, M≈0.02–0.20; Viterna ±180° extrapolation). Hover is approximated with a tiny nonzero climb speed (Vc=1e-4; pure Vx=0 is degenerate in BEM — the induction factor `a` blows up but induced velocity and thrust stay physical). A small climb sweep (Vc = 1, 2, 4 m/s → J = 0.047, 0.093, 0.187) was run alongside hover. Follow-up added an inviscid XFOIL polar peer (`ncrit=0`, `cd=0`) and replayed saved FLOWPanel VTK to add tangential spanwise loading.
+Implemented in `examples/rotor_hover_ccblade.jl`; outputs in `data/rotor_hover_ccblade/`. CCBlade BEM was built from the *same* CST blade geometry (`examples/rotor_hover_scan/processed/dji9443_brainstorm_item003.csv`, 25 sections), RPM=5400, ρ=1.179, B=2, R=0.119, with XFOIL section polars generated at the local hover Reynolds/Mach (Re≈10k–54k, M≈0.02–0.20; Viterna ±180° extrapolation). Hover is approximated with a tiny nonzero climb speed (Vc=1e-4; pure Vx=0 is degenerate in BEM — the induction factor `a` blows up but induced velocity and thrust stay physical). A small climb sweep (Vc = 1, 2, 4 m/s → J = 0.047, 0.093, 0.187) was run alongside hover. Follow-up added an inviscid XFOIL polar peer (`ncrit=0`, `cd=0`) and replayed saved FLOWPanel VTK to add tangential spanwise loading.
 
 **Integrated hover CT vs. XFOIL polar set**:
 
