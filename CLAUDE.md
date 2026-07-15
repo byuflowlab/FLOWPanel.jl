@@ -139,6 +139,33 @@ The solver supports forward-mode AD (ForwardDiff) and reverse-mode AD (ReverseDi
 
 ## Running Simulations Iteratively
 
+## HPC / Slurm
+
+Login nodes are for editing, inspection, and light checks only. Slurm scripts
+must declare both a time limit and memory request, and should request only the
+resources and hardware features the case needs. Jobs expected to take more than
+roughly 20–30 laptop minutes belong on HPC. Configure account, QOS, and modules
+for the user's allocation rather than assuming a project-specific value.
+
+For a single-node threaded Julia case, request the intended CPU count with
+`#SBATCH --ntasks=<N>` and set one `THREADS=<N>` variable in the script. Export
+that value through `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`,
+`BLAS_NUM_THREADS`, and `JULIA_NUM_THREADS`, and pass it to Julia with
+`julia -t "$THREADS"`. The batch script already runs on an allocated compute
+node, so a direct Julia invocation is appropriate for this pattern; use `srun`
+only when a launch step is actually needed, and make its task/CPU request match
+the allocation. Print `THREADS` near the start of the log for auditability.
+
+Use `set -euo pipefail` in new scripts so a failed workflow stage stops the
+job, and set explicit output/error paths if job logs should be kept with a run.
+Slurm opens those paths before the script runs, so any requested log directory
+must already exist when the user submits the job.
+
+Agents may prepare and syntax-check Slurm scripts, but must never run `sbatch`,
+`srun`, `salloc`, or otherwise launch a supercomputer job; submission is left to
+the user. See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
+[script generator](https://rc.byu.edu/documentation/slurm/script-generator).
+
 When you launch a simulation from an example (especially diagnostic / repro runs of an in-progress investigation), default to **leaving VTK output on** — the I/O cost is small relative to the value of having ParaView-ready state to inspect after the fact. Do not set `SAVE_VTK=false` unless the user asks for a no-output run.
 
 To avoid filling the disk across repeated iterations, **write each new run over the previous run's directory** rather than creating a new one per attempt. Two acceptable patterns:

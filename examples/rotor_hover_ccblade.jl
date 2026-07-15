@@ -50,6 +50,9 @@ const USE_MACH = parse(Bool, get(ENV, "USE_MACH", "true"))
 const XFOIL_ITER = parse(Int, get(ENV, "XFOIL_ITER", "200"))
 const XFOIL_NPAN = parse(Int, get(ENV, "XFOIL_NPAN", "140"))
 const XFOIL_PERCUSSIVE = parse(Bool, get(ENV, "XFOIL_PERCUSSIVE", "true"))
+const XFOIL_ALPHA_MIN = parse(Float64, get(ENV, "XFOIL_ALPHA_MIN", "-12.0"))
+const XFOIL_ALPHA_MAX = parse(Float64, get(ENV, "XFOIL_ALPHA_MAX", "20.0"))
+const XFOIL_DALPHA = parse(Float64, get(ENV, "XFOIL_DALPHA", "0.5"))
 
 # Multiplier on the section Reynolds numbers fed to XFOIL (Mach stays physical).
 # RE_SCALE=10 probes how much of the viscous CT spread is a low-Re artifact.
@@ -87,6 +90,15 @@ const MIX_CD_RESCALE = parse(Float64, get(ENV, "MIX_CD_RESCALE", "10.0"))
 const VC_LIST = let s = get(ENV, "VC_LIST", "")
     isempty(s) ? [0.001, 1.0, 2.0, 4.0] : parse.(Float64, split(s, ','))
 end
+
+# The section outputs are for one explicit operating point, not implicitly the
+# nearest-to-hover row.  This keeps radial CSVs/plots unambiguous when this
+# script is used for an advance-ratio comparison.
+const TARGET_VC = parse(Float64, get(ENV, "TARGET_VC", string(VC_LIST[argmin(abs.(VC_LIST))])))
+const ALPHA_LINEAR_LIMIT_DEG = parse(Float64, get(ENV, "ALPHA_LINEAR_LIMIT_DEG", "5.0"))
+const STRICT_ALPHA_GATE = parse(Bool, get(ENV, "STRICT_ALPHA_GATE", "true"))
+op_token(x::Real) = replace(@sprintf("%.4g", x), "." => "p", "-" => "m")
+const OP_TAG = get(ENV, "OP_TAG", "Vc$(op_token(TARGET_VC))_J$(op_token(TARGET_VC / (NREV * D)))")
 
 # Reference values for plotting context.
 const CT_PANEL = 0.0506
@@ -289,6 +301,9 @@ function get_sweeps!(ncrit, rescale)
         αs, cls, cds, failed = xfoil_polar(sec_x[i], sec_y[i], re, mach;
                                            ncrit=ncrit, iter=XFOIL_ITER,
                                            npan=XFOIL_NPAN,
+                                           alpha_min=XFOIL_ALPHA_MIN,
+                                           alpha_max=XFOIL_ALPHA_MAX,
+                                           dalpha=XFOIL_DALPHA,
                                            percussive_maintenance=XFOIL_PERCUSSIVE)
         @printf("  section %2d  r/R=%.3f  Re=%6.0f  M=%.2f  -> %d converged, %d failed\n",
                 i, sec_r[i]/R, re, mach, length(αs), length(failed))
@@ -400,19 +415,63 @@ polar_csv = outpath("rotor_hover_ccblade_polars.csv")
 CSV.write(polar_csv, polar_rows)
 println("Wrote $(polar_csv)")
 
-# hover operating point (smallest |Vc|) used for the sectional/spanwise comparison
-Vc_hover = VC_LIST[argmin(abs.(VC_LIST))]
+# Explicit operating point used for sectional/spanwise outputs.  Require an
+# exact Vc row so a typo cannot silently select a nearby sweep point.
+target_matches = findall(v -> isapprox(v, TARGET_VC; atol=eps(Float64) * max(1, abs(TARGET_VC)), rtol=0), VC_LIST)
+length(target_matches) == 1 || error("TARGET_VC=$(TARGET_VC) m/s must occur exactly once in VC_LIST=$(VC_LIST)")
+Vc_target = VC_LIST[only(target_matches)]
+J_target = Vc_target / (NREV * D)
 
-# ---- per-polar-set hover sectional CSVs (for the panel-vs-BEM spanwise comparison) ----
+# ---- operating-point validation --------------------------------------------
+# The supplied (pre-Viterna) polar domain must contain every operating alpha.
+# Outboard alpha is also gated to a deliberately conservative linear-region
+# threshold; a non-finite value or failed gate is a hard failure by default.
+validation_rows = DataFrame(polarset=String[], ncrit=Int[], Vc=Float64[], J=Float64[],
+    outboard_alpha_min_deg=Float64[], outboard_alpha_max_deg=Float64[],
+    outboard_alpha_absmax_deg=Float64[], polar_domain_covered=Bool[],
+    finite_section_data=Bool[], linear_alpha_pass=Bool[], pass=Bool[])
+for spec in specs
+    sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_target), :]
+    outboard = sub[sub.r_over_R .>= 0.3, :]
+    finite_data = !isempty(outboard) && all(isfinite, outboard.alpha_deg) &&
+                  all(isfinite, outboard.Np) && all(isfinite, outboard.W)
+    covered = finite_data && all(i -> begin
+        p = polar_data[spec.label][i]
+        row = sub[sub.r_over_R .== sec_r[i] / R, :]
+        !isempty(row) && first(p.alpha_deg) <= row.alpha_deg[1] <= last(p.alpha_deg)
+    end, eachindex(sec_r))
+    αmin = finite_data ? minimum(outboard.alpha_deg) : NaN
+    αmax = finite_data ? maximum(outboard.alpha_deg) : NaN
+    αabsmax = finite_data ? maximum(abs, outboard.alpha_deg) : NaN
+    linear = finite_data && αabsmax <= ALPHA_LINEAR_LIMIT_DEG
+    passed = finite_data && covered && linear
+    push!(validation_rows, (spec.label, spec.ncrit, Vc_target, J_target,
+        αmin, αmax, αabsmax, covered, finite_data, linear, passed))
+end
+validation_csv = outpath("rotor_hover_ccblade_operating_point_validation_$(OP_TAG).csv")
+CSV.write(validation_csv, validation_rows)
+println("Wrote $(validation_csv)")
+for row in eachrow(validation_rows)
+    @printf("  %-12s Vc=%.4g J=%.4f: outboard alpha [%.3f, %.3f] deg, |max| %.3f, polar coverage=%s, finite=%s\n",
+        row.polarset, row.Vc, row.J, row.outboard_alpha_min_deg, row.outboard_alpha_max_deg,
+        row.outboard_alpha_absmax_deg, row.polar_domain_covered, row.finite_section_data)
+end
+if any(.!validation_rows.pass)
+    msg = "CCBlade operating-point validation failed: non-finite data, polar-domain escape, or |alpha| > $(ALPHA_LINEAR_LIMIT_DEG) deg."
+    STRICT_ALPHA_GATE ? error(msg) : @warn msg
+end
+
+# ---- per-polar-set target sectional CSVs (for panel-vs-BEM comparison) ------
 # dTdr_total = B * Np is the total (both-blade) thrust per unit radius [N/m]; Np is
 # CCBlade's per-blade normal force per unit length.
 for spec in specs
-    sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
-    sect = DataFrame(r_over_R=sub.r_over_R, r_m=sub.r, chord_m=sub.chord,
+    sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_target), :]
+    sect = DataFrame(Vc=fill(Vc_target, length(sub.r_over_R)), J=fill(J_target, length(sub.r_over_R)),
+                     r_over_R=sub.r_over_R, r_m=sub.r, chord_m=sub.chord,
                      alpha_deg=sub.alpha_deg, phi_deg=sub.phi_deg,
                      W=sub.W, u=sub.u, v=sub.v, Np=sub.Np, Tp=sub.Tp,
                      dTdr_total=B .* sub.Np, Gamma=sub.Gamma)
-    fname = outpath("rotor_hover_ccblade_sectional_$(spec.label).csv")
+    fname = outpath("rotor_hover_ccblade_sectional_$(spec.label)_$(OP_TAG).csv")
     CSV.write(fname, sect)
     println("Wrote $(fname)")
 end
@@ -421,30 +480,31 @@ end
 let fig_ax = plt.subplots(figsize=(6, 4))
     fig, ax = fig_ax
     for spec in specs
-        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
+        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_target), :]
         ax.plot(sub.r_over_R, B .* sub.Np, "-o"; markersize=3, label=spec.legend)
     end
     ax.set_xlabel("r/R"); ax.set_ylabel("dT/dr (both blades) [N/m]")
-    ax.set_title(@sprintf("BEM spanwise loading, RPM=%.0f, hover%s", RPM, RE_TAG))
+    ax.set_title(@sprintf("BEM spanwise loading, RPM=%.0f, Vc=%.4g m/s, J=%.4f%s", RPM, Vc_target, J_target, RE_TAG))
     ax.grid(true); ax.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(outpath("rotor_hover_ccblade_spanwise_loading.png"), dpi=150)
+    fig.tight_layout(); fig.savefig(outpath("rotor_hover_ccblade_spanwise_loading_$(OP_TAG).png"), dpi=150)
     plt.close()
 end
 
 # ---- plots ----
-# Radial plots are drawn at hover (smallest Vc), one line per polar set, to isolate
+# Radial plots are drawn at the explicit target Vc, one line per polar set, to isolate
 # the transition-parameter effect without an 8-curve Vc x ncrit tangle.
 function plot_radial(col, ylabel, fname)
     fig, ax = plt.subplots(figsize=(6, 4))
     for spec in specs
-        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_hover), :]
+        sub = radial_rows[(radial_rows.polarset .== spec.label) .& (radial_rows.Vc .== Vc_target), :]
         ax.plot(sub.r_over_R, sub[!, col], "-o"; markersize=3,
                 label=spec.legend)
     end
     ax.set_xlabel("r/R"); ax.set_ylabel(ylabel)
-    ax.set_title(@sprintf("hover (Vc=%.4f m/s)%s", Vc_hover, RE_TAG))
+    ax.set_title(@sprintf("Vc=%.4f m/s, J=%.4f%s", Vc_target, J_target, RE_TAG))
     ax.grid(true); ax.legend(fontsize=7)
-    fig.tight_layout(); fig.savefig(outpath(fname), dpi=150)
+    stem, ext = splitext(fname)
+    fig.tight_layout(); fig.savefig(outpath("$(stem)_$(OP_TAG)$(ext)"), dpi=150)
     plt.close()
 end
 
@@ -519,9 +579,9 @@ plt.close()
 
 # ---- summary ----
 println("\n" * "="^60)
-println("Hover (Vc=$(Vc_hover) m/s) CCBlade CT by polar set:")
+println("Target (Vc=$(Vc_target) m/s, J=$(J_target)) CCBlade CT by polar set:")
 for spec in specs
-    sub = ct_rows[(ct_rows.polarset .== spec.label) .& (ct_rows.Vc .== Vc_hover), :]
+    sub = ct_rows[(ct_rows.polarset .== spec.label) .& (ct_rows.Vc .== Vc_target), :]
     ct = sub.CT[1]
     @printf("  %-35s:  CT = %.5f   (BEM/panel = %.3f, BEM/exp = %.3f)\n",
             spec.label, ct, ct/CT_PANEL, ct/CT_EXPERIMENT)

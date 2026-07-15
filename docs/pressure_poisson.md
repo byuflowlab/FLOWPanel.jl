@@ -1,5 +1,16 @@
 # Pressure Poisson Solve From the Euler Equation
 
+> **2026-07-11 revision.** The reviewed current design is
+> [`theory/unsteady_pressure_monitors_2026-07-11.md`](../theory/unsteady_pressure_monitors_2026-07-11.md).
+> It supersedes historical statements below about a first-step spike, adding
+> `[Ω]×` to `body.velocity_gradient`, raw-Hessian defaults, and uncorrected edge
+> contractions. The retained ALE candidates use safe
+> zero/BE/variable-step-BDF2 history, one final tangential projection, and
+> conservative two-point edge divergence. No formulation is currently claimed
+> as a reliable default: the compatibility fallback warns and uses corrected
+> edge difference until the pure-panel-wake unsteady gates pass. Lamb mode is
+> deprecated and diagnostic only.
+
 This note derives a sparse panel-centered pressure solve intended for FLOWPanel
 post-processing. The first implementation target is a symmetric finite-volume
 surface Laplacian on panel adjacency, solved with conjugate gradients from
@@ -717,7 +728,10 @@ uses the edge directional difference of the sampled body-frame velocity. Using
 `body.velocity` for this difference preserves constant-field behavior; tangent
 projection is still used for the relative slip velocity.
 
-The alternative `acceleration_form=:lamb_vector` uses the Lamb-vector
+The deprecated `acceleration_form=:lamb_vector` is retained for one release
+cycle as a diagnostic only. It is excluded from default selection and
+convergence acceptance because no complete ALE surface derivation has been
+established. Its historical implementation uses the Lamb-vector
 decomposition derived above. Its edge pressure jump is assembled from the
 optional same unsteady projection, the kinetic-energy difference
 `|\mathbf{u}_j|^2/2 - |\mathbf{u}_i|^2/2`, and the midpoint Lamb-vector

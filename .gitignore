@@ -10,7 +10,9 @@ temps
 temp*
 *.vtk
 *.jld
-data/
+data/*
+!data/pitching_wing_exp/
+!data/pitching_wing_exp/**
 
 # Jupyter notebook temps
 .ipynb_checkpoints

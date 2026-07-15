@@ -32,6 +32,28 @@ This track is useful if it clearly separates missing-wake physics from geometry/
 
 BEM and panel methods do not represent the same physics. Use agreement or disagreement to route the investigation, not as a final validation by itself.
 
+## Axial freestream comparison at J = 0.1867 (2026-07-14)
+
+Prepared a fixed axial operating point for the DJI 9443: RPM=5400, `Vc=4 m/s`,
+`J=Vc/(nD)=0.1867`, with `ncrit=4` and `ncrit=9` as co-primary viscous CCBlade
+polar cases. The CCBlade entry point is `examples/rotor_axial_j0187_ccblade.jl`;
+it writes tagged Vc/J sectional CSVs, loading/alpha plots, CT output, and an
+operating-point validation CSV under `data/rotor_axial_j0187_ccblade/`. The
+validation requires finite sections, coverage by the original polar domain,
+and (by default) outboard (`r/R >= 0.3`) `|alpha| <= 5 deg`; the pre-run evidence
+was `-0.23..1.89 deg` for ncrit=4 and `1.25..2.17 deg` for ncrit=9.
+
+`examples/rotor_axial_j0187_panel.jl` reuses the established 80_81 / 36
+steps-per-revolution workflow at constant axial `V∞=4 m/s`, retaining VTK
+output in the same directory. `examples/rotor_axial_j0187_replay.jl` requires
+the final full revolution to meet the existing CT peak-to-peak (5%) and drift
+(2.5%) gates. The resulting spanwise comparison and compact CT CSV/plot are
+made by `examples/rotor_axial_j0187_loading_comparison.jl`.
+
+**Status: results pending user Slurm submission.** The prepared single-node
+script is `scripts/rotor_axial_j0187_ccblade.slurm.sh` (48 CPUs, 8 h, 4 GiB/CPU,
+BYU `bigmem` constraint); it is intentionally not submitted by an agent.
+
 ## Results (2026-07-07)
 
 Implemented in `examples/rotor_hover_ccblade.jl`; outputs in `data/rotor_hover_ccblade/`. CCBlade BEM was built from the *same* CST blade geometry (`dji9443_brainstorm_item003.csv`, 25 sections), RPM=5400, ρ=1.179, B=2, R=0.119, with XFOIL section polars generated at the local hover Reynolds/Mach (Re≈10k–54k, M≈0.02–0.20; Viterna ±180° extrapolation). Hover is approximated with a tiny nonzero climb speed (Vc=1e-4; pure Vx=0 is degenerate in BEM — the induction factor `a` blows up but induced velocity and thrust stay physical). A small climb sweep (Vc = 1, 2, 4 m/s → J = 0.047, 0.093, 0.187) was run alongside hover. Follow-up added an inviscid XFOIL polar peer (`ncrit=0`, `cd=0`) and replayed saved FLOWPanel VTK to add tangential spanwise loading.

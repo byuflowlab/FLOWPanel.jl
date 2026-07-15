@@ -137,6 +137,12 @@ end
 
 function _plot_comparison(path, t_range, period, forces, pressure_metrics)
     plt = Core.eval(@__MODULE__, :(import PythonPlot as pressure_comparison_plt; pressure_comparison_plt))
+    return Base.invokelatest(_plot_comparison_impl, plt, path, collect(t_range), period,
+        forces, pressure_metrics)
+end
+
+function _plot_comparison_impl(plt, path, t_range, period, forces, pressure_metrics)
+    mkpath(path)
     cycles = collect(t_range) ./ period
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
     for (method, label) in PRESSURE_COMPARISON_METHODS

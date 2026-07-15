@@ -378,6 +378,16 @@ function window_length_samples(times, rpm, nrevs)
 end
 
 function select_window(ct, times, rpm, requested_nrevs)
+    # Axial-comparison runs require the final complete revolution itself to be
+    # flat; do not silently substitute an older plateau.
+    if env_bool("REQUIRE_FINAL_FULL_REV", false)
+        n = window_length_samples(times, rpm, 1)
+        idxs = collect((length(ct) - n + 1):length(ct))
+        stats = flatness_stats(ct[idxs], times[idxs])
+        passes_flatness(stats) || error("Final full-revolution CT window failed flatness: " *
+            "ptp=$(100 * stats.rel_ptp)% (tol 5%), drift=$(100 * stats.rel_drift)% (tol 2.5%).")
+        return idxs, 1, stats, false
+    end
     attempts = requested_nrevs >= 2 ? (requested_nrevs, 1) : (requested_nrevs,)
     for nrevs in attempts
         n = window_length_samples(times, rpm, nrevs)

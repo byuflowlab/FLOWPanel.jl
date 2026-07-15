@@ -1,5 +1,13 @@
 # Unsteady Bernoulli Pressure
 
+> **2026-07-11 revision.** The reviewed implementation contract is
+> [`theory/unsteady_pressure_monitors_2026-07-11.md`](../theory/unsteady_pressure_monitors_2026-07-11.md).
+> The kinetic term now uses reconstructed inertial surface velocity; the first
+> sample seeds a zero derivative; later samples use backward Euler and then
+> variable-step BDF2; and particle/vector-potential-only wake sources produce a
+> warning-only mixed partial diagnostic. First-order formulas below remain as
+> derivational background, not the current temporal scheme.
+
 This note records the discrete unsteady term used by `PressureBernoulli`.
 The monitor owns this calculation because pressure is a post-processing
 quantity, while `simulate!` should only advance the aerodynamic state needed by
