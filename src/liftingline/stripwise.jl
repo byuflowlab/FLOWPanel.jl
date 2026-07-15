@@ -11,9 +11,192 @@
 
 abstract type StripwiseElement{N} <: AbstractElement where {N} end
 
+################################################################################
+# FUNCTIONAL AIRFOIL ELEMENT STRUCT
+################################################################################
+struct FunctionalAirfoil{N, R<:Number} <: StripwiseElement{N}
+
+    # Provided functions
+    fun_cl::Function
+    fun_cd::Function
+    fun_cm::Function
+
+    fun_claero::Function
+
+    alpha0::R                           # (deg) AOA at zero lift
+
+    function FunctionalAirfoil(nparameters::Int, 
+                                fun_cl::Function, fun_cd::Function, fun_cm::Function,
+                                fun_claero=fun_cl, alpha0=NaN)
+
+        new{nparameters, typeof(alpha0)}(fun_cl, fun_cd, fun_cm, 
+                                                        fun_claero, alpha0)
+
+    end
+
+end
+
+function FunctionalAirfoil(args::Tuple; optargs...)
+    return FunctionalAirfoil(args...; optargs...)
+end
+
+# Generate a wrapper for a SimpleAirfoil using only the first parameter
+function FunctionalAirfoil(nparameters::Int,
+                            alphas::AbstractVector,
+                            cls::AbstractVector, cds::AbstractVector, cms::AbstractVector,
+                            alpha0=NaN, optargs=())
+
+    simple = SimpleAirfoil(alphas, cls, cds, cms; optargs...)
+
+    fun_cl(aoa, args...) = simple.spl_cl(aoa)
+    fun_cd(aoa, args...) = simple.spl_cd(aoa)
+    fun_cm(aoa, args...) = simple.spl_cm(aoa)
+    fun_claero(aoa, args...) = simple.spl_claero(aoa)
+
+    return FunctionalAirfoil(nparameters, fun_cl, fun_cd, fun_cm, 
+                                fun_claero, isnan(alpha0) ? simple.alpha0 : alpha0)
+
+end
+
+
+function Base.show(io::IO, self::FunctionalAirfoil{N}) where {N}
+    println(io, "FunctionalAirfoil with $(N) parameter dimensions")
+    print(io, "└─ α0:\t$(self.alpha0)")
+end
+
+"""
+Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
+"""
+function calc_sweptcl(self::FunctionalAirfoil, sweep::Number, alpha_Λ::Number, 
+                                                            args...; 
+                                                            claero=false,
+                                                            optargs...)
+
+
+
+    cl = claero ? self.fun_claero : self.fun_cl
+
+    # Find AOA at zero lift
+    if isnan(self.alpha0)
+
+        f(u, p) = [self.fun_claero(u[1], args...)]
+        u0 = [0.0]
+        prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
+        result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
+        alpha0 = result.u[1]
+
+        # Check solver success
+        success = SimpleNonlinearSolve.SciMLBase.successful_retcode(result)
+
+        if !success
+            @warn "alpha0 solver did not converge!"
+            @show success
+            @show result.retcode
+            # display(result)
+        end
+
+    else
+        alpha0 = self.alpha0
+    end
+
+    alpha = alpha_Λ + alpha0*( 1 - 1/cosd(sweep) )
+
+    return cl(alpha, args...; optargs...)
+
+end
+
+
+(self::FunctionalAirfoil)(args...; optargs...) = (
+    calc_cl(self, args...; optargs...), 
+    calc_cd(self, args...; optargs...), 
+    calc_cm(self, args...; optargs...)
+)
+
+calc_claero(self::FunctionalAirfoil, args...; optargs...) = self.fun_claero(args...; optargs...)
+
+calc_cl(self::FunctionalAirfoil, args...; optargs...) = self.fun_cl(args...; optargs...)
+calc_cd(self::FunctionalAirfoil, args...; optargs...) = self.fun_cd(args...; optargs...)
+calc_cm(self::FunctionalAirfoil, args...; optargs...) = self.fun_cm(args...; optargs...)
+
+
+"""
+Blend two stripwise elements using a given weight, where `weight=0` simply
+returns `airfoil0` and `weight=1` returns `airfoil1`
+"""
+function blend(airfoil0::FunctionalAirfoil{N}, airfoil1::FunctionalAirfoil{N}, 
+                                                        weight::Number) where N
+    # Linearly blend the functions
+    cl(args...; optargs...) = (1 - weight)*airfoil0.fun_cl(args...; optargs...) + weight*airfoil1.fun_cl(args...; optargs...)
+    cd(args...; optargs...) = (1 - weight)*airfoil0.fun_cd(args...; optargs...) + weight*airfoil1.fun_cd(args...; optargs...)
+    cm(args...; optargs...) = (1 - weight)*airfoil0.fun_cm(args...; optargs...) + weight*airfoil1.fun_cm(args...; optargs...)
+    claero(args...; optargs...) = (1 - weight)*airfoil0.fun_claero(args...; optargs...) + weight*airfoil1.fun_claero(args...; optargs...)
+    alpha0 = (1 - weight)*airfoil0.alpha0 + weight*airfoil1.alpha0
+
+    return FunctionalAirfoil(N, cl, cd, cm, claero, alpha0)
+end
+
+
+function plot_slice(self::FunctionalAirfoil{N}, alphas, slice; 
+                                        claero=true,
+                                        fig=nothing, axs=nothing, 
+                                        stl="-",
+                                        optargs...) where N
+
+    fun_cl = calc_cl
+    fun_claero = calc_claero
+
+    @assert length(slice) == N-1 ""*
+        "Invalid slice dimensions; expected $(N-1) dimension, got $(length(slice))"
+
+    if isnothing(fig)
+        fig = plt.figure(figsize = [7, 0.75*5*4]*7/9)
+    end
+    if isnothing(axs)
+        axs = fig.subplots(4, 1)
+        axs = pyconvert(Array, axs)
+    end
+
+    fig.suptitle("Element polar at slice [" * join(("x$(i)" for i in 1:length(slice)), ", ") * "] = [" * join(("$x" for x in slice), ", ")*"]")
+
+    ax = axs[1]
+    ax.plot(alphas, [fun_cl(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_{\ell}")
+
+    ax = axs[2]
+    ax.plot(alphas, [fun_claero(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_{\ell_\mathrm{aero}}")
+
+    ax = axs[3]
+    ax.plot(alphas, [calc_cd(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_d")
+
+    ax = axs[4]
+    ax.plot(alphas, [calc_cm(self, a, slice...) for a in alphas], stl; optargs...)
+
+    ax.set_ylabel(L"c_m")
+
+
+    for ax in axs
+        ax.set_xlabel(L"Angle of attack ($^\circ$)")
+        ax.spines["top"].set_visible(false)
+        ax.spines["right"].set_visible(false)
+        ax.legend(loc="best", frameon=false, fontsize=8)
+    end
+        
+    fig.tight_layout()
+
+    return fig, axs
+end
+
+
+
+
 
 ################################################################################
-# AIRFOIL ELEMENT STRUCT
+# GENERAL AIRFOIL ELEMENT STRUCT
 ################################################################################
 struct GeneralAirfoil{N,
                         Tdim<:NTuple{N, Int},
@@ -160,13 +343,9 @@ function Base.show(io::IO, self::GeneralAirfoil{N}) where {N}
     println(io, "GeneralAirfoil with $(N) parameter dimensions and $(prod(self.dims)) data points")
 
     for (i, (name, vals, dim)) in enumerate(zip(self.names, self.parameters, self.dims))
-        if i != N
-            print(io, "├─")
-        else
-            print(io, "└─")
-        end
-        print(io, rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
+        println(io, "├─" * rpad(name, 20, " ") * lpad(dim, 3, " ") * " values" * " [$(vals[1]), ..., $(vals[end])]")
     end
+    print(io, "└─ α0:\t$(self.alpha0)")
 
 end
 
@@ -440,6 +619,13 @@ function plot_slice(self::GeneralAirfoil{N}, slice;
     return fig, axs
 end
 
+
+
+
+
+
+
+
 ################################################################################
 # SIMPLE AIRFOIL ELEMENT STRUCT
 ################################################################################
@@ -458,6 +644,8 @@ struct SimpleAirfoil{N,
     cd::Td                              # Drag coefficient
     cm::Tm                              # Pitching moment coefficient
 
+    claero::Tl                          # Purely-aerodynamic lift coefficient
+
     alpha0::R                           # (deg) AOA at zero lift
 
     # Pre-computed Akima spline
@@ -465,16 +653,19 @@ struct SimpleAirfoil{N,
     spl_cd::Sd
     spl_cm::Sm
 
-    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm) where {Ta, Tl, Td, Tm}
+    spl_claero::Sl
+
+    function SimpleAirfoil(alpha::Ta, cl::Tl, cd::Td, cm::Tm; claero=cl, u0=[0.0]) where {Ta, Tl, Td, Tm}
 
         # Spline data
         spl_cl = math.Akima(alpha, cl)
         spl_cd = math.Akima(alpha, cd)
         spl_cm = math.Akima(alpha, cm)
+        spl_claero = math.Akima(alpha, claero)
 
         # Find AOA at zero lift
-        f(u, p) = [spl_cl(u[1])]
-        u0 = [0.0]
+        f(u, p) = [spl_claero(u[1])]
+        # u0 = [0.0]
         prob = SimpleNonlinearSolve.NonlinearProblem{false}(f, u0)
         result = SimpleNonlinearSolve.solve(prob, SimpleNonlinearSolve.SimpleNewtonRaphson(), abstol = 1e-9)
         alpha0 = result.u[1]
@@ -483,7 +674,7 @@ struct SimpleAirfoil{N,
             Ta, Tl, Td, Tm, 
             typeof(alpha0),
             typeof(spl_cl), typeof(spl_cd), typeof(spl_cm)
-            }(alpha, cl, cd, cm, alpha0, spl_cl, spl_cd, spl_cm)
+            }(alpha, cl, cd, cm, claero, alpha0, spl_cl, spl_cd, spl_cm, spl_claero)
     end
 
 end
@@ -504,12 +695,13 @@ function SimpleAirfoil(file_name::String; path::String="")
 end
 
 function Base.show(io::IO, self::SimpleAirfoil)
-    print(io, "SimpleAirfoil with $(length(self.alpha)) data points")
+    println(io, "SimpleAirfoil with $(length(self.alpha)) data points")
+    print(io, "└─ α0:\t$(self.alpha0)")
 end
 
 (self::SimpleAirfoil)(alpha) = (self.spl_cl(alpha), self.spl_cd(alpha), self.spl_cm(alpha))
 
-calc_claero(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
+calc_claero(self::SimpleAirfoil, alpha) = self.spl_claero(alpha)
 calc_cl(self::SimpleAirfoil, alpha) = self.spl_cl(alpha)
 calc_cd(self::SimpleAirfoil, alpha) = self.spl_cd(alpha)
 calc_cm(self::SimpleAirfoil, alpha) = self.spl_cm(alpha)
@@ -520,7 +712,14 @@ function extrapolate(self::SimpleAirfoil, args...; optargs...)
                                                         args...; optargs...)
     alpha *= 180/pi
 
-    return SimpleAirfoil(alpha, cl, cd, cm)
+    if self.cl === self.claero
+        claero = cl
+    else
+        _, claero = extrapolate(self.alpha*pi/180, self.claero, self.cd, self.cm, 
+                                                        args...; optargs...)
+    end
+
+    return SimpleAirfoil(alpha, cl, cd, cm; claero)
 end
 
 """
@@ -535,7 +734,17 @@ function blend(airfoil0::SimpleAirfoil, airfoil1::SimpleAirfoil, weight::Number)
                                         airfoil1.cl, airfoil1.cd, airfoil1.cm, 
                                         weight)
 
-    return SimpleAirfoil(alphas, cls, cds, cms)
+    if airfoil0.cl === airfoil0.claero && airfoil1.cl === airfoil1.claero
+        claero = cls
+    else
+        _, claero = blend(airfoil0.alpha, 
+                                        airfoil0.claero, airfoil0.cd, airfoil0.cm, 
+                                        airfoil1.alpha, 
+                                        airfoil1.claero, airfoil1.cd, airfoil1.cm, 
+                                        weight)
+    end
+
+    return SimpleAirfoil(alphas, cls, cds, cms; claero)
 end
 
 
@@ -546,11 +755,17 @@ end
 Calculate swept sectional lift coefficient as in Goates 2022, Eq. (28).
 """
 function calc_sweptcl(airfoil::StripwiseElement, sweep::Number, alpha_Λ::Number, 
-                                                            args...; optargs...)
+                                                            args...; 
+                                                            claero=false,
+                                                            optargs...)
 
     alpha = alpha_Λ + airfoil.alpha0*( 1 - 1/cosd(sweep) )
 
-    return calc_cl(airfoil, alpha, args...; optargs...)
+    if claero
+        return calc_claero(airfoil, alpha, args...; optargs...)
+    else
+        return calc_cl(airfoil, alpha, args...; optargs...)
+    end
 
 end
 
@@ -584,7 +799,7 @@ of AirfoilPrep, but with some modifications for better robustness and smoothness
 - `cl::Vector{Float64}`: correspnding extrapolated lift coefficients
 - `cd::Vector{Float64}`: correspnding extrapolated drag coefficients
 """
-function extrapolate(alpha, cl, cd, cm, AR=5.0, nalpha=50, mincd=0.0001)
+function extrapolate(alpha, cl, cd, cm; AR=5.0, nalpha=50, mincd=0.0001)
 
     # estimate cdmax
     cdmaxAR = 1.11 + 0.018 * AR
@@ -718,6 +933,66 @@ function extrapolate(alpha, cl, cd, cm, AR=5.0, nalpha=50, mincd=0.0001)
     # --- End Julia replacement ---
 
     return alphafull, clfull, cdfull, cmfull
+end
+
+"""
+Truong, V. K. "An analytical model for airfoil aerodynamic characteristics over 
+the entire 360deg angle of attack range". J. Renewable Sustainable Energy. 2020
+"""
+function stall_naca0012!(alphas, cls, cds; 
+                        aoa_lo_clip=-20, aoa_up_clip=20, 
+                        hardness_lo=0.3, hardness_up=0.2, 
+                        offset_lo=0, offset_up=0,
+                        factor_lo=1, factor_up=1,
+                        fun_lo=aoa->0, fun_up=aoa->0, 
+                        Cd90_0 = 2.08,
+                        pn2_star = 8.36e-2,
+                        pn3_star = 4.06e-1,
+                        pt1_star = 9.00e-2,
+                        pt2_star = -1.78e-1,
+                        pt3_star = -2.98e-1)
+
+    for (i, (aoa, cl, cd)) in enumerate(zip(alphas, cls, cds))
+
+        # Post-stall correction (values for NACA 0012)
+        cosa = cosd(aoa)
+        sina = sind(aoa)
+
+        Cd90 = Cd90_0 + pn2_star * cosa + pn3_star * cosa^2
+        CN = Cd90 * sina
+        CT = (pt1_star + pt2_star * cosa + pt3_star * cosa^3) * sina^2
+
+        cl_stalled = CN * cosa + CT * sina
+        cd_stalled = CN * sina - CT * cosa
+
+        offset = 0
+        offset = math.sigmoid_blend(offset_lo, offset, aoa, aoa_lo_clip, hardness_lo)
+        offset = math.sigmoid_blend(offset, offset_up, aoa, aoa_up_clip, hardness_up)
+
+        factor = 1
+        factor = math.sigmoid_blend(factor_lo, factor, aoa, aoa_lo_clip, hardness_lo)
+        factor = math.sigmoid_blend(factor, factor_up, aoa, aoa_up_clip, hardness_up)
+
+        fun = 0
+        fun = math.sigmoid_blend(fun_lo(aoa), fun, aoa, aoa_lo_clip, hardness_lo)
+        fun = math.sigmoid_blend(fun, fun_up(aoa), aoa, aoa_up_clip, hardness_up)
+
+        cl_stalled = factor*(cl_stalled + offset) + fun
+        cd_stalled = factor*(cd_stalled + offset) + fun
+
+        # Smoothly blend with stalled NACA 0012 outside of bounds
+        cl_final = math.sigmoid_blend(cl_stalled, cl, aoa, aoa_lo_clip, hardness_lo)
+        cl_final = math.sigmoid_blend(cl_final, cl_stalled, aoa, aoa_up_clip, hardness_up)
+
+        cd_final = math.sigmoid_blend(cd_stalled, cd, aoa, aoa_lo_clip, hardness_lo)
+        cd_final = math.sigmoid_blend(cd_final, cd_stalled, aoa, aoa_up_clip, hardness_up)
+
+        cls[i] = cl_final
+        cds[i] = cd_final
+
+    end
+
+
 end
 
 function blend(alphas1::AbstractArray, 
