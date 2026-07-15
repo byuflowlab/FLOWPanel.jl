@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=fp-pitch-pressure
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=48
+#SBATCH --ntasks=48
 #SBATCH --mem=36g
 #SBATCH --time=08:00:00
 #SBATCH --output=slurm-%x-%j.out
 #SBATCH --error=slurm-%x-%j.err
 
-# Submit with, for example:
+# Submit from the top level of the FLOWPanel.jl checkout with:
 #   sbatch examples/run_pitching_wing_pressure_comparison.slurm.sh
 #
 # Override run settings without editing this file:
@@ -16,11 +15,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
-
-THREADS="$SLURM_CPUS_PER_TASK"
-RUN_DIR="${PRESSURE_COMPARISON_PATH:-$REPO_ROOT/data/pitching_wing_pressure_comparison}"
+THREADS=48
+RUN_DIR="${PRESSURE_COMPARISON_PATH:-data/pitching_wing_pressure_comparison}"
 
 # Julia's thread count is fixed at process startup. Keep it and the native
 # OpenMP pool aligned with the Slurm CPU allocation.
@@ -43,7 +39,7 @@ export FMM_LEAF_SIZE="${FMM_LEAF_SIZE:-40}"
 export PRESSURE_ITMAX_PER_PANEL="${PRESSURE_ITMAX_PER_PANEL:-2.0}"
 
 echo "FLOWPanel pitching-wing pressure comparison"
-echo "  repo:      $REPO_ROOT"
+echo "  repo:      $(pwd)"
 echo "  output:    $PRESSURE_COMPARISON_PATH"
 echo "  CPUs:      $THREADS"
 echo "  Julia:     $JULIA_NUM_THREADS threads"
@@ -54,6 +50,4 @@ echo "  C_PER_DT:  $C_PER_DT"
 echo "  N_CYCLES:  $N_CYCLES"
 echo "  SAVE_VTK:  $SAVE_VTK"
 
-srun --ntasks=1 --cpus-per-task="$THREADS" \
-    julia --project="$REPO_ROOT" --threads="$THREADS" \
-    "$REPO_ROOT/examples/pitching_wing_pressure_comparison.jl"
+julia --project=. -t "$THREADS" examples/pitching_wing_pressure_comparison.jl

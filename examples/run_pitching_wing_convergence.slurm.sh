@@ -7,7 +7,7 @@
 #SBATCH --output=slurm-%x-%j.out
 #SBATCH --error=slurm-%x-%j.err
 
-# Submit from the repository checkout with:
+# Submit from the top level of the FLOWPanel.jl checkout with:
 #   sbatch examples/run_pitching_wing_convergence.slurm.sh
 #
 # If the driver stops before the allocation expires, submit this same command
@@ -17,11 +17,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
-
-THREADS="${SLURM_NTASKS:-48}"
-RUN_ROOT="${PITCHCONV_ROOT:-$REPO_ROOT/data/pitching_wing_convergence}"
+THREADS=48
+RUN_ROOT="${PITCHCONV_ROOT:-data/pitching_wing_convergence}"
 
 export JULIA_NUM_THREADS="$THREADS"
 export OMP_NUM_THREADS="$THREADS"
@@ -41,7 +38,7 @@ export PITCHCONV_TIME_SAFETY="${PITCHCONV_TIME_SAFETY:-1.5}"
 export PITCHCONV_TIME_RESERVE_SECONDS="${PITCHCONV_TIME_RESERVE_SECONDS:-900}"
 
 echo "FLOWPanel adaptive pitching-wing convergence"
-echo "  repo:             $REPO_ROOT"
+echo "  repo:             $(pwd)"
 echo "  output:           $PITCHCONV_ROOT"
 echo "  threads:          $THREADS"
 echo "  wake spans:       $PITCHCONV_WAKE_VALUES"
@@ -51,6 +48,4 @@ echo "  cycle range:      $PITCHCONV_INITIAL_CYCLES..$PITCHCONV_MAX_CYCLES"
 echo "  amplitude tol:    $PITCHCONV_AMPLITUDE_TOL"
 echo "  frequency tol:    $PITCHCONV_FREQUENCY_TOL"
 
-julia --project="$REPO_ROOT" -t "$THREADS" \
-    "$REPO_ROOT/examples/pitching_wing_convergence.jl"
-
+julia --project=. -t "$THREADS" examples/pitching_wing_convergence.jl
