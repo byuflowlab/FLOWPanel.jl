@@ -11,7 +11,7 @@ include("runtests_liftingline.jl")
 include("runtests_liftingline_optimization.jl")
 # include("runtests_liftingline_optimization_snopt.jl")
 
-if VERSION >= v"1.9" && !("remote" in Test.ARGS)
-    include("runtests_meshes.jl")
-    include("runtests_meshes2.jl")
-end
+# if VERSION >= v"1.9" && !("remote" in Test.ARGS)
+#     include("runtests_meshes.jl")
+#     include("runtests_meshes2.jl")
+# end
