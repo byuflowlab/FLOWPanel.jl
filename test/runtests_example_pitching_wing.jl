@@ -34,9 +34,9 @@ end
         save_vtk=false,
         backend=pnl.DirectBackend(),
     )
-    @test sim.setup.c_per_dt == 0.05
+    @test sim.setup.c_per_dt == 0.5
     @test sim.setup.das_chord_fraction == 0.05
-    @test sim.setup.dt * sim.setup.U / sim.setup.c ≈ 0.05
+    @test sim.setup.dt * sim.setup.U / sim.setup.c ≈ 0.5
     @test sim.setup.aspect_ratio == 4.0
     @test sim.setup.span_ft == 4.0
     @test sim.setup.reference_area == sim.setup.c * sim.setup.b

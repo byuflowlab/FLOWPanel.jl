@@ -903,7 +903,7 @@ function prepare_pitching_wing(;
         alpha_amp_deg::Real=1.99,
         frequency_hz::Real=4.01,
         n_cycles::Real=3,
-        c_per_dt::Real=0.05,
+        c_per_dt::Real=0.5,
         das_chord_fraction::Real=0.05,
         pivot_chord_fraction::Real=0.25,
         section_eta=[0.25, 0.5, 0.75],

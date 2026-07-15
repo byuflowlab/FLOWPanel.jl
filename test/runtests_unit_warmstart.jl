@@ -42,12 +42,14 @@ pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
     Uinf = t -> [1.0, 0.0, 0.0]
     maneuver = (frames, systems, wakes, t) -> nothing
     t_range = collect(range(0.0; step=0.05, length=10))
+    grad_mu_options = (; basis=:tri)
 
     body_A, wake_A, frames_A = setup_warmstart_case()
     path_A = mktempdir()
     pnl.simulate!((body_A,), (wake_A,), frames_A, maneuver, Uinf, t_range;
         body_solvers=(WarmstartNoopSolver(),),
         backend=pnl.DirectBackend(),
+        grad_mu_options,
         name="run",
         path=path_A,
     )
@@ -57,6 +59,7 @@ pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
     pnl.simulate!((body_B,), (wake_B,), frames_B, maneuver, Uinf, t_range[1:5];
         body_solvers=(WarmstartNoopSolver(),),
         backend=pnl.DirectBackend(),
+        grad_mu_options,
         name="run",
         path=path_B,
     )
@@ -65,6 +68,7 @@ pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
     pnl.simulate_warmstart!((body_C,), (wake_C,), frames_C, maneuver, Uinf, t_range;
         body_solvers=(WarmstartNoopSolver(),),
         backend=pnl.DirectBackend(),
+        grad_mu_options,
         name="run",
         path=path_B,
     )
@@ -92,6 +96,7 @@ pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
     pnl.simulate_warmstart!((body_D,), (wake_D,), frames_D, maneuver, Uinf, t_range;
         body_solvers=(WarmstartNoopSolver(),),
         backend=pnl.DirectBackend(),
+        grad_mu_options,
         name="run",
         path=path_B,
         restart_step=4,
