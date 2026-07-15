@@ -137,7 +137,7 @@ function run_liftingline(;
                                                         # Nonlinear solver
         # solver        = SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust post stall   <---- NOT COMPATIBLE WITH FORWARDDIFF (but compatible with CSDA and optimization converges well)
         # solver        = SimpleNonlinearSolve.SimpleTrustRegion(),        # Trust region needs a good initial guess, but solver converges very reliably post stall, not compatible with CSDA nor ForwardDiff
-        # solver        = NonlinearSolve.SimpleBroyden(),                  # Optimization converges well while being compatible with ForwardDiff (not compatible with CSDA). EXTREMELY ROBUST ACROSS LINEAR, MILD STALL, AND DEEP STALL (it returns an answer, but it might be noise and not accurate)
+        # solver        = NonlinearSolve.SimpleBroyden(),                  # Optimization converges well while being compatible with ForwardDiff (not compatible with CSDA). EXTREMELY ROBUST ACROSS LINEAR, MILD STALL, AND DEEP STALL (it returns an answer, but it might be noisy and not accurate)
         # solver        = NonlinearSolve.NonlinearSolveQuasiNewton.Broyden(; autodiff = ADTypes.AutoForwardDiff(),  init_jacobian=Val(:true_jacobian)) # Also extremely robust across regions (it returns an answer, but it might be noise and not accurate)
         # solver        = NonlinearSolve.NLsolveJL(method = :trust_region),# Optimization converges very well with ForwardDiff, not compatible with CSDA. Solver converges slowly but realibly in linear and mild stall regions, does not converge post stall
         # solver        = NonlinearSolve.SIAMFANLEquationsJL(method = :newton, autodiff=ADTypes.AutoForwardDiff()), # Also robust in linear and mild stall regions, but much faster
@@ -249,6 +249,9 @@ function run_liftingline(;
         cache["ll"][NumType] = ll
     end
 
+    # Set ground distance
+    set_ground!(ll, ground_distance; recalculate_Geff=false)  # false since it will be calculated in remorph anyways
+
     # Morph Lifting Line into its shape
     remorph!(   ll; 
                     geom_optargs...,
@@ -269,11 +272,6 @@ function run_liftingline(;
     # Freestream velocity at each stripwise element
     for U in eachcol(Uinfs)
         U .= Uinf
-    end
-
-    # Set ground distance
-    if isfinite(ground_distance)
-        set_ground!(ll, ground_distance)
     end
 
     # Expose LiftingLine to user for further customization

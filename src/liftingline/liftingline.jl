@@ -95,6 +95,8 @@ struct LiftingLine{ R<:Number,
     residuals::VectorType                       # Non-linear solver residuals
     Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
                                                 # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
+    Geffnowake::TensorType                      # Same than Geff, but without the semi-infinite wake vortices
+
     # Solver settings
     kerneloffset::Float64                       # Kernel offset to avoid singularities
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
@@ -194,6 +196,7 @@ struct LiftingLine{ R<:Number,
         RHS = VectorType(undef, nelements)
         residuals = VectorType(undef, nelements)
         Geff = TensorType(undef, nelements, nelements, 3)
+        Geffnowake = TensorType(undef, nelements, nelements, 3)
         elements_settings = MatrixType(undef, nelements, S.parameters[1]-1)
 
         ground_position = VectorType(undef, 3)
@@ -212,6 +215,7 @@ struct LiftingLine{ R<:Number,
         RHS .= 0
         residuals .= 0
         Geff .= 0
+        Geffnowake .= 0
         elements_settings .= 0
 
         # ------------------ INITIALIZE SOLVER SETTINGS ------------------------
@@ -237,8 +241,6 @@ struct LiftingLine{ R<:Number,
         calc_swepttangents!(swepttangents, lines, tangents, nelements)
         calc_sweptnormals!(sweptnormals, swepttangents, lines, nelements)
 
-        calc_Dinfs!(Dinfs, initial_Uinf, nelements)
-
         calc_effective_horseshoes!(effective_horseshoes, horseshoes, midpoints,
                                                 tangents, spans, 
                                                 ypositions, strippositions, 
@@ -248,13 +250,26 @@ struct LiftingLine{ R<:Number,
                                                 strippositions, nelements,
                                                 normals, chords; deltajoint)
 
+        calc_Dinfs!(Dinfs, initial_Uinf, nelements)
+
+        calc_Geff!(Geffnowake, effective_horseshoes, Dinfs,
+                    midpoints,
+                    swepttangents, lines, sweptnormals,
+                    nelements;
+                    ground_position,
+                    ground_normal,
+                    offset=kerneloffset, cutoff=kernelcutoff,
+                    add_surface=true, add_wake=false)
+
+        Geff .= Geffnowake
         calc_Geff!(Geff, effective_horseshoes, Dinfs,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
                     ground_position,
                     ground_normal,
-                    offset=kerneloffset, cutoff=kernelcutoff)
+                    offset=kerneloffset, cutoff=kernelcutoff,
+                    add_surface=false, add_wake=true)
 
         new{R,
             S, _count(S),
@@ -273,7 +288,7 @@ struct LiftingLine{ R<:Number,
                                 auxtangents,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, 
-                                residuals, Geff,
+                                residuals, Geff, Geffnowake,
                                 kerneloffset, kernelcutoff,
                                 elements_settings
                                 )
@@ -306,14 +321,18 @@ Set the ground plane of the given normal at the requested distance `h` or
 position `position`.
 """
 function set_ground!(self::LiftingLine, 
-                    position::AbstractVector, normal::AbstractVector)
+                    position::AbstractVector, normal::AbstractVector; 
+                    recalculate_Geff=true)
 
     self.ground_position .= position
     self.ground_normal .= normal
 
+    calc_Geff!(self)
+
 end
 
-set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal) = set_ground!(self, -h*normal, normal)
+set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal, 
+                optargs...) = set_ground!(self, -h*normal, normal; optargs...)
 
 """
 Morph the lifting-line wing geometry into a new geometry
@@ -353,14 +372,12 @@ function remorph!(self::LiftingLine, args...;
     calc_lines!(self)
     calc_swepttangents!(self)
     calc_sweptnormals!(self)
-
-    calc_Dinfs!(self, Uinf)
     
     calc_effective_horseshoes!(self; deltasb)
 
     jointerize!(self; deltajoint)
 
-    calc_Geff!(self)
+    calc_Dinfs!(self, Uinf)
 
     # Reset solution
     if reset_solution
@@ -511,13 +528,15 @@ Convert Weissenger VLM horseshoes into Reid's joint horseshoes as explained in
 Reid (2022), "A General Approach to Lifting-Line Theory, Applied to Wings With
 Sweep", Sec. 2.2.3. 
 """
-function jointerize!(self::LiftingLine; optargs...)
+function jointerize!(self::LiftingLine; deltajoint=nothing, optargs...)
 
     jointerize!(self.effective_horseshoes, self.auxtangents, 
                     self.strippositions, self.nelements,
                     self.normals, self.chords; 
-                    deltajoint=self.deltajoint, 
-                    optargs...)
+                    deltajoint=isnothing(deltajoint) ? self.deltajoint : deltajoint)
+
+    # Re-calculate geometric matrix
+    calc_Geff!(self; add_surface=true, add_wake=false, optargs...)
 end
 
 function jointerize!(effective_horseshoes::AbstractArray{<:Number, 4}, 
@@ -644,7 +663,8 @@ function jointerize!(horseshoes::AbstractArray{R, 3}, tangents::AbstractMatrix,
 end
 
 "Rotate joint segments to align with freestream rather than surface"
-function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
+function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix; 
+                                    optargs...)
 
     for ei in 1:ll.nelements                   # Iterate over stripwise elements
 
@@ -654,6 +674,9 @@ function align_joints_with_Uinfs!(ll::LiftingLine, Uinfs::AbstractMatrix)
         # Modify the effective horseshoes to aling joints with freestream
         align_joints_with_Uinfs!(horseshoes, ll.chords, ll.lines, Uinfs, ll.nelements, ll.deltajoint)
     end
+
+    # Re-calculate geometric matrix
+    calc_Geff!(ll; add_surface=true, add_wake=false, optargs...)
 
 end
 
@@ -1182,8 +1205,15 @@ function calc_sweep(horseshoes::AbstractArray,
 end
 
 
-function calc_Dinfs!(self::LiftingLine, Uinfs) 
-    return calc_Dinfs!(self.Dinfs, Uinfs, self.nelements)
+function calc_Dinfs!(self::LiftingLine, Uinfs; optargs...) 
+
+    # Set semi-infinte directions
+    out = calc_Dinfs!(self.Dinfs, Uinfs, self.nelements)
+
+    # Re-calculate geometric matrix
+    calc_Geff!(self; add_surface=false, add_wake=true, optargs...)
+
+    return out
 end
 
 function calc_Dinfs!(Dinfs::AbstractArray, Uinf::AbstractVector, nelements::Int)
@@ -1229,17 +1259,47 @@ by the ei-th effective horseshoe on the mi-th midpoint.
 
 NOTE: this precomputation includes both the surface and wake induced velocity.
 """
-function calc_Geff!(self::LiftingLine; optargs...)
-    calc_Geff!(self.Geff, self.effective_horseshoes, 
-                self.Dinfs,
-                self.midpoints,
-                self.swepttangents, self.lines, self.sweptnormals, 
-                self.nelements; 
-                offset=self.kerneloffset, 
-                cutoff=self.kernelcutoff,
-                ground_position=self.ground_position,
-                ground_normal=self.ground_normal,
-                optargs...)
+function calc_Geff!(self::LiftingLine; add_surface=true, add_wake=true, optargs...)
+
+    # First, compute geometric matrix without the wake, storing it under 
+    # Geffnowake to avoid unnecessary computation if the surface do not changes
+    if add_surface
+
+        # Erase previous computation
+        self.Geffnowake .= 0                            
+        
+        # Compute new surface matrix
+        calc_Geff!(self.Geffnowake, self.effective_horseshoes, 
+                    self.Dinfs,
+                    self.midpoints,
+                    self.swepttangents, self.lines, self.sweptnormals, 
+                    self.nelements; 
+                    offset=self.kerneloffset, 
+                    cutoff=self.kernelcutoff,
+                    ground_position=self.ground_position,
+                    ground_normal=self.ground_normal,
+                    add_surface=true, add_wake=false,
+                    optargs...)
+    end
+
+    # Re-use stored surface matrix
+    self.Geff .= self.Geffnowake
+
+    # Add wake matrix on top of it
+    if add_wake
+
+        calc_Geff!(self.Geff, self.effective_horseshoes, 
+                    self.Dinfs,
+                    self.midpoints,
+                    self.swepttangents, self.lines, self.sweptnormals, 
+                    self.nelements; 
+                    offset=self.kerneloffset, 
+                    cutoff=self.kernelcutoff,
+                    ground_position=self.ground_position,
+                    ground_normal=self.ground_normal,
+                    add_surface=false, add_wake=true,
+                    optargs...)
+    end
 end
 
 function calc_Geff!(Geff::AbstractArray{<:Number, 3}, 
@@ -1264,6 +1324,13 @@ function calc_Geff!(Geff::AbstractArray{<:Number, 3},
     calc_Geff!(view(Geff, :, :, 3), effective_horseshoes, Dinfs, 
                             midpoints, normals, nelements; optargs...)
 
+    # Threads.@threads for (i, unitvector) in ((1, tangents), (2, spans), (3, normals))
+
+    #     calc_Geff!(view(Geff, :, :, i), effective_horseshoes, Dinfs, 
+    #                             midpoints, unitvector, nelements; optargs...)
+
+    # end
+
 end
 
 function calc_Geff!(Geff::AbstractMatrix, 
@@ -1275,9 +1342,9 @@ function calc_Geff!(Geff::AbstractMatrix,
                     ground_distance=Inf, 
                     ground_normal=[0, 0, 1], 
                     ground_position=-ground_distance*ground_normal,
+                    add_surface=true,
+                    add_wake=true,
                     optargs...)
-
-    Geff .= 0                                   # Erase previous values
 
     TE = [1, size(effective_horseshoes, 2)]     # Indices of TE nodes in each horseshoe
 
@@ -1300,37 +1367,42 @@ function calc_Geff!(Geff::AbstractMatrix,
         for ei in 1:nelements               # Iterate over the effective horseshoes seen by this middle point
 
             # Add surface contribution
-            U_vortexring(
-                            view(horseshoes, :, :, ei),   # All nodes in this horseshoe
-                            1:4,                          # Indices of nodes that make this horseshoe (closed ring)
-                            1.0,                          # Unitary strength
-                            ground...,
-                            targets,                      # Midpoint as the target
-                            view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
-                            dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
-                            optargs...
-                            )
+            if add_surface
+                U_vortexring(
+                                view(horseshoes, :, :, ei),   # All nodes in this horseshoe
+                                1:4,                          # Indices of nodes that make this horseshoe (closed ring)
+                                1.0,                          # Unitary strength
+                                ground...,
+                                targets,                      # Midpoint as the target
+                                view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
+                                dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
+                                optargs...
+                                )
+            end
             
             # Add wake contribution
-            da1 = Dinfs[1, 1, ei]
-            da2 = Dinfs[2, 1, ei]
-            da3 = Dinfs[3, 1, ei]
-            db1 = Dinfs[1, 2, ei]
-            db2 = Dinfs[2, 2, ei]
-            db3 = Dinfs[3, 2, ei]
+            if add_wake
 
-            U_semiinfinite_horseshoe(
-                            view(horseshoes, :, :, ei),   # All nodes in this horseshoe
-                            TE,                           # Indices of nodes that make the shedding edge
-                            da1, da2, da3,                # Semi-infinite direction da
-                            db1, db2, db3,                # Semi-infinite direction db
-                            1.0,                          # Unitary strength
-                            ground...,
-                            targets,                      # Midpoint as the target
-                            view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
-                            dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
-                            optargs...
-                            )
+                da1 = Dinfs[1, 1, ei]
+                da2 = Dinfs[2, 1, ei]
+                da3 = Dinfs[3, 1, ei]
+                db1 = Dinfs[1, 2, ei]
+                db2 = Dinfs[2, 2, ei]
+                db3 = Dinfs[3, 2, ei]
+
+                U_semiinfinite_horseshoe(
+                                view(horseshoes, :, :, ei),   # All nodes in this horseshoe
+                                TE,                           # Indices of nodes that make the shedding edge
+                                da1, da2, da3,                # Semi-infinite direction da
+                                db1, db2, db3,                # Semi-infinite direction db
+                                1.0,                          # Unitary strength
+                                ground...,
+                                targets,                      # Midpoint as the target
+                                view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
+                                dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
+                                optargs...
+                                )
+            end
 
         end
 

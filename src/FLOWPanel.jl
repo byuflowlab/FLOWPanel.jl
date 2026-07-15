@@ -28,6 +28,7 @@ import NonlinearSolve
 import SimpleNonlinearSolve
 import ADTypes
 import Requires: @require
+# import Polyester: @batch
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 # GeometricTools from https://github.com/byuflowlab/GeometricTools.jl

@@ -68,20 +68,27 @@ function solve(self::LiftingLine,
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
+
         # jointerize!(self)
         align_joints_with_Uinfs!(self, Uinfs)
-    else
-        jointerize!(self)
+        
+
+    # NOTE: we comment jointerize! out to avoid recomputing Geffnowake every 
+    #       time, but this also means that if align_joints_with_Uinfs! is ever
+    #       called on the lifting line, the joints will stay aligned with Uinf
+    #       afterward
+
+    # else
+    #     jointerize!(self)
+    
     end
+
 
     # Set AOA initial guess
     self.aoas .= aoas_initial_guess
 
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Dinfs)
-
-    # Precompute self-induced velocity geometric matrix
-    calc_Geff!(self; optargs...)
 
     # Generate residual function
     f! = generate_f_residual(self, Uinfs, update_states; 
@@ -122,6 +129,7 @@ function solve(self::LiftingLine,
         gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
         gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
     end
+    
 
     return result, solver_cache
 
