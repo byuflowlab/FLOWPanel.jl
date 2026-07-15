@@ -28,12 +28,14 @@ Base.isless(x::Complex, y::Real) = isless(real(x), y)
 Base.isless(x::Real, y::Complex) = isless(x, real(y))
 Base.isless(x::Complex, y::Complex) = isless(real(x), real(y))
 
-"""
-Override `abs(::Complex)` to be consistent with CSDA instead of the complex 
-norm. This is important in order to get NonLinearSolve to converge the CSDA 
-primal at the same accuracy than Dual.
-"""
-Base.abs(x::Complex) = sqrt(x^2)
+# """
+# Override `abs(::Complex)` to be consistent with CSDA instead of the complex 
+# norm. This is important in order to get NonLinearSolve to converge the CSDA 
+# primal at the same accuracy than Dual.
+# NOTE: This is commented out since it keeps the Julia compiler from 
+#       being able to pre-compile FLOWPanel
+# """
+# Base.abs(x::Complex) = sqrt(x^2)
 
 """
 Wrapper function that generates a lifting line (or morphs an existing one found
