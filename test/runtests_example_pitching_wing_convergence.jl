@@ -40,6 +40,10 @@ end
     root = mktempdir()
     state = _pitchconv_default_state()
     options = (;
+        wake_model=:particle,
+        section_eta=[0.25, 0.475, 0.8, 0.9],
+        baseline_n_span=13,
+        span_values=[26, 52],
         wake_values=[1.0, 2.0],
         dt_values=[0.25, 0.125],
         baseline_c_per_dt=0.5,
@@ -54,6 +58,10 @@ end
     state_path = _pitchconv_save_state(root, state)
     @test isfile(state_path)
     loaded = _pitchconv_load_state(root)
+    @test loaded["wake_model"] == "particle"
+    @test loaded["section_eta"] == options.section_eta
+    @test loaded["baseline_n_span"] == 13
+    @test loaded["span_values"] == options.span_values
     @test loaded["wake_values"] == options.wake_values
     @test loaded["dt_values"] == options.dt_values
     @test_throws ErrorException _pitchconv_initialize_options!(loaded,
@@ -78,7 +86,6 @@ end
         "c_per_dt" => 0.5,
         "wake_length_spans" => 1.0,
     )]
-    estimate = _pitchconv_estimated_seconds(loaded, 4.0, 0.25, 1)
-    @test estimate ≈ 160.0
+    estimate = _pitchconv_estimated_seconds(loaded, 4.0, 0.25, 26, 1)
+    @test estimate ≈ 320.0
 end
-

@@ -26,6 +26,12 @@ function _pitchconv_env_list(name, default)
     return parse.(Float64, strip.(split(raw, ',')))
 end
 
+function _pitchconv_env_int_list(name, default)
+    raw = strip(get(ENV, name, join(default, ",")))
+    isempty(raw) && return Int[]
+    return parse.(Int, strip.(split(raw, ',')))
+end
+
 function _pitchconv_relative_change(a::Real, b::Real)
     return abs(float(a) - float(b)) / max(abs(float(a)), abs(float(b)), eps(Float64))
 end
@@ -126,9 +132,11 @@ function _pitchconv_default_state()
         "stage" => "wake",
         "wake_index" => 1,
         "dt_index" => 1,
+        "span_index" => 1,
         "active_cycles" => 3,
         "accepted_wake" => -1.0,
         "accepted_c_per_dt" => -1.0,
+        "accepted_n_span" => -1,
         "accepted_cycles" => -1,
         "reference_amplitude" => -1.0,
         "reference_frequency" => -1.0,
@@ -162,19 +170,21 @@ function _pitchconv_save_state(root, state)
     return path
 end
 
-function _pitchconv_case_name(wake, c_per_dt)
+function _pitchconv_case_name(wake, c_per_dt; n_span=nothing)
     encode(x) = replace(@sprintf("%.8g", x), "." => "p", "-" => "m")
-    return "wake_$(encode(wake))__c_per_dt_$(encode(c_per_dt))"
+    prefix = isnothing(n_span) ? "" : "n_span_$(Int(n_span))__"
+    return "$(prefix)wake_$(encode(wake))__c_per_dt_$(encode(c_per_dt))"
 end
 
-_pitchconv_case_path(root, wake, c_per_dt) = joinpath(root, "cases",
-    _pitchconv_case_name(wake, c_per_dt))
+_pitchconv_case_path(root, wake, c_per_dt; n_span=nothing) = joinpath(root, "cases",
+    _pitchconv_case_name(wake, c_per_dt; n_span))
 
 function _pitchconv_restart_files(path)
     names = (
         PITCHING_WING_NAME * ".metadata.toml",
         PITCHING_WING_NAME * "_body1.pvd",
         PITCHING_WING_NAME * "_wake1.pvd",
+        PITCHING_WING_NAME * "_wake1_particles.pvd",
         PITCHING_WING_NAME * "_unsteady.csv",
         PITCHING_WING_CONFIG_FILE,
         PITCHING_WING_PRESSURE_STATE_FILE,
@@ -214,10 +224,13 @@ function _pitchconv_prune_case!(path)
         target = joinpath(path, PITCHING_WING_NAME * suffix)
         isdir(target) && rm(target; recursive=true, force=true)
     end
+    particles = joinpath(path, PITCHING_WING_NAME * "_wake1_particles")
+    isdir(particles) && rm(particles; recursive=true, force=true)
     for file in (
             PITCHING_WING_NAME * ".metadata.toml",
             PITCHING_WING_NAME * "_body1.pvd",
             PITCHING_WING_NAME * "_wake1.pvd",
+            PITCHING_WING_NAME * "_wake1_particles.pvd",
             PITCHING_WING_PRESSURE_STATE_FILE)
         rm(joinpath(path, file); force=true)
     end
@@ -231,7 +244,7 @@ end
 
 function _pitchconv_write_summary(root, records)
     path = joinpath(root, "pitching_wing_convergence_summary.csv")
-    columns = ["stage", "wake_length_spans", "c_per_dt", "n_cycles", "cycles_added",
+    columns = ["stage", "wake_length_spans", "c_per_dt", "n_span", "n_cycles", "cycles_added",
         "previous_amplitude", "last_amplitude", "cycle_amplitude_change",
         "previous_frequency_hz", "last_frequency_hz", "cycle_frequency_change",
         "cycle_converged", "reference_amplitude_change", "reference_frequency_change",
@@ -258,7 +271,7 @@ function _pitchconv_seconds_remaining()
     return parse(Int, raw) - time()
 end
 
-function _pitchconv_estimated_seconds(state, wake, c_per_dt, cycles_added)
+function _pitchconv_estimated_seconds(state, wake, c_per_dt, n_span, cycles_added)
     estimates = Float64[]
     for record in state["records"]
         elapsed = float(get(record, "elapsed_seconds", 0.0))
@@ -266,25 +279,28 @@ function _pitchconv_estimated_seconds(state, wake, c_per_dt, cycles_added)
         elapsed > 0 && added > 0 || continue
         dt_scale = float(record["c_per_dt"]) / c_per_dt
         wake_scale = sqrt(max(1.0, wake / float(record["wake_length_spans"])))
-        push!(estimates, elapsed / added * cycles_added * dt_scale * wake_scale)
+        record_n_span = Int(get(record, "n_span", state["baseline_n_span"]))
+        span_scale = max(1.0, n_span / record_n_span)
+        push!(estimates, elapsed / added * cycles_added * dt_scale * wake_scale * span_scale)
     end
     return isempty(estimates) ? nothing : maximum(estimates)
 end
 
-function _pitchconv_has_time(state, wake, c_per_dt, cycles_added; safety_factor, reserve_seconds)
-    estimate = _pitchconv_estimated_seconds(state, wake, c_per_dt, cycles_added)
+function _pitchconv_has_time(state, wake, c_per_dt, n_span, cycles_added; safety_factor, reserve_seconds)
+    estimate = _pitchconv_estimated_seconds(state, wake, c_per_dt, n_span, cycles_added)
     isnothing(estimate) && return (true, estimate, _pitchconv_seconds_remaining())
     remaining = _pitchconv_seconds_remaining()
     return (remaining >= safety_factor * estimate + reserve_seconds, estimate, remaining)
 end
 
-function _pitchconv_run_case!(root, state, wake, c_per_dt, n_cycles, prior_cycles, options)
-    path = _pitchconv_case_path(root, wake, c_per_dt)
+function _pitchconv_run_case!(root, state, wake, c_per_dt, n_span, n_cycles, prior_cycles, options)
+    path = _pitchconv_case_path(root, wake, c_per_dt;
+        n_span=state["stage"] == "span" ? n_span : nothing)
     history_path = joinpath(path, PITCHING_WING_NAME * "_unsteady.csv")
     extending = prior_cycles > 0
     cycles_added = extending ? n_cycles - prior_cycles : n_cycles
 
-    enough, estimate, remaining = _pitchconv_has_time(state, wake, c_per_dt, cycles_added;
+    enough, estimate, remaining = _pitchconv_has_time(state, wake, c_per_dt, n_span, cycles_added;
         safety_factor=options.safety_factor, reserve_seconds=options.reserve_seconds)
     if !enough
         state["status"] = "needs_resubmit"
@@ -305,12 +321,16 @@ function _pitchconv_run_case!(root, state, wake, c_per_dt, n_cycles, prior_cycle
     state["running_prior_cycles"] = prior_cycles
     _pitchconv_save_state(root, state)
 
-    println("\nRunning wake_length_spans=$(wake), c_per_dt=$(c_per_dt), n_cycles=$(n_cycles)")
+    println("\nRunning wake_length_spans=$(wake), c_per_dt=$(c_per_dt), " *
+        "n_span=$(n_span), n_cycles=$(n_cycles)")
     started = time()
     result = run_pitching_wing(;
         path,
+        wake_model=options.wake_model,
         wake_length_spans=wake,
         c_per_dt,
+        n_span,
+        section_eta=options.section_eta,
         n_cycles,
         include_static_polar=false,
         plot_convergence=false,
@@ -332,8 +352,12 @@ function _pitchconv_recover_interrupted!(root, state)
     state["status"] == "running" || return state
     stage = state["stage"]
     wake = stage == "wake" ? state["wake_values"][state["wake_index"]] : state["accepted_wake"]
-    c_per_dt = stage == "wake" ? state["baseline_c_per_dt"] : state["dt_values"][state["dt_index"]]
-    path = _pitchconv_case_path(root, wake, c_per_dt)
+    c_per_dt = stage == "wake" ? state["baseline_c_per_dt"] :
+        stage == "timestep" ? state["dt_values"][state["dt_index"]] : state["accepted_c_per_dt"]
+    n_span = stage == "span" ? state["span_values"][state["span_index"]] :
+        state["baseline_n_span"]
+    path = _pitchconv_case_path(root, wake, c_per_dt;
+        n_span=stage == "span" ? n_span : nothing)
     prior = state["running_prior_cycles"]
     if prior > 0
         _pitchconv_restore_checkpoint!(path) || error(
@@ -352,6 +376,10 @@ end
 
 function _pitchconv_initialize_options!(state, options)
     stored = Dict(
+        "wake_model" => String(options.wake_model),
+        "section_eta" => options.section_eta,
+        "baseline_n_span" => options.baseline_n_span,
+        "span_values" => options.span_values,
         "wake_values" => options.wake_values,
         "dt_values" => options.dt_values,
         "baseline_c_per_dt" => options.baseline_c_per_dt,
@@ -363,6 +391,13 @@ function _pitchconv_initialize_options!(state, options)
     if !haskey(state, "wake_values")
         merge!(state, stored)
     else
+        # Version-1 panel-wake checkpoints predate the explicit model field.
+        get!(state, "wake_model", "panel")
+        get!(state, "section_eta", [0.25, 0.5, 0.75])
+        get!(state, "baseline_n_span", 13)
+        get!(state, "span_values", Int[])
+        get!(state, "span_index", 1)
+        get!(state, "accepted_n_span", -1)
         mismatches = [key for (key, value) in stored if state[key] != value]
         isempty(mismatches) || error("Existing convergence state uses different settings: " * join(mismatches, ", "))
     end
@@ -387,9 +422,12 @@ function _pitchconv_final_report(root, state)
     open(path, "w") do io
         println(io, "FLOWPanel pitching-wing convergence")
         println(io, "status = ", state["status"])
+        println(io, "wake_model = ", state["wake_model"])
+        println(io, "section_eta = ", state["section_eta"])
         println(io, "wake_length_spans = ", state["accepted_wake"])
         println(io, "n_cycles = ", state["accepted_cycles"])
         println(io, "c_per_dt = ", state["accepted_c_per_dt"])
+        println(io, "n_span = ", state["accepted_n_span"])
         println(io, "amplitude_relative_tolerance = ", state["amplitude_tolerance"])
         println(io, "frequency_relative_tolerance = ", state["frequency_tolerance"])
     end
@@ -398,6 +436,10 @@ end
 
 function run_pitching_wing_convergence(;
         root=get(ENV, "PITCHCONV_ROOT", PITCHCONV_DEFAULT_ROOT),
+        wake_model=Symbol(lowercase(get(ENV, "PITCHCONV_WAKE_MODEL", "panel"))),
+        section_eta=_pitchconv_env_list("PITCHCONV_SECTION_ETA", [0.25, 0.5, 0.75]),
+        baseline_n_span=_pitchconv_env_int("PITCHCONV_BASELINE_N_SPAN", 13),
+        span_values=_pitchconv_env_int_list("PITCHCONV_N_SPAN_VALUES", Int[]),
         wake_values=_pitchconv_env_list("PITCHCONV_WAKE_VALUES", [1.0, 2.0, 4.0, 8.0, 16.0]),
         dt_values=_pitchconv_env_list("PITCHCONV_DT_VALUES", [0.25, 0.125, 0.0625, 0.03125]),
         baseline_c_per_dt=_pitchconv_env_float("PITCHCONV_BASELINE_C_PER_DT", 0.5),
@@ -408,17 +450,36 @@ function run_pitching_wing_convergence(;
         safety_factor=_pitchconv_env_float("PITCHCONV_TIME_SAFETY", 1.5),
         reserve_seconds=_pitchconv_env_float("PITCHCONV_TIME_RESERVE_SECONDS", 900.0),
         dry_run=_pitchconv_env_bool("PITCHCONV_DRY_RUN", false))
+    wake_model in (:panel, :particle) || throw(ArgumentError(
+        "wake_model must be :panel or :particle; got $(wake_model)"))
+    isempty(section_eta) && throw(ArgumentError("section_eta cannot be empty"))
+    all(eta -> 0 <= eta <= 1, section_eta) || throw(ArgumentError(
+        "section_eta values must lie in [0, 1]; got $(section_eta)"))
+    baseline_n_span >= 1 || throw(ArgumentError("baseline_n_span must be positive"))
+    all(>=(1), span_values) || throw(ArgumentError("span_values must be positive"))
+    previous_span = baseline_n_span
+    for n_span in span_values
+        n_span == 2previous_span || throw(ArgumentError(
+            "span_values must successively double from baseline_n_span=$(baseline_n_span); " *
+            "expected $(2previous_span), got $(n_span)"))
+        previous_span = n_span
+    end
     isempty(wake_values) && throw(ArgumentError("wake_values cannot be empty"))
     isempty(dt_values) && throw(ArgumentError("dt_values cannot be empty"))
     initial_cycles >= 2 || throw(ArgumentError("initial_cycles must be at least 2"))
     max_cycles >= initial_cycles || throw(ArgumentError("max_cycles must be >= initial_cycles"))
-    options = (; wake_values=collect(float.(wake_values)), dt_values=collect(float.(dt_values)),
+    options = (; wake_model, section_eta=collect(float.(section_eta)), baseline_n_span,
+        span_values=collect(Int.(span_values)), wake_values=collect(float.(wake_values)),
+        dt_values=collect(float.(dt_values)),
         baseline_c_per_dt=float(baseline_c_per_dt), initial_cycles, max_cycles,
         amplitude_tolerance=float(amplitude_tolerance), frequency_tolerance=float(frequency_tolerance),
         safety_factor=float(safety_factor), reserve_seconds=float(reserve_seconds))
 
     if dry_run
         println("Pitching-wing convergence dry run")
+        println("  wake model: $(wake_model)")
+        println("  section eta: $(section_eta)")
+        println("  span stage: baseline=$(baseline_n_span), refinements=$(span_values)")
         println("  wake stage: c_per_dt=$(baseline_c_per_dt), wake_length_spans=$(wake_values), cycles=$(initial_cycles):$(max_cycles)")
         println("  timestep stage: c_per_dt=$(dt_values), cycles up to $(max_cycles)")
         println("  tolerances: amplitude=$(amplitude_tolerance), frequency=$(frequency_tolerance)")
@@ -431,14 +492,19 @@ function run_pitching_wing_convergence(;
     _pitchconv_recover_interrupted!(root, state)
     _pitchconv_save_state(root, state)
 
-    while state["stage"] in ("wake", "timestep")
+    while state["stage"] in ("wake", "timestep", "span")
         stage = state["stage"]
         wake = stage == "wake" ? options.wake_values[state["wake_index"]] : state["accepted_wake"]
-        c_per_dt = stage == "wake" ? options.baseline_c_per_dt : options.dt_values[state["dt_index"]]
+        c_per_dt = stage == "wake" ? options.baseline_c_per_dt :
+            stage == "timestep" ? options.dt_values[state["dt_index"]] : state["accepted_c_per_dt"]
+        n_span = stage == "span" ? options.span_values[state["span_index"]] :
+            options.baseline_n_span
         n_cycles = state["active_cycles"]
-        path = _pitchconv_case_path(root, wake, c_per_dt)
+        path = _pitchconv_case_path(root, wake, c_per_dt;
+            n_span=stage == "span" ? n_span : nothing)
         prior_cycles = isfile(joinpath(path, PITCHING_WING_NAME * "_unsteady.csv")) ? n_cycles - 1 : 0
-        run = _pitchconv_run_case!(root, state, wake, c_per_dt, n_cycles, prior_cycles, options)
+        run = _pitchconv_run_case!(root, state, wake, c_per_dt, n_span, n_cycles,
+            prior_cycles, options)
         isnothing(run) && return state
 
         analysis = _pitchconv_analyze_history(run.history_path, run.period, n_cycles;
@@ -449,6 +515,7 @@ function run_pitching_wing_convergence(;
             "stage" => stage,
             "wake_length_spans" => wake,
             "c_per_dt" => c_per_dt,
+            "n_span" => n_span,
             "n_cycles" => n_cycles,
             "cycles_added" => run.cycles_added,
             "previous_amplitude" => analysis.previous.amplitude,
@@ -511,8 +578,24 @@ function run_pitching_wing_convergence(;
             state["stage"] = "timestep"
             state["dt_index"] = 1
             state["active_cycles"] = n_cycles
+        elseif stage == "timestep" && comparison.converged && isempty(options.span_values)
+            state["accepted_c_per_dt"] = c_per_dt
+            state["accepted_n_span"] = options.baseline_n_span
+            state["accepted_cycles"] = n_cycles
+            state["stage"] = "complete"
+            state["status"] = "converged"
         elseif stage == "timestep" && comparison.converged
             state["accepted_c_per_dt"] = c_per_dt
+            state["accepted_n_span"] = options.baseline_n_span
+            state["accepted_cycles"] = n_cycles
+            state["reference_amplitude"] = analysis.last.amplitude
+            state["reference_frequency"] = analysis.last.frequency
+            state["reference_path"] = run.path
+            state["stage"] = "span"
+            state["span_index"] = 1
+            state["active_cycles"] = n_cycles
+        elseif stage == "span" && comparison.converged
+            state["accepted_n_span"] = n_span
             state["accepted_cycles"] = n_cycles
             state["stage"] = "complete"
             state["status"] = "converged"
@@ -527,12 +610,19 @@ function run_pitching_wing_convergence(;
                     state["stage"] = "failed"
                     state["status"] = "inconclusive_wake_convergence"
                 end
-            else
+            elseif stage == "timestep"
                 state["dt_index"] += 1
                 state["active_cycles"] = n_cycles
                 if state["dt_index"] > length(options.dt_values)
                     state["stage"] = "failed"
                     state["status"] = "inconclusive_timestep_convergence"
+                end
+            else
+                state["span_index"] += 1
+                state["active_cycles"] = n_cycles
+                if state["span_index"] > length(options.span_values)
+                    state["stage"] = "failed"
+                    state["status"] = "inconclusive_span_convergence"
                 end
             end
         end
