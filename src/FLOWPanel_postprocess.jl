@@ -1616,7 +1616,8 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
                         Fs::AbstractMatrix,
                         Lhat::AbstractVector, Dhat::AbstractVector,
                         Shat::AbstractVector;
-                        addfield=true)
+                        addfield=true,
+                        field_suffix="")
     # Error case
     @assert size(out, 1)==3 && size(out, 2)==3 ""*
         "Invalid `out` matrix. Expected size $((3, 3)); got $(size(out))."
@@ -1643,9 +1644,9 @@ function calcfield_LDS!(out::AbstractMatrix, body::AbstractBody,
 
     # Save field in body
     if addfield
-        add_field(body, "L", "vector", view(out, :, 1), "system")
-        add_field(body, "D", "vector", view(out, :, 2), "system")
-        add_field(body, "S", "vector", view(out, :, 3), "system")
+        add_field(body, "L"*field_suffix, "vector", view(out, :, 1), "system")
+        add_field(body, "D"*field_suffix, "vector", view(out, :, 2), "system")
+        add_field(body, "S"*field_suffix, "vector", view(out, :, 3), "system")
     end
 
     return out

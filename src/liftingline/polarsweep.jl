@@ -289,6 +289,7 @@ function run_polarsweep(liftingline::LiftingLine,
         # Compare database and getters
         fig = plt.figure(figsize = [7*2, 0.75*5*2]*2/3)
         axs = fig.subplots(2, 2)
+        axs = pyconvert(Array, axs)
 
         axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
         

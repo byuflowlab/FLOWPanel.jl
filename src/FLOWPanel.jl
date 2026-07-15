@@ -24,7 +24,9 @@ import Dierckx
 import LinearAlgebra as LA
 import LinearAlgebra: I
 import Krylov
+import NonlinearSolve
 import SimpleNonlinearSolve
+import ADTypes
 import Requires: @require
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
@@ -76,12 +78,12 @@ end
 
 function __init__()
 
-    # Conditionally load monitors if PyPlot is available
+    # Conditionally load monitors if PythonPlot is available
     try
-        @require PyPlot="d330b81b-6aea-500a-939a-2ce795aea3ee" begin
+        @require PythonPlot="274fc56d-3b97-40fa-a1cd-1b4a50311bf9" begin
 
-            import .PyPlot as plt
-            # import .PyPlot: @L_str
+            import .PythonPlot as plt
+            import .PythonPlot: pyconvert
 
             for header_name in ["monitor"]
               include("FLOWPanel_"*header_name*".jl")
@@ -90,7 +92,7 @@ function __init__()
         end
 
     catch e
-        @warn "PyPlot is not available; monitors will not be loaded"
+        @warn "PythonPlot is not available; monitors will not be loaded"
     end
 
 

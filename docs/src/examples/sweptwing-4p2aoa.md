@@ -25,7 +25,7 @@ angle of attack of $4.2^\circ$ using a rigid wake model.
 =###############################################################################
 
 import FLOWPanel as pnl
-import PyPlot as plt
+import PythonPlot as plt
 
 run_name        = "sweptwing000"                # Name of this run
 

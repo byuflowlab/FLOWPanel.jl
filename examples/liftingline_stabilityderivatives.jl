@@ -17,8 +17,8 @@ import ForwardDiff: Dual, Partials, value, partials
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import PyPlot as plt
-import PyPlot: @L_str
+import PythonPlot as plt
+import PythonPlot: @L_str
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 import CSV
@@ -145,7 +145,7 @@ Dhat            = pnl.direction(; alpha)        # Drag direction
 Shat            = [0, 1, 0]                     # Span direction
 Lhat            = cross(Dhat, Shat)             # Lift direction
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
+X0              = [-0.25 * chord_distribution[1, 2]*b, 0, 0] # Center about which to calculate moments
 lhat            = Dhat                          # Rolling direction
 mhat            = Shat                          # Pitching direction
 nhat            = Lhat                          # Yawing direction

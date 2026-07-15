@@ -10,6 +10,16 @@
 =###############################################################################
 
 
+#=
+TODO
+* [ ] Refactor nonlinear solver to be compatible with ImplictAD (that would 
+        allow us to use more solvers since then Duals wouldn't be passing
+        through the nonlinear solver, while also speeding up derivative calcs).
+        You might also need to rework stability derivatives to be compatible
+        Python code in the AD chain of ImplicitAD.
+=#
+
+
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################
@@ -31,11 +41,16 @@ struct LiftingLine{ R<:Number,
 
     nelements::Int                              # Number of stripwise elements
     elements::Vector{S}                         # Stripwise elements
+    root_i::Int                                 # Index of root element
 
     deltasb::Float64                            # Blending distance, deltasb = 2*dy/b
     deltajoint::Float64                         # Joint distance, deltajoint = dx/c
     sigmafactor::Float64                        # Dragging line amplification factor
     sigmaexponent::Float64                      # Dragging line amplification exponent
+
+    # Ground plane
+    ground_position::VectorType                 # Ground plane origin
+    ground_normal::VectorType                   # Ground normal
 
     # Pre-allocated memory for solver
     aerocenters::VectorType                     # Aerodynamic center of each stripwise element
@@ -101,7 +116,7 @@ struct LiftingLine{ R<:Number,
                             sigmaexponent=1.0,
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
-                            kernelcutoff=1e-14,
+                            kernelcutoff=1e-9,   # <- Finite difference would get tripped by anything smaller than this
                             arraytype::Type=Array,
                             plots=nothing,
                             optargs...
@@ -116,7 +131,7 @@ struct LiftingLine{ R<:Number,
         # ------------------ DISCRETIZE WING -----------------------------------
         (; b, ypositions, chords, twists, 
         sweeps, dihedrals, spanaxiss, 
-        symmetric) = _discretize_wing_parameterization(args...; plots, optargs...)
+        symmetric, root_i) = _discretize_wing_parameterization(args...; plots, optargs...)
 
         # ------------------ PREALLOCATE GRID MEMORY ---------------------------
         P_min = [0, 0, 0]               # Lower boundary span, chord, dummy
@@ -131,9 +146,10 @@ struct LiftingLine{ R<:Number,
         linearindices = LinearIndices(grid._ndivsnodes)
         
         # ------------------ MORPH GRID INTO WING GEOMETRY ---------------------
-        _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
+        _morph_grid_wing!(grid, b, ypositions, chords, 
+                                            twists, sweeps, dihedrals, 
                                             spanaxiss, symmetric, linearindices; 
-                                            center=true)
+                                            center=true, root_i)
 
         # ------------------ GENERATE STRIPWISE ELEMENTS -----------------------
         ypositions_elements = (ypositions[2:end] + ypositions[1:end-1]) / 2
@@ -179,6 +195,13 @@ struct LiftingLine{ R<:Number,
         residuals = VectorType(undef, nelements)
         Geff = TensorType(undef, nelements, nelements, 3)
         elements_settings = MatrixType(undef, nelements, S.parameters[1]-1)
+
+        ground_position = VectorType(undef, 3)
+        ground_normal = VectorType(undef, 3)
+
+        ground_position .= -Inf
+        ground_normal .= 0
+        ground_normal[3] = 1
 
         aoas .= 0
         claeros .= 0
@@ -229,6 +252,8 @@ struct LiftingLine{ R<:Number,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
+                    ground_position,
+                    ground_normal,
                     offset=kerneloffset, cutoff=kernelcutoff)
 
         new{R,
@@ -237,8 +262,9 @@ struct LiftingLine{ R<:Number,
             typeof(linearindices)}(
                                 grid, linearindices, String[],
                                 ypositions, 
-                                nelements, elements,
+                                nelements, elements, root_i,
                                 deltasb, deltajoint, sigmafactor, sigmaexponent,
+                                ground_position, ground_normal,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
                                 midpoints, controlpoints, 
@@ -270,16 +296,36 @@ function Base.show(io::IO, self::LiftingLine{R, S, N}) where {R, S, N}
 
 end
 
+
+"""
+    set_ground!(self::LiftingLine, position::AbstractVector, normal::AbstractVector)
+
+    set_ground!(self::LiftingLine, h::Number, normal::AbstractVector)
+
+Set the ground plane of the given normal at the requested distance `h` or 
+position `position`.
+"""
+function set_ground!(self::LiftingLine, 
+                    position::AbstractVector, normal::AbstractVector)
+
+    self.ground_position .= position
+    self.ground_normal .= normal
+
+end
+
+set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal) = set_ground!(self, -h*normal, normal)
+
 """
 Morph the lifting-line wing geometry into a new geometry
 """
 function remorph!(self::LiftingLine, args...; 
-                    recenter=false, 
+                    center=true,
                     aerodynamic_centers=1/4,
                     controlpoint_positions=3/4, 
                     Uinf=[1, 0, 0],
                     deltasb=self.deltasb,
                     deltajoint=self.deltajoint,
+                    reset_solution=true,
                     optargs...)
 
     # Discretize parameterization
@@ -288,7 +334,8 @@ function remorph!(self::LiftingLine, args...;
 
     # Morph existing wing geometry into the new geometry
     _morph_grid_wing!(self.grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric, self.linearindices; center=recenter)
+                            spanaxiss, symmetric, self.linearindices; 
+                            center, root_i=self.root_i)
 
     # Update horseshoe geometries
     self.aerocenters .= aerodynamic_centers
@@ -316,11 +363,13 @@ function remorph!(self::LiftingLine, args...;
     calc_Geff!(self)
 
     # Reset solution
-    self.aoas .= 0
-    self.claeros .= 0
-    self.Gammas .= 0
-    self.sigmas .= 0
-    self.Us .= 0
+    if reset_solution
+        self.aoas .= 0
+        self.claeros .= 0
+        self.Gammas .= 0
+        self.sigmas .= 0
+        self.Us .= 0
+    end
 
     return nothing
 end
@@ -1188,6 +1237,8 @@ function calc_Geff!(self::LiftingLine; optargs...)
                 self.nelements; 
                 offset=self.kerneloffset, 
                 cutoff=self.kernelcutoff,
+                ground_position=self.ground_position,
+                ground_normal=self.ground_normal,
                 optargs...)
 end
 
@@ -1221,11 +1272,21 @@ function calc_Geff!(Geff::AbstractMatrix,
                     midpoints::AbstractMatrix,
                     dot_with::AbstractMatrix, 
                     nelements::Int;
+                    ground_distance=Inf, 
+                    ground_normal=[0, 0, 1], 
+                    ground_position=-ground_distance*ground_normal,
                     optargs...)
 
     Geff .= 0                                   # Erase previous values
 
     TE = [1, size(effective_horseshoes, 2)]     # Indices of TE nodes in each horseshoe
+
+    # Ground plane arguments
+    if isfinite(norm(ground_position))
+        ground = (ground_position..., ground_normal...)
+    else
+        ground = ()
+    end
 
     # Build geometric matrix from panel contributions
     Threads.@threads for mi in 1:nelements                         # Iterate over midpoints (iterations distributed among all CPU threads)
@@ -1243,6 +1304,7 @@ function calc_Geff!(Geff::AbstractMatrix,
                             view(horseshoes, :, :, ei),   # All nodes in this horseshoe
                             1:4,                          # Indices of nodes that make this horseshoe (closed ring)
                             1.0,                          # Unitary strength
+                            ground...,
                             targets,                      # Midpoint as the target
                             view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
                             dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
@@ -1263,6 +1325,7 @@ function calc_Geff!(Geff::AbstractMatrix,
                             da1, da2, da3,                # Semi-infinite direction da
                             db1, db2, db3,                # Semi-infinite direction db
                             1.0,                          # Unitary strength
+                            ground...,
                             targets,                      # Midpoint as the target
                             view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
                             dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint
@@ -1367,7 +1430,16 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                     targets::AbstractMatrix, out::AbstractMatrix; 
                     horseshoes::AbstractArray=self.horseshoes,
                     add_boundvortices=true,
+                    ground_normal=self.ground_normal, 
+                    ground_position=self.ground_position,
                     optargs...)
+
+    # Ground plane arguments
+    if isfinite(norm(ground_position))
+        ground = (ground_position..., ground_normal...)
+    else
+        ground = ()
+    end
 
     if add_boundvortices
 
@@ -1379,6 +1451,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                                 view(horseshoes, :, :, ei),        # All nodes
                                 1:4,                               # Indices of nodes that make this panel (closed ring)
                                 Gammas[ei],                        # Horseshoe circulation
+                                ground...,
                                 targets,                           # Targets
                                 out;                               # Outputs
                                 offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -1407,6 +1480,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                           da1, da2, da3,                     # Semi-infinite direction da
                           db1, db2, db3,                     # Semi-infinite direction db
                           Gammas[ei],                        # Filament circulation
+                          ground...,
                           targets,                           # Targets
                           out;                               # Outputs
                           offset=self.kerneloffset,          # Offset of kernel to avoid singularities
@@ -1466,6 +1540,9 @@ function _discretize_wing_parameterization(;
     dihedrals = interpolation(dihedral_distribution[:, 1], dihedral_distribution[:, 2], ypositions)
     spanaxiss = interpolation(spanaxis_distribution[:, 1], spanaxis_distribution[:, 2], ypositions)
 
+    # Index of root section
+    root_i = 1
+
     # Mirror the wing if symmetric
     if symmetric
         @assert minimum(ypositions) >= 0 ""*
@@ -1479,6 +1556,8 @@ function _discretize_wing_parameterization(;
         sweeps = vcat(-reverse(sweeps[rng]), sweeps)
         dihedrals = vcat(-reverse(dihedrals[rng]), dihedrals)
         spanaxiss = vcat(reverse(spanaxiss[rng]), spanaxiss)
+
+        root_i += length(rng)
     end
 
 
@@ -1487,6 +1566,7 @@ function _discretize_wing_parameterization(;
 
         fig = plt.figure(figsize = [7*2, 0.5*5*3]*7/9)
         axs = fig.subplots(3, 2)
+        axs = pyconvert(Array, axs)
         axs = permutedims(axs, (2, 1))
 
         stl_inp = "o"
@@ -1528,11 +1608,13 @@ function _discretize_wing_parameterization(;
         end
     end
 
-    return (; b, ypositions, chords, twists, sweeps, dihedrals, spanaxiss, symmetric)
+    return (; b, ypositions, chords, twists, sweeps, dihedrals, spanaxiss, 
+                symmetric, root_i)
 end
 
 function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedrals, 
-                            spanaxiss, symmetric, linearindices; center=false)
+                            spanaxiss, symmetric, linearindices; 
+                            center=true, root_i=1)
 
     @assert grid._ndivsnodes[1] == length(ypositions) ""*
         "Invalid grid! Received grid of $(grid._ndivsnodes[1]) spanwise nodes,"*
@@ -1543,6 +1625,8 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
     ypos_prev = ypositions[1]
     x0_prev, y0_prev, z0_prev = 0, ypos_prev*(b/2), 0
     sweep_prev, dihedral_prev = 0, 0
+
+    xroot, yroot, zroot = 0.0, 0.0, 0.0
 
     for (i, (ypos, cob, twist, sweep, dihedral, xoc)) in enumerate(zip(
                                                                 ypositions, chords, twists, sweeps, dihedrals, spanaxiss
@@ -1578,6 +1662,12 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
         grid.nodes[2, iTE] = yTE
         grid.nodes[3, iTE] = zTE
 
+        if i==root_i
+            xroot = x0
+            yroot = y0
+            zroot = z0
+        end
+
         ypos_prev = ypos
         x0_prev = x0
         y0_prev = y0
@@ -1587,24 +1677,19 @@ function _morph_grid_wing!(grid, b, ypositions, chords, twists, sweeps, dihedral
 
     end
 
-    # Center the wing nose on the origin
+    # Center the wing root on the origin
     if center
-        xorigin = minimum(view(grid.nodes, 1, :))
-        yorigin = (minimum(view(grid.nodes, 2, :)) + maximum(view(grid.nodes, 2, :))) / 2
-        zorigin = grid.nodes[3, findmin(view(grid.nodes, 1, :))[2]]
-
-        grid.nodes[1, :] .-= xorigin
-        grid.nodes[2, :] .-= yorigin
-        grid.nodes[3, :] .-= zorigin
+        grid.nodes[1, :] .-= xroot
+        grid.nodes[2, :] .-= yroot
+        grid.nodes[3, :] .-= zroot
     end
-
-    return nothing
 
 end
 
 function _generate_stripwise_elements(airfoil_distribution, ypositions, 
                                         symmetric::Bool; 
                                         extrapolatepolar=true, plot_polars=true, 
+                                        slice=nothing, slice_alphas=range(-40, 40, step=1),
                                         verbose=true,
                                         plots=nothing,
                                         optargs...)
@@ -1691,7 +1776,9 @@ function _generate_stripwise_elements(airfoil_distribution, ypositions,
     if plot_polars
         these_figs = _plot_polars(airfoils, 
                                     airfoils_extrapolated, airfoils_blended; 
-                                    plot_extrapolated=extrapolatepolar)
+                                    plot_extrapolated=extrapolatepolar,
+                                    symmetric,
+                                    slice, slice_alphas)
 
         if !isnothing(plots)
             for (fig, axs) in these_figs
@@ -1719,7 +1806,13 @@ function _read_polars(airfoil_distribution; optargs...)
 end
 
 function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
-                                                    plot_extrapolated=true)
+                                        plot_extrapolated=true, symmetric=true,
+                                        claero=true,
+                                        slice=nothing, slice_alphas=range(-40, 40, step=1)
+                                        )
+
+    fun_cl = calc_cl
+    fun_claero = calc_claero
 
     stl_org = ""
     stl_extrap = "-"
@@ -1727,12 +1820,13 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
 
     fmt_org = (; marker=".", alpha=0.5)
     fmt_extrap = (; linewidth=1, alpha=0.5)
-    fmt_blnd = (; linewidth=1, alpha=0.25)
+    fmt_blnd = (; linewidth=1, alpha=0.5)
 
     if plot_extrapolated
         # Compare raw vs extrapolated
-        fig1 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
-        axs1 = fig1.subplots(3, 1)
+        fig1 = plt.figure(figsize = [7, 0.75*5*4]*7/9 )
+        axs1 = fig1.subplots(4, 1)
+        axs1 = pyconvert(Array, axs1)
 
         fig = fig1
         axs = axs1
@@ -1744,10 +1838,14 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
             stl = stl_org
             fmt = fmt_org
 
-            axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-            axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-            axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [fun_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.claero, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+                axs[2].plot([airfoil.alpha0], [fun_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+                axs[4].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+            end
 
         end
 
@@ -1757,20 +1855,30 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
             stl = stl_extrap
             fmt = fmt_extrap
 
-            axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
-            axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-            axs[2].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
-            axs[3].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [fun_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.claero, stl; color=clr, fmt...)
+                axs[2].plot([airfoil.alpha0], [fun_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cd, stl; color=clr, fmt...)
+                axs[4].plot(airfoil.alpha, airfoil.cm, stl; color=clr, fmt...)
+            else
+                plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, color=clr, claero, fmt...)
+                axs[1].plot([airfoil.alpha0], [fun_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+            end
 
         end
 
         ax = axs[1]
-        ax.set_ylabel(L"Lift $c_\ell$")
+        ax.set_ylabel(L"Lift $c_{\ell}$")
 
         ax = axs[2]
-        ax.set_ylabel(L"Drag $c_d$")
+        ax.set_ylabel(L"Lift $c_{\ell_\mathrm{aero}}$")
 
         ax = axs[3]
+        ax.set_ylabel(L"Drag $c_d$")
+
+        ax = axs[4]
         ax.set_ylabel(L"Pitching moment $c_m$")
 
         for ax in axs
@@ -1784,33 +1892,55 @@ function _plot_polars(airfoils, airfoils_extrapolated, airfoils_blended;
     end
 
     # Compare blends
-    fig2 = plt.figure(figsize = [7, 0.75*5*3]*7/9 )
-    axs2 = fig2.subplots(3, 1)
+    fig2 = plt.figure(figsize = [7, 0.75*5*4]*7/9 )
+    axs2 = fig2.subplots(4, 1)
+    axs2 = pyconvert(Array, axs2)
 
     fig = fig2
     axs = axs2
     fig.suptitle("Blending comparison")
 
-    for (ypos, airfoil) in airfoils_blended
-        
-        clr = plt.cm.gnuplot(0.9*ypos)
-        stl = stl_blnd
-        fmt = fmt_blnd
+    for (ai, (ypos, airfoil)) in enumerate(airfoils_blended)
 
-        axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[1].plot([airfoil.alpha0], [calc_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
-        axs[2].plot(airfoil.alpha, airfoil.cd, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
-        axs[3].plot(airfoil.alpha, airfoil.cm, stl; label=L"$2y/b = $"*"$(ypos)", color=clr, fmt...)
+        if !symmetric || ypos>=0
+        
+            # clr = plt.cm.gnuplot(symmetric ? 0.9*ypos : 0.9*(ypos+1)/2)
+            clr = plt.cm.berlin(symmetric ? 0.9*ypos : 0.9*(ypos+1)/2)
+            stl = stl_blnd
+            fmt = fmt_blnd
+            if symmetric
+                lbl = (L"$2y/b = $"*"$(ypos)")^(ai==length(airfoils_blended) || ai==round(length(airfoils_blended)/2 + 1) || ai==round(length(airfoils_blended)*3/4))
+            else
+                lbl = (L"$2y/b = $"*"$(ypos)")^(ai==1 || ai==length(airfoils_blended) || ai==round(length(airfoils_blended)/2))
+            end
+
+            if isnothing(slice)
+                axs[1].plot(airfoil.alpha, airfoil.cl, stl; label=lbl, color=clr, fmt...)
+                axs[1].plot([airfoil.alpha0], [fun_cl(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[2].plot(airfoil.alpha, airfoil.claero, stl; label=lbl, color=clr, fmt...)
+                axs[2].plot([airfoil.alpha0], [fun_claero(airfoil, airfoil.alpha0)], "*"; color=clr, fmt...)
+                axs[3].plot(airfoil.alpha, airfoil.cd, stl; label=lbl, color=clr, fmt...)
+                axs[4].plot(airfoil.alpha, airfoil.cm, stl; label=lbl, color=clr, fmt...)
+            else
+                plot_slice(airfoil, slice_alphas, slice; fig, axs, stl, label=lbl, color=clr, claero, fmt...)
+                axs[1].plot([airfoil.alpha0], [fun_cl(airfoil, airfoil.alpha0, slice...)], "*"; color=clr, fmt...)
+            end
+            
+        end
+
 
     end
 
     ax = axs[1]
-    ax.set_ylabel(L"Lift $c_\ell$")
+    ax.set_ylabel(L"Lift $c_{\ell}$")
 
     ax = axs[2]
-    ax.set_ylabel(L"Drag $c_d$")
+    ax.set_ylabel(L"Lift $c_{\ell_\mathrm{aero}}$")
 
     ax = axs[3]
+    ax.set_ylabel(L"Drag $c_d$")
+
+    ax = axs[4]
     ax.set_ylabel(L"Pitching moment $c_m$")
 
     for ax in axs

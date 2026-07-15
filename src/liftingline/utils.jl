@@ -9,7 +9,6 @@
   * License     : MIT License
 =###############################################################################
 
-
 function calc_area(ll::LiftingLine{R}) where {R}
 
     nodes = ll.grid.nodes
@@ -37,24 +36,9 @@ function calc_noseposition(ll::LiftingLine)
     nodes = ll.grid.nodes
     lin = ll.linearindices
 
-    if ll.nelements % 2 == 0
+    # LE on b-side of root element
+    return nodes[:, lin[ll.root_i, 2]] 
 
-        # Nose element
-        ei1 = ceil(Int, ll.nelements / 2)
-        ei2 = ceil(Int, ll.nelements / 2) + 1
-
-        # Average of a and b LE
-        return (nodes[:, lin[ei1, 2]] .+ nodes[:, lin[ei1+1, 2]]
-                + nodes[:, lin[ei2, 2]] .+ nodes[:, lin[ei2+1, 2]]) / 4
-
-    else
-
-        # Nose element
-        ei = Int(ll.nelements/2)
-        
-        # LE on b-side
-        return nodes[:, lin[ei+1, 2]] 
-    end
 end
 
 
@@ -296,7 +280,33 @@ function save(self::LiftingLine{R}, filename::AbstractString;
                                 point_data=controlpoints_data, optargs...)
 
     #  ------------- OUTPUT PLANAR GEOMETRY ------------------------------------
-    if !(R <: FD.Dual)
+    if R <: FD.Dual
+
+        # Fetch original Dual data
+        nodes_org = self.grid.nodes
+        fields_org = Dict(field_name => field["field_data"] for (field_name, field) in self.grid.field)
+
+        # Replace Dual data with Real data
+        self.grid.nodes = value(nodes_org)
+
+        for (field_name, field_data) in fields_org
+
+            field_type = self.grid.field[field_name]["field_type"]
+            self.grid.field[field_name]["field_data"] = field_type == "vector" ? value.(field_data) : value(field_data)
+
+        end
+
+        # Save grid with Real data
+        str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
+
+        # Restore Dual data
+        self.grid.nodes = nodes_org
+
+        for (field_name, field_data) in fields_org
+            self.grid.field[field_name]["field_data"] = field_data
+        end
+
+    else
         str *= gt.save(self.grid, filename*planar_suffix; format, optargs...)
     end
 

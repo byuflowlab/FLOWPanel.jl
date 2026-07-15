@@ -18,8 +18,8 @@
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import PyPlot as plt
-import PyPlot: @L_str
+import PythonPlot as plt
+import PythonPlot: @L_str, pyconvert
 include(joinpath(pnl.examples_path, "plotformat.jl"))
 
 import CSV
@@ -112,8 +112,8 @@ sigmafactor     = 0.0                           # Dragging line amplification fa
 sigmaexponent   = 4.0                           # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
 
                                                 # Nonlinear solver
-solver          = pnl.SimpleNonlinearSolve.SimpleDFSane()              # Indifferent to initial guess, but somewhat not robust
-# solver        = pnl.SimpleNonlinearSolve.SimpleTrustRegion()         # Trust region needs a good initial guess, but it converges very reliably
+solver          = pnl.analysis_solver           # Very robust and physically accurate, but it can take a long time post-stall (not AD compatible)
+# solver        = pnl.optimization_solver       # Robus, fast, and ForwardDiff compatible, but often times it returns the secondary solution that is unphysical post stall
 
 solver_optargs  = (; 
                     abstol = 1e-9,  
@@ -125,7 +125,7 @@ align_joints_with_Uinfs = false                 # Whether to align joint bound v
 use_Uind_for_force = true                       # Whether to use Uind as opposed to selfUind for force postprocessing
                                                 # (`true` for more accurate spanwise cd distribution, but worse integrated CD)
 
-X0              = [0.0 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
+X0              = [-0.25 * chord_distribution[1, 2]*b, 0, 0] # (m) center about which to calculate moments
 cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
 
@@ -298,6 +298,7 @@ cds = cd
 
 fig = plt.figure(figsize = [7*2, 0.75*5]*2/3 )
 axs = fig.subplots(1, 2)
+axs = pyconvert(Array, axs)
 
 ax = axs[1]
 
@@ -511,6 +512,7 @@ function plot_distribution(distributions, sweep1; suffix="loading")
 
     fig = plt.figure(figsize=[7*2, 5*1*0.8]*2/3)
     axs = fig.subplots(1, 2)
+    axs = pyconvert(Array, axs)
 
     ypos = distributions[1].spanposition
     aoas = [aoa for (aoa, cl) in zip(distributions[1].AOA, distributions[1].cl) if aoa in sweep1]
@@ -579,8 +581,8 @@ function plot_distribution(distributions, sweep1; suffix="loading")
 
             ax.annotate("", [0.4, 0.0145], xycoords="data",
                         xytext=[0.5, 0.035], textcoords="data",
-                        arrowprops=Dict(:facecolor=>"black", :linewidth=>0, :alpha=>0.4,
-                                        :shrink=>0, :width=>1.0, :headwidth=>5.0, :headlength=>7))
+                        arrowprops=Dict("facecolor"=>"black", "linewidth"=>0, "alpha"=>0.4,
+                                        "shrink"=>0, "width"=>1.0, "headwidth"=>5.0, "headlength"=>7))
         end
 
         ax.spines["right"].set_visible(false)
@@ -637,6 +639,7 @@ function plot_polars(wingpolar; suffix="CLCDCm",
 
     fig = plt.figure(figsize=[7*2, 5*2*0.75]*2/3)
     axs = fig.subplots(2, 2)
+    axs = pyconvert(Array, axs)
 
     axs = [axs[j, i] for i in 1:size(axs, 1), j in 1:size(axs, 2)]
 
