@@ -1,6 +1,14 @@
 # Pressure Poisson Solve From the Euler Equation
 
-> **2026-07-11 revision.** The reviewed current design is
+> **2026-07-15 revision.** Gradient-based material-acceleration modes now use
+> the conservative shared-edge flux `ρ ℓ a_avg·ν`, and node-backed surface
+> velocity gradients use paired-quad reconstruction with trailing-edge
+> barriers. `:corrected_hessian` is diagnostic only: a mathematically defined
+> exterior hypersingular panel limit is not implemented. Pressure CG output
+> includes absolute and relative residuals and warns on capped, unconverged
+> solves; such samples must be excluded from validation summaries.
+>
+> The reviewed design background is
 > [`theory/unsteady_pressure_monitors_2026-07-11.md`](../theory/unsteady_pressure_monitors_2026-07-11.md).
 > It supersedes historical statements below about a first-step spike, adding
 > `[Ω]×` to `body.velocity_gradient`, raw-Hessian defaults, and uncorrected edge

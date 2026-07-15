@@ -161,6 +161,18 @@ job, and set explicit output/error paths if job logs should be kept with a run.
 Slurm opens those paths before the script runs, so any requested log directory
 must already exist when the user submits the job.
 
+Before submitting, check that every input asset used by the script is present
+on the cluster checkout. In particular, an untracked local CSV or mesh will
+not appear in a fresh clone; copy it to the matching repository path or pass
+its cluster path explicitly through the script's environment. Do not silently
+substitute a different geometry or polar input just to make an HPC job start.
+
+For multi-stage jobs, retain completed, validated stage artifacts in the run
+directory and let the driver checkpoint-skip that stage on resubmission. The
+rotor axial comparison treats both tagged CCBlade sectional CSVs, its polar
+CSV, and its validation report as the complete XFOIL/CCBlade checkpoint; set
+`FORCE_CCBLADE=1` only when those polars must be deliberately rebuilt.
+
 Agents may prepare and syntax-check Slurm scripts, but must never run `sbatch`,
 `srun`, `salloc`, or otherwise launch a supercomputer job; submission is left to
 the user. See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and

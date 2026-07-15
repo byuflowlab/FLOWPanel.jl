@@ -33,7 +33,28 @@ export JULIA_NUM_THREADS="$THREADS"
 export MPLBACKEND=Agg
 
 echo "THREADS: $THREADS"
-OMP_NUM_THREADS="$THREADS" julia --project=. -t $THREADS examples/rotor_axial_j0187_ccblade.jl
+
+# CCBlade writes these only after both ncrit=4 and ncrit=9 have completed.
+# Preserve them after a wall-time timeout so a panel rerun does not repeat the
+# expensive XFOIL polar sweeps. Set FORCE_CCBLADE=1 to rebuild deliberately.
+ccblade_outputs=(
+    "$RUN_DIR/rotor_hover_ccblade_polars.csv"
+    "$RUN_DIR/rotor_hover_ccblade_operating_point_validation_Vc4_J0p1867.csv"
+    "$RUN_DIR/rotor_hover_ccblade_sectional_ncrit4_Vc4_J0p1867.csv"
+    "$RUN_DIR/rotor_hover_ccblade_sectional_ncrit9_Vc4_J0p1867.csv"
+)
+ccblade_complete=true
+for output in "${ccblade_outputs[@]}"; do
+    [[ -s "$output" ]] || ccblade_complete=false
+done
+
+if [[ "${FORCE_CCBLADE:-0}" == "1" || "$ccblade_complete" != true ]]; then
+    echo "Running CCBlade/XFOIL polar generation."
+    OMP_NUM_THREADS="$THREADS" julia --project=. -t "$THREADS" examples/rotor_axial_j0187_ccblade.jl
+else
+    echo "Reusing completed CCBlade polar and sectional outputs; skipping XFOIL."
+fi
+
 OMP_NUM_THREADS="$THREADS" julia --project=. -t $THREADS examples/rotor_axial_j0187_panel.jl
 OMP_NUM_THREADS="$THREADS" julia --project=. -t $THREADS examples/rotor_axial_j0187_replay.jl
 OMP_NUM_THREADS="$THREADS" julia --project=. -t $THREADS examples/rotor_axial_j0187_loading_comparison.jl

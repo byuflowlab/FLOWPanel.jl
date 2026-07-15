@@ -367,7 +367,7 @@ end
         p_exact = collect(range(0.0, 1.0; length=body.ncells))
         p_exact[1] = 0.0
         b = L * p_exact
-        monitor = pnl.PressureLaplace((body,), 1.0;
+        monitor = @test_logs (:warn, r"unsupported diagnostic") pnl.PressureLaplace((body,), 1.0;
             gradient_mode=:corrected_hessian)
         x = collect(range(-0.4, 0.7; length=body.ncells))
         @test monitor.pressure_operator[1].n == body.ncells
@@ -389,6 +389,18 @@ end
         monitor.b[1] .= b
         pnl._pressure_solve!(monitor, 1)
         @test isapprox(monitor.p[1], p_exact; atol=1e-8)
+        @test monitor.workspace[1].stats.solved
+        @test monitor.absolute_residual[1] ≤ 1e-8
+        @test monitor.relative_residual[1] ≤ 1e-8
+
+        failed = pnl.PressureLaplace((body,), 1.0;
+            gradient_mode=:surface_velocity, itmax=1)
+        failed.b[1] .= L * collect(range(0.0, 2.0; length=body.ncells))
+        @test_logs (:warn, r"did not converge") pnl._pressure_solve!(failed, 1)
+        @test !failed.workspace[1].stats.solved
+        @test failed.convergence_warned
+        @test isfinite(failed.absolute_residual[1])
+        @test isfinite(failed.relative_residual[1])
     end
 
     @testset "PressureLaplace co-normal metric" begin
@@ -905,7 +917,7 @@ end
         laplace((lap_body,), (nothing,), pnl.ReferenceFrame(lap_body), zeros(3), 0, 0.1)
         pnl.write_monitor_csv!(laplace, dir, "case", 5, ctx, (lap_body,), 0, 0.1; overwrite=true)
         rows = readlines(joinpath(dir, "case_monitor05_pressure_laplace_system1.csv"))
-        @test rows[1] == "step,time,system,panels,rebuild,cg_iters,cg_solved"
+        @test rows[1] == "step,time,system,panels,rebuild,cg_iters,cg_solved,absolute_residual,relative_residual"
         @test occursin(",1,2,false,", rows[2])
 
         bernoulli = pnl.PressureBernoulli(1.0)
@@ -1473,6 +1485,25 @@ end
         for i in 1:body.ncells, k in 1:3
             @test abs(dot(grad_u[k, :, i], body.normals[:, i])) ≤ 1e-10
         end
+
+        # Supplying nodes selects the paired-quad reconstruction. It remains
+        # exact for constant vector gradients on highly anisotropic split quads.
+        anisotropic_nodes = copy(nodes)
+        anisotropic_nodes[1, :] .*= 100.0
+        anisotropic = pnl.NonLiftingBody{pnl.ConstantSource}(anisotropic_nodes, cells;
+            watertight=false, ensure_winding=false)
+        pnl.calc_normals!(anisotropic); pnl.calc_controlpoints!(anisotropic)
+        u_aniso = zeros(3, anisotropic.ncells)
+        u_aniso[1, :] .= anisotropic.controlpoints[1, :] .+ 2 .* anisotropic.controlpoints[2, :]
+        u_aniso[2, :] .= -3 .* anisotropic.controlpoints[1, :] .+ 0.5 .* anisotropic.controlpoints[2, :]
+        grad_aniso = zeros(3, 3, anisotropic.ncells)
+        pnl.compute_surface_velocity_gradient!(grad_aniso, u_aniso,
+            anisotropic.controlpoints, anisotropic.normals, anisotropic.cells,
+            anisotropic.neighbor, te_info; nodes=anisotropic.nodes)
+        for i in 1:anisotropic.ncells
+            @test isapprox(grad_aniso[1, :, i], [1.0, 2.0, 0.0]; atol=1e-8)
+            @test isapprox(grad_aniso[2, :, i], [-3.0, 0.5, 0.0]; atol=1e-8)
+        end
     end
 
     @testset "compute_mu_gradient! trailing-edge stencil isolation" begin
@@ -1515,5 +1546,17 @@ end
 
         @test maximum(abs.(grad_no_te_ref[:, upper_side] .- grad_no_te_perturbed[:, upper_side])) > 1.0
         @test maximum(abs.(grad_no_te_ref[:, .!upper_side] .- grad_no_te_perturbed[:, .!upper_side])) > 1.0
+
+        u_ref = zeros(3, body.ncells); u_ref[1, :] .= mu_ref
+        u_perturbed = zeros(3, body.ncells); u_perturbed[1, :] .= mu_perturbed
+        Gu_ref = zeros(3, 3, body.ncells); Gu_perturbed = similar(Gu_ref)
+        pnl.compute_surface_velocity_gradient!(Gu_ref, u_ref, body.controlpoints,
+            body.normals, body.cells, body.neighbor, te_info; nodes=body.nodes,
+            grad_mu_options=(; basis=:tri))
+        pnl.compute_surface_velocity_gradient!(Gu_perturbed, u_perturbed, body.controlpoints,
+            body.normals, body.cells, body.neighbor, te_info; nodes=body.nodes,
+            grad_mu_options=(; basis=:tri))
+        @test isapprox(Gu_ref[:, :, upper_side], Gu_perturbed[:, :, upper_side]; atol=1e-12)
+        @test isapprox(Gu_ref[:, :, .!upper_side], Gu_perturbed[:, :, .!upper_side]; atol=1e-12)
     end
 end

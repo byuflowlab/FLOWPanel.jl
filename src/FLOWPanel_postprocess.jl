@@ -894,7 +894,15 @@ function compute_surface_velocity_gradient!(grad_u::AbstractArray{Float64,3},
     size(u, 1) == 3 || throw(ArgumentError("u must be a 3 × ncells matrix."))
     size(grad_u, 1) == 3 && size(grad_u, 2) == 3 && size(grad_u, 3) == size(u, 2) ||
         throw(ArgumentError("grad_u must have size 3 × 3 × ncells."))
-    opts = _normalize_grad_mu_options(grad_mu_options; default_basis=:tri)
+    opts = _normalize_grad_mu_options(grad_mu_options;
+        default_basis=isnothing(nodes) ? :tri : :quad)
+    if bad_panel_mask === nothing && opts.tri_robust
+        isnothing(nodes) && throw(ArgumentError(
+            "grad_mu_options.tri_robust=true requires nodes for aspect-ratio masking."))
+        mask = panel_aspect_ratio_mask(nodes, cells;
+            threshold=opts.tri_robust_ar_threshold)
+        any(mask) && (bad_panel_mask = mask)
+    end
 
     fill!(grad_u, 0.0)
     scratch = zeros(Float64, 3, size(u, 2))

@@ -436,13 +436,15 @@ gate. Omitting `gradient_mode` therefore emits a warning and uses corrected
 `:edge_difference` only as a compatibility fallback; production validation
 should select a mode explicitly.
 
-The analytic `gradient_mode=:corrected_hessian` uses the inertial
-kernel Jacobian in `body.velocity_gradient` and adds the surface derivative of
-the postprocessed exterior `-½∇ₛμ_code` jump. No `[Ω]×` term is added: grid
-kinematics modify velocity values, not the stored kernel gradient. The complete
-ALE acceleration is projected tangentially once before conservative edge
-divergence. `:surface_velocity` reconstructs the full trace gradient, while
-The default `:edge_difference` is Hessian-free and uses exterior volumetric
+The diagnostic `gradient_mode=:corrected_hessian` uses the inertial kernel
+Jacobian in `body.velocity_gradient` and adds the surface derivative of the
+postprocessed exterior `-½∇ₛμ_code` jump. It is unsupported for production
+because the exterior hypersingular surface limit is not implemented. No
+`[Ω]×` term is added: grid kinematics modify velocity values, not the stored
+kernel gradient. The complete ALE acceleration is projected tangentially once
+before conservative edge divergence. `:surface_velocity` reconstructs the
+full trace gradient with node-aware paired quads when available. The default
+`:edge_difference` is Hessian-free and uses exterior volumetric
 vorticity (with bound-sheet κ removed) to correct nonsymmetric gradients.
 `:raw_hessian` is accepted as a compatibility alias
 for `:corrected_hessian`.
@@ -487,10 +489,12 @@ stored in the monitor.
 - `pressure_operator::Vector{PressureLaplacianOperator}` — matrix-free FV surface Laplacian per body for CG matvecs
 - `b::Vector{Vector{Float64}}` — RHS vector per body (length ncells); rebuilt each call from the selected acceleration form
 - `p::Vector{Vector{Float64}}` — owned pressure solution vector per body (length ncells)
+- `residual::Vector{Vector{Float64}}` — reusable `L*p-b` residual workspace per body
 - `acceleration::Vector{Matrix{Float64}}` — material acceleration `Du/Dt` scratch buffer (3 × ncells per body)
 - `tangential::Vector{Matrix{Float64}}` — tangential projection of `acceleration` (3 × ncells per body)
 - `edges::Vector{Matrix{Int}}` — shared interior edges per body (4 × nedges); rows are `(node_a, node_b, panel_i, panel_j)`
 - `workspace::Vector{Krylov.CgWorkspace{Float64, Float64, Vector{Float64}}}` — preallocated Krylov CG workspace per body
+- `absolute_residual`, `relative_residual` — independently evaluated `L*p-b` solve diagnostics per body
 """
 struct PressureLaplacianOperator
     n::Int
@@ -542,6 +546,7 @@ mutable struct PressureLaplace{UN, GM, AF, LV, TP} <: AbstractMonitor
     pressure_operator::Vector{PressureLaplacianOperator}
     b::Vector{Vector{Float64}}
     p::Vector{Vector{Float64}}
+    residual::Vector{Vector{Float64}}
     acceleration::Vector{Matrix{Float64}}
     tangential::Vector{Matrix{Float64}}
     edges::Vector{Matrix{Int}}
@@ -553,6 +558,9 @@ mutable struct PressureLaplace{UN, GM, AF, LV, TP} <: AbstractMonitor
     jump_velocity_gradient::Vector{Array{Float64,3}}
     vtk_fields::Tuple{Vararg{Symbol}}
     last_rebuild::Vector{Bool}
+    absolute_residual::Vector{Float64}
+    relative_residual::Vector{Float64}
+    convergence_warned::Bool
     file::Bool
 end
 
@@ -588,6 +596,9 @@ function PressureLaplace(bodies, rho::Real;
     gradient_mode in (:corrected_hessian, :raw_hessian, :surface_velocity, :edge_difference) || throw(ArgumentError(
         "gradient_mode must be :corrected_hessian, :surface_velocity, or :edge_difference; got $(gradient_mode)."))
     gradient_mode == :raw_hessian && (gradient_mode = :corrected_hessian)
+    if gradient_mode == :corrected_hessian
+        @warn "PressureLaplace gradient_mode=:corrected_hessian is an unsupported diagnostic: the exterior hypersingular surface limit of the panel Hessian is not implemented. On-sheet self Hessians and edge-singular neighboring derivatives do not define a convergent exterior surface gradient; use :surface_velocity for gradient-based pressure recovery." maxlog=1
+    end
     acceleration_form in (:material_derivative, :lamb_vector) || throw(ArgumentError(
         "acceleration_form must be :material_derivative or :lamb_vector; got $(acceleration_form)."))
     if acceleration_form == :lamb_vector
@@ -608,6 +619,7 @@ function PressureLaplace(bodies, rho::Real;
     pressure_operators = PressureLaplacianOperator[]
     bs = Vector{Float64}[]
     ps = Vector{Float64}[]
+    residuals = Vector{Float64}[]
     acceleration = Matrix{Float64}[]
     tangential = Matrix{Float64}[]
     edges = Matrix{Int}[]
@@ -618,12 +630,15 @@ function PressureLaplace(bodies, rho::Real;
     jump_velocity = Matrix{Float64}[]
     jump_velocity_gradient = Array{Float64,3}[]
     last_rebuild = Bool[]
+    absolute_residual = Float64[]
+    relative_residual = Float64[]
     sizehint!(velocity_dot, nbodies)
     sizehint!(velocity_history, nbodies); sizehint!(velocity_history_older, nbodies)
     sizehint!(Ls, nbodies)
     sizehint!(pressure_operators, nbodies)
     sizehint!(bs, nbodies)
     sizehint!(ps, nbodies)
+    sizehint!(residuals, nbodies)
     sizehint!(acceleration, nbodies)
     sizehint!(tangential, nbodies)
     sizehint!(edges, nbodies)
@@ -655,6 +670,7 @@ function PressureLaplace(bodies, rho::Real;
         push!(pressure_operators, A)
         push!(bs, b)
         push!(ps, zeros(Float64, body.ncells))
+        push!(residuals, zeros(Float64, body.ncells))
         push!(acceleration, zeros(Float64, 3, body.ncells))
         push!(tangential, zeros(Float64, 3, body.ncells))
         push!(edges, body_edges)
@@ -665,6 +681,8 @@ function PressureLaplace(bodies, rho::Real;
         push!(jump_velocity, zeros(Float64, 3, body.ncells))
         push!(jump_velocity_gradient, zeros(Float64, 3, 3, body.ncells))
         push!(last_rebuild, false)
+        push!(absolute_residual, Inf)
+        push!(relative_residual, Inf)
     end
     preconditioner = build_pressure_preconditioner(preconditioner, Ls)
 
@@ -674,10 +692,11 @@ function PressureLaplace(bodies, rho::Real;
         rebuild_every_step, verbose, gradient_mode, acceleration_form,
         lamb_vorticity, kappa_basis, project_edge_du, velocity_dot, velocity_history,
         velocity_history_older, history_count, previous_dt, older_dt, last_step,
-        Ls, pressure_operators, bs, ps,
+        Ls, pressure_operators, bs, ps, residuals,
         acceleration, tangential,
         edges, workspace, u_inertial, omega_used, surface_velocity_gradient,
-        jump_velocity, jump_velocity_gradient, vtk_fields, last_rebuild, file)
+        jump_velocity, jump_velocity_gradient, vtk_fields, last_rebuild,
+        absolute_residual, relative_residual, false, file)
 end
 
 function PressureLaplace(rho::Real, dt::Real; optargs...)
@@ -808,13 +827,15 @@ function write_monitor_csv!(m::PressureLaplace, dir::AbstractString, name::Abstr
     for (i_system, body) in enumerate(systems_tuple)
         i_system <= length(m.p) || continue
         path = _monitor_csv_path(dir, name, i_monitor, "pressure_laplace", i_system)
-        header = "step,time,system,panels,rebuild,cg_iters,cg_solved"
+        header = "step,time,system,panels,rebuild,cg_iters,cg_solved,absolute_residual,relative_residual"
         _monitor_csv_open(path, i_step, overwrite, header) do io
             ws = m.workspace[i_system]
             println(io, join((i_step, t, i_system, body.ncells,
                               _monitor_csv_bool(m.last_rebuild[i_system]),
                               ws.stats.niter,
-                              _monitor_csv_bool(ws.stats.solved)), ","))
+                              _monitor_csv_bool(ws.stats.solved),
+                              m.absolute_residual[i_system],
+                              m.relative_residual[i_system]), ","))
         end
     end
     return nothing
@@ -885,6 +906,17 @@ function _pressure_solve!(m::PressureLaplace, i_body::Int)
         Krylov.krylov_solve!(m.workspace[i_body], A, m.b[i_body]; M, ldiv=true, atol=m.atol, rtol=m.rtol, itmax=m.itmax)
     end
     m.p[i_body] .= m.workspace[i_body].x
+    residual = m.residual[i_body]
+    LA.mul!(residual, A, m.p[i_body])
+    residual .-= m.b[i_body]
+    absolute_residual = LA.norm(residual)
+    relative_residual = absolute_residual / max(LA.norm(m.b[i_body]), eps(Float64))
+    m.absolute_residual[i_body] = absolute_residual
+    m.relative_residual[i_body] = relative_residual
+    if !m.workspace[i_body].stats.solved && !m.convergence_warned
+        @warn "PressureLaplace CG did not converge; pressure from capped iterations is under-converged and must not be treated as converged." body=i_body iterations=m.workspace[i_body].stats.niter itmax=m.itmax absolute_residual relative_residual
+        m.convergence_warned = true
+    end
     return m.p[i_body]
 end
 
@@ -1243,15 +1275,13 @@ function _pressure_rhs_from_acceleration!(b::AbstractVector, m::PressureLaplace,
 
     @inbounds for k in axes(edges, 2)
         edge_a, edge_b, i, j = edges[1, k], edges[2, k], edges[3, k], edges[4, k]
-        w = _pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
-        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
-        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
-        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
-        aedge_dot_r = 0.5 * (
-            (acceleration[1, i] + acceleration[1, j]) * r1 +
-            (acceleration[2, i] + acceleration[2, j]) * r2 +
-            (acceleration[3, i] + acceleration[3, j]) * r3)
-        flux = rho * w * aedge_dot_r
+        w, ell, nu1, nu2, nu3 = _pressure_edge_conormal_weight(
+            body, edge_a, edge_b, i, j)[1:5]
+        aedge_dot_nu = 0.5 * (
+            (acceleration[1, i] + acceleration[1, j]) * nu1 +
+            (acceleration[2, i] + acceleration[2, j]) * nu2 +
+            (acceleration[3, i] + acceleration[3, j]) * nu3)
+        flux = rho * ell * aedge_dot_nu
         b[i] += flux
         b[j] -= flux
         _pressure_apply_reference_pressure_rhs!(b, reference_panel, reference_pressure, w, i, j)
@@ -1321,14 +1351,19 @@ function _pressure_material_acceleration!(m::PressureLaplace, body::AbstractBody
     G_surf = nothing
     if m.gradient_mode == :surface_velocity
         G_surf = m.surface_velocity_gradient[i_body]
-        bad_panel_mask = panel_aspect_ratio_mask(body.nodes, body.cells; threshold=10.0)
         te_info = hasproperty(body, :shedding_full) ?
                   view(body.shedding_full, 1:2, :) :
                   zeros(Int, 2, body.ncells)
+        # Structured split-quad meshes use the node-aware agglomerated
+        # reconstruction. Genuinely unstructured all-triangle meshes have no
+        # logical pairs and retain the triangle reconstruction.
+        partners = _quad_pairing_propagate(body.nodes, body.cells, body.neighbor,
+            body.normals, te_info)
+        use_quads = any(!iszero, partners)
+        grad_options = use_quads ? (; basis=:quad) : (; basis=:tri, tri_robust=true)
         compute_surface_velocity_gradient!(G_surf, u_inertial, body.controlpoints,
             body.normals, body.cells, body.neighbor, te_info;
-            bad_panel_mask=any(bad_panel_mask) ? bad_panel_mask : nothing,
-            nodes=body.nodes)
+            nodes=body.nodes, grad_mu_options=grad_options)
     end
 
     G_jump = m.jump_velocity_gradient[i_body]

@@ -32,7 +32,7 @@ include(joinpath(@__DIR__, "pitching_wing.jl"))
 const PRESSURE_COMPARISON_METHODS = (
     (:bernoulli, "Unsteady Bernoulli"),
     (:edge_difference, "Laplace corrected edge"),
-    (:corrected_hessian, "Laplace corrected Hessian"),
+    (:corrected_hessian, "Laplace Hessian (unsupported diagnostic)"),
     (:surface_velocity, "Laplace surface velocity"),
 )
 
@@ -44,16 +44,24 @@ mutable struct PressureComparisonRecorder <: pnl.AbstractMonitor
     method::Symbol
     pressure_l2_relative::Vector{Float64}
     pressure_linf::Vector{Float64}
+    converged::Vector{Bool}
+    absolute_residual::Vector{Float64}
+    relative_residual::Vector{Float64}
+    rhs_l2::Vector{Float64}
+    gradient_l2::Vector{Float64}
     reference_history::Vector{Vector{Float64}}
+    laplace::Any
 end
 
 monitor_requires(::PressureComparisonRecorder) = (:P,)
 monitor_provides(::PressureComparisonRecorder) = ()
 
 function PressureComparisonRecorder(method::Symbol, nt::Integer;
-                                    reference_history=Vector{Vector{Float64}}())
+                                    reference_history=Vector{Vector{Float64}}(),
+                                    laplace=nothing)
     return PressureComparisonRecorder(method, fill(NaN, nt), fill(NaN, nt),
-        reference_history)
+        trues(nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt),
+        reference_history, laplace)
 end
 
 function _run_monitor!(m::PressureComparisonRecorder, ctx::pnl.MonitorContext,
@@ -70,12 +78,23 @@ function _run_monitor!(m::PressureComparisonRecorder, ctx::pnl.MonitorContext,
         delta = pressure .- reference
         m.pressure_l2_relative[i_step + 1] = norm(delta) / max(norm(reference), eps())
         m.pressure_linf[i_step + 1] = maximum(abs, delta)
+        laplace = m.laplace
+        m.converged[i_step + 1] = laplace.workspace[1].stats.solved
+        m.absolute_residual[i_step + 1] = laplace.absolute_residual[1]
+        m.relative_residual[i_step + 1] = laplace.relative_residual[1]
+        m.rhs_l2[i_step + 1] = norm(laplace.b[1])
+        if laplace.gradient_mode == :surface_velocity
+            m.gradient_l2[i_step + 1] = norm(laplace.surface_velocity_gradient[1])
+        elseif laplace.gradient_mode == :corrected_hessian
+            m.gradient_l2[i_step + 1] = sqrt(norm(systems[1].velocity_gradient)^2 +
+                                                 norm(laplace.jump_velocity_gradient[1])^2)
+        end
     end
     return nothing
 end
 
 function _comparison_csv(path, t_range, period, alpha_history, forces,
-                         pressure_metrics)
+                         pressure_metrics, diagnostics)
     mkpath(dirname(path))
     names = String["time", "t_over_T", "alpha_deg"]
     for (method, _) in PRESSURE_COMPARISON_METHODS
@@ -85,6 +104,9 @@ function _comparison_csv(path, t_range, period, alpha_history, forces,
     for (method, _) in PRESSURE_COMPARISON_METHODS[2:end]
         push!(names, "pressure_l2_relative_$(method)")
         push!(names, "pressure_linf_$(method)")
+        append!(names, ("cg_solved_$(method)", "absolute_residual_$(method)",
+                        "relative_residual_$(method)", "rhs_l2_$(method)",
+                        "gradient_l2_$(method)"))
     end
     open(path, "w") do io
         println(io, join(names, ","))
@@ -97,6 +119,9 @@ function _comparison_csv(path, t_range, period, alpha_history, forces,
             for (method, _) in PRESSURE_COMPARISON_METHODS[2:end]
                 push!(row, pressure_metrics[method].l2[i])
                 push!(row, pressure_metrics[method].linf[i])
+                d = diagnostics[method]
+                append!(row, (d.converged[i], d.absolute_residual[i],
+                              d.relative_residual[i], d.rhs_l2[i], d.gradient_l2[i]))
             end
             println(io, join(row, ","))
         end
@@ -104,18 +129,26 @@ function _comparison_csv(path, t_range, period, alpha_history, forces,
     return path
 end
 
-function _comparison_summary(t_range, period, forces, pressure_metrics;
+function _comparison_summary(t_range, period, forces, pressure_metrics, diagnostics;
                              skip_first_cycle::Bool=true)
     indices = skip_first_cycle ? findall(t -> t >= period, t_range) : collect(eachindex(t_range))
     isempty(indices) && (indices = collect(eachindex(t_range)))
     rows = NamedTuple[]
     reference = forces[:bernoulli][3, indices]
     for (method, label) in PRESSURE_COMPARISON_METHODS
-        cl = forces[method][3, indices]
-        relative_cl = method == :bernoulli ? 0.0 : norm(cl - reference) / max(norm(reference), eps())
-        l2 = method == :bernoulli ? 0.0 : mean(pressure_metrics[method].l2[indices])
-        linf = method == :bernoulli ? 0.0 : maximum(pressure_metrics[method].linf[indices])
-        push!(rows, (; method, label, CL_mean=mean(cl), CL_peak_to_peak=maximum(cl) - minimum(cl),
+        valid = method == :bernoulli ? indices : [i for i in indices if diagnostics[method].converged[i]]
+        cl = forces[method][3, valid]
+        ref = forces[:bernoulli][3, valid]
+        relative_cl = method == :bernoulli ? 0.0 :
+            (isempty(valid) ? NaN : norm(cl - ref) / max(norm(ref), eps()))
+        l2 = method == :bernoulli ? 0.0 :
+            (isempty(valid) ? NaN : mean(pressure_metrics[method].l2[valid]))
+        linf = method == :bernoulli ? 0.0 :
+            (isempty(valid) ? NaN : maximum(pressure_metrics[method].linf[valid]))
+        cl_mean = isempty(valid) ? NaN : mean(cl)
+        cl_pp = isempty(valid) ? NaN : maximum(cl) - minimum(cl)
+        push!(rows, (; method, label, converged_samples=length(valid), total_samples=length(indices),
+                     CL_mean=cl_mean, CL_peak_to_peak=cl_pp,
                      relative_CL_L2=relative_cl, pressure_L2_mean=l2,
                      pressure_Linf_max=linf))
     end
@@ -125,9 +158,10 @@ end
 function _write_comparison_summary(path, rows)
     mkpath(dirname(path))
     open(path, "w") do io
-        println(io, "method,label,CL_mean,CL_peak_to_peak,relative_CL_L2,pressure_L2_mean,pressure_Linf_max")
+        println(io, "method,label,converged_samples,total_samples,CL_mean,CL_peak_to_peak,relative_CL_L2,pressure_L2_mean,pressure_Linf_max")
         for row in rows
-            println(io, join((row.method, row.label, row.CL_mean, row.CL_peak_to_peak,
+            println(io, join((row.method, row.label, row.converged_samples, row.total_samples,
+                              row.CL_mean, row.CL_peak_to_peak,
                               row.relative_CL_L2, row.pressure_L2_mean,
                               row.pressure_Linf_max), ","))
         end
@@ -169,6 +203,7 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
         n_cycles=_env_float("N_CYCLES", 3.0), c_per_dt=_env_float("C_PER_DT", 0.5),
         n_span=_env_int("N_SPAN", 13), n_airfoil=_env_int("N_AIRFOIL", 161),
         n_endcap=_env_int("N_ENDCAP", 9), panel_wake_rows=nothing,
+        pressure_itmax=nothing,
         backend=pnl.FastMultipoleBackend(expansion_order=_env_int("FMM_EXPANSION_ORDER", 8),
             multipole_acceptance=_env_float("FMM_ACCEPTANCE", 0.4),
             leaf_size=_env_int("FMM_LEAF_SIZE", 40)))
@@ -176,9 +211,12 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
         path, n_cycles, c_per_dt, n_span, n_airfoil, n_endcap, panel_wake_rows, backend)
     nt = length(setup0.t_range)
     normalization = pnl.WingNormalization(setup0.setup.rho, setup0.setup.Sref, setup0.setup.c)
+    pressure_itmax === nothing && (pressure_itmax = max(1000,
+        ceil(Int, _env_float("PRESSURE_ITMAX_PER_PANEL", 2.0) * setup0.wing.ncells)))
     bernoulli = pnl.PressureBernoulli(setup0.setup.rho; unsteady=true, backend)
     laplace = Dict(method => pnl.PressureLaplace((setup0.wing,), setup0.setup.rho;
-        unsteady=true, gradient_mode=method, reference_panel=1, verbose=false)
+        unsteady=true, gradient_mode=method, reference_panel=1, verbose=false,
+        itmax=pressure_itmax)
         for (method, _) in PRESSURE_COMPARISON_METHODS[2:end])
     pressures = merge((bernoulli=bernoulli,), laplace)
     forces = Dict{Symbol,Any}()
@@ -189,7 +227,8 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
         pressure = pressures[method]
         force = pnl.ForceMonitor(nt, 1; normalization, i_frame=-1,
             correct_kuttacondition=true, verbose=false, file=false)
-        recorder = PressureComparisonRecorder(method, nt; reference_history)
+        recorder = PressureComparisonRecorder(method, nt; reference_history,
+            laplace=method == :bernoulli ? nothing : pressure)
         forces[method] = force.force
         recorders[method] = recorder
         push!(monitors, pressure); push!(monitors, force); push!(monitors, recorder)
@@ -198,6 +237,7 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
     println("Pitching-wing pressure comparison")
     @printf("  Julia threads = %d, OMP_NUM_THREADS = %s\n", Threads.nthreads(), get(ENV, "OMP_NUM_THREADS", "unset"))
     @printf("  panels = %d, steps = %d, dt = %.6g s\n", setup0.wing.ncells, nt, setup0.setup.dt)
+    @printf("  PressureLaplace itmax = %d\n", pressure_itmax)
     pnl.simulate!((setup0.wing,), (setup0.wake,), setup0.frames, setup0.maneuver!, setup0.Uinf,
         setup0.t_range; body_solvers=(setup0.solver,), backend, monitors=Tuple(monitors),
         path=save_vtk ? path : nothing, name="pitching_wing_pressure_comparison",
@@ -205,24 +245,30 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
 
     pressure_metrics = Dict(method => (; l2=recorders[method].pressure_l2_relative,
         linf=recorders[method].pressure_linf) for (method, _) in PRESSURE_COMPARISON_METHODS[2:end])
+    diagnostics = Dict(method => (; converged=recorders[method].converged,
+        absolute_residual=recorders[method].absolute_residual,
+        relative_residual=recorders[method].relative_residual,
+        rhs_l2=recorders[method].rhs_l2,
+        gradient_l2=recorders[method].gradient_l2)
+        for (method, _) in PRESSURE_COMPARISON_METHODS[2:end])
     alpha_history = [setup0.setup.alpha_mean_deg + setup0.setup.alpha_amp_deg *
         sin(setup0.setup.omega * t) for t in setup0.t_range]
     csv_path = _comparison_csv(joinpath(path, "pitching_wing_pressure_comparison.csv"),
-        setup0.t_range, setup0.setup.period, alpha_history, forces, pressure_metrics)
-    rows = _comparison_summary(setup0.t_range, setup0.setup.period, forces, pressure_metrics)
+        setup0.t_range, setup0.setup.period, alpha_history, forces, pressure_metrics, diagnostics)
+    rows = _comparison_summary(setup0.t_range, setup0.setup.period, forces, pressure_metrics, diagnostics)
     summary_path = _write_comparison_summary(joinpath(path, "pitching_wing_pressure_comparison_summary.csv"), rows)
     plot_paths = plot ? _plot_comparison(path, setup0.t_range, setup0.setup.period, forces, pressure_metrics) : nothing
 
-    println("\nmethod                         CL mean       CL p-p       rel CL L2       p L2 mean       p Linf max")
+    println("\nmethod                         solved      CL mean       CL p-p       rel CL L2       p L2 mean       p Linf max")
     for row in rows
-        @printf("%-30s % .6e  % .6e  % .6e  % .6e  % .6e\n", row.label,
-            row.CL_mean, row.CL_peak_to_peak, row.relative_CL_L2,
+        @printf("%-30s %4d/%-4d % .6e  % .6e  % .6e  % .6e  % .6e\n", row.label,
+            row.converged_samples, row.total_samples, row.CL_mean, row.CL_peak_to_peak, row.relative_CL_L2,
             row.pressure_L2_mean, row.pressure_Linf_max)
     end
     println("\nWrote comparison CSV: $(csv_path)")
     println("Wrote summary CSV: $(summary_path)")
     plot !== false && println("Wrote plots: $(plot_paths.loads), $(plot_paths.errors)")
-    return (; setup=setup0, pressures, forces, pressure_metrics, rows, csv_path, summary_path, plot_paths)
+    return (; setup=setup0, pressures, forces, pressure_metrics, diagnostics, rows, csv_path, summary_path, plot_paths)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
