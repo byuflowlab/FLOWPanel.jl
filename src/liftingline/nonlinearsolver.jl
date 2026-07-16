@@ -43,27 +43,71 @@ const analysis_solver = NonlinearSolve.FastShortcutNLLSPolyalg(;
                                 # jvp_autodiff = ADTypes.AutoForwardDiff(), 
                                 )
 
+                                
+function solve(self::LiftingLine, Uinf::AbstractVector, 
+                                            args...; optargs...) 
+    return solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+end
 
-function solve(self::LiftingLine, Uinfs; 
+function solve(self::LiftingLine, Uinfs::AbstractMatrix; 
                         solver_cache=Dict(),
                         debug=false,
+                        addfields=true, raise_warn=false,
                         update_states=tuple,
                         optargs...)
 
 
-    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
+    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD,
+    # where y = aoas, x = Uinfs, and p = nothing
     residual! = generate_f_residual(self, Uinfs, update_states; 
                                         cache=solver_cache, debug)
 
-    result = _solve(self, Uinfs, residual!; update_states, optargs...)
+    # result = _solve(self, Uinfs, residual!; optargs...)
+
+    # Define solve function of form `solve(x, p)`, where x = Uinfs and 
+    # p = nothing, and it returns the solution y such that r = 0
+    @inline function solve_fun(x, p)
+
+        result = _solve(self, x, residual!; optargs...)
+
+        push!(p, result)
+
+        return result.u
+    end
+
+    # Call
+    p = []
+    y = solve_fun(Uinfs, p)
+    result = p[1]
+
+    # Set solved AOAs
+    self.aoas .= y
+
+    # Update element states from the AOA solution
+    update_states(self.elements_settings, self, self.aoas, Uinfs)
+
+    # Calculate Gamma from AOA
+    # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
+    #       calculating U without iterating on Gamma until convergence.
+    #       Just using Uinf might be good enough of an approximation?
+    # UPDATE: Not needed since we already backtrack Uind from Uinf and the 
+    #       effective AOA?
+    # calc_Gammas!(self.Gammas, self, self.aoas, self.Us, self.elements_settings)
+    calc_Gammas!(self.Gammas, self, self.aoas, Uinfs, self.elements_settings)
+
+    # Calculate velocity at lifting-line midpoints
+    self.Us .= Uinfs
+    # Uind!(self, self.midpoints, self.Us)
+    selfUind!(self, self.Us)
+
+    if addfields
+        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
+        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
+        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
+    end
+
    
     return result, solver_cache
-end
-
-                                
-function _solve(self::LiftingLine, Uinf::AbstractVector, 
-                                            args...; optargs...) 
-    return _solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
 end
 
 function _solve(self::LiftingLine{R}, 
@@ -71,13 +115,9 @@ function _solve(self::LiftingLine{R},
                         residual!::Function;
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=false,
-                        addfields=true, raise_warn=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
-                        solver_cache=Dict(),
-                        Dinfs=Uinfs,
-                        update_states=tuple,
-                        optargs...
+                        Dinfs=Uinfs
                         ) where {R<:Number}
 
     # Align joint nodes with freestream
@@ -121,33 +161,6 @@ function _solve(self::LiftingLine{R},
 
     # Call nonlinear solver
     result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
-
-    # Set solved AOA
-    self.aoas .= result.u
-
-    # Update element states from the AOA solution
-    update_states(self.elements_settings, self, self.aoas, Uinfs)
-
-    # Calculate Gamma from AOA
-    # NOTE: We should use U instead of Uinf, but there isn't a clear way of 
-    #       calculating U without iterating on Gamma until convergence.
-    #       Just using Uinf might be good enough of an approximation?
-    # UPDATE: Not needed since we already backtrack Uind from Uinf and the 
-    #       effective AOA?
-    # calc_Gammas!(self.Gammas, self, self.aoas, self.Us, self.elements_settings)
-    calc_Gammas!(self.Gammas, self, self.aoas, Uinfs, self.elements_settings)
-
-    # Calculate velocity at lifting-line midpoints
-    self.Us .= Uinfs
-    # Uind!(self, self.midpoints, self.Us)
-    selfUind!(self, self.Us)
-
-    if addfields
-        gt.add_field(self.grid, "Uinf", "vector", collect(eachcol(Uinfs)), "cell"; raise_warn)
-        gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
-        gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
-    end
-    
 
     return result
 end
