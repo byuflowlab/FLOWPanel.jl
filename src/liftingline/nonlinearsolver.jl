@@ -83,23 +83,27 @@ function solve(self::LiftingLine,
     
     end
 
-
-    # Set AOA initial guess
-    self.aoas .= aoas_initial_guess
-
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Dinfs)
 
-    # Generate residual function
-    f! = generate_f_residual(self, Uinfs, update_states; 
+    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
+    residual! = generate_f_residual(self, Uinfs, update_states; 
                                         cache=solver_cache, debug)
 
-    # Define solver initial guess
-    u0 = self.aoas
+    # Wrap residual for NonlinearSolve of form `f!(du, u, p)`. Note that the
+    # `p` parameter used by NonlinearSolve is the `x` parameter expected by
+    # ImplictAD, while there is no `p` parameter for ImplicitAD (in reality,
+    # `p` in ImplicitAD is the entire geometry inside the lifting line that is 
+    # already being used when calling `generate_f_residual`).
+    f!(du, u, p) = residual!(du, u, p, nothing)
 
-    # Define nonlinear problem
+    # Define solver initial guess
+    u0 = zeros(self.nelements)
+    u0 .= aoas_initial_guess
+
+    # Define nonlinear problem, using p = Uinfs
     isinplace = true
-    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
+    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0, Uinfs)
 
     # Call nonlinear solver
     result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
@@ -442,9 +446,10 @@ function generate_f_residual(ll::LiftingLine,
         cache[:residual_rms] = []
     end
 
-    reset_cache(cache, Uinfs, ll.elements_settings)
+    reset_cache(cache, ll.elements_settings)
 
-    function f_residual!(du, u::AbstractVector{T}, p; 
+    # f_residual follows the format `residual!(r, y, x, p)` of ImplicitAD
+    function f_residual!(du, u::AbstractVector{T}, Uinfs, p; 
                             cache=cache, update_states=update_states
                             ) where T<:Number
 
@@ -458,7 +463,6 @@ function generate_f_residual(ll::LiftingLine,
                             sigmas = zeros(T, ll.nelements),
                             Us = zeros(T, 3, ll.nelements),
                             fcalls = [0],
-                            Uinfs,
                             elements_settings = zeros(T, size(ll.elements_settings)),
                         )
 
@@ -477,7 +481,7 @@ function generate_f_residual(ll::LiftingLine,
         cache[T].Us .= Uinfs  # <-- Force it to use only Uinfs to dimensionalize cl and cd reducing nonlinearity
 
         # Calculate residual
-        calc_residuals!(cache[T].residuals, ll, cache[T].Uinfs, 
+        calc_residuals!(cache[T].residuals, ll, Uinfs, 
                         aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us,
                         cache[T].elements_settings,
                         update_states)
@@ -495,7 +499,7 @@ function generate_f_residual(ll::LiftingLine,
 
 end
 
-function reset_cache(cache, Uinfs, elements_settings)
+function reset_cache(cache, elements_settings)
 
     for (T, data) in cache
         if T != :fcalls && T != :residual_rms
@@ -503,8 +507,7 @@ function reset_cache(cache, Uinfs, elements_settings)
             data.residuals .= 0
             data.Gammas .= 0
             data.sigmas .= 0
-            data.Uinfs .= Uinfs
-            data.Us .= data.Uinfs
+            data.Us .= 0
             data.elements_settings .= elements_settings
 
         end
