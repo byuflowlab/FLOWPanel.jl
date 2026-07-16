@@ -52,16 +52,20 @@ diagnostic, not the full unsteady Bernoulli pressure of the coupled flow.
    potential, plus the freestream potential;
 2. never request scalar potential from vortex particles or other vector-
    potential-only sources;
-3. emit one prominent warning per monitor instance when such sources are
-   excluded, explaining that the result is a partial diagnostic;
-4. continue the calculation rather than throwing.
+3. reject vector-potential-capable body sources, whose retained exterior scalar
+   trace cannot be separated reliably;
+4. reject vector-potential-only wake sources by default;
+5. only with `allow_partial=true`, emit one prominent warning per monitor
+   instance and continue with a partial diagnostic.
 
 The warning is required even though filtering the sources is numerically safe:
 silently presenting the partial result as a complete Bernoulli pressure would
-be physically misleading. The output is a mixed partial diagnostic: particle
-velocity remains in inertial kinetic energy while particle potential history is
-absent. Detect exclusion from the full wake source list, because the existing
-scalar-source collector has already discarded particle capability information.
+be physically misleading. The opted-in output is a mixed partial diagnostic:
+particle velocity remains in inertial kinetic energy while particle potential
+history is absent. Its velocity is subtracted from `w dot grad(phi)` so the ALE
+contraction uses only retained scalar flow. Detect exclusion from the complete
+body and wake source lists, because a prefiltered scalar-source collector has
+already discarded capability information.
 Steady Bernoulli does not use history and need not inspect wake capabilities.
 
 ## Moving-point derivative for Bernoulli
@@ -77,6 +81,10 @@ Hence the Eulerian derivative required by scalar Bernoulli is
 ```math
 partial_t phi = D_g phi - w dot u.
 ```
+
+Here ALE means Arbitrary Lagrangian--Eulerian. In an opted-in partial diagnostic,
+`u` in this contraction is the retained scalar-potential velocity, while the
+kinetic-energy term keeps total inertial exterior velocity.
 
 The monitor must finite-difference the panel-following scalar history and then
 subtract `w dot u`. It must also use reconstructed inertial `u_s`, rather than
@@ -256,6 +264,21 @@ u_jump = -(1/2) grad_s(mu_code)
 This is the concrete `compute_mu_gradient!(...; scale=0.5)` convention: the
 helper stores `-scale*grad_s(mu_code)`. A textbook `mu` with the opposite sign
 must be translated before using this equation.
+
+The potential history itself also requires the exterior surface limit. The
+exact-control-point body evaluation returns FLOWPanel's canonical interior
+limit, so every target panel of a body with `has_grad_mu(body)` stores
+
+```math
+phi^+ = phi^- - mu_code.
+```
+
+The local strength is subtracted exactly once. Source-only bodies, other
+bodies' off-surface contributions, and wake potentials are unchanged.
+
+Trailing-edge panel-pressure averaging is an optional heuristic. It is disabled
+by default and enabled explicitly with `correct_kuttacondition=true`.
+
 The raw kernel Hessian cannot differentiate a term that was added only after
 the influence evaluation. Thus the corrected gradient is
 
@@ -399,7 +422,8 @@ unused potential, Hessian, vorticity, or history paths through runtime branches.
 Recommended defaults are:
 
 - `PressureBernoulli`: steady unless explicitly requested; unsteady mode warns
-  once and continues when particle sources are omitted;
+  rejects vector-only wake sources by default, or warns once and continues only
+  when `allow_partial=true`;
 - `PressureLaplace`: corrected-Hessian acceleration, conservative edge
   divergence, unsteady term opt-in as today, BDF history with safe startup;
 - corrected edge difference and surface-velocity reconstruction: supported
@@ -420,8 +444,9 @@ The following evidence is required before treating the revision as complete:
    startup, and a nonuniform sequence verifies the variable-step coefficients;
 6. first call, monitor reuse, topology mismatch, nonconsecutive steps, and warm
    restart produce zero seeding derivatives rather than spikes;
-7. a particle-wake Bernoulli case emits exactly one warning per monitor and
-   continues with finite partial pressure;
+7. a particle-wake Bernoulli case throws by default, emits exactly one warning
+   per opted-in monitor, and continues with finite partial pressure; a
+   vector-capable body throws even in partial mode;
 8. direct and FMM kernel gradients agree for supported elements;
 9. corrected Hessian, corrected edge, and surface reconstruction are compared
    on isotropic and anisotropic meshes, at trailing edges, and in the pitching-

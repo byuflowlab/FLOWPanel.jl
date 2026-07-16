@@ -41,7 +41,8 @@ end
     @test sim.setup.span_ft == 4.0
     @test sim.setup.reference_area == sim.setup.c * sim.setup.b
     @test sim.wake isa pnl.PanelWake
-    @test !pnl._bernoulli_has_excluded_sources((sim.wake,))
+    @test !any(FastMultipole.has_vector_potential,
+        pnl._collect_wake_sources((sim.wake,)))
     @test all(Das -> all(col -> norm(col) ≈ 0.05 * sim.setup.c, eachcol(Das)),
         sim.wing.Das)
 

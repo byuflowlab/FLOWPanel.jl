@@ -122,7 +122,8 @@ end
 _monitor_csv_bool(x::Bool) = x ? "true" : "false"
 
 """
-    PressureBernoulli(rho; unsteady=false, correct_kuttacondition=true, clip=nothing,
+    PressureBernoulli(rho; unsteady=false, correct_kuttacondition=false, clip=nothing,
+                      allow_partial=false,
                       backend=FastMultipoleBackend(expansion_order=10,
                                                    multipole_acceptance=0.4,
                                                    leaf_size=100))
@@ -131,14 +132,21 @@ Monitor that owns pressure arrays for every body in the simulation by
 evaluating the Bernoulli equation each step. With `unsteady=false` (default) the steady
 form ``P = \\tfrac{1}{2} \\rho (U_\\infty^2 - U^2)`` is used; with
 `unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is added.
-The monitor evaluates scalar potential at the body control points, finite
-differences it with zero/BE/variable-step-BDF2 startup, and subtracts the
-moving-control-point term. The kinetic term uses reconstructed inertial surface
-velocity. Only scalar-potential sources enter the history; when particle or
-other vector-potential-only wake sources are excluded, the monitor warns once
-and continues with a mixed partial diagnostic.
+The monitor evaluates the exterior scalar-potential trace at the body control
+points, finite differences it with zero/BE/variable-step-BDF2 startup, and uses
+the Arbitrary Lagrangian--Eulerian (ALE) identity
+``\\partial_t\\phi=D_g\\phi-\\mathbf{w}\\cdot\\nabla\\phi``. The kinetic term uses
+reconstructed total inertial surface velocity.
 
-`correct_kuttacondition` and `clip` are forwarded to `calcfield_P!`.
+Vector-potential-capable body sources are unsupported and throw in unsteady
+mode. Vector-potential-only wake sources also throw by default because their
+scalar-potential contribution is unavailable. `allow_partial=true` explicitly
+enables a mixed partial diagnostic: their velocity remains in kinetic energy
+but is excluded from ``\\mathbf{w}\\cdot\\nabla\\phi``. This mode warns once per
+monitor.
+
+`correct_kuttacondition=true` opts into heuristic averaging of pressures on
+trailing-edge panel pairs. It and `clip` are forwarded to `calcfield_P!`.
 
 Pressure-dependent monitors (e.g. `ForceMonitor`) must appear *after* this
 monitor in the `monitors` tuple passed to `simulate!`.
@@ -147,6 +155,7 @@ mutable struct PressureBernoulli{UN, TF, TC, TB} <: AbstractMonitor
     rho::TF
     unsteady::Bool
     correct_kuttacondition::Bool
+    allow_partial::Bool
     clip::TC
     backend::TB
     pressure::Vector{Vector{Float64}}
@@ -167,7 +176,8 @@ end
 monitor_provides(::PressureBernoulli) = (:P,)
 
 function PressureBernoulli(rho::Real; unsteady::Bool=false,
-                          correct_kuttacondition::Bool=true,
+                          correct_kuttacondition::Bool=false,
+                          allow_partial::Bool=false,
                           clip=nothing,
                           backend=FastMultipoleBackend(expansion_order=10,
                                                        multipole_acceptance=0.4,
@@ -175,7 +185,7 @@ function PressureBernoulli(rho::Real; unsteady::Bool=false,
                           vtk_fields::Tuple{Vararg{Symbol}}=(:pressure,),
                           file::Bool=true)
     return PressureBernoulli{unsteady, typeof(rho), typeof(clip), typeof(backend)}(
-        rho, unsteady, correct_kuttacondition, clip, backend,
+        rho, unsteady, correct_kuttacondition, allow_partial, clip, backend,
         Vector{Float64}[], Vector{Float64}[], Vector{Float64}[], Vector{Float64}[],
         FastMultipole.ProbeSystem{Float64}[], Matrix{Float64}[], Int[], Float64[],
         Float64[], Int[], false, vtk_fields, file)
@@ -186,9 +196,10 @@ function (m::PressureBernoulli)(systems, wakes,
                                uinf, i_step::Int, dt::Real)
     systems_tuple = _systems_tuple(systems)
     Uinf_mag = norm(uinf)
-    scalar_sources = m.unsteady ? _bernoulli_scalar_sources(systems_tuple, wakes) : ()
-    if m.unsteady && !m.warned_excluded_sources && _bernoulli_has_excluded_sources(wakes)
-        @warn "PressureBernoulli(unsteady=true) excludes vortex-particle/vector-potential-only sources from scalar-potential history. Continuing with a mixed partial diagnostic: their velocity is retained in inertial kinetic energy, but their unsteady scalar-potential contribution is unavailable."
+    scalar_sources, excluded_sources = m.unsteady ?
+        _bernoulli_source_partition(m, systems_tuple, wakes) : ((), ())
+    if m.unsteady && !isempty(excluded_sources) && !m.warned_excluded_sources
+        @warn "PressureBernoulli(unsteady=true, allow_partial=true) excludes vector-potential-only wake sources from scalar-potential history and the scalar ALE contraction. Continuing with a partial diagnostic: their velocity is retained only in inertial kinetic energy."
         m.warned_excluded_sources = true
     end
     _pressure_bernoulli_ensure_storage!(m, systems_tuple)
@@ -196,7 +207,8 @@ function (m::PressureBernoulli)(systems, wakes,
         pressure = m.pressure[i_body]
         fill!(pressure, 0.0)
         phi_dot = m.unsteady ?
-            _pressure_bernoulli_phi_dot!(m, body, i_body, scalar_sources, uinf, i_step, dt) :
+            _pressure_bernoulli_phi_dot!(m, body, i_body, scalar_sources,
+                excluded_sources, uinf, i_step, dt) :
             nothing
         # Bernoulli's kinetic energy is inertial in both steady and unsteady
         # modes.  Reconstruct the impermeable exterior trace so that finite
@@ -290,13 +302,23 @@ function _pressure_bernoulli_ensure_storage!(m::PressureBernoulli, systems_tuple
     return nothing
 end
 
-function _bernoulli_has_excluded_sources(wakes)
-    return any(FastMultipole.has_vector_potential, _collect_wake_sources(wakes))
-end
+function _bernoulli_source_partition(m::PressureBernoulli, systems_tuple::Tuple, wakes)
+    vector_bodies = Tuple(body for body in systems_tuple
+        if FastMultipole.has_vector_potential(body))
+    isempty(vector_bodies) || throw(ArgumentError(
+        "PressureBernoulli(unsteady=true) does not support vector-potential-capable " *
+        "body sources because their retained exterior scalar trace cannot be separated."))
 
-function _bernoulli_scalar_sources(systems_tuple::Tuple, wakes)
-    wake_sources = _collect_wake_scalar_sources(wakes)
-    return _filter_scalar_potential_sources((systems_tuple..., wake_sources...))
+    wake_sources = _collect_wake_sources(wakes)
+    excluded_sources = Tuple(source for source in wake_sources
+        if FastMultipole.has_vector_potential(source))
+    if !isempty(excluded_sources) && !m.allow_partial
+        throw(ArgumentError(
+            "PressureBernoulli(unsteady=true) encountered vector-potential-only wake " *
+            "sources. Pass allow_partial=true to request the warned partial diagnostic."))
+    end
+    all_sources = (systems_tuple..., wake_sources...)
+    return _filter_scalar_potential_sources(all_sources), excluded_sources
 end
 
 function _filter_scalar_potential_sources(sources::Tuple)
@@ -311,6 +333,7 @@ end
 
 function _pressure_bernoulli_phi_dot!(m::PressureBernoulli, body::AbstractBody,
                                       i_body::Int, scalar_sources::Tuple,
+                                      excluded_sources::Tuple,
                                       uinf, i_step::Int, dt::Real)
     dt > 0 || throw(ArgumentError("PressureBernoulli(unsteady=true) requires a positive runtime dt; got $(dt)."))
 
@@ -326,6 +349,7 @@ function _pressure_bernoulli_phi_dot!(m::PressureBernoulli, body::AbstractBody,
             body.controlpoints[3, p],
         )
         probes.scalar_potential[p] = 0.0
+        probes.gradient[p] = zero(eltype(probes.gradient))
     end
 
     if length(scalar_sources) > 0
@@ -334,11 +358,22 @@ function _pressure_bernoulli_phi_dot!(m::PressureBernoulli, body::AbstractBody,
             hessian=(false,))
     end
 
+    # Vector-potential-only wake velocity belongs to total kinetic energy but
+    # not to the gradient of the retained scalar potential in the ALE term.
+    if length(excluded_sources) > 0
+        influence!((probes,), excluded_sources, m.backend;
+            precalc=false, scalar_potential=false, gradient=true,
+            hessian=(false,))
+    end
+
     @inbounds for p in 1:body.ncells
         phi = probes.scalar_potential[p] +
               uinf[1] * body.controlpoints[1, p] +
               uinf[2] * body.controlpoints[2, p] +
               uinf[3] * body.controlpoints[3, p]
+        # Exact-control-point body kernels return FLOWPanel's canonical
+        # interior limit. Bernoulli history requires the exterior trace.
+        has_grad_mu(body) && (phi -= body.strength[p, get_Gammai(body)])
         count = m.history_count[i_body]
         consecutive = i_step == m.last_step[i_body] + 1
         valid_history = consecutive && count > 0
@@ -352,9 +387,10 @@ function _pressure_bernoulli_phi_dot!(m::PressureBernoulli, body::AbstractBody,
         vk1 = body.velocity_kinematic[1, p]
         vk2 = body.velocity_kinematic[2, p]
         vk3 = body.velocity_kinematic[3, p]
-        grad_phi_1 = body.velocity[1, p] + vk1
-        grad_phi_2 = body.velocity[2, p] + vk2
-        grad_phi_3 = body.velocity[3, p] + vk3
+        excluded = probes.gradient[p]
+        grad_phi_1 = body.velocity[1, p] + vk1 - excluded[1]
+        grad_phi_2 = body.velocity[2, p] + vk2 - excluded[2]
+        grad_phi_3 = body.velocity[3, p] + vk3 - excluded[3]
         phi_dot[p] = valid_history ?
             Dphi_Dt - (vk1 * grad_phi_1 + vk2 * grad_phi_2 + vk3 * grad_phi_3) : 0.0
         older[p] = history[p]

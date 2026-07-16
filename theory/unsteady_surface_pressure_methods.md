@@ -160,21 +160,32 @@ Required fields are `body.controlpoints`, `body.velocity`,
 sources, `uinf`, `i_step`, and runtime `dt`. Monitor integration is simple:
 `PressureBernoulli` provides `:P`; `ForceMonitor(source=:pressure)` requires
 `:P`. Direct and FMM backends are both supported through `influence!`, but only
-sources with scalar potential are included in the potential history. When
-vector-potential-only wake sources are excluded, the monitor warns and
-continues with a mixed partial diagnostic.
+sources with scalar potential are included in the potential history.
+Vector-potential-capable bodies are rejected. Vector-potential-only wake sources
+throw by default; `allow_partial=true` opts into a once-warned mixed partial
+diagnostic.
 
 Pseudocode:
 
 ```text
 for each body:
     u_s = body.velocity_kinematic + tangent(body.velocity)
-    phi = scalar_potential(body + scalar wake sources, controlpoints)
+    phi_minus = scalar_potential(body + scalar wake sources, controlpoints)
           + dot(uinf, controlpoint)
-    Dg_phi = zero/BE/BDF2 panel-following derivative(phi)
-    phi_t = Dg_phi - dot(w, u_s)
+    phi_plus = phi_minus - local_mu_code  # only when has_grad_mu(body)
+    Dg_phi = zero/BE/BDF2 panel-following derivative(phi_plus)
+    u_retained = u_total - u_excluded_vector_wake
+    phi_t = Dg_phi - dot(w, u_retained)
     p = 0.5*rho*(|uinf|^2 - |u_s|^2) - rho*phi_t
 ```
+
+Here ALE means Arbitrary Lagrangian--Eulerian and
+`partial_t(phi)=D_g(phi)-w dot grad(phi)`. History stores the exterior
+potential `phi_plus`; source-only bodies and off-body/wake contributions need no
+surface-limit correction. In partial mode the kinetic term retains total
+inertial velocity, while the ALE contraction excludes vector-only wake velocity.
+Trailing-edge pressure averaging is a separate optional heuristic, disabled by
+default and enabled with `correct_kuttacondition=true`.
 
 Cost is one scalar-potential influence evaluation per pressure step plus
 `O(N)` history and pressure work. Direct evaluation is `O(N^2)` in the number

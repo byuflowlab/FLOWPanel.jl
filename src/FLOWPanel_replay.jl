@@ -306,6 +306,7 @@ function _wake_manifest_dict(wake, i::Int)
         d["core_size"] = wake.core_size
         d["shed_with_induced_velocity"] = wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.unsteady_filament
+        d["include_final_filament"] = wake.include_final_filament
     else
         d["type"] = string(nameof(typeof(wake)))
     end
@@ -460,7 +461,10 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
                 nwakerows=Int(get(wmeta, "nwakerows", 100)),
                 core_size=Float64(get(wmeta, "core_size", 1e-3)),
                 shed_with_induced_velocity=Bool(get(wmeta, "shed_with_induced_velocity", true)),
-                unsteady_filament=Bool(get(wmeta, "unsteady_filament", true))))
+                unsteady_filament=Bool(get(wmeta, "unsteady_filament", true)),
+                # Preserve the historical default for manifests written before
+                # finite panel-only wakes recorded this setting explicitly.
+                include_final_filament=Bool(get(wmeta, "include_final_filament", true))))
         elseif wtype == "PanelParticleWake"
             systems[i] isa AbstractLiftingBody ||
                 throw(ArgumentError("Cannot reconstruct PanelParticleWake for non-lifting body $(i)."))

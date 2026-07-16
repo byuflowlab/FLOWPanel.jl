@@ -45,6 +45,7 @@ mutable struct PressureComparisonRecorder <: pnl.AbstractMonitor
     pressure_l2_relative::Vector{Float64}
     pressure_linf::Vector{Float64}
     converged::Vector{Bool}
+    iterations::Vector{Int}
     absolute_residual::Vector{Float64}
     relative_residual::Vector{Float64}
     rhs_l2::Vector{Float64}
@@ -60,7 +61,7 @@ function PressureComparisonRecorder(method::Symbol, nt::Integer;
                                     reference_history=Vector{Vector{Float64}}(),
                                     laplace=nothing)
     return PressureComparisonRecorder(method, fill(NaN, nt), fill(NaN, nt),
-        trues(nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt),
+        trues(nt), zeros(Int, nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt), fill(NaN, nt),
         reference_history, laplace)
 end
 
@@ -80,6 +81,7 @@ function _run_monitor!(m::PressureComparisonRecorder, ctx::pnl.MonitorContext,
         m.pressure_linf[i_step + 1] = maximum(abs, delta)
         laplace = m.laplace
         m.converged[i_step + 1] = laplace.workspace[1].stats.solved
+        m.iterations[i_step + 1] = laplace.workspace[1].stats.niter
         m.absolute_residual[i_step + 1] = laplace.absolute_residual[1]
         m.relative_residual[i_step + 1] = laplace.relative_residual[1]
         m.rhs_l2[i_step + 1] = norm(laplace.b[1])
@@ -94,17 +96,18 @@ function _run_monitor!(m::PressureComparisonRecorder, ctx::pnl.MonitorContext,
 end
 
 function _comparison_csv(path, t_range, period, alpha_history, forces,
-                         pressure_metrics, diagnostics)
+                         pressure_metrics, diagnostics;
+                         methods=PRESSURE_COMPARISON_METHODS)
     mkpath(dirname(path))
     names = String["time", "t_over_T", "alpha_deg"]
-    for (method, _) in PRESSURE_COMPARISON_METHODS
+    for (method, _) in methods
         push!(names, "CL_$(method)")
         push!(names, "CD_$(method)")
     end
-    for (method, _) in PRESSURE_COMPARISON_METHODS[2:end]
+    for (method, _) in methods[2:end]
         push!(names, "pressure_l2_relative_$(method)")
         push!(names, "pressure_linf_$(method)")
-        append!(names, ("cg_solved_$(method)", "absolute_residual_$(method)",
+        append!(names, ("cg_solved_$(method)", "cg_iterations_$(method)", "absolute_residual_$(method)",
                         "relative_residual_$(method)", "rhs_l2_$(method)",
                         "gradient_l2_$(method)"))
     end
@@ -112,15 +115,15 @@ function _comparison_csv(path, t_range, period, alpha_history, forces,
         println(io, join(names, ","))
         for i in eachindex(t_range)
             row = Any[t_range[i], t_range[i] / period, alpha_history[i]]
-            for (method, _) in PRESSURE_COMPARISON_METHODS
+            for (method, _) in methods
                 push!(row, forces[method][3, i])
                 push!(row, forces[method][1, i])
             end
-            for (method, _) in PRESSURE_COMPARISON_METHODS[2:end]
+            for (method, _) in methods[2:end]
                 push!(row, pressure_metrics[method].l2[i])
                 push!(row, pressure_metrics[method].linf[i])
                 d = diagnostics[method]
-                append!(row, (d.converged[i], d.absolute_residual[i],
+                append!(row, (d.converged[i], d.iterations[i], d.absolute_residual[i],
                               d.relative_residual[i], d.rhs_l2[i], d.gradient_l2[i]))
             end
             println(io, join(row, ","))
@@ -130,12 +133,13 @@ function _comparison_csv(path, t_range, period, alpha_history, forces,
 end
 
 function _comparison_summary(t_range, period, forces, pressure_metrics, diagnostics;
-                             skip_first_cycle::Bool=true)
+                             skip_first_cycle::Bool=true,
+                             methods=PRESSURE_COMPARISON_METHODS)
     indices = skip_first_cycle ? findall(t -> t >= period, t_range) : collect(eachindex(t_range))
     isempty(indices) && (indices = collect(eachindex(t_range)))
     rows = NamedTuple[]
     reference = forces[:bernoulli][3, indices]
-    for (method, label) in PRESSURE_COMPARISON_METHODS
+    for (method, label) in methods
         valid = method == :bernoulli ? indices : [i for i in indices if diagnostics[method].converged[i]]
         cl = forces[method][3, valid]
         ref = forces[:bernoulli][3, valid]
@@ -169,30 +173,33 @@ function _write_comparison_summary(path, rows)
     return path
 end
 
-function _plot_comparison(path, t_range, period, forces, pressure_metrics)
+function _plot_comparison(path, t_range, period, forces, pressure_metrics;
+                          methods=PRESSURE_COMPARISON_METHODS,
+                          stem="pitching_wing_pressure")
     plt = Core.eval(@__MODULE__, :(import PythonPlot as pressure_comparison_plt; pressure_comparison_plt))
     return Base.invokelatest(_plot_comparison_impl, plt, path, collect(t_range), period,
-        forces, pressure_metrics)
+        forces, pressure_metrics, methods, stem)
 end
 
-function _plot_comparison_impl(plt, path, t_range, period, forces, pressure_metrics)
+function _plot_comparison_impl(plt, path, t_range, period, forces, pressure_metrics,
+                               methods, stem)
     mkpath(path)
     cycles = collect(t_range) ./ period
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
-    for (method, label) in PRESSURE_COMPARISON_METHODS
+    for (method, label) in methods
         ax.plot(cycles, forces[method][3, :]; linewidth=1.25, label=label)
     end
     ax.set_xlabel("t/T"); ax.set_ylabel("C_L"); ax.grid(true, alpha=0.3); ax.legend(fontsize=8)
-    fig.tight_layout(); load_path = joinpath(path, "pitching_wing_pressure_loads.png")
+    fig.tight_layout(); load_path = joinpath(path, "$(stem)_loads.png")
     fig.savefig(load_path, dpi=170); plt.pyplot.close(fig)
 
     fig, ax = plt.subplots(figsize=(8.0, 4.8))
-    for (method, label) in PRESSURE_COMPARISON_METHODS[2:end]
+    for (method, label) in methods[2:end]
         ax.plot(cycles, pressure_metrics[method].l2; linewidth=1.25, label=label)
     end
     ax.set_xlabel("t/T"); ax.set_ylabel("relative pressure L2 error")
     ax.set_yscale("log"); ax.grid(true, alpha=0.3); ax.legend(fontsize=8)
-    fig.tight_layout(); error_path = joinpath(path, "pitching_wing_pressure_errors.png")
+    fig.tight_layout(); error_path = joinpath(path, "$(stem)_errors.png")
     fig.savefig(error_path, dpi=170); plt.pyplot.close(fig)
     return (; loads=load_path, errors=error_path)
 end
@@ -213,7 +220,8 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
     normalization = pnl.WingNormalization(setup0.setup.rho, setup0.setup.Sref, setup0.setup.c)
     pressure_itmax === nothing && (pressure_itmax = max(1000,
         ceil(Int, _env_float("PRESSURE_ITMAX_PER_PANEL", 2.0) * setup0.wing.ncells)))
-    bernoulli = pnl.PressureBernoulli(setup0.setup.rho; unsteady=true, backend)
+    bernoulli = pnl.PressureBernoulli(setup0.setup.rho;
+        unsteady=true, allow_partial=true, backend)
     laplace = Dict(method => pnl.PressureLaplace((setup0.wing,), setup0.setup.rho;
         unsteady=true, gradient_mode=method, reference_panel=1, verbose=false,
         itmax=pressure_itmax)
@@ -246,6 +254,7 @@ function run_pitching_wing_pressure_comparison(; path=get(ENV, "PRESSURE_COMPARI
     pressure_metrics = Dict(method => (; l2=recorders[method].pressure_l2_relative,
         linf=recorders[method].pressure_linf) for (method, _) in PRESSURE_COMPARISON_METHODS[2:end])
     diagnostics = Dict(method => (; converged=recorders[method].converged,
+        iterations=recorders[method].iterations,
         absolute_residual=recorders[method].absolute_residual,
         relative_residual=recorders[method].relative_residual,
         rhs_l2=recorders[method].rhs_l2,

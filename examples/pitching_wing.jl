@@ -1003,7 +1003,8 @@ function prepare_pitching_wing(;
     solver = pnl.Backslash(wing)
     normalization = pnl.WingNormalization(rho, Sref, c)
 
-    pressure_monitor = pnl.PressureBernoulli(rho; unsteady=true)
+    pressure_monitor = pnl.PressureBernoulli(rho; unsteady=true,
+        allow_partial=(wake_model == :particle))
     force_monitor = pnl.ForceMonitor(length(t_range), 1;
         normalization,
         i_frame=-1,

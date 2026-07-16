@@ -240,7 +240,7 @@ function prepare_heaving_wing(;
     solver = pnl.Backslash(wing)
     normalization = pnl.WingNormalization(rho, S0, c)
 
-    pressure_monitor = pnl.PressureBernoulli(rho; unsteady=true)
+    pressure_monitor = pnl.PressureBernoulli(rho; unsteady=true, allow_partial=true)
     force_monitor = pnl.ForceMonitor(length(t_range), 1;
         normalization,
         i_frame=-1,

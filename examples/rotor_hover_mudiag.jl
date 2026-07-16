@@ -280,6 +280,7 @@ function wake_v_monitor(systems, wakes, frames, uinf, i_step)
 end
 
 monitors = (pnl.PressureBernoulli(rho; unsteady=true,
+                    allow_partial=true,
                     correct_kuttacondition=p_correct_kuttacondition_flag),
             pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                     i_frame=-1,

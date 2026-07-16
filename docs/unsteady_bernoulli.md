@@ -4,8 +4,9 @@
 > [`theory/unsteady_pressure_monitors_2026-07-11.md`](../theory/unsteady_pressure_monitors_2026-07-11.md).
 > The kinetic term now uses reconstructed inertial surface velocity; the first
 > sample seeds a zero derivative; later samples use backward Euler and then
-> variable-step BDF2; and particle/vector-potential-only wake sources produce a
-> warning-only mixed partial diagnostic. First-order formulas below remain as
+> variable-step BDF2; history stores the exterior potential; and
+> particle/vector-potential-only wake sources require explicit opt-in to a
+> warned mixed partial diagnostic. First-order formulas below remain as
 > derivational background, not the current temporal scheme.
 
 This note records the discrete unsteady term used by `PressureBernoulli`.
@@ -13,7 +14,7 @@ The monitor owns this calculation because pressure is a post-processing
 quantity, while `simulate!` should only advance the aerodynamic state needed by
 the flow solve.
 
-## Moving Control-Point Derivative
+## Arbitrary Lagrangian--Eulerian Moving-Point Derivative
 
 For an inviscid, incompressible potential flow with scalar potential `phi`,
 
@@ -29,12 +30,13 @@ p =
 - \rho \frac{\partial \phi}{\partial t}.
 ```
 
-Panel potentials are sampled at control points that move with the body. If a
+In the Arbitrary Lagrangian--Eulerian (ALE) description, panel potentials are
+sampled at control points that move with the body. If a
 control point has inertial velocity `w`, the time derivative seen by the moving
 point is
 
 ```math
-\frac{d}{dt}\phi(\mathbf{x}_p(t),t)
+D_g\phi := \frac{d}{dt}\phi(\mathbf{x}_p(t),t)
 =
 \frac{\partial \phi}{\partial t}
 + \mathbf{w}\cdot\nabla\phi .
@@ -112,11 +114,25 @@ The scalar potential used in this finite difference is evaluated inside
 body control points using `FastMultipole.ProbeSystem`, then adds the freestream
 potential `uinf dot x`.
 
-Only sources with a well-defined scalar potential are included. In practice the
-source list is filtered with `FastMultipole.has_vector_potential(source)`;
+The stored history is the exterior surface potential. Exact-control-point body
+kernels return FLOWPanel's canonical interior limit, so bodies with a doublet
+or ring strength use ``\phi^+=\phi^- - \mu_\mathrm{code}`` at the target panel.
+Source-only bodies, other bodies' off-surface contributions, and wake
+potentials are unchanged.
+
+Only sources with a well-defined scalar potential are included. The complete
+body and wake source lists are checked with
+`FastMultipole.has_vector_potential(source)`;
 sources that induce only a vector potential, such as vortex filaments or vortex
 particles, are excluded. This avoids requesting scalar potential from a vector
 potential source, which can corrupt the FMM scalar-potential result.
+Vector-capable bodies are unsupported. Vector-only wake sources throw by
+default; `allow_partial=true` opts into a once-warned partial diagnostic. Their
+velocity remains in the total inertial kinetic-energy term but is subtracted
+from the retained-scalar ``\mathbf{w}\cdot\nabla\phi`` contraction.
+
+Trailing-edge pressure-pair averaging is an optional heuristic, disabled by
+default. Set `correct_kuttacondition=true` to enable it.
 
 The normal velocity/gradient influence calls in `simulate!` should not be used
 for this bookkeeping. Keeping scalar-potential evaluation monitor-local avoids

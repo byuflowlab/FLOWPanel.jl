@@ -172,6 +172,7 @@ wakes        = (wake_rotor,)
 body_solvers = (solver_rotor,)
 pressure_bernoulli = pnl.PressureBernoulli(rho;
                         unsteady=true,
+                        allow_partial=true,
                         correct_kuttacondition=p_correct_kuttacondition_flag,
                         backend=backend)
 force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;

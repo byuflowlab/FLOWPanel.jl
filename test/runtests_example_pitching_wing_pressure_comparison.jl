@@ -15,6 +15,7 @@ end
                    for (method, _) in PRESSURE_COMPARISON_METHODS[2:end])
     diagnostics = Dict(method => (;
         converged=[true, false, true],
+        iterations=[4, 9, 5],
         absolute_residual=[1.0e-8, 2.0, 3.0e-8],
         relative_residual=[1.0e-9, 0.2, 3.0e-9],
         rhs_l2=[10.0, 20.0, 30.0],
@@ -71,5 +72,24 @@ end
         @test failed_sample[findfirst(==("cg_solved_edge_difference"), header)] == "false"
         @test parse(Float64,
             failed_sample[findfirst(==("absolute_residual_edge_difference"), header)]) == 2.0
+    end
+
+    @testset "two-method replay report" begin
+        methods = PRESSURE_COMPARISON_METHODS[1:2]
+        rows = _comparison_summary(t, 0.1, forces, metrics, diagnostics;
+            skip_first_cycle=false, methods)
+        @test getfield.(rows, :method) == [:bernoulli, :edge_difference]
+
+        mktempdir() do dir
+            csv = _comparison_csv(joinpath(dir, "replay.csv"), t, 0.1,
+                [1.0, 2.0, 3.0], forces, metrics, diagnostics; methods)
+            summary = _write_comparison_summary(joinpath(dir, "summary.csv"), rows)
+            header = split(first(readlines(csv)), ',')
+            @test "CL_bernoulli" in header
+            @test "CL_edge_difference" in header
+            @test "cg_iterations_edge_difference" in header
+            @test !any(occursin("corrected_hessian"), header)
+            @test countlines(summary) == 3
+        end
     end
 end

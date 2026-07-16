@@ -94,7 +94,8 @@ function make_monitors(systems, nt)
         unsteady=false, reference_panel=1, reference_pressure=0.0,
         verbose=false, file=false, vtk_fields=(), kwargs...)
     bern(unsteady) = pnl.PressureBernoulli(RHO;
-        unsteady, correct_kuttacondition=false, file=false, vtk_fields=())
+        unsteady, allow_partial=unsteady, correct_kuttacondition=false,
+        file=false, vtk_fields=())
 
     pressure_monitors = (
         pl(; acceleration_form=:lamb_vector),

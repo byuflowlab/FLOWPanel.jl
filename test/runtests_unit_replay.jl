@@ -477,6 +477,43 @@ end
         end
     end
 
+    @testset "finite PanelWake metadata round trip" begin
+        body = make_plate_vortex_body()
+        frames = pnl.ReferenceFrame(body)
+
+        function write_panel_wake_case(path, wake)
+            pnl.write_vtk(joinpath(path, "run_body1"), body, 0, 0.0; overwrite=true)
+            pnl.write_vtk(joinpath(path, "run_wake1"), wake, 0, 0.0; overwrite=true)
+            pnl._write_metadata_toml(path, "run", (body,), (wake,), frames, [0.0, 0.1],
+                (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(),
+                pnl.DirectBackend(), ())
+            pnl._append_metadata_step_toml(path, "run", frames, 0, 0.0)
+        end
+
+        finite_path = mktempdir()
+        finite_wake = pnl.PanelWake(body; nwakerows=2, include_final_filament=false)
+        write_panel_wake_case(finite_path, finite_wake)
+        finite_meta = TOML.parsefile(joinpath(finite_path, "run.metadata.toml"))
+        @test finite_meta["wake"][1]["include_final_filament"] == false
+        finite_result = pnl.replay(finite_path, "run"; steps=0, recompute=())
+        @test !finite_result.wakes[1].include_final_filament
+        @test length(pnl.get_sources(finite_result.wakes[1])) == 1
+        @test all(source -> !pnl.FastMultipole.has_vector_potential(source),
+            pnl.get_sources(finite_result.wakes[1]))
+
+        legacy_path = mktempdir()
+        legacy_wake = pnl.PanelWake(body; nwakerows=2, include_final_filament=true)
+        write_panel_wake_case(legacy_path, legacy_wake)
+        legacy_file = joinpath(legacy_path, "run.metadata.toml")
+        legacy_meta = TOML.parsefile(legacy_file)
+        delete!(legacy_meta["wake"][1], "include_final_filament")
+        open(legacy_file, "w") do io
+            TOML.print(io, legacy_meta)
+        end
+        legacy_result = pnl.replay(legacy_path, "run"; steps=0, recompute=())
+        @test legacy_result.wakes[1].include_final_filament
+    end
+
     @testset "particle wake explicit field round trips" begin
         body = make_plate_vortex_body()
         wake = pnl.PanelParticleWake(body; nwakerows=2, max_particles=8,

@@ -930,7 +930,7 @@ end
 # PRESSURE FIELDS
 ################################################################################
 """
-    calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=true, clip=nothing)
+    calcfield_P!(out, body, Us, Uinf, rho, phi_dot; correct_kuttacondition=false, clip=nothing)
 
 Compute and store the dimensional gauge pressure field using the Bernoulli
 equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial \\phi}{\\partial t}``
@@ -938,12 +938,14 @@ equation:  ``P = \\frac{1}{2} \\rho (U_\\infty^2 - U^2) - \\rho \\frac{\\partial
 `phi_dot` is a per-panel ``\\partial \\phi / \\partial t`` vector; pass
 `nothing` to ignore the unsteady term. The field is calculated in-place and
 added to `out` (hence, make sure that `out` starts with all zeroes).
+Set `correct_kuttacondition=true` to opt into heuristic averaging of pressures
+on paired trailing-edge panels.
 """
 function calcfield_P!(out::Arr1,
                        body::Union{NonLiftingBody, AbstractLiftingBody},
                        Us::Arr2, Uinf::Number, rho::Number,
                        phi_dot::Union{Nothing, AbstractVector};
-                       correct_kuttacondition=true,
+                       correct_kuttacondition=false,
                        clip::Union{Nothing, Function}=nothing,
                        ) where {Arr1<:AbstractArray{<:Number,1},
                                 Arr2<:AbstractArray{<:Number,2}}

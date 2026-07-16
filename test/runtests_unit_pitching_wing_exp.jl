@@ -14,8 +14,16 @@ end
         "dynamic_tripped_eta_0p900_cm.csv"
     @test pitching_wing_exp_cd_filename(:dynamic, :tripped) ==
         "dynamic_tripped_eta_all_cd.csv"
-    @test pitching_wing_exp_cd_filename(:dynamic, :notrip) ==
-        "dynamic_untripped_eta_all_cd.csv"
+    for invalid_tripping in (:notrip, "notrip")
+        @test_throws ArgumentError pitching_wing_exp_filename(
+            :dynamic, invalid_tripping, 0.9)
+        @test_throws ArgumentError pitching_wing_exp_cd_filename(
+            :dynamic, invalid_tripping)
+        @test_throws ArgumentError load_pitching_wing_exp_curve(
+            :dynamic, invalid_tripping, 0.25; data_dir=fixture_dir)
+        @test_throws ArgumentError load_pitching_wing_exp_cd(;
+            data_dir=fixture_dir, regime=:dynamic, tripping=invalid_tripping)
+    end
 
     static = load_pitching_wing_exp_curve(:static, :untripped, 0.25; data_dir=fixture_dir)
     @test !isempty(static.aoa_deg)
@@ -27,7 +35,8 @@ end
     dynamic_cl = load_pitching_wing_exp_curve(:dynamic, :untripped, 0.25; data_dir=fixture_dir)
     @test !isempty(dynamic_cl.aoa_deg)
     @test length(dynamic_cl.aoa_deg) == length(dynamic_cl.values)
-    @test endswith(dynamic_cl.source, "dynamic_notrip_eta_0p250.csv")
+    @test dynamic_cl.source ==
+        joinpath(fixture_dir, "dynamic_untripped_eta_0p250.csv")
     @test pitching_wing_exp_has_hysteresis(dynamic_cl)
     @test length(pitching_wing_exp_sweeps(dynamic_cl)) > 1
 
@@ -51,7 +60,8 @@ end
     @test dynamic_cd.source == joinpath(fixture_dir, "dynamic_tripped_eta_all_cd.csv")
     dynamic_untripped_cd = load_pitching_wing_exp_cd(; data_dir=fixture_dir,
         regime=:dynamic, tripping=:untripped)
-    @test endswith(dynamic_untripped_cd.source, "dynamic_notrip_eta_all_cd.csv")
+    @test dynamic_untripped_cd.source ==
+        joinpath(fixture_dir, "dynamic_untripped_eta_all_cd.csv")
     @test pitching_wing_exp_has_hysteresis(dynamic_untripped_cd)
 
     exp = load_pitching_wing_exp(data_dir=fixture_dir)
@@ -61,14 +71,14 @@ end
     @test haskey(exp.dynamic.tripped, 0.25)
     @test haskey(exp.dynamic.untripped, 0.9)
     @test haskey(exp.dynamic.tripped, 0.9)
-    @test exp.static.untripped[0.25].cl.source != static.source
-    @test endswith(exp.static.untripped[0.25].cl.source, "static_notrip_eta_0p250.csv")
+    @test exp.static.untripped[0.25].cl.source == static.source
     @test exp.static.untripped.cd_all !== nothing
     @test exp.static.tripped.cd_all !== nothing
     @test exp.dynamic.untripped.cd_all !== nothing
     @test exp.dynamic.tripped.cd_all !== nothing
     @test length(exp.dynamic.tripped.cd_all.aoa_deg) == length(dynamic_cd.aoa_deg)
     @test length(exp.dynamic.untripped.cd_all.aoa_deg) == length(dynamic_untripped_cd.aoa_deg)
+    @test exp.dynamic.untripped.cd_all.source == dynamic_untripped_cd.source
     @test length(exp.dynamic.untripped[0.25].cl.values) == length(dynamic_cl.values)
     @test length(exp.dynamic.tripped[0.25].cm.values) == length(dynamic_cm.values)
     @test exp.dynamic.untripped[0.25].cl.source == dynamic_cl.source

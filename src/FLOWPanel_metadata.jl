@@ -210,6 +210,7 @@ function _monitor_metadata(m)
             "rho" => m.rho,
             "unsteady" => m.unsteady,
             "correct_kuttacondition" => m.correct_kuttacondition,
+            "allow_partial" => m.allow_partial,
             "clip" => m.clip === nothing ? "nothing" : string(m.clip),
             "backend" => _backend_metadata_dict(m.backend),
             "vtk_fields" => collect(string.(m.vtk_fields)),

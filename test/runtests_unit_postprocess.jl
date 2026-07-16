@@ -23,6 +23,58 @@ end
 pnl.get_sources(w::PostprocessVectorWake) = (w.source,)
 pnl._scalar_potential_sources(::PostprocessVectorWake) = ()
 
+function make_bernoulli_limit_body(kind::Symbol)
+    if kind == :doublet
+        body = pnl.NonLiftingBody{pnl.ConstantDoublet}(copy(NODES_2TRI), copy(CELLS_2TRI);
+            watertight=false, ensure_winding=false)
+    elseif kind == :ring
+        body = make_plate_vortex_body()
+    elseif kind == :source_doublet
+        body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            copy(NODES_2TRI), copy(CELLS_2TRI);
+            DBC=true, watertight=false, ensure_winding=false)
+    elseif kind == :source_ring
+        base = make_plate_vortex_body()
+        body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.VortexRing}}(
+            copy(base.nodes), copy(base.cells), deepcopy(base.shedding);
+            DBC=true, check_mesh=false, watertight=false, ensure_winding=false)
+        for Da in body.Das
+            Da .= repeat([1.0, 0.0, 0.0], 1, size(Da, 2))
+        end
+    else
+        error("unknown Bernoulli limit body kind $(kind)")
+    end
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    body.strength .= 0.0
+    gammai = pnl.get_Gammai(body)
+    body.strength[:, gammai] .= range(0.2, 0.8; length=body.ncells)
+    return body
+end
+
+function raw_controlpoint_potential(body, backend)
+    probes = FastMultipole.ProbeSystem(body.ncells, Float64)
+    for p in 1:body.ncells
+        probes.position[p] = SVector{3, Float64}(body.controlpoints[:, p])
+        probes.scalar_potential[p] = 0.0
+    end
+    pnl.influence!((probes,), (body,), backend;
+        precalc=false, scalar_potential=true, gradient=false, hessian=(false,))
+    return copy(probes.scalar_potential)
+end
+
+function make_active_final_filament_wake(body)
+    wake = pnl.PanelWake(body; nwakerows=2, include_final_filament=true)
+    wake.nwakes[] = 1
+    wake.overflowed[] = true
+    for (nodes, strength) in zip(wake.nodes, wake.strength)
+        nodes[:, 2, 1] .= (-0.5, -0.7, 0.6)
+        nodes[:, 2, 2] .= (1.5, -0.7, 0.6)
+        strength[1, 2, 1] = 0.9
+    end
+    return wake
+end
+
 function make_planar_gradient_mesh()
     nodes = Float64[
         0 1 2 0 1 2 0 1 2;
@@ -229,7 +281,7 @@ end
         for (step, u) in enumerate(us)
             body.velocity_kinematic .= w
             body.velocity .= u .- w
-            pnl._pressure_bernoulli_phi_dot!(monitor, body, 1, (), u, step - 1, dts[step])
+            pnl._pressure_bernoulli_phi_dot!(monitor, body, 1, (), (), u, step - 1, dts[step])
         end
         for p in 1:body.ncells
             expected_D = pnl._variable_bdf2(phis[3,p], phis[2,p], phis[1,p], dts[2], dts[1])
@@ -248,6 +300,39 @@ end
         pnl.calcfield_P!(steady_from_zero, body, body.velocity, 1.0, 1.0, zeros(body.ncells);
             correct_kuttacondition=false)
         @test steady_from_nothing == steady_from_zero
+    end
+
+    @testset "PressureBernoulli exterior potential limits" begin
+        backends = (pnl.DirectBackend(),
+            pnl.FastMultipoleBackend(expansion_order=12,
+                multipole_acceptance=0.4, leaf_size=2))
+        for backend in backends, kind in (:doublet, :ring, :source_doublet, :source_ring)
+            body = make_bernoulli_limit_body(kind)
+            monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend)
+            frames = pnl.ReferenceFrame(body)
+            gammai = pnl.get_Gammai(body)
+
+            raw1 = raw_controlpoint_potential(body, backend)
+            monitor((body,), (nothing,), frames, zeros(3), 0, 0.2)
+            exterior1 = raw1 .- body.strength[:, gammai]
+            @test isapprox(monitor.potential_history[1], exterior1;
+                atol=2e-9, rtol=2e-9)
+
+            body.strength[:, gammai] .+= range(0.05, 0.15; length=body.ncells)
+            raw2 = raw_controlpoint_potential(body, backend)
+            monitor((body,), (nothing,), frames, zeros(3), 1, 0.2)
+            exterior2 = raw2 .- body.strength[:, gammai]
+            @test isapprox(monitor.potential_history[1], exterior2;
+                atol=2e-9, rtol=2e-9)
+            @test isapprox(monitor.phi_dot[1], (exterior2 .- exterior1) ./ 0.2;
+                atol=2e-8, rtol=2e-8)
+        end
+
+        source = make_octa_source_body()
+        raw = raw_controlpoint_potential(source, pnl.DirectBackend())
+        monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend=pnl.DirectBackend())
+        monitor((source,), (nothing,), pnl.ReferenceFrame(source), zeros(3), 0, 0.1)
+        @test isapprox(monitor.potential_history[1], raw; atol=1e-12)
     end
 
 
@@ -271,7 +356,7 @@ end
         @test !isapprox(monitor.pressure[1], raw_pressure; atol=1e-12)
     end
 
-    @testset "Unsteady history order and particle warning" begin
+    @testset "Unsteady history order and vector-source policy" begin
         # Variable-step BDF2 differentiates quadratics exactly.
         h, hp = 0.3, 0.2
         f(t) = 2t^2 - 3t + 1
@@ -281,13 +366,90 @@ end
         cubic_error(h) = abs(pnl._variable_bdf2(1.0, (1-h)^3, (1-2h)^3, h, h) - 3.0)
         @test isapprox(cubic_error(0.1) / cubic_error(0.05), 4.0; rtol=1e-10)
 
-        body = make_octa_source_body()
-        wake = PostprocessVectorWake(PostprocessVectorPotentialDummy())
-        monitor = pnl.PressureBernoulli(1.0; unsteady=true, backend=pnl.DirectBackend())
+        body = make_plate_vortex_body()
+        wake = make_active_final_filament_wake(body)
         frames = pnl.ReferenceFrame(body)
-        @test_logs (:warn, r"excludes vortex-particle") monitor((body,), (wake,), frames, zeros(3), 0, 0.1)
+        default_monitor = pnl.PressureBernoulli(1.0; unsteady=true,
+            backend=pnl.DirectBackend())
+        @test_throws ArgumentError default_monitor((body,), (wake,), frames, zeros(3), 0, 0.1)
+
+        partial = pnl.PressureBernoulli(1.0; unsteady=true, allow_partial=true,
+            backend=pnl.DirectBackend())
+        @test_logs (:warn, r"allow_partial=true") partial((body,), (wake,), frames, zeros(3), 0, 0.1)
+        @test_logs partial((body,), (wake,), frames, zeros(3), 1, 0.1)
+        @test all(isfinite, partial.pressure[1])
+
+        vector_body = pnl.RigidWakeBody{
+            Union{pnl.VortexRing, pnl.UniformVortexSheet}, 2, Float64, true}(
+            copy(body.nodes), copy(body.cells), deepcopy(body.shedding);
+            check_mesh=false, watertight=false, ensure_winding=false)
+        pnl.calc_normals!(vector_body); pnl.calc_controlpoints!(vector_body)
+        rejected = pnl.PressureBernoulli(1.0; unsteady=true, allow_partial=true,
+            backend=pnl.DirectBackend())
+        @test_throws ArgumentError rejected((vector_body,), (nothing,),
+            pnl.ReferenceFrame(vector_body), zeros(3), 0, 0.1)
+    end
+
+
+    @testset "PressureBernoulli scalar ALE split and Galilean translation" begin
+        body = make_plate_vortex_body()
+        wake = make_active_final_filament_wake(body)
+        excluded = last(pnl.get_sources(wake))
+        probes = FastMultipole.ProbeSystem(body.ncells, Float64)
+        for p in 1:body.ncells
+            probes.position[p] = SVector{3, Float64}(body.controlpoints[:, p])
+            probes.gradient[p] = zero(eltype(probes.gradient))
+        end
+        pnl.influence!((probes,), (excluded,), pnl.DirectBackend();
+            precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
+        excluded_velocity = reduce(hcat, probes.gradient)
+        w = [0.35, -0.2, 0.15]
+        retained = [0.6, 0.1, -0.25]
+        body.velocity_kinematic .= w
+        body.velocity .= retained .+ excluded_velocity .- w
+        monitor = pnl.PressureBernoulli(1.0; unsteady=true, allow_partial=true,
+            backend=pnl.DirectBackend())
+        frames = pnl.ReferenceFrame(body)
+        @test_logs (:warn, r"partial diagnostic") monitor((body,), (wake,), frames, zeros(3), 0, 0.1)
         @test_logs monitor((body,), (wake,), frames, zeros(3), 1, 0.1)
-        @test all(isfinite, monitor.pressure[1])
+        @test isapprox(monitor.phi_dot[1], fill(-dot(w, retained), body.ncells);
+            atol=2e-10, rtol=2e-10)
+        total_surface = similar(body.velocity)
+        pnl._pressure_fill_inertial_surface_velocity!(total_surface, body)
+        kinetic_only = zeros(body.ncells)
+        pnl.calcfield_P!(kinetic_only, body, total_surface, 0.0, 1.0, nothing)
+        @test isapprox(monitor.pressure[1], kinetic_only .- monitor.phi_dot[1];
+            atol=2e-10, rtol=2e-10)
+
+        translating = make_octa_source_body()
+        u = [0.4, -0.3, 0.2]
+        translating.velocity_kinematic .= u
+        translating.velocity .= 0.0
+        galilean = pnl.PressureBernoulli(1.0; unsteady=true,
+            backend=pnl.DirectBackend())
+        galilean((translating,), (nothing,), pnl.ReferenceFrame(translating), u, 0, 0.25)
+        translating.nodes .+= u .* 0.25
+        pnl.calc_controlpoints!(translating)
+        translating.velocity_kinematic .= u
+        translating.velocity .= 0.0
+        galilean((translating,), (nothing,), pnl.ReferenceFrame(translating), u, 1, 0.25)
+        @test isapprox(galilean.phi_dot[1], zeros(translating.ncells); atol=2e-10)
+        @test isapprox(galilean.pressure[1], zeros(translating.ncells); atol=2e-10)
+    end
+
+    @testset "Pressure Kutta averaging is opt-in" begin
+        body = make_plate_vortex_body()
+        U = zeros(3, body.ncells)
+        U[1, :] .= (1.0, 2.0)
+        default_pressure = zeros(body.ncells)
+        averaged_pressure = zeros(body.ncells)
+        pnl.calcfield_P!(default_pressure, body, U, 0.0, 1.0, nothing)
+        pnl.calcfield_P!(averaged_pressure, body, U, 0.0, 1.0, nothing;
+            correct_kuttacondition=true)
+        @test default_pressure[1] != default_pressure[2]
+        @test averaged_pressure[1] == averaged_pressure[2] ==
+            (default_pressure[1] + default_pressure[2]) / 2
+        @test !pnl.PressureBernoulli(1.0).correct_kuttacondition
     end
 
     @testset "PressureLaplace monitor" begin
