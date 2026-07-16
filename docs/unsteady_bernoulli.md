@@ -9,6 +9,35 @@
 > warned mixed partial diagnostic. First-order formulas below remain as
 > derivational background, not the current temporal scheme.
 
+## Steady Mode
+
+With `unsteady=false`, `PressureBernoulli` evaluates the **body-relative steady
+loading formulation**
+
+```math
+P = \frac{1}{2}\rho\left(U_\infty^2 - \left|\mathbf{u}_{\mathrm{rel},t}\right|^2\right),
+```
+
+where `u_rel,t` is the tangential projection of `body.velocity` (which is
+body-relative during monitor execution; see "FLOWPanel Variables" below). This
+is valid for flows steady in the body frame, such as a rotor at constant
+rotation rate. The complete steady relation in a rotating frame also carries a
+centrifugal/reference-potential term `½ρ|w|²`, omitted here: the steady
+pressure is defined only up to that rotating-frame reference contribution. The
+omitted term is symmetric across a blade section and loading-neutral, so
+integrated loads match the historically validated rotor results, but the steady
+field is not the complete absolute pressure for every rotating body.
+
+The reconstructed **inertial** surface velocity enters the kinetic term only in
+`unsteady=true` mode, where the ALE `∂φ/∂t` term compensates for the frame
+motion. Using the inertial kinetic energy *without* that term cancels the
+first-order blade loading on a rotating body.
+
+> **Regression note.** Between commit `ef1fe1e` (2026-07-14) and this fix, the
+> steady mode incorrectly used the inertial surface velocity. Any
+> steady-Bernoulli pressure or force computed on a moving body with code from
+> that window is invalid (observed: rotor axial-flow CT collapse).
+
 This note records the discrete unsteady term used by `PressureBernoulli`.
 The monitor owns this calculation because pressure is a post-processing
 quantity, while `simulate!` should only advance the aerodynamic state needed by

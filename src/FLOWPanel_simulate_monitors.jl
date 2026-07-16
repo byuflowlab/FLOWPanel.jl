@@ -129,14 +129,26 @@ _monitor_csv_bool(x::Bool) = x ? "true" : "false"
                                                    leaf_size=100))
 
 Monitor that owns pressure arrays for every body in the simulation by
-evaluating the Bernoulli equation each step. With `unsteady=false` (default) the steady
-form ``P = \\tfrac{1}{2} \\rho (U_\\infty^2 - U^2)`` is used; with
-`unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is added.
-The monitor evaluates the exterior scalar-potential trace at the body control
-points, finite differences it with zero/BE/variable-step-BDF2 startup, and uses
-the Arbitrary Lagrangian--Eulerian (ALE) identity
-``\\partial_t\\phi=D_g\\phi-\\mathbf{w}\\cdot\\nabla\\phi``. The kinetic term uses
-reconstructed total inertial surface velocity.
+evaluating the Bernoulli equation each step.
+
+With `unsteady=false` (default) the monitor evaluates the *body-relative steady
+loading formulation* ``P = \\tfrac{1}{2} \\rho (U_\\infty^2 - |u_{rel,t}|^2)``,
+where ``u_{rel,t}`` is the tangential projection of the body-relative surface
+velocity (`body.velocity`, i.e. with the rigid-body kinematic velocity already
+subtracted). This is valid for flows that are steady in the body frame (e.g. a
+rotor at constant rotation rate). In a rotating frame the complete steady
+pressure relation also carries a centrifugal/reference-potential term
+``\\tfrac{1}{2}\\rho|\\mathbf{w}|^2`` which is omitted here, so the steady
+pressure is defined only up to that rotating-frame reference contribution; the
+omitted term is symmetric across a blade section and loading-neutral, but the
+steady field is not the complete absolute pressure for every rotating body.
+
+With `unsteady=true` the term ``-\\rho \\, \\partial \\phi / \\partial t`` is
+added and the kinetic term uses the reconstructed total *inertial* surface
+velocity instead. The monitor evaluates the exterior scalar-potential trace at
+the body control points, finite differences it with zero/BE/variable-step-BDF2
+startup, and uses the Arbitrary Lagrangian--Eulerian (ALE) identity
+``\\partial_t\\phi=D_g\\phi-\\mathbf{w}\\cdot\\nabla\\phi``.
 
 Vector-potential-capable body sources are unsupported and throw in unsteady
 mode. Vector-potential-only wake sources also throw by default because their
@@ -210,11 +222,14 @@ function (m::PressureBernoulli)(systems, wakes,
             _pressure_bernoulli_phi_dot!(m, body, i_body, scalar_sources,
                 excluded_sources, uinf, i_step, dt) :
             nothing
-        # Bernoulli's kinetic energy is inertial in both steady and unsteady
-        # modes.  Reconstruct the impermeable exterior trace so that finite
-        # Dirichlet normal leakage is not counted as physical kinetic energy.
-        pressure_velocity =
-            _pressure_fill_inertial_surface_velocity!(m.inertial_velocity[i_body], body)
+        # Steady mode evaluates the body-relative steady loading formulation,
+        # so the kinetic energy uses the relative surface trace; unsteady mode
+        # uses the inertial trace, compensated by the ALE phi_dot term. Both
+        # project out the normal component so that finite Dirichlet normal
+        # leakage is not counted as physical kinetic energy.
+        pressure_velocity = m.unsteady ?
+            _pressure_fill_inertial_surface_velocity!(m.inertial_velocity[i_body], body) :
+            _pressure_fill_relative_surface_velocity!(m.inertial_velocity[i_body], body)
         calcfield_P!(pressure, body, pressure_velocity, Uinf_mag, m.rho, phi_dot;
                      correct_kuttacondition=m.correct_kuttacondition,
                      clip=m.clip)
@@ -415,6 +430,18 @@ end
     return ((2h + hprev) / (h * (h + hprev))) * current -
            ((h + hprev) / (h * hprev)) * previous +
            (h / (hprev * (h + hprev))) * older
+end
+
+function _pressure_fill_relative_surface_velocity!(out::AbstractMatrix, body::AbstractBody)
+    @inbounds for p in 1:body.ncells
+        nx, ny, nz = body.normals[1,p], body.normals[2,p], body.normals[3,p]
+        qx, qy, qz = body.velocity[1,p], body.velocity[2,p], body.velocity[3,p]
+        qn = qx*nx + qy*ny + qz*nz
+        out[1,p] = qx - qn*nx
+        out[2,p] = qy - qn*ny
+        out[3,p] = qz - qn*nz
+    end
+    return out
 end
 
 function _pressure_fill_inertial_surface_velocity!(out::AbstractMatrix, body::AbstractBody)

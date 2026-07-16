@@ -1,6 +1,7 @@
 using Test
 import FLOWPanel as pnl
 import FLOWVPM
+using LinearAlgebra: norm
 const ReadVTK = pnl.ReadVTK
 const TOML = pnl.TOML
 
@@ -187,6 +188,33 @@ end
         result = pnl.replay(path, "run"; recompute=(:velocity,), backend=pnl.DirectBackend(),
             Uinf=t -> [99.0, 99.0, 99.0])
         @test result.systems[1].velocity ≈ expected.velocity
+    end
+
+    @testset "steady Bernoulli replay uses loaded relative velocity" begin
+        # Saved VTK stores body.velocity (body-relative). The fixed steady
+        # PressureBernoulli path never touches velocity_kinematic, so replay
+        # needs neither a velocity recompute nor kinematic reconstruction.
+        rho = 1.1
+        uinf = [0.7, -0.4, 0.2]
+        body = make_replay_surface_vorticity_body()
+        frames = pnl.ReferenceFrame(body)
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "run_body1"), body, 0, 0.0; overwrite=true)
+        pnl._append_metadata_step_toml(path, "run", frames, 0, 0.0; uinf)
+
+        monitor = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
+            correct_kuttacondition=false)
+        result = pnl.replay(path, "run"; monitors=(monitor,),
+            backend=pnl.DirectBackend())
+
+        expected_velocity = similar(body.velocity)
+        pnl._pressure_fill_relative_surface_velocity!(expected_velocity, body)
+        expected = zeros(body.ncells)
+        pnl.calcfield_P!(expected, body, expected_velocity,
+            norm(uinf), rho, nothing;
+            correct_kuttacondition=false)
+        @test result.monitors[1].pressure[1] ≈ expected
+        @test all(iszero, result.systems[1].velocity_kinematic)
     end
 
     @testset "force monitor uses loaded pressure" begin

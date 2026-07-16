@@ -336,7 +336,9 @@ end
     end
 
 
-    @testset "PressureBernoulli steady inertial projected trace" begin
+    @testset "PressureBernoulli steady relative projected trace" begin
+        rho = 1.0
+        uinf = [1.0, 0.0, 0.0]
         body = make_octa_source_body()
         body.velocity .= 0.0
         body.velocity_kinematic .= 0.0
@@ -344,16 +346,90 @@ end
             body.velocity[:,p] .= [0.4, -0.2, 0.1] .+ 7.0 .* body.normals[:,p]
             body.velocity_kinematic[:,p] .= [0.3, 0.1, -0.2]
         end
-        monitor = pnl.PressureBernoulli(1.0; backend=pnl.DirectBackend(),
+        monitor = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
             correct_kuttacondition=false)
-        monitor((body,), (nothing,), pnl.ReferenceFrame(body), [1.0, 0.0, 0.0], 0, 1.0)
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
+
+        # Steady mode uses the tangential projection of the body-relative
+        # velocity, with velocity_kinematic excluded.
         expected = similar(body.velocity)
-        pnl._pressure_fill_inertial_surface_velocity!(expected, body)
+        pnl._pressure_fill_relative_surface_velocity!(expected, body)
         @test monitor.inertial_velocity[1] == expected
-        raw_pressure = zeros(body.ncells)
-        pnl.calcfield_P!(raw_pressure, body, body.velocity, 1.0, 1.0, nothing;
+        expected_pressure = [0.5 * rho * (norm(uinf)^2 - norm(expected[:, p])^2)
+                             for p in 1:body.ncells]
+        @test monitor.pressure[1] ≈ expected_pressure
+
+        # Normal leakage is projected out: doubling the normal component of the
+        # relative velocity leaves the steady pressure unchanged.
+        for p in 1:body.ncells
+            body.velocity[:,p] .+= 7.0 .* body.normals[:,p]
+        end
+        leak_monitor = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
             correct_kuttacondition=false)
-        @test !isapprox(monitor.pressure[1], raw_pressure; atol=1e-12)
+        leak_monitor((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
+        @test leak_monitor.pressure[1] ≈ expected_pressure
+        for p in 1:body.ncells
+            body.velocity[:,p] .-= 7.0 .* body.normals[:,p]
+        end
+
+        # Changing velocity_kinematic must not change the steady pressure.
+        body.velocity_kinematic .= 0.0
+        for p in 1:body.ncells
+            body.velocity_kinematic[:,p] .= [-5.0, 2.5, 4.0]
+        end
+        kin_monitor = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
+            correct_kuttacondition=false)
+        kin_monitor((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
+        @test kin_monitor.pressure[1] ≈ expected_pressure
+
+        # Unsteady mode still uses the inertial trace,
+        # tangent(body.velocity) + velocity_kinematic.
+        expected_inertial = similar(body.velocity)
+        pnl._pressure_fill_inertial_surface_velocity!(expected_inertial, body)
+        @test expected_inertial ≈ expected .+ body.velocity_kinematic
+        unsteady_monitor = pnl.PressureBernoulli(rho; unsteady=true,
+            backend=pnl.DirectBackend(), correct_kuttacondition=false)
+        unsteady_monitor((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
+        @test unsteady_monitor.inertial_velocity[1] == expected_inertial
+    end
+
+    @testset "PressureBernoulli steady rotor loading is first order" begin
+        # Regression for the ef1fe1e steady kinetic-energy bug: on a moving
+        # body, the inertial trace (relative + kinematic) reduces the surface
+        # velocity to the small perturbation on both sides of a loaded pair,
+        # cancelling the first-order loading. The relative form must retain it.
+        rho = 1.2
+        W = 30.0
+        delta = 0.5
+        body = make_octa_source_body()
+        body.velocity .= 0.0
+        body.velocity_kinematic .= 0.0
+        tangents = similar(body.velocity)
+        for p in 1:body.ncells
+            n = body.normals[:, p]
+            t = cross(n, [0.37, -0.61, 0.42])
+            t = t / norm(t)
+            tangents[:, p] .= t
+            # Blade-frame picture: kinematic motion +W t, relative surface flow
+            # -(W ± delta) t depending on the side of the pair.
+            s = isodd(p) ? delta : -delta
+            body.velocity[:, p] .= -(W + s) .* t
+            body.velocity_kinematic[:, p] .= W .* t
+        end
+        monitor = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
+            correct_kuttacondition=false)
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), [0.0, 0.0, 0.0], 0, 1.0)
+        # First-order loading: P(-side) - P(+side) = 2 rho W delta.
+        p_plus = monitor.pressure[1][1]   # panel with |u_rel| = W + delta
+        p_minus = monitor.pressure[1][2]  # panel with |u_rel| = W - delta
+        @test isapprox(p_minus - p_plus, 2 * rho * W * delta; rtol=1e-12)
+        # The broken inertial steady form gives an exactly zero difference here.
+        broken = zeros(body.ncells)
+        inertial = similar(body.velocity)
+        pnl._pressure_fill_inertial_surface_velocity!(inertial, body)
+        pnl.calcfield_P!(broken, body, inertial, 0.0, rho, nothing;
+            correct_kuttacondition=false)
+        @test isapprox(broken[2] - broken[1], 0.0; atol=1e-10)
     end
 
     @testset "Unsteady history order and vector-source policy" begin

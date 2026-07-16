@@ -2,6 +2,7 @@ using Test
 import FLOWPanel as pnl
 import FastMultipole
 import FLOWVPM
+using LinearAlgebra: dot, norm
 
 if !isdefined(@__MODULE__, :make_plate_vortex_body)
     include("test_helpers.jl")
@@ -418,4 +419,52 @@ end
         path=nothing,
         grad_mu_options=(; basis=:tri),
     )
+end
+
+@testset "steady! moving-frame steady Bernoulli uses relative trace" begin
+    # Regression: steady PressureBernoulli on a body in a rotating frame must
+    # exclude the kinematic velocity from the kinetic-energy term (the
+    # ef1fe1e inertial form cancelled first-order blade loading).
+    rho = 1.3
+    uinf = [1.0, 0.0, 0.0]
+    body = make_plate_vortex_body()
+    frames = pnl.ReferenceFrame(body;
+        ω_axis=FastMultipole.SVector{3}(0.0, 0.0, 1.0), ω=5.0)
+    pressure = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
+        correct_kuttacondition=false)
+    force = pnl.ForceMonitor(1, 1; normalization=pnl.NoNormalization())
+
+    pnl.steady!(body, frames, uinf;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        backend_system=SimMarkerBackend(),
+        monitors=(pressure, force),
+        grad_mu_options=(; basis=:tri),
+    )
+
+    # kinematic_velocity! ran: body.velocity is body-relative, and the rotation
+    # produced a nonzero kinematic velocity.
+    @test any(!iszero, body.velocity_kinematic)
+
+    # Steady pressure matches the relative-trace formula panelwise.
+    Uinf2 = norm(uinf)^2
+    expected = map(1:body.ncells) do p
+        n = body.normals[:, p]
+        q = body.velocity[:, p]
+        qt = q - dot(q, n) * n
+        0.5 * rho * (Uinf2 - norm(qt)^2)
+    end
+    @test pressure.pressure[1] ≈ expected
+    @test all(isfinite, force.force[:, 1])
+    @test any(!iszero, force.force[:, 1])
+
+    # A rerun with the kinematic velocity zeroed but identical relative
+    # velocity gives the same steady pressure.
+    saved_velocity = copy(body.velocity)
+    body.velocity_kinematic .= 0.0
+    body.velocity .= saved_velocity
+    static_pressure = pnl.PressureBernoulli(rho; backend=pnl.DirectBackend(),
+        correct_kuttacondition=false)
+    static_pressure((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
+    @test static_pressure.pressure[1] ≈ pressure.pressure[1]
 end
