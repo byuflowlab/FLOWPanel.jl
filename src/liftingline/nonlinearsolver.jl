@@ -44,27 +44,41 @@ const analysis_solver = NonlinearSolve.FastShortcutNLLSPolyalg(;
                                 )
 
 
+function solve(self::LiftingLine, Uinfs; 
+                        solver_cache=Dict(),
+                        debug=false,
+                        update_states=tuple,
+                        optargs...)
 
 
-                                
-function solve(self::LiftingLine, Uinf::AbstractVector, 
-                                            args...; optargs...) 
-    solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
+    residual! = generate_f_residual(self, Uinfs, update_states; 
+                                        cache=solver_cache, debug)
+
+    result = _solve(self, Uinfs, residual!; update_states, optargs...)
+   
+    return result, solver_cache
 end
 
-function solve(self::LiftingLine, 
-                        Uinfs::AbstractMatrix;
+                                
+function _solve(self::LiftingLine, Uinf::AbstractVector, 
+                                            args...; optargs...) 
+    return _solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+end
+
+function _solve(self::LiftingLine{R}, 
+                        Uinfs::AbstractMatrix,
+                        residual!::Function;
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=false,
                         addfields=true, raise_warn=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
-                        debug=false,
                         Dinfs=Uinfs,
                         update_states=tuple,
                         optargs...
-                        )
+                        ) where {R<:Number}
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
@@ -86,9 +100,9 @@ function solve(self::LiftingLine,
     # Update semi-infinite wake to align with freestream
     calc_Dinfs!(self, Dinfs)
 
-    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
-    residual! = generate_f_residual(self, Uinfs, update_states; 
-                                        cache=solver_cache, debug)
+    # # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
+    # residual! = generate_f_residual(self, Uinfs, update_states; 
+    #                                     cache=solver_cache, debug)
 
     # Wrap residual for NonlinearSolve of form `f!(du, u, p)`. Note that the
     # `p` parameter used by NonlinearSolve is the `x` parameter expected by
@@ -98,7 +112,7 @@ function solve(self::LiftingLine,
     f!(du, u, p) = residual!(du, u, p, nothing)
 
     # Define solver initial guess
-    u0 = zeros(self.nelements)
+    u0 = zeros(R, self.nelements)
     u0 .= aoas_initial_guess
 
     # Define nonlinear problem, using p = Uinfs
@@ -135,8 +149,7 @@ function solve(self::LiftingLine,
     end
     
 
-    return result, solver_cache
-
+    return result
 end
 
 """
@@ -436,9 +449,10 @@ end
 """
 Generate residual wrapper for NonlinerSolver methods
 """
-function generate_f_residual(ll::LiftingLine, 
+function generate_f_residual(ll::LiftingLine{T1},
                                 Uinfs::AbstractMatrix, update_states; 
-                                cache=Dict(), debug=false)
+                                cache=Dict(), debug=false
+                                ) where T1<:Number
 
     cache[:fcalls] = 0
 
@@ -449,9 +463,11 @@ function generate_f_residual(ll::LiftingLine,
     reset_cache(cache, ll.elements_settings)
 
     # f_residual follows the format `residual!(r, y, x, p)` of ImplicitAD
-    function f_residual!(du, u::AbstractVector{T}, Uinfs, p; 
-                            cache=cache, update_states=update_states
-                            ) where T<:Number
+    function f_residual!(du, u::AbstractVector{T2}, Uinfs, p; 
+                                cache=cache, update_states=update_states
+                                ) where T2<:Number
+
+        T = promote_type(T1, T2)
 
         # Fetch AOAs from input variables
         aoas = u
@@ -471,8 +487,6 @@ function generate_f_residual(ll::LiftingLine,
 
             # Set initial element settings
             cache[T].elements_settings .= ll.elements_settings
-
-
         end
 
         # Increase function call counter
