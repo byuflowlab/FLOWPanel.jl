@@ -75,12 +75,16 @@ function solve(self::LiftingLine, Uinfs::AbstractMatrix;
         return result.u
     end
 
-    # Call
+    # Call nonlinear solver solving for y such that r = 0 (aoas such that
+    # the self-induced velocity is consistent with the claero lookup tables)
     p = []
-    y = solve_fun(Uinfs, p)
+    # y = solve_fun(Uinfs, p)                           # Direct solver call
+    y = IAD.implicit(solve_fun, residual!, Uinfs, p)    # ImplicitAD solver call
     result = p[1]
 
     # Set solved AOAs
+    display(self.aoas)
+    display(y)
     self.aoas .= y
 
     # Update element states from the AOA solution
@@ -110,15 +114,19 @@ function solve(self::LiftingLine, Uinfs::AbstractMatrix;
     return result, solver_cache
 end
 
-function _solve(self::LiftingLine{R}, 
-                        Uinfs::AbstractMatrix,
+function _solve(self::LiftingLine, Uinfs::AbstractVector, args...; optargs...)
+    return _solve(self, reshape(Uinfs, 3, Int(length(Uinfs)/3)), args...; optargs...)
+end
+
+function _solve(self::LiftingLine{RS, RG}, 
+                        Uinfs::AbstractMatrix{RU},
                         residual!::Function;
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         Dinfs=Uinfs
-                        ) where {R<:Number}
+                        ) where {RS<:Number, RG<:Number, RU<:Number}
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
@@ -152,15 +160,25 @@ function _solve(self::LiftingLine{R},
     f!(du, u, p) = residual!(du, u, p, nothing)
 
     # Define solver initial guess
-    u0 = zeros(R, self.nelements)
+    u0 = zeros(promote_type(RG, RU), self.nelements)
     u0 .= aoas_initial_guess
+    println("typeof(u0) = $(typeof(u0))")
 
     # Define nonlinear problem, using p = Uinfs
     isinplace = true
-    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0, Uinfs)
+    # problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
+    # problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0, Uinfs)
+
+    # problem = NonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
+    problem = NonlinearSolve.NonlinearProblem{isinplace}(f!, u0, Uinfs)
 
     # Call nonlinear solver
-    result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+    # result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+    # result = SimpleNonlinearSolve.solve(problem, solver; u0, p=Uinfs, solver_optargs...)
+    
+    # result = NonlinearSolve.solve(problem, solver; store_trace=Val(true), solver_optargs...)
+    # result = NonlinearSolve.solve(problem, solver; u0, store_trace=Val(true), solver_optargs...)
+    result = NonlinearSolve.solve(problem, solver; u0, p=Uinfs, store_trace=Val(true), solver_optargs...)
 
     return result
 end
@@ -462,10 +480,10 @@ end
 """
 Generate residual wrapper for NonlinerSolver methods
 """
-function generate_f_residual(ll::LiftingLine{T1},
-                                Uinfs::AbstractMatrix, update_states; 
+function generate_f_residual(ll::LiftingLine{RS, RG},
+                                _Uinfs::AbstractMatrix, update_states; 
                                 cache=Dict(), debug=false
-                                ) where T1<:Number
+                                ) where {RS<:Number, RG<:Number}
 
     cache[:fcalls] = 0
 
@@ -476,11 +494,11 @@ function generate_f_residual(ll::LiftingLine{T1},
     reset_cache(cache, ll.elements_settings)
 
     # f_residual follows the format `residual!(r, y, x, p)` of ImplicitAD
-    function f_residual!(du, u::AbstractVector{T2}, Uinfs, p; 
+    function f_residual!(du, u::AbstractVector{T2}, Uinfs::AbstractMatrix{T3}, p; 
                                 cache=cache, update_states=update_states
-                                ) where T2<:Number
+                                ) where {T2<:Number, T3<:Number}
 
-        T = promote_type(T1, T2)
+        T = promote_type(RG, T2, T3)
 
         # Fetch AOAs from input variables
         aoas = u
@@ -514,12 +532,27 @@ function generate_f_residual(ll::LiftingLine{T1},
                         update_states)
 
         # Set residual as state
+        # println("T1 = $(T1), T2 = $(T2), T3 = $(T3), T = $(T), typeof(du) = $(typeof(du))")
         du .= cache[T].residuals
 
         if debug
             push!( cache[:residual_rms], FD.value(sqrt(mean(du.^2))))
         end
 
+    end
+
+    # Flatten x for differentiation
+    function f_residual!(du, u::AbstractVector, Uinfs::AbstractVector, p; optargs...)
+        return f_residual!(du, u, reshape(Uinfs, 3, Int(length(Uinfs)/3)), p; optargs...)
+    end
+
+    # Non-in-place version for ImplicitAD
+    function f_residual!(u::AbstractVector{R1}, Uinfs::AbstractArray{R2}, p; optargs...) where {R1, R2}
+        du = zeros(promote_type(R1, R2), length(u))
+        
+        f_residual!(du, u, Uinfs, p; optargs...)
+
+        return du
     end
 
     return f_residual!

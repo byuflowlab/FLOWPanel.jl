@@ -9,12 +9,12 @@
   * License     : MIT License
 =###############################################################################
 
-function calc_area(ll::LiftingLine{R}) where {R}
+function calc_area(ll::LiftingLine{RS, RG}) where {RS, RG}
 
     nodes = ll.grid.nodes
     linearindices = ll.linearindices
 
-    area = zero(R)
+    area = zero(RG)
 
     for ei in 1:ll.nelements
 

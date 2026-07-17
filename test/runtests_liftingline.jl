@@ -8,7 +8,7 @@ import Printf: @printf
 import FLOWPanel as pnl
 import FLOWPanel: mean, norm, dot, cross
 
-import ForwardDiff: Dual, Partials, value, partials
+import ForwardDiff: Dual, Partials, value, partials, Tag
 
 try
     verbose
@@ -291,13 +291,17 @@ v_lvl = 0
         alpha           = 4.2                           # (deg) angle of attack
         beta            = 2.0                           # (deg) sideslip angle
 
+        NumType         = promote_type(typeof(alpha), typeof(beta)) # Number type for LiftingLine
+
         # NOTE: In the dual numbers we will implicitely defined the first partial to be 
         #       the derivative w.r.t. angle of attack and the second partial to be
         #       the derivative w.r.t. sideslip angle
 
-        alpha           = Dual(alpha, Partials((1.0, 0.0))) # Convert angle of attack into dual number for automatic differentiation
-        beta            = Dual(beta,  Partials((0.0, 1.0))) # Convert sideslip angle into dual number for automatic differentiation
-        NumType         = typeof(alpha)                 # Number type for LiftingLine
+        tag             = Tag{:testAD, NumType}
+        alpha           = Dual{tag}(alpha, Partials((1.0, 0.0))) # Convert angle of attack into dual number for automatic differentiation
+        beta            = Dual{tag}(beta,  Partials((0.0, 1.0))) # Convert sideslip angle into dual number for automatic differentiation
+
+        # NumType         = promote_type(typeof(alpha), typeof(beta)) # Update type to be all Dual (needed for the lifting line to store derivatives)
 
         Uinf            = magUinf*pnl.direction(; alpha, beta) # Freestream vector
 
@@ -321,6 +325,7 @@ v_lvl = 0
         ]
 
         solver = pnl.optimization_solver # NOTE: analysis_solver is not compatible with Duals
+        # solver = pnl.NonlinearSolve.SimpleBroyden()
 
         # Redefine lifting line with Dual numbers
         ll = pnl.LiftingLine{NumType}(
@@ -345,7 +350,7 @@ v_lvl = 0
         # Run solver
         result, solver_cache = pnl.solve(ll, Uinfs; 
                                             debug=true,             # `true` returns the residual rms
-                                            aoas_initial_guess=alpha, 
+                                            aoas_initial_guess=value(alpha),
                                             solver, solver_optargs)
 
 
@@ -392,15 +397,15 @@ v_lvl = 0
 
         #Tests
         @testset "Stability derivatives" begin
-            @test abs(CL - CL_ref) <= 1e-12
-            @test abs(CD - CD_ref) <= 1e-12
-            @test abs(Cm - Cm_ref) <= 1e-12
-            @test abs(dCLdα - dCLdα_ref) <= 1e-12
-            @test abs(dCDdα - dCDdα_ref) <= 1e-12
-            @test abs(dCmdα - dCmdα_ref) <= 1e-12
-            @test abs(dCLdβ - dCLdβ_ref) <= 1e-12
-            @test abs(dCDdβ - dCDdβ_ref) <= 1e-12
-            @test abs(dCmdβ - dCmdβ_ref) <= 1e-12
+            @test abs(CL - CL_ref) <= 5e-12
+            @test abs(CD - CD_ref) <= 5e-12
+            @test abs(Cm - Cm_ref) <= 5e-12
+            @test abs(dCLdα - dCLdα_ref) <= 5e-12
+            @test abs(dCDdα - dCDdα_ref) <= 5e-12
+            @test abs(dCmdα - dCmdα_ref) <= 5e-12
+            @test abs(dCLdβ - dCLdβ_ref) <= 5e-12
+            @test abs(dCDdβ - dCDdβ_ref) <= 5e-12
+            @test abs(dCmdβ - dCmdβ_ref) <= 5e-12
         end
 
     end

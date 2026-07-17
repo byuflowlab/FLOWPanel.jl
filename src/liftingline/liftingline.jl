@@ -23,12 +23,16 @@ TODO
 ################################################################################
 # LIFTING LINE STRUCT
 ################################################################################
-struct LiftingLine{ R<:Number, 
+struct LiftingLine{ RS<:Number, RI<:Number, RG<:Number,
                     S<:StripwiseElement, N,
-                    VectorType<:AbstractVector{R}, 
-                    MatrixType<:AbstractMatrix{R}, 
-                    TensorType<:AbstractArray{R, 3},
-                    TensorType2<:AbstractArray{R, 4},
+                    VectorTypeS<:AbstractVector{RS},
+                    VectorTypeI<:AbstractVector{RS},
+                    VectorTypeG<:AbstractVector{RG},
+                    MatrixTypeS<:AbstractMatrix{RS},
+                    MatrixTypeG<:AbstractMatrix{RG},
+                    TensorTypeG<:AbstractArray{RG, 3},
+                    TensorTypeI<:AbstractArray{RI, 3},
+                    TensorTypeG2<:AbstractArray{RG, 4},
                     LI<:LinearIndices} <: AbstractBody{S, N}
 
     # Internal properties
@@ -49,14 +53,14 @@ struct LiftingLine{ R<:Number,
     sigmaexponent::Float64                      # Dragging line amplification exponent
 
     # Ground plane
-    ground_position::VectorType                 # Ground plane origin
-    ground_normal::VectorType                   # Ground normal
+    ground_position::VectorTypeI                # Ground plane origin
+    ground_normal::VectorTypeI                  # Ground normal
 
     # Pre-allocated memory for solver
-    aerocenters::VectorType                     # Aerodynamic center of each stripwise element
-    strippositions::VectorType                  # Position of each stripwise element within the bound vortex (0==a, 1==b)
+    aerocenters::VectorTypeG                    # Aerodynamic center of each stripwise element
+    strippositions::VectorTypeG                 # Position of each stripwise element within the bound vortex (0==a, 1==b)
 
-    horseshoes::TensorType                      # Horseshoes nodes, where horseshoes[i, j, n] 
+    horseshoes::TensorTypeG                     # Horseshoes nodes, where horseshoes[i, j, n] 
                                                 # is the i-th coordinate of the j-th node in 
                                                 # the n-th horseshoe
 
@@ -64,45 +68,45 @@ struct LiftingLine{ R<:Number,
                                                 # where effective_horseshoes[:, :, :, ei] is the
                                                 # effective horseshoes seen by the ei-th stripwise element
 
-    Dinfs::TensorType                           # Direction of each semi-infinite vortex filament
+    Dinfs::TensorTypeI                          # Direction of each semi-infinite vortex filament
                                                 # (freestream direction at each TE), where
                                                 # Dinfs[i, j, n] is the i-th coordinate of the 
                                                 # j-th semi-infinite filament (1==a, 2==b) of the
                                                 # n-th horeseshoe
 
-    midpoints::MatrixType                       # Midpoint along lifting line for probing the velocity
-    controlpoints::MatrixType                   # Control point of each horseshoe
-    tangents::MatrixType                        # Tangent of each horseshoe (direction of streamwise element). Orthogonal bases: span x normal = tangent
-    spans::MatrixType                           # Spanwise unit vector of each horseshoe (direction of span at each streamwise element). Orthogonal bases: normal x tangent = span
-    normals::MatrixType                         # Normal of each horseshoe (normal to streamwise element). Orthogonal bases: tangent x span = normal
+    midpoints::MatrixTypeG                      # Midpoint along lifting line for probing the velocity
+    controlpoints::MatrixTypeG                  # Control point of each horseshoe
+    tangents::MatrixTypeG                       # Tangent of each horseshoe (direction of streamwise element). Orthogonal bases: span x normal = tangent
+    spans::MatrixTypeG                          # Spanwise unit vector of each horseshoe (direction of span at each streamwise element). Orthogonal bases: normal x tangent = span
+    normals::MatrixTypeG                        # Normal of each horseshoe (normal to streamwise element). Orthogonal bases: tangent x span = normal
 
-    swepttangents::MatrixType                   # Unit vector in the direction of the effective swept chord (u_aΛ in Goates 2022 notation). line x sweptnormal = swepttangent
-    lines::MatrixType                           # Unit vector in the direction of the lifting line (u_sΛ in Goates 2022 notation). sweptnormal x swepttangent = line
-    sweptnormals::MatrixType                    # Unit vector in the normal to the lifting line and effective swep chord (-u_nΛ in Goates 2022 notation). swepttangent x line = sweptnormal
+    swepttangents::MatrixTypeG                  # Unit vector in the direction of the effective swept chord (u_aΛ in Goates 2022 notation). line x sweptnormal = swepttangent
+    lines::MatrixTypeG                          # Unit vector in the direction of the lifting line (u_sΛ in Goates 2022 notation). sweptnormal x swepttangent = line
+    sweptnormals::MatrixTypeG                   # Unit vector in the normal to the lifting line and effective swep chord (-u_nΛ in Goates 2022 notation). swepttangent x line = sweptnormal
 
-    auxtangents::MatrixType                     # Auxiliary memory for calculating tangents of effective lifting line
+    auxtangents::MatrixTypeG                    # Auxiliary memory for calculating tangents of effective lifting line
 
-    aoas::VectorType                            # (deg) swept angle of attack seen by each stripwise element (𝛼_Λ in Goates 2022 notation)
-    claeros::VectorType                         # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
-    Gammas::VectorType                          # Circulation of each horseshoe (lifting line)
-    sigmas::VectorType                          # Source strength of each horseshoe (dragging line)
-    Us::MatrixType                              # Velocity at each midpoint
-    chords::VectorType                          # Dimensional chord of each stripwise element
+    aoas::VectorTypeS                           # (deg) swept angle of attack seen by each stripwise element (𝛼_Λ in Goates 2022 notation)
+    claeros::VectorTypeS                        # Purely-aerodynamic sectional lift coefficient of each stripwise element (used for calculating Gamma)
+    Gammas::VectorTypeS                         # Circulation of each horseshoe (lifting line)
+    sigmas::VectorTypeS                         # Source strength of each horseshoe (dragging line)
+    Us::MatrixTypeS                             # Velocity at each midpoint
+    chords::VectorTypeG                         # Dimensional chord of each stripwise element
 
-    G::MatrixType                               # Geometry matrix in linear system of equations (matrix in left-hand side)
-    RHS::VectorType                             # Right-hand-side vector in linear system of equations
+    G::MatrixTypeG                              # Geometry matrix in linear system of equations (matrix in left-hand side)
+    RHS::VectorTypeS                            # Right-hand-side vector in linear system of equations
 
-    residuals::VectorType                       # Non-linear solver residuals
-    Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
+    residuals::VectorTypeS                      # Non-linear solver residuals
+    Geff::TensorTypeGI                          # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
                                                 # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
-    Geffnowake::TensorType                      # Same than Geff, but without the semi-infinite wake vortices
+    Geffnowake::TensorTypeG                     # Same than Geff, but without the semi-infinite wake vortices
 
     # Solver settings
     kerneloffset::Float64                       # Kernel offset to avoid singularities
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
 
     # Stripwise element settings
-    elements_settings::MatrixType               # Additional settings for each element
+    elements_settings::MatrixTypeI              # Additional settings for each element
 
 
     function LiftingLine{R}(
