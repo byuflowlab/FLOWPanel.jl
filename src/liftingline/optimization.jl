@@ -183,24 +183,25 @@ function run_liftingline(;
     # Increase function call counter
     cache["fcalls"] += 1
                                                     
-    # Number type for LiftingLine geometry
-    GNumType = promote_type(R5, R6, R7, R8, R9, R10)      
-
-    # Number type for LiftingLine solution
-    SNumType = promote_type(GNumType, R1, R2, R3, R4)
+    # Number type for LiftingLine
+    NumType = promote_type(R1, R2, R3, R4, R5, R6, R7, R8, R9, R10)
     
     # NOTE: In these dual numbers we will implicitely defined the first partial to be 
     #       the derivative w.r.t. angle of attack and the second partial to be
     #       the derivative w.r.t. sideslip angle
     if stability_derivatives
 
+        # Promote the primals of alpha and beta
+        alpha = NumType(alpha)
+        beta = NumType(beta)
+
         # Convert alpha and beta into Dual numbers for stability derivatives
-        tag = FD.Tag{:stabilityderivative, promote_type(R1, R2)}
+        tag = FD.Tag{:stabilityderivative, NumType}
         alpha = FD.Dual{tag}(alpha, FD.Partials((1.0, 0.0)))    # Convert angle of attack into dual number for automatic differentiation
         beta  = FD.Dual{tag}(beta,  FD.Partials((0.0, 1.0)))    # Convert sideslip angle into dual number for automatic differentiation
         
-        # Update number type of solution
-        SNumType = promote_type(typeof(alpha), typeof(beta))
+        # Number type for LiftingLine
+        NumType = promote_type(typeof(alpha), typeof(beta))
         
     end
     
@@ -216,12 +217,9 @@ function run_liftingline(;
     
     cref            = chord_distribution[1, 2]*b    # (m) reference chord
 
-    # Lifting line numerical type
-    LLNumType = (SNumType, GNumType)
-
     # Initialize solver cache
-    if !(LLNumType in keys(cache["solver_cache"]))
-        cache["solver_cache"][LLNumType] = Dict()
+    if !(NumType in keys(cache["solver_cache"]))
+        cache["solver_cache"][NumType] = Dict()
     end 
 
     # ------------------ GENERATE GEOMETRY -------------------------------------
@@ -235,21 +233,20 @@ function run_liftingline(;
                                         plot_discretization = !true,)
 
     # Generate or fetch Lifting Line
-    if LLNumType in keys(cache["ll"])
+    if NumType in keys(cache["ll"])
         
-        ll = cache["ll"][LLNumType]
+        ll = cache["ll"][NumType]
         
     else
         
-        ll = LiftingLine{SNumType, GNumType}(  
-                                        airfoil_distribution; 
+        ll = LiftingLine{NumType}(  airfoil_distribution; 
                                         geom_optargs...,
                                         deltasb, deltajoint, sigmafactor, sigmaexponent,
                                         element_optargs,
                                         )
         # verbose && display(ll)   # NOTE: For some reason, this display throws off Python when called through juliacall
 
-        cache["ll"][LLNumType] = ll
+        cache["ll"][NumType] = ll
     end
 
     # Set ground distance
@@ -265,11 +262,11 @@ function run_liftingline(;
     # ------------------ CALL NONLINEAR SOLVER -------------------------------------
 
     # Fetch cache
-    if LLNumType in keys(cache["Uinfs"])
-        Uinfs = cache["Uinfs"][LLNumType]
+    if NumType in keys(cache["Uinfs"])
+        Uinfs = cache["Uinfs"][NumType]
     else
         Uinfs = repeat(Uinf, 1, ll.nelements)
-        cache["Uinfs"][LLNumType] = Uinfs
+        cache["Uinfs"][NumType] = Uinfs
     end
     
     # Freestream velocity at each stripwise element
@@ -286,7 +283,7 @@ function run_liftingline(;
                                         aoas_initial_guess, 
                                         align_joints_with_Uinfs, 
                                         solver, solver_optargs,
-                                        solver_cache=cache["solver_cache"][LLNumType],
+                                        solver_cache=cache["solver_cache"][NumType],
                                         solve_optargs...
                                         )
 

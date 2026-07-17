@@ -118,15 +118,17 @@ function _solve(self::LiftingLine, Uinfs::AbstractVector, args...; optargs...)
     return _solve(self, reshape(Uinfs, 3, Int(length(Uinfs)/3)), args...; optargs...)
 end
 
-function _solve(self::LiftingLine{RS, RG}, 
-                        Uinfs::AbstractMatrix{RU},
+function _solve(self::LiftingLine{R1}, 
+                        Uinfs::AbstractMatrix{R2},
                         residual!::Function;
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=false,
                         solver=SimpleNonlinearSolve.SimpleDFSane(),
                         solver_optargs=(; abstol = 1e-9),
                         Dinfs=Uinfs
-                        ) where {RS<:Number, RG<:Number, RU<:Number}
+                        ) where {R1, R2}
+
+    R = promote_type(R1, R2)
 
     # Align joint nodes with freestream
     if align_joints_with_Uinfs
@@ -160,7 +162,7 @@ function _solve(self::LiftingLine{RS, RG},
     f!(du, u, p) = residual!(du, u, p, nothing)
 
     # Define solver initial guess
-    u0 = zeros(promote_type(RG, RU), self.nelements)
+    u0 = zeros(R, self.nelements)
     u0 .= aoas_initial_guess
     println("typeof(u0) = $(typeof(u0))")
 
@@ -480,10 +482,10 @@ end
 """
 Generate residual wrapper for NonlinerSolver methods
 """
-function generate_f_residual(ll::LiftingLine{RS, RG},
+function generate_f_residual(ll::LiftingLine{T1},
                                 _Uinfs::AbstractMatrix, update_states; 
                                 cache=Dict(), debug=false
-                                ) where {RS<:Number, RG<:Number}
+                                ) where {T1<:Number}
 
     cache[:fcalls] = 0
 
@@ -498,7 +500,7 @@ function generate_f_residual(ll::LiftingLine{RS, RG},
                                 cache=cache, update_states=update_states
                                 ) where {T2<:Number, T3<:Number}
 
-        T = promote_type(RG, T2, T3)
+        T = promote_type(T1, T2, T3)
 
         # Fetch AOAs from input variables
         aoas = u
