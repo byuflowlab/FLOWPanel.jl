@@ -43,45 +43,69 @@ const analysis_solver = NonlinearSolve.FastShortcutNLLSPolyalg(;
                                 # jvp_autodiff = ADTypes.AutoForwardDiff(), 
                                 )
 
+
+
+
                                 
 function solve(self::LiftingLine, Uinf::AbstractVector, 
                                             args...; optargs...) 
-    return solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
+    solve(self, repeat(Uinf, 1, self.nelements), args...; optargs...)
 end
 
-function solve(self::LiftingLine, Uinfs::AbstractMatrix; 
+function solve(self::LiftingLine, 
+                        Uinfs::AbstractMatrix;
+                        aoas_initial_guess=0.0,
+                        align_joints_with_Uinfs=false,
+                        addfields=true, raise_warn=false,
+                        solver=SimpleNonlinearSolve.SimpleDFSane(),
+                        solver_optargs=(; abstol = 1e-9),
                         solver_cache=Dict(),
                         debug=false,
-                        addfields=true, raise_warn=false,
+                        Dinfs=Uinfs,
                         update_states=tuple,
-                        optargs...)
+                        optargs...
+                        )
 
+    # Align joint nodes with freestream
+    if align_joints_with_Uinfs
 
-    # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD,
-    # where y = aoas, x = Uinfs, and p = nothing
-    residual! = generate_f_residual(self, Uinfs, update_states; 
-                                        cache=solver_cache, debug)
+        # jointerize!(self)
+        align_joints_with_Uinfs!(self, Uinfs)
+        
 
-    # result = _solve(self, Uinfs, residual!; optargs...)
+    # NOTE: we comment jointerize! out to avoid recomputing Geffnowake every 
+    #       time, but this also means that if align_joints_with_Uinfs! is ever
+    #       called on the lifting line, the joints will stay aligned with Uinf
+    #       afterward
 
-    # Define solve function of form `solve(x, p)`, where x = Uinfs and 
-    # p = nothing, and it returns the solution y such that r = 0
-    @inline function solve_fun(x, p)
-
-        result = _solve(self, x, residual!; optargs...)
-
-        push!(p, result)
-
-        return result.u
+    # else
+    #     jointerize!(self)
+    
     end
 
-    # Call
-    p = []
-    y = solve_fun(Uinfs, p)
-    result = p[1]
 
-    # Set solved AOAs
-    self.aoas .= y
+    # Set AOA initial guess
+    self.aoas .= aoas_initial_guess
+
+    # Update semi-infinite wake to align with freestream
+    calc_Dinfs!(self, Dinfs)
+
+    # Generate residual function
+    f! = generate_f_residual(self, Uinfs, update_states; 
+                                        cache=solver_cache, debug)
+
+    # Define solver initial guess
+    u0 = self.aoas
+
+    # Define nonlinear problem
+    isinplace = true
+    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0)
+
+    # Call nonlinear solver
+    result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
+
+    # Set solved AOA
+    self.aoas .= result.u
 
     # Update element states from the AOA solution
     update_states(self.elements_settings, self, self.aoas, Uinfs)
@@ -105,64 +129,10 @@ function solve(self::LiftingLine, Uinfs::AbstractMatrix;
         gt.add_field(self.grid, "Gamma", "scalar", self.Gammas, "cell"; raise_warn)
         gt.add_field(self.grid, "angleofattack", "scalar", self.aoas, "cell"; raise_warn)
     end
-
-   
-    return result, solver_cache
-end
-
-function _solve(self::LiftingLine{R}, 
-                        Uinfs::AbstractMatrix,
-                        residual!::Function;
-                        aoas_initial_guess=0.0,
-                        align_joints_with_Uinfs=false,
-                        solver=SimpleNonlinearSolve.SimpleDFSane(),
-                        solver_optargs=(; abstol = 1e-9),
-                        Dinfs=Uinfs
-                        ) where {R<:Number}
-
-    # Align joint nodes with freestream
-    if align_joints_with_Uinfs
-
-        # jointerize!(self)
-        align_joints_with_Uinfs!(self, Uinfs)
-        
-
-    # NOTE: we comment jointerize! out to avoid recomputing Geffnowake every 
-    #       time, but this also means that if align_joints_with_Uinfs! is ever
-    #       called on the lifting line, the joints will stay aligned with Uinf
-    #       afterward
-
-    # else
-    #     jointerize!(self)
     
-    end
 
-    # Update semi-infinite wake to align with freestream
-    calc_Dinfs!(self, Dinfs)
+    return result, solver_cache
 
-    # # Generate residual function of form `residual!(r, y, x, p)` for ImplicitAD
-    # residual! = generate_f_residual(self, Uinfs, update_states; 
-    #                                     cache=solver_cache, debug)
-
-    # Wrap residual for NonlinearSolve of form `f!(du, u, p)`. Note that the
-    # `p` parameter used by NonlinearSolve is the `x` parameter expected by
-    # ImplictAD, while there is no `p` parameter for ImplicitAD (in reality,
-    # `p` in ImplicitAD is the entire geometry inside the lifting line that is 
-    # already being used when calling `generate_f_residual`).
-    f!(du, u, p) = residual!(du, u, p, nothing)
-
-    # Define solver initial guess
-    u0 = zeros(R, self.nelements)
-    u0 .= aoas_initial_guess
-
-    # Define nonlinear problem, using p = Uinfs
-    isinplace = true
-    problem = SimpleNonlinearSolve.NonlinearProblem{isinplace}(f!, u0, Uinfs)
-
-    # Call nonlinear solver
-    result = SimpleNonlinearSolve.solve(problem, solver; solver_optargs...)
-
-    return result
 end
 
 """
@@ -462,10 +432,9 @@ end
 """
 Generate residual wrapper for NonlinerSolver methods
 """
-function generate_f_residual(ll::LiftingLine{T1},
+function generate_f_residual(ll::LiftingLine, 
                                 Uinfs::AbstractMatrix, update_states; 
-                                cache=Dict(), debug=false
-                                ) where T1<:Number
+                                cache=Dict(), debug=false)
 
     cache[:fcalls] = 0
 
@@ -473,14 +442,11 @@ function generate_f_residual(ll::LiftingLine{T1},
         cache[:residual_rms] = []
     end
 
-    reset_cache(cache, ll.elements_settings)
+    reset_cache(cache, Uinfs, ll.elements_settings)
 
-    # f_residual follows the format `residual!(r, y, x, p)` of ImplicitAD
-    function f_residual!(du, u::AbstractVector{T2}, Uinfs, p; 
-                                cache=cache, update_states=update_states
-                                ) where T2<:Number
-
-        T = promote_type(T1, T2)
+    function f_residual!(du, u::AbstractVector{T}, p; 
+                            cache=cache, update_states=update_states
+                            ) where T<:Number
 
         # Fetch AOAs from input variables
         aoas = u
@@ -492,6 +458,7 @@ function generate_f_residual(ll::LiftingLine{T1},
                             sigmas = zeros(T, ll.nelements),
                             Us = zeros(T, 3, ll.nelements),
                             fcalls = [0],
+                            Uinfs,
                             elements_settings = zeros(T, size(ll.elements_settings)),
                         )
 
@@ -500,6 +467,8 @@ function generate_f_residual(ll::LiftingLine{T1},
 
             # Set initial element settings
             cache[T].elements_settings .= ll.elements_settings
+
+
         end
 
         # Increase function call counter
@@ -508,7 +477,7 @@ function generate_f_residual(ll::LiftingLine{T1},
         cache[T].Us .= Uinfs  # <-- Force it to use only Uinfs to dimensionalize cl and cd reducing nonlinearity
 
         # Calculate residual
-        calc_residuals!(cache[T].residuals, ll, Uinfs, 
+        calc_residuals!(cache[T].residuals, ll, cache[T].Uinfs, 
                         aoas, cache[T].Gammas, cache[T].sigmas, cache[T].Us,
                         cache[T].elements_settings,
                         update_states)
@@ -526,7 +495,7 @@ function generate_f_residual(ll::LiftingLine{T1},
 
 end
 
-function reset_cache(cache, elements_settings)
+function reset_cache(cache, Uinfs, elements_settings)
 
     for (T, data) in cache
         if T != :fcalls && T != :residual_rms
@@ -534,7 +503,8 @@ function reset_cache(cache, elements_settings)
             data.residuals .= 0
             data.Gammas .= 0
             data.sigmas .= 0
-            data.Us .= 0
+            data.Uinfs .= Uinfs
+            data.Us .= data.Uinfs
             data.elements_settings .= elements_settings
 
         end
