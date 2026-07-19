@@ -44,9 +44,10 @@ end
 function FunctionalAirfoil(nparameters::Int,
                             alphas::AbstractVector,
                             cls::AbstractVector, cds::AbstractVector, cms::AbstractVector,
+                            claeros=cls,
                             alpha0=NaN, optargs=())
 
-    simple = SimpleAirfoil(alphas, cls, cds, cms; optargs...)
+    simple = SimpleAirfoil(alphas, cls, cds, cms; claero=claeros, optargs...)
 
     fun_cl(aoa, args...) = simple.spl_cl(aoa)
     fun_cd(aoa, args...) = simple.spl_cd(aoa)
