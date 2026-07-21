@@ -92,6 +92,17 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     semiinfinite_wake::Bool
 
     needs_velocity_gradient::Base.RefValue{Bool}  # Set by simulate! when a monitor requires ∇u
+
+    # Affine attached-wake correction channel (TraceCorrected formulation):
+    # when wake_correction_active[] is true, the attached transition panel of a
+    # paired shedding edge carries μ_upper − c/2 (upper) and μ_lower + c/2
+    # (lower), so the net attached/shed circulation is γ = μ_u − μ_l − c.
+    # Matrix assembly and linear operator products must run with the flag
+    # false (operator mode) so the correction stays a right-hand-side constant.
+    wake_strength_correction::Vector{Vector{TF}}  # c per surface, per shedding edge
+    wake_strength_shift::Vector{TF}               # per-panel transition-strength shift
+    wake_correction_active::Base.RefValue{Bool}   # physical mode true / operator mode false
+    suppress_attached_wake::Base.RefValue{Bool}   # skip attached-wake influence entirely (body-only operator assembly)
 end
 
 _normalize_shedding(shedding::AbstractMatrix{Int}) = Matrix{Int}[Matrix{Int}(shedding)]
@@ -124,6 +135,10 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 check_mesh=true, watertight=true,
                                 semiinfinite_wake=true,
                                 needs_velocity_gradient=Ref(false),
+                                wake_strength_correction=[zeros(TF, size(s, 2)) for s in _normalize_shedding(shedding)],
+                                wake_strength_shift=zeros(TF, size(cells, 2)),
+                                wake_correction_active=Ref(false),
+                                suppress_attached_wake=Ref(false),
                                 ensure_winding::Bool=true,
                                 flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
@@ -223,7 +238,11 @@ function RigidWakeBody{E, N, TF, DBC}(
                     characteristiclength,
                     watertight,
                     semiinfinite_wake,
-                    needs_velocity_gradient
+                    needs_velocity_gradient,
+                    wake_strength_correction,
+                    wake_strength_shift,
+                    wake_correction_active,
+                    suppress_attached_wake
                 )
 end
 
@@ -711,8 +730,9 @@ function FastMultipole.body_to_multipole!(system::RigidWakeBody{<:Union{Constant
         element = FastMultipole.Panel{FastMultipole.SourceDipole}
         FastMultipole.body_to_multipole_panel!(element, multipole_coefficients, harmonics, x0, xu, xv, normal, strength, expansion_order)
 
-        # add wake panel
-        if !system.semiinfinite_wake
+        # add wake panel (skipped in body-only operator mode, e.g. the Green
+        # system's B products)
+        if !system.semiinfinite_wake && !system.suppress_attached_wake[]
             # which vertices connect to the wake
             idx1 = Int(buffer[end-7, i_body])
             if idx1 > 0
@@ -1041,6 +1061,9 @@ function FastMultipole.buffer_to_target_system!(target_system::RigidWakeBody, i_
 end
 
 function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer, source_bodies_index, switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}) where {NK,PS,GS,HS,NO,NM}
+
+    # body-only operator mode (e.g. Green-system B products): no attached wake
+    source_system.suppress_attached_wake[] && return nothing
 
     # loop over targets
     for i_target in target_bodies_index
@@ -1553,44 +1576,105 @@ end
 
 
 ##### INTERNAL FUNCTIONS  ######################################################
+
+# Affine attached-wake correction applied to the (upper, lower) transition
+# strengths of shedding edge i: (μ_u − c/2, μ_l + c/2) for paired edges so
+# γ = μ_u − μ_l − c; the whole −c for unpaired edges. No-op unless
+# wake_correction_active[] (physical mode).
+@inline function _wake_correction_mu(self::RigidWakeBody, strength1, strength2,
+        i, isurf)
+    if self.wake_correction_active[]
+        c = self.wake_strength_correction[isurf][i]
+        if self.shedding[isurf][4, i] != -1
+            strength1 -= c/2
+            strength2 += c/2
+        else
+            strength1 -= c
+        end
+    end
+    return strength1, strength2
+end
+
 function _get_wakestrength_mu(self::RigidWakeBody, i, isurf=1; stri=1)
-    # if self.use_wake_strength
-    #     return self.wake_strength[i], zero(self.wake_strength[i])
-    # else
-        strength1 = self.strength[self.shedding[isurf][1, i], stri]
-        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
-        return strength1, strength2
-    # end
+    strength1 = self.strength[self.shedding[isurf][1, i], stri]
+    strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
+    return _wake_correction_mu(self, strength1, strength2, i, isurf)
 end
 function _get_wakestrength_mu(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i, isurf=1)
-    # if self.use_wake_strength
-    #     return self.wake_strength[i], zero(self.wake_strength[i])
-    # else
-        stri = 2
-        strength1 = self.strength[self.shedding[isurf][1, i], stri]
-        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
-        return strength1, strength2
-    # end
+    stri = 2
+    strength1 = self.strength[self.shedding[isurf][1, i], stri]
+    strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
+    return _wake_correction_mu(self, strength1, strength2, i, isurf)
 end
 function _get_wakestrength_Gamma(self::RigidWakeBody, i, isurf=1; stri=1)
-    # if self.use_wake_strength
-    #     return self.wake_strength[i]
-    # else
-        strength1 = self.strength[self.shedding[isurf][1, i], stri]
-        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
-        return strength1 - strength2
-    # end
+    strength1, strength2 = _get_wakestrength_mu(self, i, isurf; stri)
+    return strength1 - strength2
 end
 function _get_wakestrength_Gamma(self::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i, isurf=1)
-    # if self.use_wake_strength
-    #     return self.wake_strength[i]
-    # else
-        stri = 2
-        strength1 = self.strength[self.shedding[isurf][1, i], stri]
-        strength2 = self.shedding[isurf][4, i] != -1 ? self.strength[self.shedding[isurf][4, i], stri] : 0.0
-        return strength1 - strength2
-    # end
+    strength1, strength2 = _get_wakestrength_mu(self, i, isurf)
+    return strength1 - strength2
 end
+
+"""
+    set_wake_correction!(body::RigidWakeBody, c::AbstractVector)
+
+Store the per-shedding-edge Kutta-trace correction `c` (flat vector over all
+shedding surfaces in order) and activate physical mode: every attached-wake
+strength lookup and influence evaluation then sees the affine strength
+`γ = μ_upper − μ_lower − c` (upper panel shifted by −c/2, lower by +c/2; an
+unpaired edge takes the whole −c). Used by the `TraceCorrected` solve
+formulation. Matrix assembly and linear operator products suppress the
+correction internally (operator mode).
+"""
+function set_wake_correction!(body::RigidWakeBody, c::AbstractVector)
+    nedges = sum(size(shed, 2) for shed in body.shedding; init=0)
+    length(c) == nedges ||
+        error("Invalid wake correction; expected $nedges entries, got $(length(c)).")
+    body.wake_strength_shift .= zero(eltype(body.wake_strength_shift))
+    k = 0
+    for (i_surf, shed) in enumerate(body.shedding)
+        for i in axes(shed, 2)
+            k += 1
+            ce = c[k]
+            body.wake_strength_correction[i_surf][i] = ce
+            up = shed[1, i]
+            lo = shed[4, i]
+            if lo > 0
+                body.wake_strength_shift[up] -= ce/2
+                body.wake_strength_shift[lo] += ce/2
+            else
+                body.wake_strength_shift[up] -= ce
+            end
+        end
+    end
+    body.wake_correction_active[] = true
+    return nothing
+end
+
+"""
+    clear_wake_correction!(body::RigidWakeBody)
+
+Zero the attached-wake strength correction and deactivate physical mode,
+restoring the plain Kutta map `γ = μ_upper − μ_lower`.
+"""
+function clear_wake_correction!(body::RigidWakeBody)
+    for v in body.wake_strength_correction
+        v .= zero(eltype(v))
+    end
+    body.wake_strength_shift .= zero(eltype(body.wake_strength_shift))
+    body.wake_correction_active[] = false
+    return nothing
+end
+
+# Operator-mode guards: matrix assembly and Krylov products must see the
+# linear operator only, so the affine wake correction is switched off around
+# them and restored afterwards.
+_operator_mode_begin!(body::RigidWakeBody) =
+    (was = body.wake_correction_active[]; body.wake_correction_active[] = false; was)
+_operator_mode_begin!(body) = false
+_operator_mode_end!(body::RigidWakeBody, was::Bool) =
+    (body.wake_correction_active[] = was; nothing)
+_operator_mode_end!(body, was) = nothing
 
 # RigidWakeBody hook: contributes panel strength
 # to the VTK output produced by the generic write_vtk(name, body::AbstractBody, ...).

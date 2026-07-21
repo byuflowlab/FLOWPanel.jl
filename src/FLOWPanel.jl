@@ -28,6 +28,9 @@ export  solve, save, influence!,
         NoSectionalNormalization, FreestreamSectionalNormalization,
         RotorSectionalNormalization,
         steady!, simulate_warmstart!, initialize_Das!,
+        AbstractSolveFormulation, VelocityThroughSources,
+        GreenReconstruction, TraceCorrected,
+        set_wake_correction!, clear_wake_correction!,
         replay, ReplayResult, migrate_metadata_toml
 
 # ------------ GENERIC MODULES -------------------------------------------------
@@ -81,7 +84,7 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
+                    "wake", "formulation", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
                     "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")

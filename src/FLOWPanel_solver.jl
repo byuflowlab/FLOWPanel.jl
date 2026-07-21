@@ -129,7 +129,10 @@ target body's boundary-condition flag (the 4th type parameter of
 
 If `update_geometry=true`, the target body's normals and control points are
 recomputed before assembling `G`. Control points sit exactly on the panel
-surface (no offset); the diagonal jump term is added via the DBC type parameter.
+surface (no offset); no separate diagonal jump term is added because `induced`
+returns the side-aware one-sided self limit (e.g. the interior `+μ/2` doublet
+limit for Dirichlet bodies), with the side selected by the source body's DBC
+type parameter.
 """
 function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
              source_system::AbstractBody{<:Any,NK,TF};
@@ -158,6 +161,11 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
     source_system.strength .= zero(eltype(source_system.strength))
     source_system.strength[:, strength_index] .= 1.0
 
+    # operator mode: the affine attached-wake correction (TraceCorrected
+    # formulation) is a right-hand-side constant and must not enter the
+    # assembled linear operator
+    correction_was_active = _operator_mode_begin!(source_system)
+
     CPs = target_system.controlpoints
     normals = target_system.normals
 
@@ -180,7 +188,8 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
         end
     end
 
-    # Restore strength
+    # Restore strength and correction mode
+    _operator_mode_end!(source_system, correction_was_active)
     source_system.strength .= old_strength
 
     return G
@@ -650,6 +659,9 @@ function FGSSolver(body::AbstractBody;
         solution_history_length::Int=0,      # 0 disables history & projection
         project_solution::Bool=false,        # warm-start next solve via polynomial extrapolation
         project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
+        build_fgs::Bool=true,                # false skips the FastGaussSeidel build;
+                                             # the solver then only carries options
+                                             # (e.g. as a formulation green_solver)
     )
 
     # calculate control points if needed
@@ -661,7 +673,9 @@ function FGSSolver(body::AbstractBody;
     # generate solver
     TF = numtype(body)
     bodies = (body,)
-    fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
+    fgs = build_fgs ?
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
+        nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
@@ -771,6 +785,12 @@ end
 end
 
 @inline _fgs_solved_strength_index(body::AbstractBody) = has_dirichlet_bc(body) && size(body.strength, 2) >= 2 ? 2 : 1
+
+function _solve!(body::AbstractBody, solver::FGSSolver{Nothing}; optargs...)
+    error("This FGSSolver was constructed with build_fgs=false and only "*
+          "carries options (e.g. as a formulation green_solver); it cannot "*
+          "run the FastGaussSeidel body solve.")
+end
 
 function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,

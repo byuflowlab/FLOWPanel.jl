@@ -1002,6 +1002,12 @@ get_wake_kernel(::AbstractBody{VortexRing}) = VortexRing
 get_wake_kernel(::AbstractBody{ConstantDoublet}) = ConstantDoublet
 
 function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,PS,VS,GS,NO,NM}
+    # body-only operator assembly (e.g. the Green-system B matrix) skips the
+    # attached wake entirely
+    if source_system.suppress_attached_wake[]
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
     # check if this panel has a wake
     idx_1 = source_system.shedding_full[1, i_source]
     if idx_1 > 0
@@ -1024,8 +1030,13 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
         Dax, Day, Daz = source_system.Das[i_surf][1, das_col_1], source_system.Das[i_surf][2, das_col_1], source_system.Das[i_surf][3, das_col_1]
 
-        # get strength
+        # get strength; in physical mode the affine attached-wake correction
+        # shifts the transition-panel strength (∓c/2 across a paired edge, so
+        # the net attached circulation is γ = μ_u − μ_l − c)
         strength = get_strength_doublet(source_system, i_source)
+        if source_system.wake_correction_active[]
+            strength += source_system.wake_strength_shift[i_source]
+        end
         TK = get_wake_kernel(source_system)
 
         # evaluate potential
@@ -1074,6 +1085,11 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
 end
 
 function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,NK,PS,VS,GS,NO,NM}
+    # body-only operator mode (e.g. Green-system B products): no attached wake
+    if source_system.suppress_attached_wake[]
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
     # Buffer layout (rows are 1-indexed, NK = number of element types):
     #   1-3:       center (cx, cy, cz)
     #   4:         radius

@@ -1,271 +1,237 @@
-# Dirichlet Potential Green Identity
+# Dirichlet potential identity at exact panel centroids
 
-This note records the identity checked by `test/dirichlet_potential_test.jl`.
+## Scope
 
-## Summary
+This note states the Green identity used by the velocity-through-sources wake
+formulation and maps it to FLOWPanel's current Dirichlet operator. The current code
+collocates exactly at panel centroids and inserts a selected one-sided self limit. There
+is no exterior/interior control-point displacement or runtime `cp_outer` switch.
 
-For an outward-facing normal on a closed boundary $\partial \Omega$,
+The companion note, `docs/wake_solve_schemes.md`, applies the identity to the finite
+attached-wake Kutta coupling and to comparisons with a semi-infinite wake.
 
-$$\begin{align}
-\frac{\phi}{2} &= \int \limits_{\partial \Omega} \phi \frac{\partial}{\partial n}\left( -\frac{1}{4\pi r} \right) dS - \int \limits_{\partial \Omega} \left( -\frac{1}{4\pi r} \right) \frac{\partial \phi}{\partial n} dS
-\end{align}$$
-Off the boundary, the factor of $\frac{1}{2}$ on the LHS becomes unity.
+## Symbols and signs
 
-In this equation, $\phi$ is the potential we are trying to solve for, as well as the doublet strengths. In the second term of the RHS, $\frac{\partial \phi}{\partial n}$ is the source strengths, equal to the normal component of the induced velocity field $\hat{n} \cdot \nabla \phi$. 
+Let \(\Omega\) be the closed body interior, \(\partial\Omega\) its consistently
+oriented boundary, and \(\boldsymbol n\) the outward unit normal. Let \(\psi\) be a
+single-valued harmonic potential in \(\Omega\), with
 
-The tricky part is understanding the role of the $\phi/2$ term and how it can be manipulated. After discretizing the surface into flat panels and evaluating on the surface, the self-induced panel potential due to a doublet is zero. Thus, the $\phi/2$ term is equivalent to adding a self-induced doublet potential of $\mu/2$, which appears on the diagonal of the matrix expression:
-
-$$\begin{align}
-\frac{1}{2} I \phi - G \phi &= -\phi_\mathrm{source}\\
-\left( \frac{1}{2} I - G \right) \phi &= -\phi_\mathrm{source}
-\end{align}$$
-
-If $G$ is formed by evaluating the potential just above the surface, then the $\frac12 I$ on the diagonal is recovered automatically. In addition, there are contributions due to unknown wake panels that are included. Calling this matrix $\tilde{G}$, we can say
-
-$$\begin{align}
--\tilde{G} \phi &= -\phi_\mathrm{source}
-\end{align}$$
-
-Below, I expound some of the details with the help of ChatGPT and Claude.
-
-## Continuous Identity
-
-Let
-
-```math
-g(\mathbf{x}, \mathbf{y}) = -\frac{1}{4\pi r},
+\[
+q=\left.\psi\right|_{\partial\Omega},
 \qquad
-r = \lVert \mathbf{x} - \mathbf{y} \rVert .
-```
+\sigma=-\frac{\partial\psi}{\partial n}.
+\]
 
-For a harmonic potential `phi` evaluated on a smooth boundary from the exterior
-side, Green's identity gives
+The operators are:
 
-```math
-\frac{1}{2}\phi(\mathbf{x})
-- \int_{\partial\Omega}
-    \phi(\mathbf{y})
-    \frac{\partial}{\partial n_\mathbf{y}}
-    \left(-\frac{1}{4\pi r}\right)
-    dS_\mathbf{y}
-=
--\int_{\partial\Omega}
-    \left(-\frac{1}{4\pi r}\right)
-    \frac{\partial\phi}{\partial n}(\mathbf{y})
-    dS_\mathbf{y}.
-```
+- \(\mathcal S\): the body single-layer potential or its interior trace;
+- \(\mathcal D\): the body double-layer potential away from the boundary;
+- \(\mathcal B\): the complete interior trace of \(\mathcal D\), including the
+  positive half jump used by FLOWPanel;
+- \(\mathcal W\): attached-wake potential influence at body control points;
+- \(\mathcal C\): Kutta map from body doublet strengths to attached-wake strengths;
+- \(\boldsymbol\mu\): body doublet-strength vector.
 
-The left integral is the doublet influence. The right integral is the source
-potential induced by the boundary-normal derivative of `phi`.
+Thus the body-only boundary operator is \(\mathcal B\), while the lifting-body solve
+operator is
 
-## Discrete Form
+\[
+\mathcal G=\mathcal B+\mathcal W\mathcal C.
+\]
 
-FLOWPanel's Dirichlet body stores source and doublet panel strengths in the two
-columns of `body.strength`. In the test, the target potential `phi` is the
-wake-induced potential at the body control points.
+The attached wake is not part of the closed-boundary Green identity. It is included in
+\(\mathcal G\) only because its strength is coupled to the body unknowns.
 
-The doublet influence matrix `G` is assembled using `pnl._G!` with
-`update_geometry=false`, so the caller is responsible for choosing the side of
-the boundary where the control points are placed. If no wake panels are coupled
-to the body-panel unknowns, the discrete identity can be written as
+## Continuous derivation
 
-```math
--G\,\phi = \phi_\mathrm{source}.
-```
+Suppose the singular support that generates \(\psi\) is disjoint from the closed body
+interior and boundary. Green's representation in the interior is
 
-For a `RigidWakeBody`, however, `G` can also include the influence of wake
-panels whose strengths are tied to the trailing-edge body-panel strengths. The
-more precise form is
-
-```math
-\left(\frac{1}{2}I - K_b - K_w C\right)\phi = \phi_\mathrm{source}.
-```
-
-Here `K_b` is the body-panel doublet principal-value influence, `K_w` is the
-wake-panel doublet influence at the body control points, and `C` maps the body
-doublet unknowns to wake-panel strengths through the trailing-edge/Kutta
-coupling. In the implementation, `_G!` assembles `K_b + K_w C` together, with
-the limiting body self term included in the diagonal.
-
-## Exterior vs Interior Collocation
-
-The off-diagonal entries of `G` are ordinary panel-to-control-point influence
-terms, including any wake-panel influence coupled to a trailing-edge column.
-Those entries change only by the small geometric displacement between an
-exterior and interior control point. The important difference is the body-panel
-diagonal self term, which represents the limiting solid angle of the doublet
-kernel.
-
-### Exterior control points
-
-For a smooth flat body panel, the doublet kernel `∂g/∂n` with
-`g = −1/(4πr)` integrates to `−½` at the panel's own exterior control point.
-Thus the body self part of `G[i,i]` is `−½` on the exterior side, so `−G`
-already contains the explicit `+½I` jump term:
-
-```math
-(-G)[i,i] = +\tfrac{1}{2} = \tfrac{1}{2}I[i,i] - 0 = ({\tfrac{1}{2}I - G_\text{zeroed}})[i,i].
-```
-
-If there are no coupled wake panels, exterior `−G` is equivalent to zeroing the
-diagonal and adding `½I` explicitly.
-
-```math
--G_\mathrm{exterior} \approx \tfrac{1}{2}I - G_{\mathrm{exterior},\mathrm{offdiag}}.
-```
-
-This is why the exterior test can use the assembled matrix directly:
-
-```math
-\phi = (-G_\mathrm{exterior})^{-1}\phi_\mathrm{source}.
-```
-
-When wake panels are present, the diagonal of the assembled total matrix may not
-be exactly `−½`, because a trailing-edge column can also include same-column wake
-influence. That extra wake contribution is not part of the jump term and should
-not be discarded. This is why the exterior test uses the assembled matrix
-directly:
-
-```math
-A_\mathrm{exterior} = -G_\mathrm{exterior}.
-```
-
-### Interior control points
-
-On the interior side, `_G!` sees the opposite limiting solid angle and the
-body-panel self term is approximately `+½`:
-
-```math
-G_\mathrm{interior}[i,i] \approx +\tfrac{1}{2}.
-```
-
-If we used raw interior `−G`, the diagonal of the Green matrix would become
-`−½`, which has the wrong sign for the identity being checked:
-
-```math
-(-G_\mathrm{interior})[i,i] \approx -\tfrac{1}{2}.
-```
-
-If there were no wake coupling, the fix would be to replace the diagonal with
-`−½` before forming `−G`. With wake coupling, that is too aggressive: it also
-removes any same-column wake influence already assembled into `G`.
-
-The correct interior transform is to subtract only the body jump difference
-between the two limiting sides. Since the body self term changes from `+½`
-inside to the desired exterior-equivalent `−½`, subtract one from the diagonal:
-
-```math
-G_\mathrm{interior}[i,i] \leftarrow G_\mathrm{interior}[i,i] - 1,
+\[
+\psi(\boldsymbol x)
+=\mathcal S\sigma(\boldsymbol x)+\mathcal Dq(\boldsymbol x),
 \qquad
-A_\mathrm{interior} = -\left(G_\mathrm{interior} - I\right)
-= I - G_\mathrm{interior}.
-```
+\boldsymbol x\in\Omega.
+\]
 
-Then
+Take the limit from the body interior. With \(\mathcal B\) defined to include the
+chosen interior jump,
 
-```math
-A_\mathrm{interior}
-= \frac{1}{2}I - K_{b,\mathrm{offdiag}} - K_w C,
-```
+\[
+q=\mathcal S\sigma+\mathcal Bq.
+\]
 
-up to the small displacement of the interior control points. This keeps the
-required `+½I` body jump while preserving wake-panel influence on trailing-edge
-columns.
+Rearranging gives the boundary identity
 
-## Why Exterior Collocation Is Rank Deficient
+\[
+\boxed{\mathcal S\sigma=(I-\mathcal B)q.}
+\]
 
-A closed constant-strength doublet sheet has a constant-mode ambiguity. Let
-`1` denote the vector with the same doublet strength on every body panel. From
-the exterior of a closed surface, this constant doublet shell produces no
-observable potential field, so the exterior doublet influence matrix satisfies
+The two body layers reconstruct \(\psi\) in the interior. In the exterior component
+containing infinity, they reconstruct zero because the singular support responsible
+for \(\psi\) lies outside the Green surface:
 
-```math
-G_\mathrm{exterior}\mathbf{1} \approx \mathbf{0}.
-```
+\[
+\mathcal S_{\mathrm e}\sigma+\mathcal D_{\mathrm e}q=0.
+\]
 
-Thus raw exterior collocation leaves the constant vector in the nullspace. This
-is why an exterior matrix such as `G_exterior`, or equivalently `-G_exterior`,
-is not full rank for a closed body.
+This does not say that the single layer is the negative of the wake potential. The
+double layer carrying the boundary trace is indispensable.
 
-Another way to see this is to remember that a doublet sheet represents a jump
-in potential. If a closed body has a constant doublet distribution on its
-surface, then the potential trace immediately on the interior side is constant.
-The induced potential satisfies Laplace's equation away from the sheet, so a
-constant boundary value on the closed interior domain implies a constant
-potential everywhere inside. The exterior domain has an additional boundary
-condition at infinity: the perturbation potential must decay to zero. A constant
-exterior boundary trace together with zero potential at infinity therefore
-forces the exterior potential to be zero everywhere. The same constant doublet
-mode is therefore visible as a constant interior potential but invisible from
-the exterior.
+The exact statement requires:
 
-The interior limiting operator is different because a double-layer potential is
-discontinuous across the surface. Crossing the sheet changes the potential by
-the doublet strength, with the sign set by the kernel and normal conventions.
-With FLOWPanel's convention, the two limiting matrices satisfy
+- a closed boundary with consistent outward orientation;
+- singular support disjoint from the body interior and boundary;
+- a single-valued harmonic branch of \(\psi\) throughout the interior, with a
+  well-defined trace and normal derivative;
+- matching kernel signs, one-sided limits, and gauge conventions.
 
-```math
-G_\mathrm{interior} \approx G_\mathrm{exterior} + I.
-```
+If a vortex-sheet potential needs a branch cut, that cut must remain outside the body
+interior and boundary.
 
-Applying both sides to the constant mode gives
+## FLOWPanel's exact-centroid operator
 
-```math
-G_\mathrm{interior}\mathbf{1}
-\approx
-G_\mathrm{exterior}\mathbf{1} + I\mathbf{1}
-\approx
-\mathbf{1}.
-```
+`calc_controlpoints!` in `src/FLOWPanel_abstractbody.jl` places every triangular-panel
+control point at its centroid. The normals argument retained by that function is for
+backwards compatibility and does not offset the point.
 
-So the jump term converts the exterior null vector into an interior eigenvector
-with eigenvalue approximately one. In other words, raw interior collocation
-sees the potential jump of the constant doublet sheet, while raw exterior
-collocation does not. That is why the raw interior matrix can be full rank even
-when the raw exterior matrix is rank deficient.
+At a target equal to its source-panel centroid, the raw doublet kernel supplies its
+principal value. `_self_limit` in `src/FLOWPanel_elements_fmm.jl` replaces the
+self-potential with the selected interior limit. For a body doublet strength
+\(\mu_i\), the self contribution is
 
-This does not contradict the exterior Green identity. The exterior representation
-still determines potential only up to an additive constant, so matrices like
-`-G_exterior` and the exterior-equivalent interior operator
-`I - G_interior` retain the same constant-mode nullspace. The raw interior
-matrix `G_interior` is full rank because it includes the double-layer jump
-rather than subtracting it away.
+\[
+\frac{1}{2}\mu_i.
+\]
 
-Here `phi_source` is not just `U_wake dot n`; it is the scalar potential induced
-by source panels whose strengths are set from the wake-induced normal velocity:
+`_G!` in `src/FLOWPanel_solver.jl` consumes that side-aware value directly. It neither
+moves the target nor adds another diagonal jump. In operator form, its body-only
+Dirichlet block approximates \(\mathcal B\). For a lifting body, `_induced_wake` adds
+the same-column attached-wake influence, so the assembled block approximates
+\(\mathcal G\).
 
-```math
-\sigma_i = -\mathbf{u}_{wake,i}\cdot\mathbf{n}_i.
-```
+This convention supersedes descriptions based on separate exterior and interior
+control-point locations. The exterior self-potential, when needed for an operator
+comparison, is obtained by subtracting the full doublet jump from the stored interior
+self value; it is not obtained by moving the centroid.
 
-This is exactly what `pnl.set_strengths!(body)` does for a Dirichlet
-source-doublet body after `body.velocity` has been set to the wake-induced
-velocity.
+## Discrete identity and its limits
 
-## Test Procedure
+Let the vector \(\boldsymbol q\) contain samples or coefficients for the trace, and
+let \(\boldsymbol\sigma\) contain source-panel coefficients for its negative outward
+normal derivative. With no attached-wake coupling in the closed-surface operator, the
+discrete target identity is
 
-The test verifies the identity as follows:
+\[
+\boxed{
+\mathcal S_h\boldsymbol\sigma
+\approx(I-\mathcal B_h)\boldsymbol q.
+}
+\]
 
-1. Generate a `RigidWakeBody` and a finite `PanelWake`.
-2. Directly evaluate the wake-induced potential at exterior body control points.
-3. Directly evaluate the wake-induced velocity at those same points.
-4. Assemble the doublet matrix `G` at the chosen control-point side.
-5. Convert wake-induced velocity to source strengths with `set_strengths!`.
-6. Evaluate the source-induced potential `phi_source` from those strengths.
-7. Solve `−G φ = phi_source` and compare against the direct wake potential.
+The approximation becomes an exact algebraic equality only if all of the following
+hold:
 
-The test performs this twice:
+- the trace and normal flux are representable in the chosen panel spaces;
+- their coefficients are obtained consistently rather than mixing projection and
+  point sampling;
+- the same geometry, quadrature, kernel signs, self limits, and gauge are used in both
+  terms; and
+- evaluation errors, including near-singular wake influence, are absent.
 
-- Exterior control points use the unmodified assembled diagonal, since
-  `G[i,i] ≈ −½`.
-- Interior control points subtract one from the assembled diagonal, or
-  equivalently use `I - G_interior`, since raw interior assembly gives
-  `G[i,i] ≈ +½`.
+Constant-strength panels filled from centroid samples generally do not meet the first
+two conditions for a spatially varying wake field. The continuum Green identity is
+exact, while its point-collocated constant-panel realization is normally a consistency
+check that should converge under appropriate refinement.
 
-With exact control-point self pairs, FLOWPanel's kernel self-potential uses
-the interior limit as the canonical stored value. When an exterior self-panel
-potential is needed for an operator comparison, it is recovered by subtracting
-the self panel's doublet or vortex strength from that interior value.
+The attached-wake term must not be folded into the body Green operator when checking
+this identity. If the assembled lifting-body matrix is used without separating it,
+then
 
-Because normal-derivative data determines potential only up to an additive
-constant, the test compares both potentials after subtracting their means.
+\[
+(I-\mathcal G)\boldsymbol q
+=(I-\mathcal B)\boldsymbol q-\mathcal W\mathcal C\boldsymbol q,
+\]
+
+and the last term tests Kutta coupling rather than the closed-boundary identity.
+
+## Gauge and the constant mode
+
+Neumann data determines a harmonic potential only up to an additive constant. The
+trace may therefore be replaced by
+
+\[
+\boldsymbol q^{\prime}=\boldsymbol q+a\boldsymbol 1.
+\]
+
+For a closed doublet shell, the constant mode is exterior-invisible. In the exact
+operator,
+
+\[
+(I-\mathcal B)\boldsymbol 1=\boldsymbol 0.
+\]
+
+Numerically, the corresponding mode may be only approximately null because of
+geometry and quadrature error. A comparison should impose one common gauge, for
+example zero mean or a pinned reference value, rather than compare raw potentials.
+
+The Kutta map uses differences of upper and lower trailing-edge values and therefore
+annihilates an additive constant:
+
+\[
+\mathcal C\boldsymbol 1=\boldsymbol 0.
+\]
+
+Consequently, gauge selection does not change attached-wake strength. A nonconstant
+difference between paired trailing-edge trace samples is different: it produces
+\(\mathcal C\boldsymbol q\) and must be retained in the finite-wake derivation.
+
+## Solver-path implications
+
+In a Dirichlet solve, `set_strengths!` maps the velocity at each centroid to a source
+strength. Production wake marching in `_steady_aerodynamics!` requests free-wake
+velocity and does not request scalar potential.
+
+The single-body `solve!` method saves `body.potential`, clears it before assembling the
+body source potential, and restores it after solving. It therefore does not consume a
+previously assembled external potential. In contrast, the coupled `KrylovCoupled` and
+`BackslashCoupled` solvers save and re-add external potential before forming their
+Dirichlet right-hand sides. This distinction matters to an experimental explicit-
+potential solve, but not to the production wake path because that path assembles no
+free-wake potential in the first place.
+
+## Updated validation design
+
+The most direct closed-surface diagnostic uses a body without Kutta-coupled wake
+columns:
+
+1. Construct a closed, consistently oriented source/doublet body.
+2. Place a known wake singularity system wholly outside the body.
+3. At every exact body centroid, evaluate its potential trace and velocity using the
+   same kernel and regularization intended for the comparison.
+4. Form source strengths from the negative outward normal velocity.
+5. Evaluate the body single-layer potential from those source strengths.
+6. Assemble the body-only exact-centroid Dirichlet operator, retaining its positive
+   half self-potential limit.
+7. Apply the same gauge to both sides and check
+   \[
+   \mathcal S_h\boldsymbol\sigma
+   \approx(I-\mathcal B_h)\boldsymbol q.
+   \]
+8. Repeat under body-panel refinement and increasing wake/body separation to separate
+   representation error from near-singular evaluation error.
+
+Additional checks should be kept distinct:
+
+- Adding attached-wake columns and measuring \(\mathcal C\boldsymbol q\) diagnoses
+  Kutta-trace coupling.
+- Comparing finite attached and first-row edges at off-body probes diagnoses handoff
+  geometry, strength, orientation, and regularization.
+- Comparing the complete marched composite with a semi-infinite wake at common probes
+  diagnoses wake-shape and far-closure mismatch.
+
+`test/dirichlet_potential_test.jl` does not currently implement this procedure. It is
+an ad hoc script outside the maintained test matrix, refers to the removed `cp_outer`
+constructor keyword and field, and presently fails before its final Green-identity
+assertion. No passing regression should be claimed from that file until it is rewritten
+for the exact-centroid operator and admitted to a maintained test suite.

@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FLOWPanel.jl is a 3D panel method solver for low-speed (inviscid, incompressible) aerodynamics, written in Julia. It supports non-lifting bodies (source/doublet panels), lifting bodies (vortex-ring panels with rigid wake), and unsteady simulation with free wakes. Computation is accelerated via the `FastMultipole` package (FMM) or direct N-body evaluation.
 
+## Agent Behavior Requirements
+
+- before performing or suggesting a token-heavy task, also include a brief estimate of the token count required as a fraction of my 5-hour limit.
+- be token-consciencious. If you can save tokens by writing code to perform a task instead of doing it yourself, write the code. In general, prefer low-token solutions without sacrificing accuracy
+- anytime you are asked to report a conclusion based on evidence you have gathered, do the following: 1) make your conclusion as usual; 2) review methods, results, and the conclusion, checking for consistency and robustness of the conclusion- revise your conclusion if necessary; 3) report
+- to save your context window from filling up, launch subagents to do major tasks and report rather than doing them yourself. Their report can include indexed files for you to reference later as needed, so long as they immediately provide a summary/index of what is in the included files. Read the summary/index immediately, but only read those files when needed so you don't fill up context prematurely.
+
 ## Required Policy Reads (by task)
 
 - Diagnosing or modifying repository code → `agent_policies/WORKFLOW.md` (subsystem/source-file routing, repo realities, editing boundaries, failure modes)
@@ -42,8 +49,3 @@ Source lives in `src/` as `FLOWPanel_<subsystem>.jl` files; the authoritative lo
 
 Compute shedding from the *constructed* body's cells, never the raw mesh: with `ensure_winding=true` (default) the constructor re-winds `cells` in place, so shedding computed from raw mesh cells attaches the wake at the wrong edges with **no error** — the body silently sheds almost no circulation (observed: rotor-hover CT collapsed ~3.6×, 0.0505→0.014). Build a `noshedding` body first, run `calc_shedding_from_seed` on *its* `.nodes`/`.cells`, then rebuild with the shedding. See the `RigidWakeBody` docstring in `src/FLOWPanel_liftingbody.jl` and `examples/rotor_hover_convergence.jl`.
 
-## Response Preferences
-
-When you respond to prompts, if you ever need to ask me questions where I decide between possible options (not including asking permissions to perform shell commands), and you suspect any of the option will be token-heavy, also include a brief estimate of the token count required as a fraction of my 5-hour limit.
-
-When in plan mode, default to preparing a plan with enough context that a new agent with clean context doesn't have to waste tokens by reading other files. Save the plan to file, tell me where it is saved, and stop so I can run with a new agent with clear context. If you don't think this would save any tokens in the long run, ask me if I would like you to prepare a plan for you to implement without clearing context.

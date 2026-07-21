@@ -328,7 +328,10 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         particle_hessian_self::Bool=true,
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
-        grad_mu_options=(;))
+        grad_mu_options=(;),
+        formulation::AbstractSolveFormulation=VelocityThroughSources(),
+        formulation_state=nothing,
+        i_step::Int=0)
     normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
         default_basis=:quad)
     for w in wakes_tuple
@@ -354,6 +357,10 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
             !isnothing(w) && update_TE!(w, sys)
         end
     end
+
+    # snapshot pre-wake control-point velocity for formulations that isolate
+    # the wake-only contribution afterwards (no-op for the default)
+    formulation_prewake!(formulation, formulation_state, systems_tuple)
 
     if length(wake_sources) > 0
         # Diagnostic gates:
@@ -444,7 +451,8 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     end
 
     _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
-    solve!(systems, body_solvers; backend=backend_solve)
+    solve_formulation!(formulation, formulation_state, systems, systems_tuple,
+        wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
 
     needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
         grad_mu_options=normalized_grad_mu_options)
@@ -684,6 +692,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
         grad_mu_options=(;),
+        formulation::AbstractSolveFormulation=VelocityThroughSources(),
         verbose=false
     )
     @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
@@ -723,6 +732,13 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             set_Das_min_kinematic_displacement)
     end
 
+    # Validate the wake→body solve formulation and build its runtime state
+    # (one-time operator assembly; `nothing` for the default formulation).
+    # Placed after geometry/Das initialization so cached operators see final
+    # trailing-edge wake directions.
+    formulation_state = initialize_formulation(formulation, systems_tuple,
+        wakes_tuple, body_solvers, backend_solve, backend_system)
+
     # Body bound-circulation low-pass (item 005 E4.8): when bound_strength_rlx < 1
     # we blend each step's freshly solved strength with the previous (relaxed)
     # strength, Γ_n = (1-α)Γ_{n-1} + α Γ_solve, to artificially damp the body↔wake
@@ -730,6 +746,10 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     apply_bound_rlx = bound_strength_rlx != 1
     prev_strengths = apply_bound_rlx ? [copy(sys.strength) for sys in systems_tuple] : nothing
     have_prev_strength = false
+    # The TraceCorrected Kutta-trace correction c is blended with the same α so
+    # the affine wake strength γ = C·μ̃ − c stays consistent with the relaxed μ̃.
+    prev_c = apply_bound_rlx && formulation isa TraceCorrected ?
+        copy(formulation_state.c) : nothing
 
     # begin simulation
     i_step = start_step
@@ -763,7 +783,10 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             particle_hessian_self,
             diagnose_particle_influence,
             diagnostic_vertical,
-            grad_mu_options)
+            grad_mu_options,
+            formulation,
+            formulation_state,
+            i_step)
 
         # body bound-circulation low-pass (item 005 E4.8): damp body↔wake feedback
         # by under-relaxing the solved strength before it is shed into the wake.
@@ -774,6 +797,13 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                     @. sys.strength = (1 - α) * prev + α * sys.strength
                 end
                 prev .= sys.strength
+            end
+            if !isnothing(prev_c)
+                if have_prev_strength
+                    @. formulation_state.c = (1 - α) * prev_c + α * formulation_state.c
+                    set_wake_correction!(systems_tuple[1], formulation_state.c)
+                end
+                prev_c .= formulation_state.c
             end
             have_prev_strength = true
         end

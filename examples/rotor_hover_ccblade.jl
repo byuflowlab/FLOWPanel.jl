@@ -284,7 +284,85 @@ failure_rows = DataFrame(ncrit=Int[], rescale=Float64[], section=Int[], r_over_R
 
 # Raw XFOIL sweep cache. A mixed polar can reuse one set's cl and another set's cd
 # without rerunning XFOIL or duplicating failure rows.
-sweep_cache = Dict{Tuple{Int,Float64},Vector{NamedTuple{(:alpha_deg, :cl, :cd, :failed),Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}}}()
+const SweepVec = Vector{NamedTuple{(:alpha_deg, :cl, :cd, :failed),Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}}
+sweep_cache = Dict{Tuple{Int,Float64},SweepVec}()
+
+# Disk-backed sweep cache: one CSV per (ncrit, Re rescale) under
+# XFOIL_CACHE_DIR, so already-swept conditions never rerun XFOIL across script
+# invocations. Failed alphas are stored as rows with cl/cd = NaN, failed=true.
+# The load path validates the geometry hash, per-section Re/Mach, the alpha
+# grid, and the XFOIL knobs, and falls back to a fresh sweep (rewriting the
+# cache) on any mismatch. Disable with XFOIL_CACHE=false.
+const XFOIL_CACHE = parse(Bool, get(ENV, "XFOIL_CACHE", "true"))
+const XFOIL_CACHE_DIR = get(ENV, "XFOIL_CACHE_DIR", joinpath(SAVE_PATH, "xfoil_cache"))
+const GEOM_HASH = string(hash((sec_x, sec_y)); base=16)
+
+sweep_cache_path(ncrit, rescale) =
+    joinpath(XFOIL_CACHE_DIR, "xfoil_sweeps_ncrit$(ncrit)_re$(rescale_token(rescale))x.csv")
+
+function save_sweeps_cache(ncrit, rescale, sweeps)
+    XFOIL_CACHE || return nothing
+    rows = DataFrame(section=Int[], geom_hash=String[], Re=Float64[], Mach=Float64[],
+        iter=Int[], npan=Int[], alpha_min=Float64[], alpha_max=Float64[], dalpha=Float64[],
+        alpha_deg=Float64[], cl=Float64[], cd=Float64[], failed=Bool[])
+    for i in 1:nsec
+        re = rescale * sec_Re_base[i]
+        s = sweeps[i]
+        for (a, cl, cd) in zip(s.alpha_deg, s.cl, s.cd)
+            push!(rows, (i, GEOM_HASH, re, sec_Mach[i], XFOIL_ITER, XFOIL_NPAN,
+                XFOIL_ALPHA_MIN, XFOIL_ALPHA_MAX, XFOIL_DALPHA, a, cl, cd, false))
+        end
+        for a in s.failed
+            push!(rows, (i, GEOM_HASH, re, sec_Mach[i], XFOIL_ITER, XFOIL_NPAN,
+                XFOIL_ALPHA_MIN, XFOIL_ALPHA_MAX, XFOIL_DALPHA, a, NaN, NaN, true))
+        end
+    end
+    mkpath(XFOIL_CACHE_DIR)
+    path = sweep_cache_path(ncrit, rescale)
+    CSV.write(path, rows)
+    println("Cached XFOIL sweeps: $(path)")
+    return nothing
+end
+
+function load_sweeps_cache(ncrit, rescale)
+    XFOIL_CACHE || return nothing
+    path = sweep_cache_path(ncrit, rescale)
+    isfile(path) || return nothing
+    df = CSV.read(path, DataFrame)
+    required = (:section, :geom_hash, :Re, :Mach, :iter, :npan,
+                :alpha_min, :alpha_max, :dalpha, :alpha_deg, :cl, :cd, :failed)
+    if !all(c -> c in propertynames(df), required)
+        @warn "XFOIL cache $(path) has an unexpected schema; resweeping."
+        return nothing
+    end
+    sweeps = SweepVec(undef, nsec)
+    for i in 1:nsec
+        sub = df[df.section .== i, :]
+        re = rescale * sec_Re_base[i]
+        ok = !isempty(sub) &&
+             all(sub.geom_hash .== GEOM_HASH) &&
+             all(isapprox.(sub.Re, re; rtol=1e-6)) &&
+             all(isapprox.(sub.Mach, sec_Mach[i]; atol=1e-9)) &&
+             all(sub.iter .== XFOIL_ITER) && all(sub.npan .== XFOIL_NPAN) &&
+             all(sub.alpha_min .== XFOIL_ALPHA_MIN) &&
+             all(sub.alpha_max .== XFOIL_ALPHA_MAX) &&
+             all(sub.dalpha .== XFOIL_DALPHA)
+        if !ok
+            @warn "XFOIL cache $(path) does not match the current configuration at section $(i) (geometry/RPM/rho/alpha-grid/XFOIL knobs changed?); resweeping."
+            return nothing
+        end
+        conv = sub[.!sub.failed, :]
+        if size(conv, 1) < 4
+            @warn "XFOIL cache $(path) has too few converged points at section $(i); resweeping."
+            return nothing
+        end
+        sweeps[i] = (alpha_deg=Vector{Float64}(conv.alpha_deg),
+                     cl=Vector{Float64}(conv.cl),
+                     cd=Vector{Float64}(conv.cd),
+                     failed=Vector{Float64}(sub[sub.failed, :alpha_deg]))
+    end
+    return sweeps
+end
 
 function get_sweeps!(ncrit, rescale)
     key = (ncrit, rescale)
@@ -294,6 +372,21 @@ function get_sweeps!(ncrit, rescale)
 
     label = polar_label(ncrit) * rescale_suffix(rescale)
     legend = polar_legend(ncrit) * rescale_legend(rescale)
+
+    cached = load_sweeps_cache(ncrit, rescale)
+    if !isnothing(cached)
+        println("\n=== XFOIL sweep $(legend) (loaded from cache) ===")
+        println("  $(sweep_cache_path(ncrit, rescale))")
+        for i in 1:nsec
+            for a in cached[i].failed
+                push!(failure_rows, (ncrit, rescale, i, sec_r[i]/R,
+                    rescale * sec_Re_base[i], sec_Mach[i], a))
+            end
+        end
+        sweep_cache[key] = cached
+        return cached
+    end
+
     println("\n=== XFOIL sweep $(legend) ===")
     println("Generating XFOIL polars (Re from hover inflow W = Omega*r)...")
     sweeps = Vector{NamedTuple{(:alpha_deg, :cl, :cd, :failed),Tuple{Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}}(undef, nsec)
@@ -318,6 +411,7 @@ function get_sweeps!(ncrit, rescale)
         sweeps[i] = (alpha_deg=αs, cl=cls, cd=cds, failed=failed)
     end
     sweep_cache[key] = sweeps
+    save_sweeps_cache(ncrit, rescale, sweeps)
     return sweeps
 end
 

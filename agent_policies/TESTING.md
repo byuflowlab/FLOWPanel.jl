@@ -27,6 +27,7 @@ higher-level suite.
 - Body assembly / geometry bookkeeping changes: `test/runtests_unit_body.jl`
 - Lifting-body or wake changes: `test/runtests_unit_liftingbody.jl`, `test/runtests_unit_wake.jl`
 - Simulation / monitor ordering / time-marching changes: `test/runtests_unit_simulate.jl`, `test/runtests_unit_postprocess.jl`
+- Unsteady Bernoulli phi-dot machinery (probe, trace, BE/BDF2, ALE): `test/runtests_unit_added_mass.jl`
 - Replay changes: `test/runtests_unit_replay.jl`
 - Warm-start changes: `test/runtests_unit_warmstart.jl`
 - FGS convergence-history changes: `test/runtests_unit_fgs_history.jl`

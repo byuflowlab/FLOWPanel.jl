@@ -5,12 +5,16 @@
 ## This script replays the saved VTK state through the corrected steady
 ## Bernoulli monitor only (no PressureLaplace, no CG solves) and produces:
 ##   1. CT vs revolution with the run's Laplace(Du/Dt) history for context and
-##      CCBlade ncrit=4/9 total CT as horizontal lines;
+##      CCBlade total CT per BEM_NCRITS polar set as horizontal lines;
 ##   2. spanwise dCT/d(r/R) averaged over the final NAVG_SAMPLES replay samples
-##      (default 72 = final 2 revolutions at 36 steps/rev), overlaying both
-##      CCBlade sectional curves;
+##      (default 72 = final 2 revolutions at 36 steps/rev), overlaying the
+##      CCBlade sectional curves for the same polar sets;
 ##   3. a saved-vs-replayed forensic CSV identifying which Bernoulli
 ##      formulation produced the original run output.
+##
+## PLOTS_ONLY=true regenerates the two plots from the CSVs a previous replay
+## already wrote into OUT_DIR (no VTK state, metadata TOML, or FMM evaluation
+## needed) — the mode to use on a machine that only holds the copied run CSVs.
 ##
 ## Read-only with respect to the saved run: it never re-solves, re-sheds, or
 ## overwrites anything under SAVE_PATH outside OUT_DIR.
@@ -25,17 +29,50 @@ include(joinpath(@__DIR__, "rotor_hover_spanwise_loading_replay.jl"))
 run_name = get(ENV, "RUN_NAME", "rotor_axial_j0187_ccblade")
 save_path = get(ENV, "SAVE_PATH", joinpath("data", "rotor_axial_j0187_ccblade"))
 out_dir = get(ENV, "OUT_DIR", joinpath(save_path, "bernoulli_replay"))
-metadata = TOML.parsefile(metadata_path(save_path, run_name))
+plots_only = env_bool("PLOTS_ONLY", false)
 
-R = env_float("R", something(infer_metadata_value(metadata, "R"), 0.119))
-rho = env_float("RHO", something(infer_metadata_value(metadata, "rho"), 1.179))
-rpm = env_float("RPM", something(infer_rpm(metadata), 5400.0))
+# In plots-only mode the run metadata TOML is typically not available (it stays
+# with the VTK state on the machine that ran the simulation).
+metadata = plots_only ? nothing : TOML.parsefile(metadata_path(save_path, run_name))
+meta_value(key, default) = isnothing(metadata) ?
+    default : something(infer_metadata_value(metadata, key), default)
+
+R = env_float("R", meta_value("R", 0.119))
+rho = env_float("RHO", meta_value("rho", 1.179))
+rpm = env_float("RPM", something(isnothing(metadata) ? nothing : infer_rpm(metadata), 5400.0))
 axial_dimension = env_int("AXIAL_DIMENSION", 1)
 radial_dimension = env_int("RADIAL_DIMENSION", 2)
 navg_samples = env_int("NAVG_SAMPLES", 72)
 p_correct_kuttacondition = env_bool("P_CORRECT_KUTTA", false)
 spanwise_binning = parse_spanwise_binning(get(ENV, "SPANWISE_BINNING", "span_overlap"))
 vc_target = env_float("VC_TARGET", 4.0)
+op_tag = get(ENV, "OP_TAG", "Vc4_J0p1867")
+
+# CCBlade polar sets to overlay, by `polarset` label (polar_label in
+# rotor_hover_ccblade.jl: "ncrit$(n)", "inviscid", "mixed_cl-..._cd-...").
+# Plotted in the listed order.
+bem_sets = String.(strip.(split(get(ENV, "BEM_SETS",
+    "ncrit1,ncrit2,ncrit4,ncrit9,inviscid,mixed_cl-inviscid_cd-ncrit1"), ",")))
+
+# One fixed color per polar set, shared by both plots (identity follows the
+# entity). Panel = tab:blue, run Laplace = tab:green, broken run Bernoulli =
+# tab:red are reserved.
+const BEM_COLORS = Dict(
+    "ncrit1" => "tab:purple", "ncrit2" => "tab:cyan",
+    "ncrit4" => "black", "ncrit9" => "tab:orange",
+    "inviscid" => "tab:pink", "mixed_cl-inviscid_cd-ncrit1" => "tab:olive")
+const BEM_FALLBACK_COLORS = ("tab:gray", "tab:brown", "gold", "navy")
+bem_color(label) = get(BEM_COLORS, label,
+    BEM_FALLBACK_COLORS[mod1(hash(label) % 4 + 1, length(BEM_FALLBACK_COLORS))])
+
+# Readable legend name for a polarset label.
+function bem_pretty(label)
+    label == "inviscid" && return "inviscid"
+    m = match(r"^mixed_cl-(.+)_cd-(.+)$", label)
+    isnothing(m) || return "mixed: cl " * bem_pretty(m.captures[1]) *
+                           ", cd " * bem_pretty(m.captures[2])
+    return replace(label, "ncrit" => "ncrit=")
+end
 
 # Metadata per-step uinf takes precedence inside replay; this only guards
 # against runs whose metadata is missing [[step]] uinf entries.
@@ -45,17 +82,102 @@ uinf_fallback = let s = get(ENV, "UINF_FALLBACK", "4.0,0.0,0.0")
     SVector{3, Float64}(vals...)
 end
 
-ct_vs_j_csv = get(ENV, "CT_VS_J_CSV", joinpath(save_path, "rotor_hover_ccblade_CT_vs_J.csv"))
-sectional_csvs = (
-    ncrit4 = get(ENV, "CCBLADE_SECTIONAL_NCRIT4",
-        joinpath(save_path, "rotor_hover_ccblade_sectional_ncrit4_Vc4_J0p1867.csv")),
-    ncrit9 = get(ENV, "CCBLADE_SECTIONAL_NCRIT9",
-        joinpath(save_path, "rotor_hover_ccblade_sectional_ncrit9_Vc4_J0p1867.csv")),
-)
-run_ct_csv = get(ENV, "RUN_CT_CSV", joinpath(save_path, run_name * "_CT_vs_rev.csv"))
-
 mkpath(out_dir)
 ct_scale = rho * (rpm / 60)^2 * (2R)^4
+
+trapz(x, y) = sum(0.5 * (y[i] + y[i+1]) * (x[i+1] - x[i]) for i in 1:length(x)-1)
+
+# --------------------------------------------------- CCBlade file resolution --
+# Sectional CSVs may live at the top level (possibly suffixed, e.g. `_all` from
+# a local rerun) or in an `analysis/` copy of the HPC outputs.
+bem_search_dirs = (save_path, joinpath(save_path, "analysis"))
+
+function find_sectional_csv(label)
+    pattern = Regex("^rotor_hover_ccblade_sectional_$(label)_$(op_tag)\\w*\\.csv\$")
+    for dir in bem_search_dirs
+        isdir(dir) || continue
+        for f in sort(readdir(dir))
+            occursin(pattern, f) && return joinpath(dir, f)
+        end
+    end
+    return nothing
+end
+
+# Combine every CT_vs_J CSV found (base + suffixed reruns); later files win so
+# a fresh local rerun overrides the older HPC rows for the same polar set.
+function bem_ct_table()
+    cts = Dict{String, Float64}()
+    files = String[]
+    haskey(ENV, "CT_VS_J_CSV") && isfile(ENV["CT_VS_J_CSV"]) && push!(files, ENV["CT_VS_J_CSV"])
+    for dir in bem_search_dirs
+        isdir(dir) || continue
+        for f in sort(readdir(dir))
+            occursin(r"^rotor_hover_ccblade_CT_vs_J\w*\.csv$", f) && push!(files, joinpath(dir, f))
+        end
+    end
+    for path in files
+        df = CSV.read(path, DataFrame)
+        all(c -> c in propertynames(df), (:polarset, :Vc, :CT)) || continue
+        for row in eachrow(df)
+            abs(row.Vc - vc_target) < 1e-9 || continue
+            cts[String(row.polarset)] = Float64(row.CT)
+        end
+    end
+    return cts
+end
+
+function bem_ct_from_sectional(path)
+    isnothing(path) && return nothing
+    isfile(path) || return nothing
+    df = CSV.read(path, DataFrame)
+    return trapz(df.r_over_R, df.dTdr_total .* R ./ ct_scale)
+end
+
+sectional_paths = Dict(label => find_sectional_csv(label) for label in bem_sets)
+bem_cts = let table = bem_ct_table()
+    cts = Dict{String, Float64}()
+    for label in bem_sets
+        ct_bem = get(table, label, nothing)
+        isnothing(ct_bem) && (ct_bem = bem_ct_from_sectional(sectional_paths[label]))
+        if isnothing(ct_bem)
+            @warn "No CCBlade CT found for polar set $(label) (no CT_vs_J row at Vc=$(vc_target) and no sectional CSV)."
+        else
+            cts[label] = ct_bem
+        end
+    end
+    cts
+end
+
+run_ct_csv = let candidates = [get(ENV, "RUN_CT_CSV", ""),
+        joinpath(save_path, run_name * "_CT_vs_rev.csv"),
+        joinpath(save_path, "analysis", run_name * "_CT_vs_rev.csv")]
+    i = findfirst(p -> !isempty(p) && isfile(p), candidates)
+    isnothing(i) ? nothing : candidates[i]
+end
+
+# ------------------------------------------------- replay or CSV reload -----
+ct_history_csv = joinpath(out_dir, "CT_vs_revolution_bernoulli.csv")
+stats_path = joinpath(out_dir, run_name * "_spanwise_loading_stats.csv")
+
+if plots_only
+
+println("Bernoulli-only axial replay (plots-only mode)")
+println("  run_name:   $(run_name)")
+println("  save_path:  $(save_path)")
+println("  rho/R/RPM:  $(rho) / $(R) / $(rpm)")
+println("  BEM sets:   $(join(bem_sets, ", "))")
+println("  output:     $(out_dir)")
+
+isfile(ct_history_csv) || error("PLOTS_ONLY=true requires an existing $(ct_history_csv)")
+isfile(stats_path) || error("PLOTS_ONLY=true requires an existing $(stats_path)")
+hist = CSV.read(ct_history_csv, DataFrame)
+replay_steps = Int.(hist.step)
+ct = Float64.(hist.CT_bernoulli_replay_fixed)
+revs = Float64.(hist.revolution)
+t_range = revs .* 60 ./ rpm
+stats = CSV.read(stats_path, DataFrame)
+
+else
 
 backend = pnl.FastMultipoleBackend(;
     expansion_order=env_int("FMM_EXPANSION_ORDER", 8),
@@ -63,9 +185,6 @@ backend = pnl.FastMultipoleBackend(;
     leaf_size=env_int("FMM_LEAF_SIZE", 20),
 )
 
-trapz(x, y) = sum(0.5 * (y[i] + y[i+1]) * (x[i+1] - x[i]) for i in 1:length(x)-1)
-
-# ----------------------------------------------------------------- monitors --
 monitor_store = Dict{Symbol, Any}()
 
 monitor_factory = (systems, wakes, frames, t_range) -> begin
@@ -101,6 +220,7 @@ println("Bernoulli-only axial replay")
 println("  run_name:   $(run_name)")
 println("  save_path:  $(save_path)")
 println("  rho/R/RPM:  $(rho) / $(R) / $(rpm)")
+println("  BEM sets:   $(join(bem_sets, ", "))")
 println("  avg window: last $(navg_samples) samples")
 println("  output:     $(out_dir)")
 
@@ -118,13 +238,17 @@ result = pnl.replay(save_path, run_name;
 force = monitor_store[:force]
 snapshot = monitor_store[:snapshot]
 ct = -force.force[axial_dimension, :]
-revs = result.t_range .* rpm ./ 60
+t_range = result.t_range
+replay_steps = result.steps
+revs = t_range .* rpm ./ 60
+
+end # plots_only
 
 # ------------------------------------------------------------ window + stats --
 nsamples = length(ct)
 navg = clamp(navg_samples, 1, nsamples)
 window_idxs = collect((nsamples - navg + 1):nsamples)
-window_stats = flatness_stats(ct[window_idxs], result.t_range[window_idxs])
+window_stats = flatness_stats(ct[window_idxs], t_range[window_idxs])
 @printf("\nAveraging window: samples %d:%d (rev %.3f:%.3f)\n",
     first(window_idxs), last(window_idxs),
     revs[first(window_idxs)], revs[last(window_idxs)])
@@ -134,39 +258,10 @@ window_stats = flatness_stats(ct[window_idxs], result.t_range[window_idxs])
 passes_flatness(window_stats) ||
     @warn "Bernoulli CT is not flat over the averaging window (ptp tol 5%, drift tol 2.5%). Averaged loading may not be converged."
 
-# --------------------------------------------------------------- CCBlade CT --
-function bem_ct_from_ct_vs_j(path, ncrit, vc)
-    isfile(path) || return nothing
-    df = CSV.read(path, DataFrame)
-    all(c -> c in propertynames(df), (:ncrit, :Vc, :CT)) || return nothing
-    sub = df[(df.ncrit .== ncrit) .& (abs.(df.Vc .- vc) .< 1e-9), :]
-    size(sub, 1) == 0 && return nothing
-    return Float64(sub.CT[1])
-end
-
-function bem_ct_from_sectional(path)
-    isfile(path) || return nothing
-    df = CSV.read(path, DataFrame)
-    return trapz(df.r_over_R, df.dTdr_total .* R ./ ct_scale)
-end
-
-bem_cts = Dict{String, Float64}()
-for (label, ncrit) in (("ncrit4", 4), ("ncrit9", 9))
-    ct_bem = bem_ct_from_ct_vs_j(ct_vs_j_csv, ncrit, vc_target)
-    if isnothing(ct_bem)
-        ct_bem = bem_ct_from_sectional(getproperty(sectional_csvs, Symbol(label)))
-    end
-    if isnothing(ct_bem)
-        @warn "No CCBlade CT found for $(label) (checked $(ct_vs_j_csv) and the tagged sectional CSV)."
-    else
-        bem_cts[label] = ct_bem
-    end
-end
-
 # ------------------------------------------------------- run CSV for context --
-run_ct = isfile(run_ct_csv) ? CSV.read(run_ct_csv, DataFrame) : nothing
+run_ct = isnothing(run_ct_csv) ? nothing : CSV.read(run_ct_csv, DataFrame)
 isnothing(run_ct) &&
-    @warn "Run CT CSV not found at $(run_ct_csv); CT plot will omit the run's Laplace history and the forensic CSV will be skipped."
+    @warn "Run CT CSV not found (searched SAVE_PATH and SAVE_PATH/analysis); CT plot will omit the run's Laplace history and the forensic CSV will be skipped."
 
 # ------------------------------------------------------ plot 1: CT history --
 ct_plot = joinpath(out_dir, "CT_vs_revolution_bernoulli.png")
@@ -180,11 +275,10 @@ let
         ax.plot(run_ct.revolution, run_ct.CT_bernoulli, "-"; color="tab:red",
             linewidth=1.0, alpha=0.5, label="run Bernoulli (broken steady form)")
     end
-    bem_styles = Dict("ncrit4" => ("black", "--"), "ncrit9" => ("tab:orange", "--"))
-    for (label, ct_bem) in sort(collect(bem_cts))
-        color, linestyle = bem_styles[label]
-        ax.axhline(ct_bem; color, linestyle, linewidth=1.3,
-            label=@sprintf("CCBlade %s CT %.5f", replace(label, "ncrit" => "ncrit="), ct_bem))
+    for label in bem_sets
+        haskey(bem_cts, label) || continue
+        ax.axhline(bem_cts[label]; color=bem_color(label), linestyle="--", linewidth=1.3,
+            label=@sprintf("CCBlade %s CT %.5f", bem_pretty(label), bem_cts[label]))
     end
     ax.set_xlabel("revolution")
     ax.set_ylabel("CT")
@@ -197,21 +291,23 @@ let
 end
 println("Wrote $(ct_plot)")
 
-ct_history_csv = joinpath(out_dir, "CT_vs_revolution_bernoulli.csv")
-open(ct_history_csv, "w") do io
-    println(io, "step,revolution,CT_bernoulli_replay_fixed")
-    for (i, idx) in enumerate(result.steps)
-        println(io, "$(idx),$(revs[i]),$(ct[i])")
+if !plots_only
+    open(ct_history_csv, "w") do io
+        println(io, "step,revolution,CT_bernoulli_replay_fixed")
+        for (i, idx) in enumerate(replay_steps)
+            println(io, "$(idx),$(revs[i]),$(ct[i])")
+        end
     end
+    println("Wrote $(ct_history_csv)")
 end
-println("Wrote $(ct_history_csv)")
 
 # ------------------------------------------------ plot 2: spanwise loading --
-blade_count = length(snapshot.binning.blade_dirs)
-stats_path = joinpath(out_dir, run_name * "_spanwise_loading_stats.csv")
-stats = write_stats_csv(stats_path, Dict(:bernoulli => snapshot), (:bernoulli,),
-    window_idxs, R, blade_count)
-println("Wrote $(stats_path)")
+if !plots_only
+    blade_count = length(snapshot.binning.blade_dirs)
+    stats = write_stats_csv(stats_path, Dict(:bernoulli => snapshot), (:bernoulli,),
+        window_idxs, R, blade_count)
+    println("Wrote $(stats_path)")
+end
 
 span_plot = joinpath(out_dir, "spanwise_dCTdr_bernoulli.png")
 let
@@ -230,14 +326,17 @@ let
         label=@sprintf("panel steady Bernoulli, final %d samples (CT %.5f)", navg, panel_ct))
     ax.vlines(rs, q25, q75; color="tab:blue", linewidth=2.0, alpha=0.7,
         label="panel q25–q75")
-    for (label, color) in (("ncrit4", "black"), ("ncrit9", "tab:orange"))
-        path = getproperty(sectional_csvs, Symbol(label))
-        isfile(path) || (@warn "CCBlade sectional CSV not found at $(path)"; continue)
+    for label in bem_sets
+        path = sectional_paths[label]
+        if isnothing(path)
+            @warn "CCBlade sectional CSV not found for polar set $(label); skipping its spanwise curve."
+            continue
+        end
         bem = CSV.read(path, DataFrame)
         curve = bem.dTdr_total .* R ./ ct_scale
         ct_bem = trapz(bem.r_over_R, curve)
-        ax.plot(bem.r_over_R, curve, "-"; color, linewidth=1.7,
-            label=@sprintf("CCBlade %s (CT %.5f)", replace(label, "ncrit" => "ncrit="), ct_bem))
+        ax.plot(bem.r_over_R, curve, "-"; color=bem_color(label), linewidth=1.7,
+            label=@sprintf("CCBlade %s (CT %.5f)", bem_pretty(label), ct_bem))
     end
     ax.set_xlabel("r/R")
     ax.set_ylabel("dCT/d(r/R)")
@@ -253,13 +352,14 @@ println("Wrote $(span_plot)")
 # --------------------------------------------------------------- forensics --
 # The run's CSV row k corresponds to saved VTU index k-1 (the run wrote
 # rev = (k-1)*dt*RPM/60). Comparing the fixed replay against the saved history
-# identifies which steady formulation produced the original output.
-if !isnothing(run_ct)
+# identifies which steady formulation produced the original output. Skipped in
+# plots-only mode: nothing about the replay changed.
+if !plots_only && !isnothing(run_ct)
     forensic_csv = joinpath(out_dir, "bernoulli_forensic.csv")
     run_by_step = Dict(Int(row.step) - 1 => row for row in eachrow(run_ct))
     open(forensic_csv, "w") do io
         println(io, "step,rev,CT_bernoulli_replay_fixed,CT_bernoulli_run_csv,CT_laplace_matderiv_run_csv,ratio_fixed_over_run")
-        for (i, idx) in enumerate(result.steps)
+        for (i, idx) in enumerate(replay_steps)
             row = get(run_by_step, idx, nothing)
             isnothing(row) && continue
             ratio = abs(row.CT_bernoulli) > eps() ? ct[i] / row.CT_bernoulli : NaN
@@ -268,8 +368,7 @@ if !isnothing(run_ct)
     end
     println("Wrote $(forensic_csv)")
 
-    tail = window_idxs
-    run_tail = [get(run_by_step, result.steps[i], nothing) for i in tail]
+    run_tail = [get(run_by_step, replay_steps[i], nothing) for i in window_idxs]
     run_tail = [r for r in run_tail if !isnothing(r)]
     if !isempty(run_tail)
         run_bern = mean(r.CT_bernoulli for r in run_tail)
