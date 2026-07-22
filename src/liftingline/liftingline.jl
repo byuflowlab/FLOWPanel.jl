@@ -327,7 +327,9 @@ function set_ground!(self::LiftingLine,
     self.ground_position .= position
     self.ground_normal .= normal
 
-    calc_Geff!(self)
+    if recalculate_Geff
+        calc_Geff!(self)
+    end
 
 end
 

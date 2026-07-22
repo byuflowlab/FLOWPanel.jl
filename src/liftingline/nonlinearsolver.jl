@@ -53,7 +53,7 @@ function solve(self::LiftingLine, Uinf::AbstractVector,
 end
 
 function solve(self::LiftingLine, 
-                        Uinfs::AbstractMatrix;
+                        Uinfs::AbstractMatrix{<:Number};
                         aoas_initial_guess=0.0,
                         align_joints_with_Uinfs=false,
                         addfields=true, raise_warn=false,
