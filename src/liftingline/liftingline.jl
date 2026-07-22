@@ -324,17 +324,32 @@ function set_ground!(self::LiftingLine,
                     position::AbstractVector, normal::AbstractVector; 
                     recalculate_Geff=true)
 
+    # Check whether the ground has changed or not
+    same_ground = all(self.ground_position .== position) && all(self.ground_normal .== normal)
+
+    # Set new ground
     self.ground_position .= position
     self.ground_normal .= normal
 
-    if recalculate_Geff
+    # Re-calculate Geff if needed and requested
+    if !same_ground && recalculate_Geff
         calc_Geff!(self)
     end
 
 end
 
-set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal, 
-                optargs...) = set_ground!(self, -h*normal, normal; optargs...)
+function set_ground!(self::LiftingLine, h::Number; normal=self.ground_normal, 
+                optargs...)
+
+    # Convert ground distance into a position relative to ground
+    position = -h*normal
+
+    # Remove NaN if h==+-Inf and there are zeroes in normal
+    position[isnan.(position)] .= 0
+
+    # Set ground
+    return set_ground!(self, position, normal; optargs...)
+end
 
 """
 Morph the lifting-line wing geometry into a new geometry

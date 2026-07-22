@@ -165,6 +165,7 @@ function run_liftingline(;
         
         plot_convergence = false,                       # Whether to plot solver convergence
 
+        remorph = true,                                 # Whether to remorph the geometry (it will ignore the new distributions if false)
         reset_solution = true,                          # Whether to reset the solution after remorphing
         
 ) where {R1, R2, R3, R4, R5, R6, R7, R8, R9, R10}
@@ -250,14 +251,16 @@ function run_liftingline(;
     end
 
     # Set ground distance
-    set_ground!(ll, ground_distance; recalculate_Geff=false)  # false since it will be calculated in remorph anyways
+    set_ground!(ll, ground_distance; recalculate_Geff=!remorph)  # false since it will be calculated in remorph anyways
 
     # Morph Lifting Line into its shape
-    remorph!(   ll; 
-                    geom_optargs...,
-                    deltasb, deltajoint,
-                    reset_solution
-                    )
+    if remorph
+        remorph!(   ll; 
+                        geom_optargs...,
+                        deltasb, deltajoint,
+                        reset_solution
+                        )
+    end
 
     # ------------------ CALL NONLINEAR SOLVER -------------------------------------
 
