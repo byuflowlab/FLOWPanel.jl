@@ -58,6 +58,8 @@ output-log, and error-log directives. Use `set -euo pipefail` so a failed
 workflow stage stops the job. Slurm opens log paths before the script runs, so
 any requested log directory must already exist when the user submits the job.
 
+If a run should use Julia or Python, include the appropriate module with `module load julia python` etc.
+
 Set the single `THREADS=<N>` variable explicitly to the same CPU count requested
 by `#SBATCH --ntasks=<N>`, and export it consistently through
 `JULIA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`,
@@ -106,9 +108,5 @@ one of these patterns:
 When the user explicitly wants to preserve a previous run for comparison, ask
 before overwriting and offer to move the old directory aside.
 
-## Submission Boundary
-
-Agents may prepare and syntax-check Slurm scripts, but must never run `sbatch`,
-`srun`, `salloc`, or otherwise launch a supercomputer job. Submission is left
-to the user. See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
-[script generator](https://rc.byu.edu/documentation/slurm/script-generator).
+See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
+[script generator](https://rc.byu.edu/documentation/slurm/script-generator) if you are having trouble.
