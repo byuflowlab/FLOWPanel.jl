@@ -14,6 +14,9 @@
 #   SSW_MODE       single | coarse | convergence (default: single)
 #   SSW_OUTPUT     output root (default: data/suddenly_started_wing)
 #   SSW_BACKEND    direct | fmm (default: fmm)
+#   SSW_FMM_ORDER  FMM expansion order (default: 10)
+#   SSW_FMM_THETA  FMM multipole acceptance threshold (default: 0.4)
+#   SSW_FMM_LEAF   FMM source leaf size (default: 100)
 #   SSW_NAIRFOIL   contour request for single mode (default: 21)
 #   SSW_NSPAN      spanwise strips for single mode (default: 12)
 #   SSW_DT_STAR    U*dt/c for single mode (default: 0.125)
@@ -50,6 +53,9 @@ Base.@kwdef struct SSWConfig
     output_root::String = DEFAULT_SSW_OUTPUT
     save_vtk::Bool = true
     backend_kind::Symbol = :fmm
+    fmm_expansion_order::Int = 10
+    fmm_multipole_acceptance::Float64 = 0.4
+    fmm_leaf_size::Int = 100
     verbose::Bool = true
     # Dense factorization is substantially faster and more robust than the
     # current unpreconditioned matrix-free solve for this extreme-AR geometry.
@@ -154,11 +160,22 @@ function _set_ssw_Das!(body, displacement)
     return body
 end
 
-function _ssw_backend(kind::Symbol)
-    kind == :direct && return pnl.DirectBackend()
-    kind == :fmm && return pnl.FastMultipoleBackend(
-        expansion_order=10, multipole_acceptance=0.4, leaf_size=100)
-    throw(ArgumentError("backend_kind must be :direct or :fmm; got $kind"))
+function _ssw_backend(config::SSWConfig)
+    config.backend_kind == :direct && return pnl.DirectBackend()
+    if config.backend_kind == :fmm
+        config.fmm_expansion_order > 0 ||
+            throw(ArgumentError("fmm_expansion_order must be positive"))
+        config.fmm_multipole_acceptance >= 0 ||
+            throw(ArgumentError("fmm_multipole_acceptance must be nonnegative"))
+        config.fmm_leaf_size > 0 || throw(ArgumentError("fmm_leaf_size must be positive"))
+        return pnl.FastMultipoleBackend(
+            expansion_order=config.fmm_expansion_order,
+            multipole_acceptance=config.fmm_multipole_acceptance,
+            leaf_size=config.fmm_leaf_size,
+        )
+    end
+    throw(ArgumentError(
+        "backend_kind must be :direct or :fmm; got $(config.backend_kind)"))
 end
 
 function _ssw_solver(body, backend, max_backslash::Int)
@@ -185,7 +202,7 @@ function prepare_suddenly_started_wing(config::SSWConfig)
         include_final_filament=false,
         shed_with_induced_velocity=true)
     frames = pnl.ReferenceFrame(wing)
-    backend = _ssw_backend(config.backend_kind)
+    backend = _ssw_backend(config)
     solver, solver_name = _ssw_solver(wing, backend, config.backslash_max_panels)
     pressure = pnl.PressureBernoulli(config.rho; unsteady=true,
         backend, correct_kuttacondition=false)
@@ -536,6 +553,10 @@ function _ssw_config_from_env()
         output_root=get(ENV, "SSW_OUTPUT", DEFAULT_SSW_OUTPUT),
         save_vtk=_envbool("SAVE_VTK", true),
         backend_kind=backend,
+        fmm_expansion_order=parse(Int, get(ENV, "SSW_FMM_ORDER", "10")),
+        fmm_multipole_acceptance=parse(Float64,
+            get(ENV, "SSW_FMM_THETA", "0.4")),
+        fmm_leaf_size=parse(Int, get(ENV, "SSW_FMM_LEAF", "100")),
         verbose=_envbool("SSW_VERBOSE", true),
         backslash_max_panels=parse(Int,
             get(ENV, "SSW_BACKSLASH_MAX_PANELS", "10000")),

@@ -152,6 +152,44 @@ struct TraceCorrected{TS<:Union{Nothing,KrylovSolver,FGSSolver}} <: AbstractSolv
     end
 end
 
+"""
+    DirectWakePotential(; recompute_interval=1)
+
+Direct fixed-wake scalar-potential formulation — the production version of the
+Task-3 diagnostic (`debug/dirichlet_solve/task3.md`). Each step solves the
+explicit-potential system
+
+    G_Δ · μE = −S·σ0 − q_f ,      σ0 = −u_nonwake · n
+
+on the marched finite wake, where `q_f` is the scalar potential evaluated
+*directly* from the constant-doublet `PanelWake` panels at exact body centroids
+(via the FMM `direct!`/scalar-potential path) — NOT a reconstructed trace as in
+[`GreenReconstruction`](@ref). The wake velocity is not converted into body
+sources; no mean is removed from `q_f`. The finite-body `G_Δ` factorization is
+the [`Backslash`](@ref) solver's own LU, applied manually (single-body `solve!`
+clears preassembled external potential).
+
+Requires a single Dirichlet source+doublet `RigidWakeBody` with
+`semiinfinite_wake=false`, a `Backslash` body solver, and a finite `PanelWake`
+with `include_final_filament=false` — every active wake source must expose a
+scalar potential, so particle and mixed wakes are rejected. Runs on either the
+direct or FMM backend (no `DirectBackend` guard: only a scalar potential is
+needed, which the FMM `PanelWake` path already supplies).
+
+`recompute_interval` re-evaluates `q_f` every that many steps, reusing the
+cached potential in between; `recompute_interval=1` (recompute every step) is
+required for production convergence runs.
+"""
+struct DirectWakePotential <: AbstractSolveFormulation
+    recompute_interval::Int
+
+    function DirectWakePotential(; recompute_interval::Int=1)
+        recompute_interval >= 1 ||
+            error("recompute_interval must be >= 1; got $recompute_interval.")
+        return new(recompute_interval)
+    end
+end
+
 ################################################################################
 # RUNTIME STATE (concrete parametric types, built once by
 # `initialize_formulation` where body/solver types are known)
@@ -263,6 +301,19 @@ struct TraceCorrectedState{TF, TG<:Union{AbstractGreenState, Nothing},
     last_recompute::Base.RefValue{Int}
 end
 
+"Runtime state for [`DirectWakePotential`](@ref): reusable per-step buffers for
+the direct fixed-wake potential solve. The finite-body `G_Δ` LU is the
+`Backslash` solver's own factorization (reused, not held here)."
+struct DirectWakePotentialState{TF}
+    u_prewake::Matrix{TF} # 3×N snapshot of body.velocity before the wake pass
+    sigma0::Vector{TF}    # non-wake source coefficients σ0 = −u_nonwake·n
+    sigma::Vector{TF}     # wake-induced σ (computed for completeness, unused in RHS)
+    q_wake::Vector{TF}    # direct wake scalar potential q_f at body centroids
+    Ssigma::Vector{TF}    # source-potential work buffer (S·σ0)
+    rhs::Vector{TF}       # linear-system RHS  −S·σ0 − q_f
+    last_recompute::Base.RefValue{Int}
+end
+
 ################################################################################
 # VALIDATION AND INITIALIZATION
 ################################################################################
@@ -351,6 +402,35 @@ function initialize_formulation(f::TraceCorrected, systems_tuple, wakes_tuple,
     return TraceCorrectedState{TF, typeof(green), typeof(probes)}(edges, W,
         zeros(TF, 3, N), zeros(TF, N), green, probes, n_ppe,
         zeros(TF, M), zeros(TF, M), zeros(TF, N), Ref(-1))
+end
+
+function initialize_formulation(f::DirectWakePotential, systems_tuple,
+        wakes_tuple, body_solvers, backend_solve, backend_system)
+    body, _ = _validate_formulation_common(f, systems_tuple, wakes_tuple,
+        body_solvers)
+    # every active wake must be a finite PanelWake whose sources all expose a
+    # scalar potential (no trailing vector-potential-only filament, no
+    # particles)
+    for w in wakes_tuple
+        isnothing(w) && continue
+        w isa PanelWake ||
+            error("DirectWakePotential requires a finite PanelWake with "*
+                  "include_final_filament=false; got $(typeof(w)). Particle "*
+                  "and mixed wakes cannot supply a complete scalar potential.")
+        w.include_final_filament &&
+            error("DirectWakePotential requires PanelWake "*
+                  "include_final_filament=false: the trailing semi-infinite "*
+                  "filament is vector-potential-only.")
+        for src in get_sources(w)
+            FastMultipole.has_vector_potential(src) &&
+                error("DirectWakePotential wake source $(typeof(src)) exposes "*
+                      "only a vector potential; a scalar potential is required.")
+        end
+    end
+    TF = eltype(body.strength)
+    N = body.ncells
+    return DirectWakePotentialState{TF}(zeros(TF, 3, N), zeros(TF, N),
+        zeros(TF, N), zeros(TF, N), zeros(TF, N), zeros(TF, N), Ref(-1))
 end
 
 ################################################################################
@@ -630,6 +710,26 @@ function _source_potential!(out::AbstractVector, body::AbstractBody,
     return out
 end
 
+"Evaluate the free wake's scalar potential `q_f` directly at body centroids,
+preserving body potential. Only wake sources that expose a scalar potential are
+collected (particle fields are excluded upstream)."
+function _wake_potential!(out::AbstractVector, body::AbstractBody,
+        wakes_tuple::Tuple, backend)
+    sources = _collect_wake_scalar_sources(wakes_tuple)
+    old_potential = copy(body.potential)
+    try
+        body.potential .= zero(eltype(body.potential))
+        if length(sources) > 0
+            influence!((body,), sources, backend; scalar_potential=true,
+                velocity=false, precalc=true)
+        end
+        out .= body.potential
+    finally
+        body.potential .= old_potential
+    end
+    return out
+end
+
 "Split the accumulated control-point velocity into wake-only σ and non-wake σ0
 source coefficients using the pre-wake snapshot."
 function _split_sigma!(sigma::AbstractVector, sigma0::AbstractVector,
@@ -707,6 +807,41 @@ function solve_formulation!(f::GreenReconstruction,
     ldiv!(view(body.strength, :, 2), solver.Glu, solver.rhs)
     # sources carry σ0 only: the free wake's field is represented by the
     # actual wake system in this formulation
+    body.strength[:, 1] .= state.sigma0
+    return nothing
+end
+
+function solve_formulation!(f::DirectWakePotential,
+        state::DirectWakePotentialState, systems, systems_tuple, wakes_tuple,
+        body_solvers; backend_solve, backend_wake, i_step::Int=0)
+    body = systems_tuple[1]
+    solver = _single_body_solver(body_solvers)
+
+    # this formulation stores the explicit-potential μE directly; no affine
+    # Kutta correction is applied
+    clear_wake_correction!(body)
+
+    # σ0 = non-wake normal velocity. The wake-induced σ is computed for
+    # completeness but NOT stored on the body: the free wake's field is carried
+    # by the actual wake system, entering the RHS through the direct q_f below.
+    _split_sigma!(state.sigma, state.sigma0, body, state.u_prewake)
+
+    # direct scalar potential q_f from the finite panel wake at body centroids
+    # (recompute_interval lags this on the wake-convection timescale)
+    if state.last_recompute[] < 0 ||
+            i_step - state.last_recompute[] >= f.recompute_interval
+        _wake_potential!(state.q_wake, body, wakes_tuple, backend_wake)
+        state.last_recompute[] = i_step
+    end
+
+    # explicit-potential solve G_Δ·μE = −S·σ0 − q_f, reusing the Backslash LU
+    # (single-body solve! is bypassed because it discards preassembled external
+    # potential; see task3.md)
+    _source_potential!(state.Ssigma, body, state.sigma0, backend_solve)
+    state.rhs .= .-state.Ssigma .- state.q_wake
+    solver.rhs .= state.rhs
+    ldiv!(view(body.strength, :, 2), solver.Glu, solver.rhs)
+    # sources carry σ0 only
     body.strength[:, 1] .= state.sigma0
     return nothing
 end

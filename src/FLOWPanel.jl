@@ -29,7 +29,7 @@ export  solve, save, influence!,
         RotorSectionalNormalization,
         steady!, simulate_warmstart!, initialize_Das!,
         AbstractSolveFormulation, VelocityThroughSources,
-        GreenReconstruction, TraceCorrected,
+        GreenReconstruction, TraceCorrected, DirectWakePotential,
         set_wake_correction!, clear_wake_correction!,
         replay, ReplayResult, migrate_metadata_toml
 

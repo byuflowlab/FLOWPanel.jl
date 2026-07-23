@@ -13,6 +13,8 @@
 # Account, QOS, constraint, and Julia module directives are intentionally left
 # to the allocation/site configuration.
 
+module load julia
+
 set -euo pipefail
 
 THREADS=16

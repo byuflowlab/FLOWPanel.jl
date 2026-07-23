@@ -56,6 +56,14 @@ end
     @test size(only(body.shedding), 2) == config.n_span
     @test body.nsheddings == config.n_span
 
+    fmm_config = ssw_with(config; backend_kind=:fmm,
+        fmm_expansion_order=8, fmm_multipole_acceptance=0.25,
+        fmm_leaf_size=64)
+    backend = _ssw_backend(fmm_config)
+    @test backend.expansion_order == 8
+    @test backend.multipole_acceptance == 0.25
+    @test backend.leaf_size == 64
+
     shedding = only(body.shedding)
     te_midpoints = map(eachcol(shedding)) do edge
         panel, nia, nib = edge[1:3]
