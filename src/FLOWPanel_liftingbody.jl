@@ -23,13 +23,12 @@ Lifting-surface body with a rigid wake shed from one or more prescribed
 trailing-edge chains.
 
 `shedding[:, i]` contains the information of the i-th edge along which to shed
-the wake, where `shedding[1, i]` is the linear index of the panel shedding the
-wake, and `shedding[2:3, i]` are the indices of the nodes in that panel that make
-the edge. Since the wake is typically shed at the edge between two panels,
-`shedding[3, i]` is the index of the partner panel (use -1 if none) and
-`shedding[4:5, i]` are the node indices in that panel that make the edge. The user
-must ensure that both edges are coincident, and the strength of the wake is equal
-to the difference between the strengths of both panels.
+the wake: `(pi, nia, nib, pj, nja, njb)`. Here `pi` is the linear index of the
+panel shedding the wake and `nia:nib` are the cell-local node slots of that
+edge. Since the wake is typically shed at the edge between two panels, `pj` is
+the partner panel (use `-1` if none) and `nja:njb` are its cell-local node
+slots. The user must ensure that both edges are coincident, and the strength of
+the wake is equal to the difference between the strengths of both panels.
 
 !!! warning "Compute `shedding` from the *constructed* cells, not the raw mesh"
     With `ensure_winding=true` (the default) the constructor calls

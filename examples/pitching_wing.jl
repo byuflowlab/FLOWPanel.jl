@@ -65,13 +65,14 @@ function naca00xx_contour(n::Integer=121; thickness::Real=0.15)
 end
 
 function pitching_wing_mesh(c, b; n_span::Integer=13, n_airfoil::Integer=161,
-                            n_endcap::Integer=9, endcap::Symbol=:round)
+                            n_endcap::Integer=9, endcap::Symbol=:round,
+                            caps::Bool=true, thickness::Real=0.15)
     endcap == :round || throw(ArgumentError(
         "pitching_wing_mesh currently implements endcap=:round only; got $(endcap)."))
     n_span >= 1 || throw(ArgumentError("n_span must be positive; got $(n_span)"))
     n_endcap >= 3 || throw(ArgumentError(
         "n_endcap requires at least 3 semicircle points; got $(n_endcap)"))
-    contour = naca00xx_contour(n_airfoil; thickness=0.15)
+    contour = naca00xx_contour(n_airfoil; thickness=thickness)
     n_sec = size(contour, 1)
     n_chord = cld(n_sec, 2) + 1
     y = collect(range(-b / 2, stop=b / 2, length=n_span + 1))
@@ -81,7 +82,7 @@ function pitching_wing_mesh(c, b; n_span::Integer=13, n_airfoil::Integer=161,
     upper_index(k) = k == 1 || k == n_chord ? lower_index(k) : n_chord + k - 1
 
     n_main_nodes = n_sec * length(y)
-    n_cap_nodes = 2 * (n_chord - 2) * (n_endcap - 2)
+    n_cap_nodes = caps ? 2 * (n_chord - 2) * (n_endcap - 2) : 0
     nodes = zeros(Float64, 3, n_main_nodes + n_cap_nodes)
     for (j, yj) in enumerate(y), i in 1:n_sec
         x = c * contour[i, 1]
@@ -90,7 +91,7 @@ function pitching_wing_mesh(c, b; n_span::Integer=13, n_airfoil::Integer=161,
     end
 
     n_main_cells = 2 * n_sec * n_span
-    n_cap_cells = 4 * (n_chord - 2) * (n_endcap - 1)
+    n_cap_cells = caps ? 4 * (n_chord - 2) * (n_endcap - 1) : 0
     cells = zeros(Int, 3, n_main_cells + n_cap_cells)
     k = 0
     for j in 1:n_span
@@ -120,7 +121,7 @@ function pitching_wing_mesh(c, b; n_span::Integer=13, n_airfoil::Integer=161,
 
     next_node = n_main_nodes
     theta = range(-pi / 2, stop=pi / 2, length=n_endcap)
-    for (jtip, side) in ((1, -1.0), (length(y), 1.0))
+    caps && for (jtip, side) in ((1, -1.0), (length(y), 1.0))
         rings = Vector{Vector{Int}}(undef, n_chord)
         rings[1] = [node_index(lower_index(1), jtip)]
         rings[end] = [node_index(lower_index(n_chord), jtip)]
@@ -182,9 +183,11 @@ function pitching_wing_mesh(c, b; n_span::Integer=13, n_airfoil::Integer=161,
 
     next_node == size(nodes, 2) || error("internal end-cap node count mismatch")
     k == size(cells, 2) || error("internal end-cap cell count mismatch")
-    watertight, _ = pnl.iswatertight(nodes, cells)
-    watertight || error(
-        "pitching-wing end-cap construction did not produce a watertight mesh")
+    if caps
+        watertight, _ = pnl.iswatertight(nodes, cells)
+        watertight || error(
+            "pitching-wing end-cap construction did not produce a watertight mesh")
+    end
     area2_min = minimum(norm(cross(
         nodes[:, cells[2, i]] - nodes[:, cells[1, i]],
         nodes[:, cells[3, i]] - nodes[:, cells[1, i]],
@@ -234,7 +237,8 @@ function set_wake_Das!(body, direction; magnitude::Real=1.0)
 end
 
 function build_pitching_wing_body(c, b; n_span::Integer=13, n_airfoil::Integer=161,
-        n_endcap::Integer=9, endcap::Symbol=:round, semiinfinite_wake::Bool=false)
+        n_endcap::Integer=9, endcap::Symbol=:round, semiinfinite_wake::Bool=false,
+        thickness::Real=0.15)
     bodytype = pnl.RigidWakeBody{
         Union{pnl.ConstantSource, pnl.ConstantDoublet}, 2, Float64, true}
     bodyoptargs = (;
@@ -244,7 +248,8 @@ function build_pitching_wing_body(c, b; n_span::Integer=13, n_airfoil::Integer=1
         watertight=true,
     )
 
-    nodes, cells = pitching_wing_mesh(c, b; n_span, n_airfoil, n_endcap, endcap)
+    nodes, cells = pitching_wing_mesh(c, b; n_span, n_airfoil, n_endcap, endcap,
+        caps=true, thickness)
     base = bodytype(nodes, cells, zeros(Int, 6, 0); bodyoptargs...)
     shedding = calc_pitching_wing_shedding(base.nodes, base.cells, c)
     return bodytype(copy(base.nodes), copy(base.cells), [shedding]; bodyoptargs...)

@@ -4,12 +4,13 @@
 
 import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
+include(joinpath(pnl.examples_path, "dji9443_trailing_edge.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
 using LinearAlgebra: norm
 
-run_name = "rotor_hover"
+run_name = get(ENV, "RUN_NAME", "rotor_hover")
 save_path = joinpath("data", run_name)
 
 ## =========================================================
@@ -24,7 +25,8 @@ R       = 0.119      # Rotor radius (m)
 nrevs   = 1        # Number of revolutions
 nt      = 36        # Number of time steps per revolution
 dt      = 60 / RPM / nt
-n_steps = nt * nrevs
+n_steps = parse(Int, get(ENV, "N_STEPS", string(nt * nrevs)))
+n_steps > 0 || error("N_STEPS must be a positive integer, got $(n_steps)")
 t_range = range(0.0, step=dt, length=n_steps)# [1:3]
 
 # ==========================================================
@@ -45,32 +47,12 @@ wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
 # ROTOR GEOMETRY
 # ==========================================================
 read_path   = joinpath(pnl.examples_path, "data")
-# stl_file   = joinpath(read_path, "phantom_3_mod3_rev5.stl")
-
-# dji9443_40_40.msh has coincident neighboring control points near the tip,
-# which makes the panel-centered PressureLaplace operator singular locally.
-# Use the Phantom mesh for the three-way pressure/force consistency check.
-msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
-te_indices_1 = [9, 175, 127]
-te_indices_2 = [13, 286, 238]
-
-# # phantom_3_rebuild_r3.msh
-# msh_file  = joinpath(read_path, "phantom_3_rebuild_r3.msh")
-# te_indices_1 = [8, 523, 223] .+ 1
-# te_indices_2 = [12, 997, 697] .+ 1
-
-# # phantom_3_rebuild_r4.msh
-# msh_file  = joinpath(read_path, "phantom_3_rebuild_r4.msh")
-# te_indices_1 = [7, 952, 4] .+ 1
-# te_indices_2 = [3, 478, 0] .+ 1
-
-# STL file
-# mesh = VSPGeom.readSTL(stl_file)[1]
-# scale = 1/1000 # convert to meters
-# radius = 119.38 * scale
-# for point in mesh.points
-#     point .*= scale
-# end
+msh_file, watertight = (
+    joinpath(read_path, "dji9443_20260723_30_121_uncapped.msh"),
+    false,
+)
+te_indices_1, te_indices_2 =
+    find_dji9443_trailing_edge_indices(msh_file; watertight)
 
 # MSH file
 msh = GeoIO.load(msh_file).geometry
@@ -84,31 +66,30 @@ nodes .*= R / maximum(nodes[1, :])
 shedding = pnl.noshedding
 
 # --- Construct RigidWakeBody ---
-kernel = Union{pnl.ConstantSource, pnl.VortexRing}
-# kernel = pnl.VortexRing
-DBC = kernel == pnl.VortexRing ? false : true
+kernel = watertight ? Union{pnl.ConstantSource, pnl.VortexRing} : pnl.VortexRing
+DBC = watertight
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
             kerneloffset,
             kernelcutoff,
             semiinfinite_wake=false,
-            watertight=true,
+            watertight,
             DBC)
 
-pnl.write_vtk(joinpath(save_path, "rotor_hover_check"), rotor)
-
 # update shedding
-bbox = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
-bbox = nothing
-shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2]; bbox, end_node=te_indices_1[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-bbox = (pnl.SVector{3}(R*0.1, -1.0, -1.0), pnl.SVector{3}(R*1.2, 1.0, 1.0))
-bbox = nothing
-shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2]; bbox, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+shedding1 = pnl.calc_shedding_from_seed(
+    rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
+    end_node=te_indices_1[3], normal_jump_tol=0.2,
+    max_turn_angle=pi/3, debug=false)
+shedding2 = pnl.calc_shedding_from_seed(
+    rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
+    end_node=te_indices_2[3], normal_jump_tol=0.2,
+    max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
                         kerneloffset,
                         kernelcutoff,
                         semiinfinite_wake=false,
-                        watertight=true,
+                        watertight,
                         ensure_winding=true,
                         DBC)
 
@@ -133,8 +114,8 @@ Uinf(t) = Vinf
 frames = pnl.ReferenceFrame(rotor;
     origin = SVector{3}(0.0, 0.0, 0.0),
     v = SVector{3}(0.0, 0.0, 0.0),
-    ω_axis = SVector{3}(0.0, 1.0, 0.0),
-    ω = 2*pi * RPM/60, # rad/s
+    ω_axis = SVector{3}(1.0, 0.0, 0.0),
+    ω = -2*pi * RPM/60, # rad/s
     R = SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
     name = "vehicle",
     child_index = Int[],

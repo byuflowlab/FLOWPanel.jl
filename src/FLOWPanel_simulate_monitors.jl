@@ -2262,9 +2262,11 @@ end
 
 function _bound_circulation_te_midpoint(body::AbstractLiftingBody, shedding_col,
                                         origin_global, R_g2f)
-    _, nia, nib, _, _, _ = shedding_col
-    a = _bound_circulation_frame_point(body, nia, origin_global, R_g2f)
-    b = _bound_circulation_frame_point(body, nib, origin_global, R_g2f)
+    pi, nia, nib, _, _, _ = shedding_col
+    node_a = body.cells[nia, pi]
+    node_b = body.cells[nib, pi]
+    a = _bound_circulation_frame_point(body, node_a, origin_global, R_g2f)
+    b = _bound_circulation_frame_point(body, node_b, origin_global, R_g2f)
     return 0.5 * (a + b)
 end
 

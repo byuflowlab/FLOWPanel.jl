@@ -987,6 +987,25 @@ end
         @test isapprox(narrow.circulation_slice[1, 1, 1], 0.0; atol=1e-12)
     end
 
+    @testset "BoundCirculationMonitor shedding local-node indices" begin
+        nodes, cells = make_seeded_te_mesh()
+        final_cells = pnl.ensure_consistent_winding(nodes, cells; watertight=false)
+        bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
+        shedding = pnl.calc_shedding_from_seed(
+            nodes, final_cells, 1, 2; bbox, end_node=3)
+        body = pnl.RigidWakeBody{pnl.VortexRing}(
+            nodes, final_cells, shedding;
+            check_mesh=false, watertight=false, ensure_winding=false)
+        body.strength[:, 1] .= 1.0
+        pnl.calc_controlpoints!(body)
+
+        monitor = pnl.BoundCirculationMonitor(body, 1, 1;
+            i_frame=1, radial_dimension=2, R=2.0)
+        monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.1)
+
+        @test monitor.r_over_R[:, 1] ≈ [0.25, 0.75]
+    end
+
     @testset "BoundCirculationMonitor rotor-frame invariance" begin
         body = make_bound_circulation_side_body()
         Rz = SMatrix{3,3}(0.0, -1.0, 0.0,

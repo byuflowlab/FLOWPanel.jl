@@ -124,6 +124,10 @@ else
     error("Unknown RHPC_MESH=$(repr(rhpc_mesh)); use 40_40, 56_57, or 80_81")
 end
 
+msh_file = joinpath(read_path, "dji9443_new_40_40.msh")
+te_indices_1 = [1614, 1574, 45] .+ 1 # (or 45 instead of 0) convert from 0-based to 1-based indexing
+te_indices_2 = [3324, 3284, 1755] .+ 1 #
+
 axial_dimension = occursin("dji9443", msh_file) ? 1 : 2 # DJI9443 geometry is rotated compared to typical rotor convention
 radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong for non-dji9443
 
