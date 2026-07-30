@@ -5,7 +5,7 @@ import numpy as np
 # ------------------------------------------------------------
 # Load CSV
 # ------------------------------------------------------------
-df = pd.read_csv("examples/wing_aileron/krylov_solvers.csv")
+df = pd.read_csv("examples/wing_aileron/results/krylov_solvers.csv")
 
 # ------------------------------------------------------------
 # Panel counts present in the data (sorted ascending), one bar group each
@@ -127,5 +127,5 @@ ax.spines['right'].set_visible(False)
 # ax.grid(axis="y", alpha=0.3)
 
 plt.tight_layout()
-plt.savefig("examples/wing_aileron/wing_aileron_benchmarks_nps_krylov.png")
+plt.savefig("examples/wing_aileron/figures/wing_aileron_benchmarks_nps_krylov.png")
 plt.show()

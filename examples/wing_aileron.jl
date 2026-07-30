@@ -110,7 +110,7 @@ body = bodytype(nodes, cells)
 run_names       = ["wing.msh", "surface.msh"]
 file_path       = "examples"
 paraview        = true                      # Whether to visualize with Paraview
-out_file        = joinpath(pnl.examples_path, "wing_aileron", "coupled_timing_results.csv")
+out_file        = joinpath(pnl.examples_path, "wing_aileron", "results", "coupled_timing_results.csv")
 
 function find_trailing_edge_nodes(body; tol=1e-8)
     nodes = body.nodes
@@ -128,7 +128,7 @@ end
 
 # ----------------- SIM SETUP ---------------------------------------------------
 run_names = ["wing.msh", "surface.msh"]
-files = [joinpath(pnl.examples_path, "wing_aileron", name) for name in run_names]
+files = [joinpath(pnl.examples_path, "wing_aileron", "meshes", name) for name in run_names]
 # nodes1 = [788, 788]
 # nodes2 = [768, 768]
 # nodes1 = [-1, -1]

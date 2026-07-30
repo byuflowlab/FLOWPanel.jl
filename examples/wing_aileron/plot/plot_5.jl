@@ -7,7 +7,7 @@ using CairoMakie
 
 # ------------------------------------------------------------
 
-df = CSV.read("examples/wing_aileron/times_bench.csv", DataFrame)
+df = CSV.read("examples/wing_aileron/results/times_bench.csv", DataFrame)
 
 # df_coupled = filter(r -> r.nps == 15152 && r.solver == "BackslashCoupled", df)
 # df_iter    = filter(r -> r.nps == 15152 && r.solver == "BackslashIterative", df)

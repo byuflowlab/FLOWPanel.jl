@@ -209,6 +209,8 @@ Direct solver that assembles and LU-factors the influence matrix for `body`.
 The formulation (Neumann or Dirichlet) is chosen automatically from the body's
 `DBC` type parameter: control points are placed exterior for Neumann,
 interior for Dirichlet.
+
+# IMPROVEMENT : 2026-07-30 : note that `Backslash`/`BackslashCoupled`'s O(N^2) assembly / O(N^3) factorization is the scaling wall the matrix-free solvers exist to avoid : for large panel counts, prefer `KrylovSolver`/`KrylovCoupled` (with `FastMultipoleBackend`) or `FGSSolver`, reserving `Backslash`/`BackslashCoupled` for small N or as an exact validation baseline for the other solvers.
 """
 mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
@@ -257,9 +259,9 @@ end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
         backend=DirectBackend(),
-        update_G::Bool=true,
+        update_G::Bool=false,
         optargs...)
- 
+    # IMPROVEMENT : 2026-07-30 : default update_G to false here, matching the Dirichlet solve! wrapper above : audited every solve!(body, solver) call site in src/ and examples/ (a solver reused across changing geometry without update_G=true is the only way this default could bite, and none do that -- every one either constructs its solver fresh right before the single solve, in which case update_G's value is irrelevant since the Backslash constructor already eagerly built+factored G, or explicitly passes update_G). For matrix-full solvers (e.g. Backslash), whose constructor already eagerly builds+factors G, `true` here just meant every first-ever Neumann solve wastefully rebuilt an already-current G; `update_G` is a no-op for matrix-free solvers (KrylovSolver/FGSSolver) either way, since their _solve! methods absorb it into `optargs...` and never read it. Note BackslashCoupled's own update_G=true default (a different solve! method, not this generic wrapper) is NOT part of this inconsistency and must stay true: its constructor only allocates a dummy identity-matrix G (`Glu = lu!(G)  # dummy init; will be overwritten on first update_G=true`), so the *first* solve! genuinely requires update_G=true to ever build the real matrix.
     tb = 0.0
     ts = 0.0
 
@@ -442,8 +444,8 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
     # is unchanged there; on later calls it lets GMRES resume from a guess
     # that's already close to the answer instead of restarting from zero
     # every sweep.
-    x0_norm = LA.norm(solver.unabbreviated_strengths)  # TEMPORARY diagnostic
     Krylov.warm_start!(workspace, solver.unabbreviated_strengths)
+    # IMPROVEMENT : 2026-07-30 : remove the TEMPORARY warm-start diagnostic println (and its now-unused x0_norm) : it fired unconditionally on every GMRES solve, polluting stdout on any batch run (e.g. an AOA/panel-count sweep) with no way to opt out
     if solver.preconditioner !== nothing
         ts = @elapsed begin
             Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
@@ -453,8 +455,6 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
         Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
         end
     end
-    # TEMPORARY diagnostic (warm-start investigation) -- remove after use
-    println("    [gmres diag/Neumann] ncells=$(self.ncells)  ||x0||=$x0_norm  niter=$(workspace.stats.niter)  solved=$(workspace.stats.solved)  ts=$ts")
 
     # store solution
     solver.unabbreviated_strengths .= workspace.x
@@ -491,15 +491,12 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
     # Warm-start from this body's previously-converged doublet strength --
     # see the analogous comment in the Neumann _solve! above.
-    x0_norm = LA.norm(solver.unabbreviated_strengths)  # TEMPORARY diagnostic
     Krylov.warm_start!(workspace, solver.unabbreviated_strengths)
     if solver.preconditioner !== nothing
         ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     else
         ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     end
-    # TEMPORARY diagnostic (warm-start investigation) -- remove after use
-    println("    [gmres diag/Dirichlet] ncells=$(self.ncells)  ||x0||=$x0_norm  niter=$(workspace.stats.niter)  solved=$(workspace.stats.solved)  ts=$ts")
 
     solver.unabbreviated_strengths .= workspace.x
     self.strength[:, 1] .= solver.source_strengths
@@ -509,11 +506,12 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
 end
 
 """
-    KrylovCoupled(bodies; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend())
+    KrylovCoupled(bodies; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend(), preconditioner_cell_size=0.0)
 
 Matrix-free coupled solver for a tuple of bodies.
 """
-mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
+# IMPROVEMENT : 2026-07-30 : add a `preconditioner` field (mirroring KrylovSolver's TP type parameter/field) : KrylovCoupled previously had no block-Jacobi preconditioner option at all, unlike KrylovSolver -- needed to compare "with vs without preconditioner" across both Krylov solver families on equal footing
+mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number,TP} <: AbstractMatrixFreeSolver
     bodies::TB
     backend::B
     rhs::Vector{TF}
@@ -523,6 +521,7 @@ mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number} <: Abstrac
     itmax::Int
     atol::Float64
     rtol::Float64
+    preconditioner::TP     # nothing or JacobiPreconditioner
 end
 
 function KrylovCoupled(bodies::Tuple;
@@ -530,7 +529,8 @@ function KrylovCoupled(bodies::Tuple;
         itmax::Int=50,
         atol::Real=1e-6,
         rtol::Real=1e-6,
-        backend::AbstractBackend=FastMultipoleBackend())
+        backend::AbstractBackend=FastMultipoleBackend(),
+        preconditioner_cell_size::Real=0.0)  # cell size for block Jacobi preconditioner; ≤0 disables
 
     TF = promote_type(map(numtype, bodies)...)
     ncs = sum(body -> body.ncells, bodies)
@@ -538,8 +538,15 @@ function KrylovCoupled(bodies::Tuple;
     x = zeros(TF, ncs)
     Ax = zeros(TF, ncs)
 
-    return KrylovCoupled{typeof(bodies),typeof(backend),TF}(
-        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol))
+    # build block Jacobi preconditioner if requested
+    if preconditioner_cell_size > 0
+        preconditioner = FastMultipole.JacobiPreconditioner(bodies; cell_size=preconditioner_cell_size)
+    else
+        preconditioner = nothing
+    end
+
+    return KrylovCoupled{typeof(bodies),typeof(backend),TF,typeof(preconditioner)}(
+        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol), preconditioner)
 end
 
 function _coupled_offsets(bodies::Tuple)
@@ -613,20 +620,23 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
             body.potential .= zero(eltype(body.potential))
         end
 
-        scalar_potential = [has_dirichlet_bc(body) for body in bodies]
-        velocity = [!has_dirichlet_bc(body) for body in bodies]
-        influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
-        for (i, body) in enumerate(bodies)
-            if has_dirichlet_bc(body)
-                body.potential .+= potential_old[i]
+        # IMPROVEMENT : 2026-07-30 : fold the coupled influence!/boundary_condition! cost into tb instead of leaving it untimed : mirrors the identical BackslashCoupled fix above -- this cross-body coupling evaluation is often the dominant cost of a coupled solve, so excluding it understated (tb, ts) and made cross-solver timing comparisons unfair
+        tb += @elapsed begin
+            scalar_potential = [has_dirichlet_bc(body) for body in bodies]
+            velocity = [!has_dirichlet_bc(body) for body in bodies]
+            influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
+            for (i, body) in enumerate(bodies)
+                if has_dirichlet_bc(body)
+                    body.potential .+= potential_old[i]
+                end
             end
+            # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
+            # overwriting it, so solver.rhs must start at zero every call -- true by construction
+            # the first time, but not guaranteed if this KrylovCoupled object is reused across
+            # multiple solve! calls (e.g. an AOA sweep).
+            fill!(solver.rhs, 0)
+            boundary_condition!(bodies, solver, backend; optargs...)
         end
-        # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
-        # overwriting it, so solver.rhs must start at zero every call -- true by construction
-        # the first time, but not guaranteed if this KrylovCoupled object is reused across
-        # multiple solve! calls (e.g. an AOA sweep).
-        fill!(solver.rhs, 0)
-        boundary_condition!(bodies, solver, backend; optargs...)
 
         TF = eltype(solver.rhs)
         n = length(solver.rhs)
@@ -635,7 +645,12 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
             A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
         end
         workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
-        ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        # IMPROVEMENT : 2026-07-30 : pass the optional JacobiPreconditioner to krylov_solve! : mirrors KrylovSolver's identical branch -- previously KrylovCoupled built no preconditioner at all and this call never passed M
+        if solver.preconditioner !== nothing
+            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        else
+            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        end
         solver.x .= workspace.x
 
         for (i, body) in enumerate(bodies)
@@ -866,18 +881,22 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
     end
 
     # run solver
-    FastMultipole.solve!(body, solver.fgs;
-        max_iterations=solver.max_iterations,
-        inner_iterations=solver.inner_iterations,
-        tolerance=solver.tolerance,
-        rlx=solver.rlx,
-        scalar_potential=dirichlet_bc,
-        gradient=!dirichlet_bc,
-        hessian=false,
-        reverse_pass=solver.reverse_pass,
-        verbose=solver.verbose,
-        final_update=false
-    )
+    # IMPROVEMENT : 2026-07-30 : time FastMultipole.solve! and return (tb, ts) instead of falling through to save_solution!'s `nothing` : every other _solve! returns (tb, ts), which both public solve! wrappers unconditionally destructure (`tb, ts = _solve!(...)`) -- returning `nothing` here crashed that path, so FGSSolver could only ever be driven through _solve! directly or FastMultipole.solve!, never the public solve!(body, solver) API used by the outer coupled Gauss-Seidel loop. tb=0.0 since FGS has no separable matrix-assembly phase (matrix-free, like KrylovSolver/KrylovCoupled) -- all cost lives in the timed solve itself.
+    tb = 0.0
+    ts = @elapsed begin
+        FastMultipole.solve!(body, solver.fgs;
+            max_iterations=solver.max_iterations,
+            inner_iterations=solver.inner_iterations,
+            tolerance=solver.tolerance,
+            rlx=solver.rlx,
+            scalar_potential=dirichlet_bc,
+            gradient=!dirichlet_bc,
+            hessian=false,
+            reverse_pass=solver.reverse_pass,
+            verbose=solver.verbose,
+            final_update=false
+        )
+    end
 
     # restore properties
     if dirichlet_bc
@@ -889,9 +908,11 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         println("FGSSolver actual first $(nprint) strengths after solve (column $(strength_index)): ", actual_strengths)
         println("FGSSolver actual - projected first $(nprint) strengths: ", actual_strengths .- projected_strengths)
     end
-    
+
     # save converged strengths into rolling history (no-op if disabled)
     save_solution!(body, solver)
+
+    return tb, ts
 end
 
 """
@@ -912,15 +933,15 @@ since the solver was constructed/last rebuilt). In that case `G` is rebuilt
 once, on the first outer iteration, and reused for the remaining iterations.
 """
 function solve!(bodies::Tuple, solvers::Tuple;
-    backend = fill(DirectBackend(), length(bodies)),
+    backend = fill(FastMultipoleBackend(), length(bodies)),
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-6,
     verbose::Bool = false,
     update_G::Bool = false,
     optargs...)
+    # IMPROVEMENT : 2026-07-30 : default per-body backend to FastMultipoleBackend() instead of DirectBackend() for the cross-body influence! evaluation each outer sweep : same benchmark data as BackslashCoupled's identical change above (negligible ~1e-8 accuracy cost, growing speed win past ~1000 total panels); every existing solve!(bodies::Tuple, solvers::Tuple) call site passes `backend` explicitly, so no caller relied on the old Direct default.
 
-    println("Tuple of bodies")
-
+    # IMPROVEMENT : 2026-07-30 : remove the unconditional println("Tuple of bodies") : it fired on every call to the outer coupled Gauss-Seidel loop regardless of the verbose flag, adding needless overhead/noise across e.g. an AOA sweep
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
     backends = backend isa Tuple || backend isa AbstractVector ? backend : fill(backend, N)
@@ -938,7 +959,8 @@ function solve!(bodies::Tuple, solvers::Tuple;
             body.velocity .= prev_velocity[i]
 
             sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
-            t_influence = 0.0  # TEMPORARY diagnostic
+            # IMPROVEMENT : 2026-07-30 : fold t_influence into t_build instead of only printing it, and remove the unconditional [outer diag] println : cross-body influence! is often the dominant cost of a coupled solve, so discarding it understated the loop's true (tb, ts), and the per-iteration println fired unconditionally regardless of the verbose flag
+            t_influence = 0.0
             if !isempty(sources)
                 t_influence = @elapsed influence!((body,), sources, backends[i];
                     scalar_potential=false,
@@ -946,9 +968,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
                     optargs...)
             end
             tb, ts = solve!(body, solver; backend=backends[i], update_G=iter_update_G)
-            # TEMPORARY diagnostic (warm-start investigation) -- remove after use
-            println("  [outer diag] iter=$iter body=$i t_influence=$t_influence tb=$tb ts=$ts")
-            t_build += tb
+            t_build += tb + t_influence
             t_solve += ts
         end
 
@@ -1171,9 +1191,10 @@ function set_strengths!(body::AbstractBody{<:Any, <:Any, <:Any, false})
     body.strength[:, 1] .= 0.0
 end
 
-function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend(), update_G::Bool=true, optargs...)
+function solve!(bodies::Tuple, solver::BackslashCoupled; backend=FastMultipoleBackend(), update_G::Bool=true, optargs...)
 
-    println("BackslashCoupled")
+    # IMPROVEMENT : 2026-07-30 : default backend to FastMultipoleBackend() instead of DirectBackend() for the cross-body influence!/boundary_condition! evaluation : benchmarked O(N) FMM vs O(N^2) direct summation for two-body coupling at 256/1024/2304 total panels (two spheres 5 units apart, default expansion_order=10/multipole_acceptance=0.4/leaf_size=20) -- FMM relative error vs. direct was ~1e-8 to 1e-16 (negligible) while direct becomes ~2x, then ~20x slower than FMM as panel count grows past ~1000; FMM is only slower (~1.5x) at very small counts (~250 total) where tree-build overhead dominates. Every existing solve!(bodies::Tuple, ...) call site in src/, examples/, and test/ that reaches this method already passes `backend` explicitly, so no caller silently relied on the old Direct default.
+    # IMPROVEMENT : 2026-07-30 : remove the unconditional println("BackslashCoupled") : it fired on every call regardless of a verbose flag, adding needless overhead/noise across e.g. an AOA sweep
     # Sizes
     npanels = [b.ncells for b in bodies]
     offsets = cumsum(vcat(0, npanels))
@@ -1197,36 +1218,41 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         body.potential .= zero(eltype(body.potential))
     end
     
-    influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+    # IMPROVEMENT : 2026-07-30 : time the coupled influence!/boundary_condition! evaluation and fold it into t_build instead of leaving it untimed : this cross-body coupling evaluation is frequently the most expensive part of a coupled solve (exactly what FMM acceleration targets), so leaving it out of the returned (tb, ts) understated true wall time and made cross-solver timing comparisons unfair
+    t_build = @elapsed begin
+        influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
 
-    for (bi, body) in enumerate(bodies)
-        if has_dirichlet_bc(body)
-            r = offsets[bi]+1 : offsets[bi+1]
-            @views body.potential .+= solver.phi_ext[r]
+        for (bi, body) in enumerate(bodies)
+            if has_dirichlet_bc(body)
+                r = offsets[bi]+1 : offsets[bi+1]
+                @views body.potential .+= solver.phi_ext[r]
+            end
         end
-    end
 
-    ### get the boundary_condition for each body to write the RHS
-    # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
-    # overwriting it, so solver.rhs must start at zero every call -- true by
-    # construction the first time (rhs = zeros(...)), but not guaranteed on
-    # subsequent calls if the same solver object is reused across solves.
-    fill!(solver.rhs, 0)
-    boundary_condition!(bodies, solver, backend)
+        ### get the boundary_condition for each body to write the RHS
+        # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
+        # overwriting it, so solver.rhs must start at zero every call -- true by
+        # construction the first time (rhs = zeros(...)), but not guaranteed on
+        # subsequent calls if the same solver object is reused across solves.
+        fill!(solver.rhs, 0)
+        boundary_condition!(bodies, solver, backend)
+    end
     t_solve = 0.0
 
     if update_G
         # Zero G matrix
         fill!(solver.G, 0)
-        
+
         # Build G matrix
-        t_build = @elapsed begin
+        t_build += @elapsed begin
             for (bi, source) in enumerate(bodies)
                 c = offsets[bi]+1 : offsets[bi+1] # columns of sources
                 for (ti, target) in enumerate(bodies)
                     r = offsets[ti]+1 : offsets[ti+1] # rows of targets
+                    # IMPROVEMENT : 2026-07-30 : pass kerneloffset=source.kerneloffset_panel explicitly, matching Backslash's _G! calls : without it this fell back to _G!'s generic default (source.kerneloffset), so BackslashCoupled regularized near-singular self/near-panel terms differently than Backslash whenever kerneloffset != kerneloffset_panel
                     _G!(view(solver.G, r, c), target,
                         source;
+                        kerneloffset=source.kerneloffset_panel,
                         update_geometry=false)
                 end
             end

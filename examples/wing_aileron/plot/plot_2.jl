@@ -144,7 +144,7 @@ cl_exp  = CL_exp[:,2]
 # -------------------------------
 # MAIN
 # -------------------------------
-filepath = "examples/wing_aileron/second.csv" 
+filepath = "examples/wing_aileron/results/second.csv" 
 
 df = load_data(filepath)
 

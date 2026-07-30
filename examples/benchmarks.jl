@@ -92,6 +92,38 @@ end
 # ============================================================
 # POSTPROCESSING
 # ============================================================
+# IMPROVEMENT : 2026-07-30 : calcfield_P!(bodies::Tuple,...)/calcfield_F!(bodies::Tuple,...)/calcfield_LDS!(out,
+# bodies::Tuple,...) tuple wrappers used to exist (found on the `backup-backslashcoupled` branch, storing results
+# in body.P/body.F fields), but the current `backslashcoupled` branch's postprocessing was refactored to route
+# pressure/force through monitor-owned buffers instead of body fields, and those tuple wrappers were dropped along
+# the way -- this example script (and examples/two_ducts.jl, which has the identical stale calls) was left calling
+# an API that no longer exists. Rather than reintroduce body.P/body.F fields into the library (a much larger,
+# invasive change competing with the current monitor-based architecture), this replicates the same per-body
+# physics/integration logic locally with plain temporary arrays instead of body fields.
+function calcfield_P_tuple!(bodies, Uinf, rho; correct_kuttacondition=fill(true, length(bodies)))
+    Ps = [zeros(body.ncells) for body in bodies]
+    for (i, body) in enumerate(bodies)
+        pnl.calcfield_P!(Ps[i], body, body.velocity, Uinf, rho, nothing; correct_kuttacondition=correct_kuttacondition[i])
+    end
+    return Ps
+end
+
+function calcfield_F_tuple(bodies, Ps; correct_kuttacondition=fill(true, length(bodies)))
+    Fs = [zeros(3, body.ncells) for body in bodies]
+    for (i, body) in enumerate(bodies)
+        pnl.calcfield_F!(Fs[i], body, pnl.calc_areas(body), body.normals, Ps[i]; correct_kuttacondition=correct_kuttacondition[i])
+    end
+    return Fs
+end
+
+function calcfield_LDS_tuple(Fs, Lhat, Dhat, Shat)
+    Ftot = zeros(eltype(Fs[1]), 3)
+    for F in Fs, i in 1:3
+        Ftot[i] += sum(view(F, i, :))
+    end
+    return dot(Ftot, Lhat), dot(Ftot, Dhat), dot(Ftot, Shat)
+end
+
 function postprocess!(bodies, Vinf, rho, chords, span, scaling::Float64=1.0)
 
     Dhat = Vinf / norm(Vinf)
@@ -99,17 +131,18 @@ function postprocess!(bodies, Vinf, rho, chords, span, scaling::Float64=1.0)
     Lhat = cross(Dhat, Shat)
 
     Sref = sum(chord * span * scaling^2 for chord in chords)
+    magVinf = norm(Vinf)
 
     pnl.calcfield_U!(bodies, Vinf)
-    pnl.calcfield_P!(bodies, norm(Vinf), rho)
-    pnl.calcfield_F!(bodies)
+    Ps = calcfield_P_tuple!(bodies, magVinf, rho)
+    Fs = calcfield_F_tuple(bodies, Ps)
 
-    LDS = pnl.calcfield_LDS!(zeros(3,3), bodies, Lhat, Dhat, cross(Lhat, Dhat))
+    L, D, _ = calcfield_LDS_tuple(Fs, Lhat, Dhat, cross(Lhat, Dhat))
 
-    nondim = 0.5 * rho * norm(Vinf)^2 * Sref
+    nondim = 0.5 * rho * magVinf^2 * Sref
 
-    CL = sign(dot(LDS[:,1], Lhat)) * norm(LDS[:,1]) / nondim
-    CD = sign(dot(LDS[:,2], Dhat)) * norm(LDS[:,2]) / nondim
+    CL = L / nondim
+    CD = D / nondim
 
     return CL, CD
 end
@@ -123,7 +156,7 @@ run_names = ["wing_20_20.msh", "surface_20_20.msh"]
 # run_names = ["wing_60_60.msh", "surface_60_60.msh"]
 
 
-files = [joinpath(pnl.examples_path, "wing_aileron", n) for n in run_names]
+files = [joinpath(pnl.examples_path, "wing_aileron", "meshes", n) for n in run_names]
 
 AOAs = [
 # -9.58790170132325
@@ -164,7 +197,7 @@ rts = [0.0, 10.0]
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 bodytype = pnl.RigidWakeBody{kernel}
 
-out_file = joinpath(pnl.examples_path, "wing_aileron", "krylov_solvers.csv")
+out_file = joinpath(pnl.examples_path, "wing_aileron", "results", "krylov_solvers.csv")
 
 # ============================================================
 # SOLVER RUNNER (WRITES DIRECTLY)
@@ -385,34 +418,80 @@ open(out_file, "a") do io
     #   sweep for the cross-body `influence!` cost (`t_influence`). These are
     #   the TEMPORARY diagnostics added to src/FLOWPanel_solver.jl for the
     #   warm-start investigation; remove them there once this is confirmed.
-    try
-        run_solver(io, "KrylovSolver",
-            bodies -> (
-                tuple(
-                    pnl.KrylovSolver(bodies[1]),
-                    pnl.KrylovSolver(bodies[2]),
-                    pnl.KrylovSolver(bodies[3]),
-                    pnl.KrylovSolver(bodies[4])
-                ),
-                0.0
-            ), AOAs, experimental;
-            solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
-        )
-    catch e
-        println("Error running KrylovSolver: ", e)
-    end
+    # IMPROVEMENT : 2026-07-30 : Krylov accuracy/timing study. Originally 4 configurations (KrylovSolver-FMM,
+    # KrylovSolver-FMM-Preconditioned, KrylovCoupled-FMM, KrylovCoupled-FMM-Preconditioned), each with/without
+    # the block-Jacobi preconditioner, all writing to the same krylov_solvers.csv schema so they're directly
+    # comparable to each other (and, if re-enabled, to BackslashCoupled below). preconditioner_cell_size=0.25
+    # is a starting point (~1 wing chord = 10*m = 0.254 in this geometry's real units) rather than a tuned
+    # value -- a proper sweep across a few candidate cell sizes (spanning panel size to chord length) is left
+    # as follow-up, per solver_summary.md's "benchmark the opt-in Jacobi preconditioner" item.
+    #
+    # KrylovSolver-FMM/-Preconditioned are disabled (2026-07-30): they route through the per-body outer
+    # Gauss-Seidel loop (up to 50 outer iterations, each rebuilding the FMM tree and running a full GMRES
+    # solve per body), which did not finish even a single AOA after 2+ hours / 100+ CPU-minutes on this
+    # geometry before being killed -- impractically expensive for this study at this mesh size. Left here,
+    # commented, for future re-enabling (e.g. with a much smaller mesh or a reduced max_outer_iterations).
+    # try
+    #     run_solver(io, "KrylovSolver-FMM",
+    #         bodies -> (
+    #             tuple(
+    #                 pnl.KrylovSolver(bodies[1]; backend=pnl.FastMultipoleBackend()),
+    #                 pnl.KrylovSolver(bodies[2]; backend=pnl.FastMultipoleBackend()),
+    #                 pnl.KrylovSolver(bodies[3]; backend=pnl.FastMultipoleBackend()),
+    #                 pnl.KrylovSolver(bodies[4]; backend=pnl.FastMultipoleBackend())
+    #             ),
+    #             0.0
+    #         ), AOAs, experimental;
+    #         solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
+    #     )
+    # catch e
+    #     println("Error running KrylovSolver-FMM: ", e)
+    # end
+
+    # try
+    #     run_solver(io, "KrylovSolver-FMM-Preconditioned",
+    #         bodies -> (
+    #             tuple(
+    #                 pnl.KrylovSolver(bodies[1]; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25),
+    #                 pnl.KrylovSolver(bodies[2]; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25),
+    #                 pnl.KrylovSolver(bodies[3]; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25),
+    #                 pnl.KrylovSolver(bodies[4]; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25)
+    #             ),
+    #             0.0
+    #         ), AOAs, experimental;
+    #         solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
+    #     )
+    # catch e
+    #     println("Error running KrylovSolver-FMM-Preconditioned: ", e)
+    # end
 
     # KrylovCoupled solves the whole tuple of bodies as one coupled system, so
     # it goes through its own dedicated solve!(bodies::Tuple,
     # solver::KrylovCoupled) method rather than the Gauss-Seidel outer loop --
     # solver_builder just needs to return (solver, t_build) directly, no inner
     # tuple-of-solvers like KrylovSolver above.
+    try
+        run_solver(io, "KrylovCoupled-FMM",
+            bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend()), 0.0), AOAs, experimental;
+            solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
+        )
+    catch e
+        println("Error running KrylovCoupled-FMM: ", e)
+    end
+
+    # KrylovCoupled-FMM-Preconditioned disabled (2026-07-30): segfaults (native crash, not a catchable Julia
+    # exception) on this real geometry partway into the solve. A small synthetic 2-body Dirichlet case with the
+    # same KrylovCoupled+JacobiPreconditioner+FastMultipoleBackend combination passed cleanly, so this is scale-
+    # or geometry-specific (candidates: multithreaded-only code path -- extra_farfield!'s m2l_list bug above was
+    # also multithread-only -- or an interaction between JacobiPreconditioner's cell partitioning and semi-infinite
+    # wake panels), not a fundamental incompatibility. Root cause not yet isolated; re-enable once found.
     # try
-    #     run_solver(io, "KrylovCoupled",
-    #         bodies -> (pnl.KrylovCoupled(bodies), 0.0), AOAs, experimental
+    #     run_solver(io, "KrylovCoupled-FMM-Preconditioned",
+    #         bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25), 0.0), AOAs, experimental;
+    #         solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
     #     )
     # catch e
-    #     println("Error running KrylovCoupled: ", e)
+    #     println("Error running KrylovCoupled-FMM-Preconditioned: ", e)
     # end
 
     # TEMPORARY comparison: is FastMultipoleBackend's per-call tree-rebuild
@@ -428,28 +507,6 @@ open(out_file, "a") do io
     #     )
     # catch e
     #     println("Error running KrylovCoupled-Direct: ", e)
-    # end
-
-    # try
-    #     run_solver(io, "KrylovCoupled-FMM",
-    #         bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend()), 0.0), AOAs, experimental;
-    #         solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
-    #     )
-    # catch e
-    #     println("Error running KrylovCoupled-FMM: ", e)
-    # end
-
-    # try
-    #     run_solver(io, "KrylovSolver-FMM",
-    #         bodies -> tuple(
-    #             pnl.KrylovSolver(bodies[1]; backend=pnl.FastMultipoleBackend()),
-    #             pnl.KrylovSolver(bodies[2]; backend=pnl.FastMultipoleBackend()),
-    #             pnl.KrylovSolver(bodies[3]; backend=pnl.FastMultipoleBackend()),
-    #             pnl.KrylovSolver(bodies[4]; backend=pnl.FastMultipoleBackend()),
-    #         ), AOAs, experimental
-    #     )
-    # catch e
-    #     println("Error running KrylovSolver-FMM: ", e)
     # end
 
     # try

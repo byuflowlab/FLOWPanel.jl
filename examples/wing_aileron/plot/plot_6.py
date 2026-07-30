@@ -5,7 +5,7 @@ import numpy as np
 # ------------------------------------------------------------
 # Load CSV
 # ------------------------------------------------------------
-df = pd.read_csv("examples/wing_aileron/third.csv")
+df = pd.read_csv("examples/wing_aileron/results/third.csv")
 
 # ------------------------------------------------------------
 # Filter panel count

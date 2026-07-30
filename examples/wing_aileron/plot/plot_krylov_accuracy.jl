@@ -5,7 +5,7 @@ using Statistics: mean
 # ------------------------------------------------------------
 # Load CSV (KrylovCoupled / KrylovCoupled-FMM vs experimental CL)
 # ------------------------------------------------------------
-df = CSV.read("examples/wing_aileron/krylov_solvers.csv", DataFrame)
+df = CSV.read("examples/wing_aileron/results/krylov_solvers.csv", DataFrame)
 df = filter(r -> r.CL != "ERROR", df)
 df.CL = Float64.(df.CL)
 df.AOA = Float64.(df.AOA)
@@ -49,9 +49,9 @@ palette = [:steelblue, :orange, :seagreen, :firebrick, :purple, :goldenrod, :tea
 # CL vs AOA for a single solver, one color per panel count,
 # each point labeled with its panel count (nps)
 # ------------------------------------------------------------
-function plot_solver(df, solver_name)
+function plot_solver(df, solver_name; min_nps=25000)
     sub = filter(r -> r.solver == solver_name, df)
-    nps_list = sort(filter(n -> n >= 25000, unique(sub.nps)))
+    nps_list = sort(filter(n -> n >= min_nps, unique(sub.nps)))
 
     fig = Figure(size = (800, 550))
     ax = Axis(fig[1, 1],
@@ -92,8 +92,19 @@ end
 fig_coupled = plot_solver(df, "KrylovCoupled")
 fig_fmm     = plot_solver(df, "KrylovCoupled-FMM")
 
-save("examples/wing_aileron/krylov_accuracy_coupled_high_nps.png", fig_coupled)
-save("examples/wing_aileron/krylov_accuracy_fmm_high_nps.png", fig_fmm)
+save("examples/wing_aileron/figures/krylov_accuracy_coupled_high_nps.png", fig_coupled)
+save("examples/wing_aileron/figures/krylov_accuracy_fmm_high_nps.png", fig_fmm)
+
+# IMPROVEMENT : 2026-07-30 : add the 4 Krylov study configs (wing_20_20/surface_20_20 mesh, nps ~ a
+# few thousand -- far below the min_nps=25000 default tuned for the earlier higher-resolution runs
+# above, hence min_nps=0 here) to the same CL-vs-AOA accuracy comparison.
+for solver_name in ("KrylovSolver-FMM", "KrylovSolver-FMM-Preconditioned",
+                     "KrylovCoupled-FMM", "KrylovCoupled-FMM-Preconditioned")
+    if solver_name in unique(df.solver)
+        fig = plot_solver(df, solver_name; min_nps=0)
+        save("examples/wing_aileron/figures/krylov_accuracy_$(replace(solver_name, "-" => "_")).png", fig)
+    end
+end
 
 # ------------------------------------------------------------
 # MSE (vs experimental CL) per solver, per panel count
@@ -102,5 +113,35 @@ mse_data = combine(groupby(df, [:solver, :nps]), :sq_err => mean => :mse)
 sort!(mse_data, [:solver, :nps])
 
 println(mse_data)
+
+# ------------------------------------------------------------
+# Timing: t_solve and total_time vs AOA, one series per solver,
+# for the 4 Krylov study configs (build+solve cost head-to-head)
+# ------------------------------------------------------------
+timing_solvers = filter(s -> s in unique(df.solver),
+    ["KrylovSolver-FMM", "KrylovSolver-FMM-Preconditioned",
+     "KrylovCoupled-FMM", "KrylovCoupled-FMM-Preconditioned"])
+
+if !isempty(timing_solvers)
+    fig_timing = Figure(size = (800, 550))
+    ax_timing = Axis(fig_timing[1, 1],
+        xlabel = "Angle of Attack (deg)",
+        ylabel = "Total time (s)",
+    )
+    ax_timing.xgridvisible = false
+    ax_timing.ygridvisible = false
+    ax_timing.topspinevisible = false
+    ax_timing.rightspinevisible = false
+
+    for (i, solver_name) in enumerate(timing_solvers)
+        sub = sort(filter(r -> r.solver == solver_name, df), :AOA)
+        color = palette[mod1(i, length(palette))]
+        lines!(ax_timing, sub.AOA, sub.total_time; color, label = solver_name)
+        scatter!(ax_timing, sub.AOA, sub.total_time; color)
+    end
+
+    axislegend(ax_timing, position = :lt)
+    save("examples/wing_aileron/figures/krylov_timing_study.png", fig_timing)
+end
 
 fig_coupled

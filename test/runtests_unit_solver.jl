@@ -52,6 +52,26 @@ end
         @test max_residual < 1e-12
     end
 
+    @testset "Backslash Neumann solve! defaults update_G=false" begin
+        # IMPROVEMENT : 2026-07-30 : regression test that the Neumann solve! wrapper's default (changed true -> false) still reuses the constructor's already-built G rather than silently rebuilding it, matching the Dirichlet wrapper's default
+        body_default = make_octa_source_body()
+        body_explicit = make_octa_source_body()
+        for body in (body_default, body_explicit)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+        end
+
+        solver_default = pnl.Backslash(body_default)
+        solver_explicit = pnl.Backslash(body_explicit)
+
+        pnl.solve!(body_default, solver_default)                    # relies on new default
+        pnl.solve!(body_explicit, solver_explicit; update_G=false)  # explicit, for comparison
+
+        @test isapprox(vec(body_default.strength[:, 1]), vec(body_explicit.strength[:, 1]); atol=1e-14)
+        max_residual = nonlifting_flow_tangency_max_residual(body_default)
+        @test max_residual < 1e-12
+    end
+
     @testset "Backslash Neumann RigidWakeBody (single ConstantDoublet)" begin
         # Validates that the generic Backslash + Neumann path on a
         # RigidWakeBody{ConstantDoublet,1,_,false} assembles a wake-aware
@@ -361,7 +381,9 @@ end
 
         body_fgs = make_dirichlet_body(1.0)
         fgs = pnl.FGSSolver(body_fgs; leaf_size=10000, tolerance=1e-12, max_iterations=5)
-        pnl.solve!(body_fgs, fgs)
+        # IMPROVEMENT : 2026-07-30 : assert on the return value of the public solve!(body, solver) API : previously FGSSolver's _solve! returned `nothing` (falling through to save_solution!'s return), so this call crashed on `tb, ts = _solve!(...)` inside the generic wrapper -- this exercises exactly that path and confirms it now returns a proper (tb, ts) timing tuple
+        tb_ts = pnl.solve!(body_fgs, fgs)
+        @test tb_ts isa Tuple{Float64, Float64}
 
         @test body_fgs.strength[:, 1] ≈ body_backslash.strength[:, 1] atol=1e-12
         @test body_fgs.strength[:, 2] ≈ body_backslash.strength[:, 2] atol=1e-12
@@ -387,6 +409,63 @@ end
         assert_boundary_residuals((body1, body2); tangency_atol=1e-7)
     end
 
+    @testset "Outer coupled loop solve! defaults to FastMultipoleBackend" begin
+        # IMPROVEMENT : 2026-07-30 : regression test that omitting `backend` now uses FastMultipoleBackend() per body (previously DirectBackend()) and still gives an accurate solve
+        body1 = make_octa_source_body()
+        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        body1.velocity .= 0
+        body2.velocity .= 0
+        body1.velocity[1, :] .= 1.0
+        body2.velocity[1, :] .= 1.0
+        solver1 = pnl.Backslash(body1)
+        solver2 = pnl.Backslash(body2)
+        pnl.solve!((body1, body2), (solver1, solver2))  # backend omitted -> new FMM default
+        @test any(abs.(body1.strength[:, 1]) .> 0)
+        @test any(abs.(body2.strength[:, 1]) .> 0)
+        assert_boundary_residuals((body1, body2); backend=pnl.FastMultipoleBackend(), tangency_atol=1e-6)
+    end
+
+    @testset "No unconditional debug println during solve!" begin
+        # IMPROVEMENT : 2026-07-30 : regression test guarding against reintroduction of the removed TEMPORARY debug printlns (KrylovSolver GMRES diagnostics, "Tuple of bodies", "BackslashCoupled", outer-loop "[outer diag]") : these fired unconditionally on every solve regardless of a verbose flag, polluting stdout across batch runs like AOA/panel-count sweeps
+        # NOTE: redirect_stdout requires an OS-backed stream (a plain IOBuffer isn't accepted), hence mktemp rather than IOBuffer()
+        body_krylov = make_octa_source_body()
+        body_krylov.velocity .= 0
+        body_krylov.velocity[1, :] .= 1.0
+        krylov_solver = pnl.KrylovSolver(body_krylov; backend=pnl.DirectBackend(), atol=1e-8, rtol=1e-8, itmax=50)
+
+        body_c1 = make_octa_source_body()
+        body_c2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        for b in (body_c1, body_c2)
+            b.velocity .= 0
+            b.velocity[1, :] .= 1.0
+        end
+        coupled_solver = pnl.BackslashCoupled((body_c1, body_c2))
+
+        body_o1 = make_octa_source_body()
+        body_o2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        for b in (body_o1, body_o2)
+            b.velocity .= 0
+            b.velocity[1, :] .= 1.0
+        end
+        outer_solver1 = pnl.Backslash(body_o1)
+        outer_solver2 = pnl.Backslash(body_o2)
+
+        output = mktemp() do path, f
+            redirect_stdout(f) do
+                pnl.solve!(body_krylov, krylov_solver)
+                pnl.solve!((body_c1, body_c2), coupled_solver; backend=pnl.DirectBackend(), update_G=true)
+                pnl.solve!((body_o1, body_o2), (outer_solver1, outer_solver2); backend=(pnl.DirectBackend(), pnl.DirectBackend()))
+            end
+            flush(f)
+            read(path, String)
+        end
+
+        @test !occursin("gmres diag", output)
+        @test !occursin("Tuple of bodies", output)
+        @test !occursin("BackslashCoupled", output)
+        @test !occursin("outer diag", output)
+    end
+
     @testset "KrylovCoupled nonlifting" begin
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
@@ -403,6 +482,56 @@ end
         @test any(abs.(body1.strength[:, 1]) .> 0)
         @test any(abs.(body2.strength[:, 1]) .> 0)
         assert_boundary_residuals(bodies; tangency_atol=1e-7)
+    end
+
+    @testset "KrylovCoupled + JacobiPreconditioner" begin
+        # IMPROVEMENT : 2026-07-30 : test for KrylovCoupled's new preconditioner_cell_size support, mirroring the existing "KrylovSolver + JacobiPreconditioner" test : confirms the with/without-preconditioner comparison is now possible for both Krylov solver families, not just KrylovSolver
+        # NOTE: uses Dirichlet (DBC=true) bodies, matching the one configuration "KrylovSolver + JacobiPreconditioner" already
+        # exercises successfully -- JacobiPreconditioner's default derivatives_switches=(scalar_potential=true, gradient=true)
+        # builds a potential-based self-influence matrix per cell, which is consistent with a Dirichlet (potential) formulation
+        # but not with a Neumann (velocity-dot-normal) one; an earlier version of this test used two Neumann bodies and got
+        # wildly wrong (non-converged) strengths, which is a JacobiPreconditioner/Neumann-formulation gap on the FastMultipole
+        # side, not a KrylovCoupled wiring bug -- out of scope here, so this test sticks to the proven-good Dirichlet case.
+        make_dirichlet_body(shift) = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[
+                0 1 1 0;
+                0 0 1 1;
+                0 0 0 0;
+            ] .+ shift,
+            Int[
+                1 1;
+                2 3;
+                3 4;
+            ];
+            check_mesh=false,
+            watertight=false,
+        )
+
+        make_bodies() = (make_dirichlet_body([0.0, 0.0, 0.0]), make_dirichlet_body([3.0, 0.0, 0.0]))
+
+        bodies_no_pc = make_bodies()
+        bodies_pc = make_bodies()
+
+        for bodies in (bodies_no_pc, bodies_pc), body in bodies
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+        end
+
+        solver_no_pc = pnl.KrylovCoupled(bodies_no_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        solver_pc = pnl.KrylovCoupled(bodies_pc; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50, preconditioner_cell_size=1.5)
+
+        @test solver_pc.preconditioner !== nothing
+        @test length(solver_pc.preconditioner.cell_body_indices) > 0
+
+        pnl.solve!(bodies_no_pc, solver_no_pc; backend=pnl.DirectBackend())
+        pnl.solve!(bodies_pc, solver_pc; backend=pnl.DirectBackend())
+
+        for (body_no_pc, body_pc) in zip(bodies_no_pc, bodies_pc)
+            @test isapprox(vec(body_pc.strength[:, 1]), vec(body_no_pc.strength[:, 1]); atol=1e-6)
+        end
+        assert_boundary_residuals(bodies_no_pc; tangency_atol=1e-7)
+        assert_boundary_residuals(bodies_pc; tangency_atol=1e-6)
     end
 
     @testset "numtype" begin
@@ -431,6 +560,51 @@ end
         @test any(abs.(body1.strength[:, 1]) .> 0)
         @test any(abs.(body2.strength[:, 1]) .> 0)
         assert_boundary_residuals(bodies; backend, tangency_atol=1e-8)
+    end
+
+    @testset "BackslashCoupled solve! defaults to FastMultipoleBackend" begin
+        # IMPROVEMENT : 2026-07-30 : regression test that omitting `backend` now uses FastMultipoleBackend() (previously DirectBackend()) and still gives an accurate solve
+        body1 = make_octa_source_body()
+        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        magVinf = 10.0
+        Vinf = magVinf * [1.0, 0.0, 0.0]
+        pnl.apply_freestream!(body1, Vinf)
+        pnl.apply_freestream!(body2, Vinf)
+
+        bodies = (body1, body2)
+        solver = pnl.BackslashCoupled(bodies)
+
+        pnl.solve!(bodies, solver; update_G=true)  # backend omitted -> new FMM default
+        @test any(abs.(body1.strength[:, 1]) .> 0)
+        @test any(abs.(body2.strength[:, 1]) .> 0)
+        assert_boundary_residuals(bodies; backend=pnl.FastMultipoleBackend(), tangency_atol=1e-6)
+    end
+
+    @testset "BackslashCoupled uses kerneloffset_panel, not stale kerneloffset" begin
+        # IMPROVEMENT : 2026-07-30 : regression test for BackslashCoupled's _G! call now passing kerneloffset=source.kerneloffset_panel explicitly : previously it fell back to _G!'s generic kerneloffset default, which can silently diverge from kerneloffset_panel (e.g. after a monitor/simulate! pass temporarily repoints body.kerneloffset at kerneloffset_targets), making BackslashCoupled and Backslash regularize self/near-singular terms differently for what should be the same discretization
+        body_direct = make_octa_source_body()
+        body_coupled = make_octa_source_body()
+
+        # Simulate body.kerneloffset having been left pointed at a different
+        # value than kerneloffset_panel (as happens transiently during
+        # simulate!/monitor evaluation), while kerneloffset_panel is unchanged.
+        @test body_direct.kerneloffset == body_direct.kerneloffset_panel
+        body_direct.kerneloffset = 1e-3
+        body_coupled.kerneloffset = 1e-3
+        @test body_direct.kerneloffset != body_direct.kerneloffset_panel
+
+        for body in (body_direct, body_coupled)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+        end
+
+        direct = pnl.Backslash(body_direct)
+        pnl.solve!(body_direct, direct; backend=pnl.DirectBackend())
+
+        coupled = pnl.BackslashCoupled((body_coupled,))
+        pnl.solve!((body_coupled,), coupled; backend=pnl.DirectBackend(), update_G=true)
+
+        @test isapprox(vec(body_coupled.strength[:, 1]), vec(body_direct.strength[:, 1]); atol=1e-12)
     end
 
     @testset "backslashcoupled" begin

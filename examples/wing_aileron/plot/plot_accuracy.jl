@@ -5,7 +5,7 @@ using Statistics: mean
 # ------------------------------------------------------------
 # Load CSV
 # ------------------------------------------------------------
-df = CSV.read("examples/wing_aileron/krylov_solvers.csv", DataFrame)
+df = CSV.read("examples/wing_aileron/results/krylov_solvers.csv", DataFrame)
 
 # ------------------------------------------------------------
 # Experimental (wind-tunnel) reference CL, indexed by AOA
@@ -73,8 +73,8 @@ end
 fig_coupled   = plot_CL_vs_AOA(data, "BackslashCoupled",   "BackslashCoupled: CL vs AOA")
 fig_iterative = plot_CL_vs_AOA(data, "BackslashIterative", "BackslashIterative: CL vs AOA")
 
-save("examples/wing_aileron/accuracy_coupled.png", fig_coupled)
-save("examples/wing_aileron/accuracy_iterative.png", fig_iterative)
+save("examples/wing_aileron/figures/accuracy_coupled.png", fig_coupled)
+save("examples/wing_aileron/figures/accuracy_iterative.png", fig_iterative)
 
 # ------------------------------------------------------------
 # Average MSE (vs experimental CL) over the AOAs, per panel count
@@ -98,6 +98,6 @@ end
 
 axislegend(ax_mse, position = :lt)
 
-save("examples/wing_aileron/accuracy_mse.png", fig_mse)
+save("examples/wing_aileron/figures/accuracy_mse.png", fig_mse)
 
 fig_mse
