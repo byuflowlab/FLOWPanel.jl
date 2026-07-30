@@ -48,14 +48,12 @@ function generate_body(
 
     grid = gt.GridTriangleSurface(msh)
 
-    CPoffset = 1e-6
     empty_shedding = zeros(Int, 6, 0)
 
     # build temporary body
     body = bodytype(
         grid,
         [empty_shedding];
-        CPoffset,
         kerneloffset,
         flip_normals = false
     )
@@ -78,7 +76,6 @@ function generate_body(
         nodes,
         cells,
         [shedding];
-        CPoffset,
         kerneloffset,
         flip_normals = false,
         ensure_winding = false
