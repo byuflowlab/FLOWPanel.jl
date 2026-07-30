@@ -2,6 +2,10 @@ using Test
 import FLOWPanel as pnl
 using StaticArrays, LinearAlgebra
 
+if !isdefined(@__MODULE__, :NODES_1TRI)
+    include("test_helpers.jl")
+end
+
 const FD = pnl.FD
 
 kernel_switch(ps, vs, gs) = pnl.FastMultipole.DerivativesSwitch(ps, vs, gs)
@@ -21,6 +25,83 @@ function assert_velocity_gradient_is_velocity_jacobian(eval_kernel, targets; ato
         jac_velocity = FD.jacobian(t -> eval_kernel(t, false, true, false)[2], x)
 
         @test isapprox(Matrix(gradient), jac_velocity; atol, rtol)
+    end
+end
+
+function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where {K}
+    body = pnl.NonLiftingBody{K}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                DBC=dbc, kerneloffset=1e-8)
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    body.strength[1, :] .= 1.0
+
+    vertices = ntuple(i -> SVector{3,Float64}(body.nodes[:, body.cells[i, 1]]), 3)
+    control_point = SVector{3,Float64}(body.controlpoints[:, 1])
+    normal = SVector{3,Float64}(body.normals[:, 1])
+    panel_area = pnl.calc_areas(body.nodes, body.cells)[1]
+    offset = 10 * pnl.SELF_PAIR_EPS_REL * sqrt(panel_area)
+    outward_target = control_point + offset * normal
+    inward_target = control_point - offset * normal
+
+    @test pnl._is_self_pair(control_point, control_point, vertices)
+    @test !pnl._is_self_pair(outward_target, control_point, vertices)
+    @test !pnl._is_self_pair(inward_target, control_point, vertices)
+
+    switch = kernel_switch(true, true, false)
+    potential_self, velocity_self, _ =
+        pnl.induced(control_point, body, 1, switch; kerneloffset=body.kerneloffset)
+    _, velocity_outward, _ =
+        pnl.induced(outward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+
+    @test isapprox(velocity_self, velocity_outward; atol=1e-10, rtol=1e-10)
+
+    has_source = K <: pnl.ConstantSource ||
+                 K == Union{pnl.ConstantSource, pnl.ConstantDoublet} ||
+                 K == Union{pnl.ConstantSource, pnl.VortexRing}
+    has_jump_potential = K <: pnl.ConstantDoublet || K <: pnl.VortexRing ||
+                         K == Union{pnl.ConstantSource, pnl.ConstantDoublet} ||
+                         K == Union{pnl.ConstantSource, pnl.VortexRing}
+
+    if has_source
+        velocity_continuous = zero(velocity_self)
+        if K == Union{pnl.ConstantSource, pnl.ConstantDoublet}
+            doublet_body = pnl.NonLiftingBody{pnl.ConstantDoublet}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                                  DBC=dbc, kerneloffset=1e-8)
+            pnl.calc_normals!(doublet_body)
+            pnl.calc_controlpoints!(doublet_body)
+            doublet_body.strength[:, 1] .= 1.0
+            _, velocity_continuous, _ =
+                pnl.induced(control_point, doublet_body, 1, switch; kerneloffset=doublet_body.kerneloffset)
+        elseif K == Union{pnl.ConstantSource, pnl.VortexRing}
+            vortex_body = pnl.NonLiftingBody{pnl.VortexRing}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                            DBC=dbc, kerneloffset=1e-8)
+            pnl.calc_normals!(vortex_body)
+            pnl.calc_controlpoints!(vortex_body)
+            vortex_body.strength[:, 1] .= 1.0
+            _, velocity_continuous, _ =
+                pnl.induced(control_point, vortex_body, 1, switch; kerneloffset=vortex_body.kerneloffset)
+        end
+        @test isapprox(dot(velocity_self - velocity_continuous, normal),
+                       0.5; atol=1e-12, rtol=0)
+    end
+
+    if has_jump_potential
+        potential_inward, _, _ =
+            pnl.induced(inward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+        source_potential = zero(potential_self)
+        if K == Union{pnl.ConstantSource, pnl.ConstantDoublet} ||
+                K == Union{pnl.ConstantSource, pnl.VortexRing}
+            source_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
+                                                                DBC=dbc, kerneloffset=1e-8)
+            pnl.calc_normals!(source_body)
+            pnl.calc_controlpoints!(source_body)
+            source_body.strength[:, 1] .= 1.0
+            source_potential, _, _ =
+                pnl.induced(control_point, source_body, 1, switch; kerneloffset=source_body.kerneloffset)
+        end
+        @test isapprox(potential_self - source_potential, 0.5;
+                       atol=1e-10, rtol=1e-10)
+        @test isapprox(potential_self, potential_inward; atol=1e-10, rtol=1e-10)
     end
 end
 
@@ -106,6 +187,33 @@ end
         @test errors[5] < 1e-9
         @test errors[end] < 1e-12
         @test all(errors[i+1] <= 0.02 * errors[i] for i in 1:6)
+
+        core_size = 1e-5
+        _, velocity, _ = pnl._induced(target, vertices, control_point, strength,
+                                      pnl.VortexRing, core_size, R,
+                                      kernel_switch(false, true, false))
+        grad_phi = FD.gradient(
+            t -> pnl._induced(t, vertices, control_point, strength,
+                              pnl.VortexRing, core_size, R,
+                              kernel_switch(true, false, false))[1],
+            target,
+        )
+        @test isapprox(velocity, grad_phi; atol=1e-12, rtol=1e-12)
+    end
+
+    @testset "Self limit uses exterior velocity and interior potential" begin
+        kernel_types = (
+            pnl.ConstantSource,
+            pnl.ConstantDoublet,
+            pnl.VortexRing,
+            Union{pnl.ConstantSource, pnl.ConstantDoublet},
+            Union{pnl.ConstantSource, pnl.VortexRing},
+        )
+        for K in kernel_types, dbc in (false, true)
+            @testset "$(K) DBC=$(dbc)" begin
+                assert_self_limit_uses_fixed_surface_limits(K, dbc)
+            end
+        end
     end
 
     @testset "ConstantSource + VortexRing triangle" begin

@@ -18,6 +18,9 @@ import LinearAlgebra: norm, I
 import Meshes
 import GeoIO
 
+run_name = "wing_sphere"
+save_path = joinpath("data", run_name)
+
 # =============================================================================
 # SIMULATION PARAMETERS
 # =============================================================================
@@ -49,14 +52,14 @@ trailingedge[3, :] .= 0.0
 # --- Construct RigidWakeBody ---
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 wing = pnl.RigidWakeBody{kernel}(grid;
-            CPoffset=1e-14,
+            cp_outer=true,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
 shedding = pnl.calc_shedding(wing.nodes, wing.cells, trailingedge; tolerance=0.001 * b)
 wing = pnl.RigidWakeBody{kernel}(wing.nodes, wing.cells, shedding;
-            CPoffset=1e-14,
+            cp_outer=true,
             kerneloffset=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
@@ -149,7 +152,7 @@ body_solvers = (solver_wing, solver_sphere)
 println("\nBegin wing+sphere simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     body_solvers, backend, verbose=true,
-    path="wing_sphere", name="wing_sphere"
+    path=save_path, name=run_name
 )
 
 # =============================================================================

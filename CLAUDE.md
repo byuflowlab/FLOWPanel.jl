@@ -1,137 +1,44 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. It is the routing hub: read the matching policy file below **before** starting the corresponding kind of work.
 
 ## What This Is
 
-FLOWPanel.jl is a 3D panel method solver for low-speed (inviscid, incompressible) aerodynamics, written in Julia. It supports non-lifting bodies (source/doublet panels), lifting bodies (vortex-ring panels with rigid wake), and unsteady simulation. Computation is accelerated via the `FastMultipole` package (FMM) or direct N-body evaluation.
+FLOWPanel.jl is a 3D panel method solver for low-speed (inviscid, incompressible) aerodynamics, written in Julia. It supports non-lifting bodies (source/doublet panels), lifting bodies (vortex-ring panels with rigid wake), and unsteady simulation with free wakes. Computation is accelerated via the `FastMultipole` package (FMM) or direct N-body evaluation.
 
-## Commands
+## Required Policy Reads (by task)
+
+- Diagnosing or modifying repository code → `agent_policies/WORKFLOW.md` (subsystem/source-file routing, repo realities, editing boundaries, failure modes)
+- Selecting or running tests / validation → `agent_policies/TESTING.md` (verification matrix, example smoke tests)
+- Monitors, simulation output, pressure or force recovery, replay → `agent_policies/MONITORS.md` (dependency contracts, monitor inventory, PressureLaplace constraints)
+- Long simulations, HPC, or Slurm work → `agent_policies/HPC.md` (allocation, threading, assets, checkpoints, output retention, submission boundary)
+
+## Quick Commands
 
 ```bash
-# Run all tests from shell
+# Run all tests
 julia --project -e 'include("test/runtests.jl")'
-
-# Run a specific test file
-julia --project -e 'include("test/runtests_unit_fmm.jl")'
-julia --project -e 'include("test/runtests_unit_body.jl")'
-julia --project -e 'include("test/runtests_unit_solver.jl")'
-julia --project -e 'include("test/runtests_unit_liftingbody.jl")'
-julia --project -e 'include("test/runtests_analytical.jl")'
 
 # Run an example
 julia --project examples/sphere.jl
 ```
 
-From the Julia REPL (with `--project`):
-```julia
-# Run all tests via Pkg
-] test
+For anything narrower, use the matrix in `agent_policies/TESTING.md`.
 
-# Run a specific test file
-include("test/runtests_analytical.jl")
+## Orientation
 
-# Run an example
-include("examples/sphere.jl")
-```
+Source lives in `src/` as `FLOWPanel_<subsystem>.jl` files; the authoritative load order is the `for header_name in [...]` include loop in `src/FLOWPanel.jl`. Roughly: element kernels → N-body backends (`DirectBackend`, `FastMultipoleBackend`) → body types (`NonLiftingBody`, `RigidWakeBody`, parameterized `{E,N,TF,DBC}`) → solvers (`BackslashNeumann`, `BackslashDirichlet`, `KrylovSolver`, `FGSSolver`) → frames/kinematics → post-processing → wake → monitors → `simulate!` → warm-start and replay. Multi-body solving uses `solve!(bodies::Tuple, solvers::Tuple)`. Meshes are built with `GeometricTools` (aliased `gt` everywhere). Forward/reverse AD is supported through `ImplicitAD`. For which file owns what, see the routing table in `agent_policies/WORKFLOW.md`.
 
-## Architecture
+`simulate!(body, frames, maneuver!, Vinf, t_range)` time-marches: propagate kinematics → solve body+wake → wake convection/rollup → call each monitor in tuple order.
 
-### Module Load Order (`FLOWPanel.jl`)
-Files are included in this order (reflects the dependency chain):
-1. `elements` — Panel element types and their direct velocity/potential kernels
-2. `fmm` — N-body backend abstraction (`AbstractBackend`, `DirectBackend`, `FastMultipoleBackend`)
-3. `abstractbody` — `AbstractBody{E,N,TF,DBC}` interface definition
-4. `nonliftingbody` — `NonLiftingBody{E,N,TF,DBC}` concrete type
-5. `abstractliftingbody` — `AbstractLiftingBody` interface
-6. `liftingbody` — `RigidWakeBody{E,N,TF,DBC}` concrete type
-7. `solver` — Solver types: `BackslashNeumann`, `BackslashDirichlet`, `KrylovSolver`, `FGSSolver`
-8. `elements_fmm` — FMM integration of panel elements (overloads `_Uind!`, `_phi!`)
-9. `frames` — `ReferenceFrame` kinematics for unsteady simulation
-10. `liftingline` — Lifting-line coupling utilities
-11. `utils` — Geometry helpers (`simplewing`, math utilities)
-12. `postprocess` — `calcfield_U!`, `calcfield_P!`, `calcfield_F!`, etc.
-13. `wake` — `AbstractFreeWake`, `PanelWake`, and `solve!` for body+wake systems
-14. `simulate` — `simulate!` time-marching loop
-15. `simulate_monitors` — `AbstractMonitor` types called each timestep by `simulate!`
-16. `monitor` — (conditionally loaded) PyPlot-based visualization monitors
+## Cross-Cutting Conventions
 
-### Key Types
-
-**Element types** (`FLOWPanel_elements.jl`):
-- `ConstantSource`, `ConstantDoublet`, `VortexRing`, `ConstantVortexSheet`, `UniformVortexSheet`
-- Bodies are parameterized as `Body{E,N,TF,DBC}` where `E` is a `Union` of element types, `N` is the number of element types, `TF` is the float type, and `DBC` is a bool flag for Dirichlet boundary conditions.
-
-**Body hierarchy**:
-- `AbstractBody{E,N,TF,DBC}` — base interface; holds `nodes`, `cells`, `strength`, `fields`, etc.
-- `NonLiftingBody{E,N,TF,DBC}` — for closed non-lifting surfaces
-- `AbstractLiftingBody{E,N,TF,DBC}` → `RigidWakeBody{E,N,TF,DBC}` — includes `shedding` edges for rigid wake
-
-**Solver hierarchy** (`FLOWPanel_solver.jl`):
-- `AbstractSolver`
-  - `AbstractMatrixfulSolver{LS}` — assembles full system matrix; `LS` flag enables least-squares formulation
-    - `BackslashNeumann` — direct matrix solve (Neumann formulation)
-    - `BackslashDirichlet` — direct matrix solve (Dirichlet/interior-Dirichlet formulation)
-  - `AbstractMatrixFreeSolver` — applies system operator without storing the full matrix
-    - `KrylovSolver` — matrix-free GMRES via `Krylov.jl`, works with `FastMultipoleBackend`
-    - `FGSSolver` — matrix-free Gauss-Seidel-style solver for a single body; key params: `max_iterations`, `tolerance`, `rlx` (relaxation)
-
-**Multi-body solving**: use `solve!(bodies::Tuple, solvers::Tuple)`, including one `FGSSolver(body)` per body when using FGS in coupled solves.
-
-**N-body backends** (`FLOWPanel_fmm.jl`):
-- `DirectBackend` — O(N²) direct summation via `FastMultipole.direct!`
-- `FastMultipoleBackend` — O(N log N) FMM via `FastMultipole.fmm!`; key params: `expansion_order`, `multipole_acceptance`, `leaf_size`
-
-### Key Conventions
-
-- `gt` is the alias for `GeometricTools` (used everywhere for mesh generation/manipulation).
-- Panel influence functions follow Hess & Smith / Katz & Plotkin sign conventions; note GeometricTools defines normals with the right-hand rule, which is opposite to K&P — the element kernels account for this with explicit sign flips.
+- Panel influence functions follow Hess & Smith / Katz & Plotkin sign conventions; GeometricTools defines normals with the right-hand rule (opposite K&P) — element kernels account for this with explicit sign flips. Sign handling is the most common source of regressions.
 - `strength[:, j]` stores the strength of the j-th element type for all panels (ncells × N matrix).
-- Control points are offset from panel centers along the normal by `CPoffset * characteristiclength(panel)`.
 - `Uinf` passed to `solve` is a 3×ncells matrix (freestream at each control point).
 - The `fields` vector in each body tracks which solution fields have been computed (used by post-processing).
 
-**Monitor hierarchy** (`FLOWPanel_simulate_monitors.jl`):
+## Critical Invariant: RigidWakeBody Shedding
 
-Monitors are callables `(systems, wakes, frames, uinf, i_step, dt) -> nothing` invoked each timestep by `simulate!`. They declare data contracts via two traits:
-- `monitor_provides(m)` — tuple of symbols (`:P`, `:F`) written by this monitor
-- `monitor_requires(m)` — tuple of symbols that must be written by an *earlier* monitor
+Compute shedding from the *constructed* body's cells, never the raw mesh: with `ensure_winding=true` (default) the constructor re-winds `cells` in place, so shedding computed from raw mesh cells attaches the wake at the wrong edges with **no error** — the body silently sheds almost no circulation (observed: rotor-hover CT collapsed ~3.6×, 0.0505→0.014). Build a `noshedding` body first, run `calc_shedding_from_seed` on *its* `.nodes`/`.cells`, then rebuild with the shedding. See the `RigidWakeBody` docstring in `src/FLOWPanel_liftingbody.jl` and `examples/rotor_hover_convergence.jl`.
 
-`audit_monitors(monitors)` validates the ordering at the start of `simulate!` and throws `ArgumentError` on the first unmet dependency.
-
-Concrete monitors:
-- `PressureBernoulli(rho; unsteady, correct_kuttacondition, clip)` — populates `body.P` via steady or unsteady Bernoulli; provides `:P`
-- `PressureLaplace(bodies, rho; atol, rtol, itmax, preconditioner, reference_panel, reference_pressure, cache, verbose)` — populates `body.P` by solving a sparse panel-centered surface pressure Poisson equation (CG from Krylov.jl); provides `:P`. Must be constructed with the actual body objects for preallocation. Receives `dt` from `simulate!` at runtime; do **not** pass `dt` at construction.
-- `ForceMonitor(nt, i_system; i_frame, normalization, correct_kuttacondition, verbose)` — populates `body.F`, integrates force/moment, stores histories in `.force` and `.moment` (3×nt); requires `:P`, provides `:F`
-- `KuttaJoukowskiForce(body, nt, i_system; rho, backend, normalization, verbose)` — independent Kutta–Joukowski cross-check; evaluates `ρ Σ γ (Δs × V)` at edge midpoints via a `FastMultipole.ProbeSystem`; stores history in `.force` (3×nt)
-
-Normalization callables `(CF, CM, systems, frames, uinf) -> (CF_norm, CM_norm)`:
-- `WingNormalization(rho, Sref, Lref)` — divides by `0.5 ρ |U∞|² Sref` (and `… Lref` for moments)
-- `NoNormalization()` — pass-through, returns dimensional values
-- `RotorNormalization(rho, D, i_frame)` — divides by `ρ n² D⁴` / `ρ n² D⁵`, reads `n` (rev/s) from `frames[i_frame].ω / 2π`
-- `RotorNormalization2(rho, D, i_frame)` — divides by disk-area dynamic pressure; reads `ω` (rad/s) from `frames[i_frame].ω`
-
-`PressureLaplace` internals:
-- Sparse FV surface Laplacian `L` assembled from shared-edge weights `w_ij = ℓ_ij / d_ij`; gauge-fixed by pinning one reference panel to `reference_pressure`
-- RHS built from edge-integrated tangential material acceleration: `b_i -= ρ ℓ_ij (a_t,j - a_t,i)·ê_ij`
-- Unsteady term `∂u/∂t` approximated by finite difference of successive monitor calls (stored in `velocity_dot` as negative previous velocity)
-- Velocity gradient `∇u` needed for convective term obtained analytically: `∇u_induced` is the FastMultipole Hessian populated into `body.velocity_gradient` during the per-step `influence!` calls (gated by `monitor_requires_body_hessian(::PressureLaplace) = true` flipping `body.needs_velocity_gradient[]` in `simulate!`); the kinematic part `[Ω]_×` is reconstructed from `body.angular_velocity` accumulated in `kinematic_velocity!`
-- Body count checked at call time against `length(m.b)`; no identity (`objectid`) check — caller is trusted to provide compatible bodies
-- Geometry signature cached; `L` and preconditioner only rebuilt when mesh geometry changes (controlled by `cache` flag)
-- Preconditioners: `JacobiPressurePreconditioner` (default, O(N)), `NoPressurePreconditioner`; `IncompleteCholeskyPressurePreconditioner` and `AMGPressurePreconditioner` reserved but not implemented
-
-### Unsteady Simulation Flow
-
-`simulate!(body, frames, maneuver!, Vinf, t_range)` creates a `PanelWake` and calls the time-marching `simulate!` loop. Each step:
-1. `propagate_kinematics!` — updates body node positions from `ReferenceFrame` tree
-2. `solve!` — evaluates wake influence, solves body BCs, evaluates body influence on wake
-3. Wake rollup / panel convection
-4. Each monitor in the `monitors` tuple is called in order
-
-### GeometricTools Integration
-
-Meshes are built using `GeometricTools.GridTriangleSurface`. Grids are created parametrically (e.g., as `gt.Grid`), transformed (e.g., `gt.transform!`, `gt.lintransform!`), then split into triangles (`gt.GridTriangleSurface(grid, dimsplit)`). Unstructured meshes can also be imported via `GeoIO`/`Meshes.jl`.
-
-### Differentiation Support
-
-The solver supports forward-mode AD (ForwardDiff) and reverse-mode AD (ReverseDiff) through `ImplicitAD`. The `solve_ludiv!` function is overloaded in `ImplicitAD` to efficiently differentiate through the linear solve.

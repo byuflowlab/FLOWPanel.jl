@@ -17,6 +17,9 @@ import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm
 
+run_name = "vpm"
+save_path = joinpath("data", run_name)
+
 # ----------------- GEOMETRY (shared) -----------------------------------------
 filename   = joinpath(pnl.examples_path, "data", "naca662015.csv")
 contour    = CSV.read(filename, DataFrame)
@@ -44,7 +47,7 @@ function make_body()
     ys .+= d / 2
     points = hcat(xs, ys)
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-12, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
                              semiinfinite_wake=false))
@@ -95,7 +98,7 @@ frames_A = make_frames(body_A)
 solver_A = pnl.Backslash(body_A)
 
 pnl.simulate!((body_A,), (wake_A,), frames_A, maneuver, Uinf, t_range;
-    body_solvers=(solver_A,), backend, verbose=false, path="vpm", name="bsd")
+    body_solvers=(solver_A,), backend, verbose=false, path=save_path, name="bsd")
 
 strength_A = copy(wake_A.panel_wake.strength[1])
 
@@ -125,7 +128,7 @@ solver_B = pnl.FGSSolver(body_B;
         )
 
 pnl.simulate!((body_B,), (wake_B,), frames_B, maneuver, Uinf, t_range;
-    body_solvers=(solver_B,), backend, verbose=false, path="vpm", name="fgs")
+    body_solvers=(solver_B,), backend, verbose=false, path=save_path, name="fgs")
 
 strength_B = copy(wake_B.panel_wake.strength[1])
 

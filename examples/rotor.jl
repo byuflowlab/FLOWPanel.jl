@@ -11,7 +11,7 @@ import GeoIO
 
 run_name        = "wing_capped"             # Name of this run
 
-save_path       = run_name                  # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 paraview        = true                      # Whether to visualize with Paraview
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 
@@ -76,12 +76,12 @@ Vinf = magVinf*[cos(AOA*pi/180), 0, sin(AOA*pi/180)]
 
 # Generate paneled body
 if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    body = bodytype(grid; cp_outer=iseven(flip))
 elseif bodytype <: pnl.RigidWakeBody
-    body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+    body = bodytype(grid; cp_outer=iseven(flip))
     shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*b)
     body = bodytype(body.nodes, body.cells, shedding;
-                    CPoffset=(-1)^flip * 1e-14,
+                    cp_outer=iseven(flip),
                     ensure_winding=false)
     body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
 else

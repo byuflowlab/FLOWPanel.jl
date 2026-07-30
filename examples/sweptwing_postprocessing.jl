@@ -20,7 +20,7 @@ function cross!(out, A, B)
 end
 cross(A,B) = (out = zeros(3); cross!(out, A, B); return out)
 
-function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;
+function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, pressure, spanposs, b, rho, magVinf;
                         spandirection=[0, 1, 0], AOA=nothing,
                         _fig=nothing, _axs=nothing,
                         ttl=nothing, xscaling=1,
@@ -29,13 +29,15 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
                         plot_exp=true, lbl_exp="Experimental",
                         plot_vsp=true, lbl_vsp="VSPAERO",
                         slicetol=0.02*b, dim_span=2,
+                        snap_to_span_row=false,
+                        show_axis_legend=true,
                         xLE_fn=y -> 0.0,   # local LE x at spanwise coord y
                         out=[])
 
     npos = length(spanposs)
 
     # Plot slices of the wing along the span
-    fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
+    fig = _fig==nothing ? plt.figure(figsize=[9.0, 3.2*ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 
@@ -70,8 +72,10 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
             if !isnothing(rowstart)
 
-                data_vsp_cp = CSV.read(vsp_file, DataFrame; skipto=rowstart+7, limit=1)
-                data_vsp_loc = CSV.read(vsp_file, DataFrame; skipto=rowstart+12, limit=3)
+                data_vsp_cp = CSV.read(vsp_file, DataFrame; skipto=rowstart+7,
+                                        limit=1, header=false)
+                data_vsp_loc = CSV.read(vsp_file, DataFrame; skipto=rowstart+12,
+                                         limit=3, header=false)
 
                 cp_vsp = [val for val in data_vsp_cp[1, 2:end]]
                 x_vsp = [val for val in data_vsp_loc[1, 2:end]]
@@ -96,20 +100,38 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         nrm_b = body.normals
         target_sign = sign(spanpos)
         target_y = spanpos*b/2
-        in_band = falses(body.ncells)
-        for p in 1:body.ncells
-            if abs(cps_b[dim_span, p] - target_y) <= slicetol
-                if target_sign == 0 || cps_b[dim_span, p] == 0 ||
-                   sign(cps_b[dim_span, p]) == target_sign
-                    in_band[p] = true
+        on_requested_side(y) = target_sign == 0 || y == 0 || sign(y) == target_sign
+
+        if snap_to_span_row
+            side_idx = [p for p in 1:body.ncells if on_requested_side(cps_b[dim_span, p])]
+            isempty(side_idx) && error("No panels found on requested side for spanwise $target_y")
+
+            yrows = unique(cps_b[dim_span, side_idx])
+            row_y = yrows[argmin(abs.(yrows .- target_y))]
+            rowtol = max(100eps(Float64), 1e-10*b)
+            idx = [p for p in side_idx if abs(cps_b[dim_span, p] - row_y) <= rowtol]
+            isempty(idx) && error("No panels found within row tolerance $rowtol of snapped spanwise $row_y")
+
+            outside_slicetol = abs(row_y - target_y) > slicetol
+            println("Cp slice snap: requested 2y/b=$(spanpos), y=$(target_y), ",
+                    "snapped y=$(row_y), snapped 2y/b=$(2*row_y/b), ",
+                    "panels=$(length(idx))",
+                    outside_slicetol ? " (outside slicetol=$(slicetol))" : "")
+        else
+            in_band = falses(body.ncells)
+            for p in 1:body.ncells
+                if abs(cps_b[dim_span, p] - target_y) <= slicetol
+                    if on_requested_side(cps_b[dim_span, p])
+                        in_band[p] = true
+                    end
                 end
             end
+            idx = findall(in_band)
+            isempty(idx) && error("No panels found within tolerance $slicetol of spanwise $target_y")
         end
-        idx = findall(in_band)
-        isempty(idx) && error("No panels found within tolerance $slicetol of spanwise $target_y")
 
         points = cps_b[:, idx]
-        Cps = body.P[idx] ./ (0.5 * rho * magVinf^2)
+        Cps = pressure[idx] ./ (0.5 * rho * magVinf^2)
 
         # Per-panel sweep-aware chord normalization.
         xs = points[1, :]
@@ -124,9 +146,12 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
         ord_u = sortperm(chordposs[upper])
         ord_l = sortperm(chordposs[lower])
 
-        plot_optargs_lower = merge(NamedTuple(plot_optargs), (label="_nolegend_",))
-        ax.plot(chordposs[upper][ord_u], Cps[upper][ord_u], stl; clip_on=false, plot_optargs...)
-        ax.plot(chordposs[lower][ord_l], Cps[lower][ord_l], stl; clip_on=false, plot_optargs_lower...)
+        upper_lines = ax.plot(chordposs[upper][ord_u], Cps[upper][ord_u], stl;
+                              clip_on=false, plot_optargs...)
+        plot_optargs_lower = merge(NamedTuple(plot_optargs),
+                                   (label="_nolegend_", color=upper_lines[1].get_color()))
+        ax.plot(chordposs[lower][ord_l], Cps[lower][ord_l], stl;
+                clip_on=false, plot_optargs_lower...)
 
         if xlims!=nothing; ax.set_xlim(xlims); end;
         if ylims!=nothing; ax.set_ylim(ylims); end;
@@ -138,10 +163,10 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
             ax.set_xlabel(L"x/c")
         end
         if axi%2==1
-            ax.set_ylabel(L"Pressure coefficient $C_p$")
+            ax.set_ylabel(L"C_p")
         end
 
-        if axi==1
+        if show_axis_legend && axi==1
             ax.legend(loc="best", fontsize=10, frameon=false, reverse=true)
         end
 
@@ -155,11 +180,11 @@ function plot_Cps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, cont
 
 end
 
-function plot_Cps(body, spanposs, b, rho, magVinf; optargs...)
+function plot_Cps(body, pressure, spanposs, b, rho, magVinf; optargs...)
     normals_b = pnl._calc_normals(body)
     controlpoints_b = pnl._calc_controlpoints(body, normals_b)
 
-    return plot_Cps(body, controlpoints_b, spanposs, b, rho, magVinf; optargs...)
+    return plot_Cps(body, controlpoints_b, pressure, spanposs, b, rho, magVinf; optargs...)
 end
 
 function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody}, controlpoints, spanposs, b, rho, magVinf;
@@ -174,7 +199,7 @@ function plot_deltaCps(body::Union{pnl.NonLiftingBody, pnl.AbstractLiftingBody},
     npos = length(spanposs)
 
     # Plot slices of the wing along the span
-    fig = _fig==nothing ? plt.figure(figsize=[7, 5*0.75]*2/3 .* [2, ceil(npos/2)]) : _fig
+    fig = _fig==nothing ? plt.figure(figsize=[9.0, 3.2*ceil(npos/2)]) : _fig
     axs = _axs==nothing ? fig.subplots(ceil(Int, npos/2), 2) : _axs
     axs = _axs==nothing ? [axs[i, j] for j in 1:size(axs, 2), i in 1:size(axs, 1)] : axs
 

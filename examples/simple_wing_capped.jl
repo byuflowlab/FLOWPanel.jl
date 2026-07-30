@@ -115,7 +115,7 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="",
 
     run_name        = "wing_capped"             # Name of this run
 
-    save_path       = run_name                  # Where to save outputs
+    save_path       = joinpath("data", run_name) # Where to save outputs
     paraview        = true                      # Whether to visualize with Paraview
 
     # ----------------- SIMULATION PARAMETERS --------------------------------------
@@ -194,13 +194,13 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="",
     # cells = hcat(cells[:, 1:2044], cells[:, 2046:end]) # remove 1 panel for Neumann BC
     
     if bodytype == pnl.NonLiftingBody{pnl.ConstantSource}
-        body = bodytype(nodes, cells; CPoffset=(-1)^flip * 1e-14)
+        body = bodytype(nodes, cells; cp_outer=iseven(flip))
     elseif bodytype <: pnl.RigidWakeBody
         shedding = pnl.calc_shedding(nodes, cells, trailingedge; tolerance=0.001*b)
         # shedding2 = pnl.calc_shedding_from_seed(nodes, cells, 396, 364; bbox=nothing, end_node=nothing, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-        body = bodytype(nodes, cells, shedding; CPoffset=1e-10, kerneloffset=1e-3, ensure_winding=true, semiinfinite_wake=true)
+        body = bodytype(nodes, cells, shedding; cp_outer=true, kerneloffset=1e-3, ensure_winding=true, semiinfinite_wake=true)
         shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*b)
-        body = bodytype(nodes, cells, shedding; CPoffset=1e-10, kerneloffset=1e-3, ensure_winding=true, semiinfinite_wake=true)
+        body = bodytype(nodes, cells, shedding; cp_outer=true, kerneloffset=1e-3, ensure_winding=true, semiinfinite_wake=true)
         
         body.Das[1] .= repeat(Vinf/magVinf, 1, size(body.Das[1], 2))
     else

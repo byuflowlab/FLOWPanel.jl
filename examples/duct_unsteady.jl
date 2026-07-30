@@ -24,7 +24,7 @@ include(joinpath(pnl.examples_path, "duct_postprocessing.jl"))
 
 run_name        = "duct-unsteady"             # Name of this run
 
-save_path       = run_name                  # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 fluiddomain     = false                     # Whether to generate fluid domain
 paraview        = true                      # Whether to visualize with Paraview
 call_paraview   = false                     # Whether to call Paraview at the end
@@ -108,7 +108,7 @@ points = hcat(xs, ys)
 # Generate body of revolution
 body = generate_revolution_liftbody(bodytype, points, NDIVS_theta;
                                         bodyoptargs = (
-                                                        CPoffset=1e-12,
+                                                        cp_outer=true,
                                                         kerneloffset=1e-8,
                                                         kernelcutoff=1e-14,
                                                         characteristiclength=(args...)->d*aspectratio,

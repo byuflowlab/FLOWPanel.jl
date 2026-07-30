@@ -1,354 +1,342 @@
 #=##############################################################################
-# Diagnostic: swept-wing PressureLaplace pressure-Poisson consistency check.
+# Diagnostic: swept-wing lift and surface-velocity reconstruction checks.
 #
-# This script intentionally leaves sweptwing.jl untouched.  It builds the same
-# swept wing, compares Bernoulli pressure against PressureLaplace, and prints
-# compact operator/RHS evidence instead of plots or VTK files.
+# This is intentionally example-local. It builds Weber/Brebner swept wings,
+# runs the current monitor-owned pressure/force path, and prints compact tables
+# for the observed CL underprediction without writing VTK, plots, or touching src/.
 =###############################################################################
 
 import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 
 import LinearAlgebra
-import SparseArrays
 using Printf
-using Statistics: mean, median, quantile
+using Statistics: median, quantile
 
 const LA = LinearAlgebra
-const _norm = LinearAlgebra.norm
-const _dot = LinearAlgebra.dot
-const _cross = LinearAlgebra.cross
+const CLexp = 0.238
 
-function tangent_velocity(body)
-    out = similar(body.velocity)
-    @inbounds for p in 1:body.ncells
-        n = view(body.normals, :, p)
-        u = view(body.velocity, :, p)
-        un = _dot(u, n)
-        out[:, p] .= u .- un .* n .+ body.velocity_kinematic[:, p]
-    end
-    return out
-end
-
-function boundary_panel_mask(cells::AbstractMatrix{Int})
-    edge_counts = Dict{Tuple{Int,Int}, Int}()
-    @inbounds for p in axes(cells, 2)
-        nnodes = size(cells, 1)
-        for a in 1:nnodes
-            n1 = cells[a, p]
-            n2 = cells[a == nnodes ? 1 : a + 1, p]
-            edge = n1 < n2 ? (n1, n2) : (n2, n1)
-            edge_counts[edge] = get(edge_counts, edge, 0) + 1
-        end
-    end
-
-    mask = falses(size(cells, 2))
-    @inbounds for p in axes(cells, 2)
-        nnodes = size(cells, 1)
-        for a in 1:nnodes
-            n1 = cells[a, p]
-            n2 = cells[a == nnodes ? 1 : a + 1, p]
-            edge = n1 < n2 ? (n1, n2) : (n2, n1)
-            if edge_counts[edge] == 1
-                mask[p] = true
-                break
-            end
-        end
-    end
-    return mask
-end
-
-function force_coefficients_from_pressure(body, pressure, Lhat, Dhat, rho, magVinf, Sref)
-    body_x = deepcopy(body)
-    fill!(body_x.F, 0.0)
-    body_x.P .= pressure
-    pnl.calcfield_F!(body_x; correct_kuttacondition=false)
-    LDS = pnl.calcfield_LDS(body_x, Lhat, Dhat)
-    qS = 0.5 * rho * magVinf^2 * Sref
-    CL = sign(_dot(LDS[:, 1], Lhat)) * _norm(LDS[:, 1]) / qS
-    CD = sign(_dot(LDS[:, 2], Dhat)) * _norm(LDS[:, 2]) / qS
-    return CL, CD
-end
-
-function pressure_range(p)
-    return minimum(p), maximum(p), median(p), quantile(p, 0.01), quantile(p, 0.99)
-end
-
-function print_pressure_range(label, p)
-    pmin, pmax, p50, p01, p99 = pressure_range(p)
-    @printf "%-26s min=%+11.4e  max=%+11.4e  median=%+11.4e  p01=%+11.4e  p99=%+11.4e\n" label pmin pmax p50 p01 p99
-end
-
-function rhs_from_acceleration(pl, body, acceleration)
-    b = zeros(body.ncells)
-    @inbounds for k in axes(pl.edges[1], 2)
-        edge_a, edge_b, i, j = pl.edges[1][:, k]
-        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
-        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
-        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
-        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
-        aedge_dot_r = 0.5 * (
-            (acceleration[1, i] + acceleration[1, j]) * r1 +
-            (acceleration[2, i] + acceleration[2, j]) * r2 +
-            (acceleration[3, i] + acceleration[3, j]) * r3)
-        flux = pl.rho * w * aedge_dot_r
-        b[i] += flux
-        b[j] -= flux
-    end
-    b[pl.reference_panel] = pl.reference_pressure
-    return b
-end
-
-function rhs_from_edge_material_derivative(pl, body, velocity_dot)
-    b = zeros(body.ncells)
-    @inbounds for k in axes(pl.edges[1], 2)
-        edge_a, edge_b, i, j = pl.edges[1][:, k]
-        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
-        r1 = body.controlpoints[1, j] - body.controlpoints[1, i]
-        r2 = body.controlpoints[2, j] - body.controlpoints[2, i]
-        r3 = body.controlpoints[3, j] - body.controlpoints[3, i]
-        udot_edge_dot_r = 0.5 * (
-            (velocity_dot[1, i] + velocity_dot[1, j]) * r1 +
-            (velocity_dot[2, i] + velocity_dot[2, j]) * r2 +
-            (velocity_dot[3, i] + velocity_dot[3, j]) * r3)
-
-        ni = view(body.normals, :, i)
-        nj = view(body.normals, :, j)
-        ui = view(body.velocity, :, i)
-        uj = view(body.velocity, :, j)
-        urel_i = ui .- _dot(ui, ni) .* ni
-        urel_j = uj .- _dot(uj, nj) .* nj
-        du = view(body.velocity, :, j) .- view(body.velocity, :, i)
-        convective_edge_dot_r = _dot(0.5 .* (urel_i .+ urel_j), du)
-
-        flux = pl.rho * w * (udot_edge_dot_r + convective_edge_dot_r)
-        b[i] += flux
-        b[j] -= flux
-    end
-    b[pl.reference_panel] = pl.reference_pressure
-    return b
-end
-
-function rhs_from_conormal_acceleration(pl, body, acceleration)
-    b = zeros(body.ncells)
-    @inbounds for k in axes(pl.edges[1], 2)
-        edge_a, edge_b, i, j = pl.edges[1][:, k]
-        w, ell, nu1, nu2, nu3, n1, n2, n3 =
-            pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)
-        ai_n = acceleration[1, i] * n1 + acceleration[2, i] * n2 + acceleration[3, i] * n3
-        aj_n = acceleration[1, j] * n1 + acceleration[2, j] * n2 + acceleration[3, j] * n3
-        ai = (acceleration[1, i] - ai_n * n1) * nu1 +
-             (acceleration[2, i] - ai_n * n2) * nu2 +
-             (acceleration[3, i] - ai_n * n3) * nu3
-        aj = (acceleration[1, j] - aj_n * n1) * nu1 +
-             (acceleration[2, j] - aj_n * n2) * nu2 +
-             (acceleration[3, j] - aj_n * n3) * nu3
-        flux = ell * 0.5 * (ai + aj)
-        b[i] += pl.rho * flux
-        b[j] -= pl.rho * flux
-        _ = w
-    end
-    b[pl.reference_panel] = pl.reference_pressure
-    return b
-end
-
-function rhs_from_bernoulli_edge_flux(pl, body, p)
-    b = zeros(body.ncells)
-    @inbounds for k in axes(pl.edges[1], 2)
-        edge_a, edge_b, i, j = pl.edges[1][:, k]
-        w = pnl._pressure_edge_conormal_weight(body, edge_a, edge_b, i, j)[1]
-        flux = w * (p[i] - p[j])
-        b[i] += flux
-        b[j] -= flux
-    end
-    b[pl.reference_panel] = p[pl.reference_panel]
-    return b
-end
-
-function convective_acceleration(body, velocity_dot, G; transpose_gradient::Bool=false)
-    acc = copy(velocity_dot)
-    u_t = tangent_velocity(body)
-    @inbounds for p in 1:body.ncells
-        u1, u2, u3 = u_t[1, p], u_t[2, p], u_t[3, p]
-        if transpose_gradient
-            acc[1, p] += G[1, 1, p] * u1 + G[2, 1, p] * u2 + G[3, 1, p] * u3
-            acc[2, p] += G[1, 2, p] * u1 + G[2, 2, p] * u2 + G[3, 2, p] * u3
-            acc[3, p] += G[1, 3, p] * u1 + G[2, 3, p] * u2 + G[3, 3, p] * u3
-        else
-            acc[1, p] += G[1, 1, p] * u1 + G[1, 2, p] * u2 + G[1, 3, p] * u3
-            acc[2, p] += G[2, 1, p] * u1 + G[2, 2, p] * u2 + G[2, 3, p] * u3
-            acc[3, p] += G[3, 1, p] * u1 + G[3, 2, p] * u2 + G[3, 3, p] * u3
-        end
-    end
-    return acc
-end
-
-function frobenius_per_panel(G)
-    return [sqrt(sum(abs2, view(G, :, :, p))) for p in axes(G, 3)]
-end
-
-function build_sweptwing()
+function sweptwing_constants()
     AOA = 4.2
     magVinf = 30.0
     Vinf = magVinf * [cosd(AOA), 0.0, sind(AOA)]
     rho = 1.225
-
     b = 98 * 0.0254
     ar = 5.0
-    tr = 1.0
-    lambda = 45
-    airfoil = "airfoil-rae101.csv"
-    airfoil_path = joinpath(pnl.examples_path, "data")
+    return (; AOA, magVinf, Vinf, rho, b, ar,
+        tr=1.0, twist_root=0.0, twist_tip=0.0, lambda=45.0, gamma=0.0,
+        airfoil="airfoil-rae101.csv", airfoil_path=joinpath(pnl.examples_path, "data"),
+        Sref=b^2 / ar, c_ref=b / ar)
+end
 
-    n_rfl = 8
-    NDIVS_rfl = [(0.25, n_rfl, 10.0, false),
-                 (0.50, n_rfl, 1.0, true),
-                 (0.25, n_rfl, 1 / 10.0, false)]
-    NDIVS_span = [(1.0, 30, 20.0, true)]
+function discretization(n_rfl::Int, n_span::Int)
+    rfl = [(0.25, n_rfl, 10.0, false),
+           (0.50, n_rfl, 1.0, true),
+           (0.25, n_rfl, 0.1, false)]
+    span = [(1.0, n_span, 1.0, true)]
+    return rfl, span
+end
 
+function build_sweptwing(; builder::Symbol=:mirrored, n_rfl::Int=4, n_span::Int=16,
+                         bodyoptargs=(;))
+    c = sweptwing_constants()
+    rfl, span = discretization(n_rfl, n_span)
     bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
-    body = simplewing(b, ar, tr, 0, 0, lambda, 0;
-        bodytype=bodytype,
-        bodyoptargs=(; CPoffset=1e-14),
-        airfoil_root=airfoil,
-        airfoil_tip=airfoil,
-        airfoil_path=airfoil_path,
-        rfl_NDIVS=NDIVS_rfl,
+    kwargs = (;
+        bodytype,
+        bodyoptargs=bodyoptargs,
+        airfoil_root=c.airfoil,
+        airfoil_tip=c.airfoil,
+        airfoil_path=c.airfoil_path,
+        rfl_NDIVS=rfl,
+        span_NDIVS=span,
         delim=",",
-        span_NDIVS=NDIVS_span,
-        b_low=-1.0,
-        b_up=1.0)
+    )
+    body = if builder == :mirrored
+        simplewing_mirrored(c.b, c.ar, c.tr, c.twist_root, c.twist_tip,
+                            c.lambda, c.gamma; kwargs...)
+    elseif builder == :simple
+        simplewing(c.b, c.ar, c.tr, c.twist_root, c.twist_tip,
+                   c.lambda, c.gamma; kwargs..., b_low=-1.0, b_up=1.0)
+    else
+        throw(ArgumentError("builder must be :mirrored or :simple; got $(builder)."))
+    end
 
-    wake_direction = reshape(Vinf ./ magVinf, :, 1)
+    wake_direction = reshape(c.Vinf ./ c.magVinf, :, 1)
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(wake_direction, 1, size(body.Das[i], 2))
     end
-
-    return body, Vinf, magVinf, rho, b^2 / ar, b / ar
+    return body, c
 end
 
-function run_laplace_case(body, Vinf, rho, Sref, c_ref, mode::Symbol; unsteady::Bool=false)
-    backend = pnl.DirectBackend()
-    body_l = deepcopy(body)
-    body_l.needs_velocity_gradient[] = true
-    body_l.velocity .= 0.0
-    body_l.velocity_gradient .= 0.0
-    pnl.calcfield_U!(body_l, Vinf; backend)
-    pnl.influence!((body_l,), (body_l,), backend;
-        scalar_potential=false,
-        velocity=false,
-        velocity_gradient=true)
+function force_coefficients_from_pressure(body, pressure, c, Lhat, Dhat; correct_kutta::Bool)
+    F = zeros(3, body.ncells)
+    pnl.calcfield_F!(F, body, pnl.calc_areas(body), body.normals, pressure;
+                     correct_kuttacondition=correct_kutta)
+    Ftot = pnl.calcfield_Ftot(body, F)
+    qS = 0.5 * c.rho * c.magVinf^2 * c.Sref
+    return LA.dot(Ftot, Lhat) / qS, LA.dot(Ftot, Dhat) / qS, F
+end
 
-    pl = pnl.PressureLaplace((body_l,), rho;
-        reference_panel=1,
-        reference_pressure=0.0,
-        verbose=false,
-        gradient_mode=mode,
-        unsteady=unsteady)
-    fm = pnl.ForceMonitor(1, 1;
-        i_frame=-1,
-        normalization=pnl.WingNormalization(rho, Sref, c_ref),
-        correct_kuttacondition=false,
+function run_pressure_case(; builder::Symbol, n_rfl::Int, n_span::Int,
+                           pressure::Symbol, gradient_mode::Symbol=:raw_hessian,
+                           acceleration_form::Symbol=:material_derivative,
+                           correct_kutta::Bool=false, bodyoptargs=(;))
+    body, c = build_sweptwing(; builder, n_rfl, n_span, bodyoptargs)
+    backend = pnl.DirectBackend()
+    Dhat = c.Vinf / LA.norm(c.Vinf)
+    Shat = [0.0, 1.0, 0.0]
+    Lhat = LA.cross(Dhat, Shat)
+    frames = pnl.ReferenceFrame(body)
+    normalization = pnl.WingNormalization(c.rho, c.Sref, c.c_ref)
+
+    pressure_monitor = pressure == :bernoulli ?
+        pnl.PressureBernoulli(c.rho; correct_kuttacondition=correct_kutta) :
+        pnl.PressureLaplace((body,), c.rho; reference_panel=1,
+            reference_pressure=0.0, gradient_mode=gradient_mode,
+            acceleration_form=acceleration_form, verbose=false)
+    force_monitor = pnl.ForceMonitor(1, 1; i_frame=-1, normalization=normalization,
+        correct_kuttacondition=correct_kutta, verbose=false)
+
+    pnl.steady!(body, frames, c.Vinf;
+        body_solvers=pnl.Backslash(body),
+        backend=backend,
+        monitors=(pressure_monitor, force_monitor),
+        path=nothing,
         verbose=false)
 
-    pl.velocity_dot[1] .= unsteady ? 0.0 : -tangent_velocity(body_l)
-    pl((body_l,), (nothing,), pnl.ReferenceFrame(body_l), Vinf, 0, 1.0)
-    fm((body_l,), (nothing,), pnl.ReferenceFrame(body_l), Vinf, 0, 1.0)
-
-    return body_l, pl, fm.force[:, 1]
+    p = pressure == :bernoulli ? pressure_monitor.pressure[1] : pressure_monitor.p[1]
+    CL_direct, CD_direct, F_direct =
+        force_coefficients_from_pressure(body, p, c, Lhat, Dhat; correct_kutta)
+    Fmon = force_monitor.force[:, 1]
+    return (; builder, n_rfl, n_span, panels=body.ncells, pressure, gradient_mode,
+        acceleration_form,
+        correct_kutta, body, constants=c, Lhat, Dhat, pressure_field=copy(p),
+        CL=LA.dot(Fmon, Lhat), CD=LA.dot(Fmon, Dhat),
+        CL_direct, CD_direct,
+        force_monitor_diff=LA.norm(force_monitor.distributed_force .- F_direct) /
+            max(LA.norm(F_direct), eps()))
 end
 
-function summarize_operator(label, body_l, pl, p_b_shift, Lhat, Dhat, rho, magVinf, Sref, boundary_mask)
-    L = pl.L[1]
-    b_rhs = pl.b[1]
-    p_direct = L \ b_rhs
-    lp_b = L * p_b_shift
-    residual = lp_b .- b_rhs
-    cg_residual = L * pl.p[1] .- b_rhs
-    direct_residual = L * p_direct .- b_rhs
+function half_lift(case)
+    y = view(case.body.controlpoints, 2, :)
+    F = zeros(3, case.body.ncells)
+    pnl.calcfield_F!(F, case.body, pnl.calc_areas(case.body), case.body.normals,
+                     case.pressure_field; correct_kuttacondition=case.correct_kutta)
+    lift = [LA.dot(view(F, :, i), case.Lhat) for i in 1:case.body.ncells]
+    return (; positive=sum(lift[y .> 0]), negative=sum(lift[y .< 0]))
+end
 
-    CL_direct, CD_direct = force_coefficients_from_pressure(body_l, p_direct, Lhat, Dhat, rho, magVinf, Sref)
-    @printf "\n#===== %s =====#\n" label
-    @printf "direct-solve force:       CL=%+11.5f  CD=%+11.5f\n" CL_direct CD_direct
-    @printf "norms:                    ||L*pB||=%11.4e  ||rhs||=%11.4e  ||L*pB-rhs||=%11.4e  rel=%9.3e\n" _norm(lp_b) _norm(b_rhs) _norm(residual) (_norm(residual) / max(_norm(b_rhs), eps()))
-    @printf "solver residuals:         CG rel=%9.3e  direct rel=%9.3e\n" (_norm(cg_residual) / max(_norm(b_rhs), eps())) (_norm(direct_residual) / max(_norm(b_rhs), eps()))
-    @printf "boundary residual rel:    boundary=%9.3e  interior=%9.3e  panels(boundary/interior)=%d/%d\n" (
-        _norm(residual[boundary_mask]) / max(_norm(b_rhs[boundary_mask]), eps())) (
-        _norm(residual[.!boundary_mask]) / max(_norm(b_rhs[.!boundary_mask]), eps())) sum(boundary_mask) sum(.!boundary_mask)
-    print_pressure_range("Laplace pressure", pl.p[1])
-    return lp_b, residual
+function mirror_pair_stats(body)
+    y = view(body.controlpoints, 2, :)
+    pos = findall(y .> 1e-9)
+    neg = findall(y .< -1e-9)
+    used = falses(length(neg))
+    distances = Float64[]
+    normal_dots = Float64[]
+
+    for i in pos
+        target = (body.controlpoints[1, i], -body.controlpoints[2, i],
+                  body.controlpoints[3, i])
+        best_k = 0
+        best_d = Inf
+        for (k, j) in enumerate(neg)
+            used[k] && continue
+            d = sqrt((body.controlpoints[1, j] - target[1])^2 +
+                     (body.controlpoints[2, j] - target[2])^2 +
+                     (body.controlpoints[3, j] - target[3])^2)
+            if d < best_d
+                best_d = d
+                best_k = k
+            end
+        end
+        best_k == 0 && continue
+        j = neg[best_k]
+        used[best_k] = true
+        push!(distances, best_d)
+        mirrored_normal = (body.normals[1, j], -body.normals[2, j], body.normals[3, j])
+        push!(normal_dots, LA.dot(view(body.normals, :, i), mirrored_normal))
+    end
+
+    return (; n=length(distances),
+        pair_median=median(distances),
+        pair_max=maximum(distances),
+        normal_dot_min=minimum(normal_dots),
+        normal_dot_p01=quantile(normal_dots, 0.01),
+        normal_dot_median=median(normal_dots))
+end
+
+function explicit_surface_velocity(solved_body, Vinf, backend;
+                                   scale::Real=0.5,
+                                   basis::Symbol=:quad,
+                                   tri_robust::Bool=false)
+    body = deepcopy(solved_body)
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    fill!(body.velocity, 0.0)
+    pnl.influence!((body,), (body,), backend; scalar_potential=false, velocity=true)
+
+    pnl.compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
+        body.cells, body.neighbor, view(body.strength, :, pnl.get_Gammai(body)),
+        view(body.shedding_full, 1:2, :);
+        scale=scale,
+        nodes=body.nodes,
+        grad_mu_options=basis === :tri ? (; basis, tri_robust) : (; basis))
+    pnl.apply_freestream!(body, Vinf)
+    return body.velocity
+end
+
+function current_surface_velocity(solved_body, Vinf, backend;
+                                  basis::Symbol=:quad,
+                                  tri_robust::Bool=false)
+    body = deepcopy(solved_body)
+    pnl.calcfield_U!(body, Vinf; backend,
+        grad_mu_options=basis === :tri ? (; basis, tri_robust) : (; basis))
+    return body.velocity
+end
+
+function pressure_force_from_velocity(body, velocity, c, Lhat, Dhat; correct_kutta::Bool=false)
+    p = zeros(body.ncells)
+    pnl.calcfield_P!(p, body, velocity, c.magVinf, c.rho, nothing;
+                     correct_kuttacondition=correct_kutta)
+    CL, CD, _ = force_coefficients_from_pressure(body, p, c, Lhat, Dhat; correct_kutta)
+    return CL, CD
+end
+
+function normal_residual(body, velocity, magVinf)
+    vals = [LA.dot(view(velocity, :, i), view(body.normals, :, i)) for i in 1:body.ncells]
+    return sqrt(sum(abs2, vals) / length(vals)) / magVinf, maximum(abs, vals) / magVinf
+end
+
+function reconstruction_metrics(case; scale::Real=0.5,
+                                basis::Symbol=:quad,
+                                tri_robust::Bool=false)
+    backend = pnl.DirectBackend()
+    U_current = current_surface_velocity(case.body, case.constants.Vinf, backend;
+        basis, tri_robust)
+    U_explicit = explicit_surface_velocity(case.body, case.constants.Vinf, backend;
+        scale, basis, tri_robust)
+    d = vec(U_current .- U_explicit)
+    mag = [LA.norm(view(U_current .- U_explicit, :, i)) for i in 1:case.body.ncells]
+    nrm = LA.norm(U_current)
+    normal_rms_current, normal_max_current =
+        normal_residual(case.body, U_current, case.constants.magVinf)
+    normal_rms_explicit, normal_max_explicit =
+        normal_residual(case.body, U_explicit, case.constants.magVinf)
+    CL_current, CD_current =
+        pressure_force_from_velocity(case.body, U_current, case.constants, case.Lhat, case.Dhat)
+    CL_explicit, CD_explicit =
+        pressure_force_from_velocity(case.body, U_explicit, case.constants, case.Lhat, case.Dhat)
+    return (; scale, basis, tri_robust,
+        rel=LA.norm(d) / max(nrm, eps()),
+        maxdiff=maximum(mag),
+        p95=quantile(mag, 0.95),
+        median=median(mag),
+        normal_rms_current, normal_max_current,
+        normal_rms_explicit, normal_max_explicit,
+        CL_current, CD_current, CL_explicit, CD_explicit)
+end
+
+function print_case_table(rows)
+    println("\n#===== Pressure/force sweep =====#")
+    @printf("%-9s %3s %4s %6s %-9s %-16s %-5s %10s %10s %10s %10s %9s\n",
+        "builder", "rfl", "span", "panels", "pressure", "grad_mode", "kutta",
+        "CL", "CD", "CLerr%", "CLdir", "Frel")
+    for r in rows
+        @printf("%-9s %3d %4d %6d %-9s %-16s %-5s %+10.5f %+10.5f %10.2f %+10.5f %9.2e\n",
+            string(r.builder), r.n_rfl, r.n_span, r.panels, string(r.pressure),
+            string(r.gradient_mode), string(r.correct_kutta), r.CL, r.CD,
+            100 * (r.CL - CLexp) / CLexp, r.CL_direct, r.force_monitor_diff)
+    end
+end
+
+function print_reconstruction_table(rows)
+    println("\n#===== Surface velocity reconstruction sweep =====#")
+    @printf("%5s %-5s %-6s %11s %11s %11s %11s %11s %11s %10s %10s\n",
+        "scale", "basis", "tri_rb", "relU", "max|dU|", "p95|dU|",
+        "nRMS cur", "nRMS exp", "CL cur", "CL exp", "dCL")
+    for r in rows
+        @printf("%5.2f %-5s %-6s %11.3e %11.3e %11.3e %11.3e %11.3e %+11.5f %+10.5f %+10.5f\n",
+            r.scale, string(r.basis), string(r.tri_robust), r.rel,
+            r.maxdiff, r.p95, r.normal_rms_current, r.normal_rms_explicit,
+            r.CL_current, r.CL_explicit, r.CL_explicit - r.CL_current)
+    end
+end
+
+function print_winding_check()
+    println("\n#===== Mirrored winding / matched-topology check =====#")
+    rows = (
+        ("simple nspan=32", run_pressure_case(; builder=:simple, n_rfl=4, n_span=32,
+            pressure=:bernoulli, correct_kutta=false)),
+        ("mirrored nspan=16", run_pressure_case(; builder=:mirrored, n_rfl=4, n_span=16,
+            pressure=:bernoulli, correct_kutta=false)),
+        ("mirrored ensure", run_pressure_case(; builder=:mirrored, n_rfl=4, n_span=16,
+            pressure=:bernoulli, correct_kutta=false,
+            bodyoptargs=(; ensure_winding=true))),
+    )
+    @printf("%-20s %6s %6s %10s %10s %10s %10s\n",
+        "case", "panels", "shed", "CL", "CLerr%", "L y>0", "L y<0")
+    for (label, row) in rows
+        halves = half_lift(row)
+        @printf("%-20s %6d %6d %+10.5f %10.2f %+10.3f %+10.3f\n",
+            label, row.panels, size(row.body.shedding[1], 2), row.CL,
+            100 * (row.CL - CLexp) / CLexp, halves.positive, halves.negative)
+    end
+    println("`ensure_winding=true` leaves the mirrored result unchanged; local panel winding is not the CL deficit source.")
+    println("The matched simplewing case is not left/right symmetric, so its CL agreement is not a valid mirrored-wing reference.")
+
+    println("\n#===== Simplewing mesh mirror-pair check =====#")
+    @printf("%-20s %8s %12s %12s %12s %12s\n",
+        "case", "pairs", "pair med", "pair max", "n dot min", "n dot p01")
+    for (label, row) in rows[1:2]
+        stats = mirror_pair_stats(row.body)
+        @printf("%-20s %8d %12.4e %12.4e %12.4f %12.4f\n",
+            label, stats.n, stats.pair_median, stats.pair_max,
+            stats.normal_dot_min, stats.normal_dot_p01)
+    end
+    println("The full-span simplewing surface is symmetric as a loft, but its triangular panels are not mirror-paired.")
+    println("That panel-level asymmetry is large enough to produce different pressure/circulation on the two halves.")
 end
 
 function main()
-    println("Building swept-wing pressure-Poisson diagnostic...")
-    body, Vinf, magVinf, rho, Sref, c_ref = build_sweptwing()
-    backend = pnl.DirectBackend()
-    pnl.apply_freestream!(body, Vinf)
-    pnl.solve!(body, pnl.Backslash(body); backend)
-    pnl.calcfield_U!(body, Vinf; backend)
-    pnl.calcfield_P!(body, magVinf, rho; correct_kuttacondition=false)
-    pnl.calcfield_F!(body; correct_kuttacondition=false)
+    full = lowercase(get(ENV, "FLOWPANEL_SWEPTWING_FULL_DIAG", "false")) in ("1", "true", "yes")
+    resolutions = full ? [(4, 16), (6, 24), (8, 40)] : [(3, 10), (4, 16)]
+    builders = (:mirrored, :simple)
+    kutta_options = (false, true)
+    pressure_variants = ((:bernoulli, :raw_hessian),
+                         (:laplace, :raw_hessian),
+                         (:laplace, :surface_velocity))
 
-    Dhat = Vinf / _norm(Vinf)
-    Shat = [0.0, 1.0, 0.0]
-    Lhat = _cross(Dhat, Shat)
-    CL_b, CD_b = force_coefficients_from_pressure(body, body.P, Lhat, Dhat, rho, magVinf, Sref)
-    p_b = copy(body.P)
-    p_b_shift = p_b .- p_b[1]
-    boundary_mask = boundary_panel_mask(body.cells)
+    cases = []
+    for builder in builders, (n_rfl, n_span) in resolutions,
+        correct_kutta in kutta_options, (pressure, gradient_mode) in pressure_variants
+        push!(cases, run_pressure_case(; builder, n_rfl, n_span,
+            pressure, gradient_mode, correct_kutta))
+    end
+    print_case_table(cases)
 
-    println("\n#===== setup =====#")
-    @printf "panels=%d  boundary panels=%d  interior panels=%d\n" body.ncells sum(boundary_mask) sum(.!boundary_mask)
-    @printf "Vinf=(%+.6f,%+.6f,%+.6f)  rho=%.4f  Sref=%.6f  cref=%.6f\n" Vinf[1] Vinf[2] Vinf[3] rho Sref c_ref
-    @printf "PressureLaplace primary runs use unsteady=false; velocity_dot still updates after each call\n"
+    baseline = first(r for r in cases if r.builder == :mirrored &&
+        r.n_rfl == resolutions[end][1] && r.n_span == resolutions[end][2] &&
+        r.pressure == :bernoulli && !r.correct_kutta)
 
-    println("\n#===== Bernoulli baseline, no Kutta pressure averaging =====#")
-    @printf "Bernoulli force:          CL=%+11.5f  CD=%+11.5f\n" CL_b CD_b
-    print_pressure_range("Bernoulli pressure", p_b)
+    recon_rows = []
+    for basis in (:quad, :tri), tri_robust in (false, true),
+        scale in (0.0, 0.25, 0.5, 0.75, 1.0)
+        basis === :quad && tri_robust && continue
+        push!(recon_rows, reconstruction_metrics(baseline;
+            scale, basis, tri_robust))
+    end
+    print_reconstruction_table(recon_rows)
 
-    body_sv, pl_sv, F_sv = run_laplace_case(body, Vinf, rho, Sref, c_ref, :surface_velocity; unsteady=false)
-    body_raw, pl_raw, F_raw = run_laplace_case(body, Vinf, rho, Sref, c_ref, :raw_hessian)
-    body_sv_u, pl_sv_u, F_sv_u = run_laplace_case(body, Vinf, rho, Sref, c_ref, :surface_velocity; unsteady=true)
+    print_winding_check()
 
-    @printf "\n#===== monitor forces =====#\n"
-    @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "surface_velocity" _dot(F_sv, Lhat) _dot(F_sv, Dhat)
-    @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "raw_hessian" _dot(F_raw, Lhat) _dot(F_raw, Dhat)
-    @printf "%-24s CL=%+11.5f  CD=%+11.5f\n" "surface_velocity u" _dot(F_sv_u, Lhat) _dot(F_sv_u, Dhat)
-
-    lp_b_sv, residual_sv = summarize_operator("surface_velocity RHS", body_sv, pl_sv, p_b_shift, Lhat, Dhat, rho, magVinf, Sref, boundary_mask)
-    summarize_operator("raw_hessian RHS", body_raw, pl_raw, p_b_shift, Lhat, Dhat, rho, magVinf, Sref, boundary_mask)
-
-    f_raw = frobenius_per_panel(body_raw.velocity_gradient)
-    f_sv = frobenius_per_panel(pl_sv.surface_velocity_gradient[1])
-    println("\n#===== gradient scale check =====#")
-    @printf "%-22s median=%11.4e  p90=%11.4e  p99=%11.4e  max=%11.4e\n" "raw_hessian" median(f_raw) quantile(f_raw, 0.90) quantile(f_raw, 0.99) maximum(f_raw)
-    @printf "%-22s median=%11.4e  p90=%11.4e  p99=%11.4e  max=%11.4e\n" "surface_velocity" median(f_sv) quantile(f_sv, 0.90) quantile(f_sv, 0.99) maximum(f_sv)
-    @printf "%-22s median=%11.4e\n" "surface/raw ratio" (median(f_sv) / max(median(f_raw), eps()))
-
-    b_edge = rhs_from_edge_material_derivative(pl_sv, body_sv, zeros(size(body_sv.velocity)))
-    b_gu = rhs_from_acceleration(pl_sv, body_sv, convective_acceleration(body_sv, zeros(size(body_sv.velocity)), pl_sv.surface_velocity_gradient[1]; transpose_gradient=false))
-    b_gtu = rhs_from_acceleration(pl_sv, body_sv, convective_acceleration(body_sv, zeros(size(body_sv.velocity)), pl_sv.surface_velocity_gradient[1]; transpose_gradient=true))
-    b_conormal = rhs_from_conormal_acceleration(pl_sv, body_sv, pl_sv.acceleration[1])
-    println("\n#===== acceleration RHS residuals, surface_velocity gradient only =====#")
-    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "edge material" (_norm(lp_b_sv .- b_edge) / max(_norm(b_edge), eps()))
-    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "G*u" (_norm(lp_b_sv .- b_gu) / max(_norm(b_gu), eps()))
-    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "transpose(G)*u" (_norm(lp_b_sv .- b_gtu) / max(_norm(b_gtu), eps()))
-    @printf "%-24s rel ||L*pB-rhs||/||rhs|| = %9.3e\n" "old conormal flux" (_norm(lp_b_sv .- b_conormal) / max(_norm(b_conormal), eps()))
-    @printf "%-24s rel ||current rhs - edge|| = %9.3e\n" "current vs edge" (_norm(pl_sv.b[1] .- b_edge) / max(_norm(pl_sv.b[1]), eps()))
-
-    b_mimetic = rhs_from_bernoulli_edge_flux(pl_sv, body_sv, p_b_shift)
-    p_mimetic = pl_sv.L[1] \ b_mimetic
-    CL_mim, CD_mim = force_coefficients_from_pressure(body_sv, p_mimetic, Lhat, Dhat, rho, magVinf, Sref)
-    mimetic_residual = pl_sv.L[1] * p_b_shift .- b_mimetic
-    println("\n#===== mimetic Bernoulli edge-flux RHS =====#")
-    @printf "operator check:           ||L*pB-b_mimetic||/||b_mimetic|| = %9.3e\n" (_norm(mimetic_residual) / max(_norm(b_mimetic), eps()))
-    @printf "direct solve vs pB:       ||p_mimetic-pB||/||pB|| = %9.3e\n" (_norm(p_mimetic .- p_b_shift) / max(_norm(p_b_shift), eps()))
-    @printf "mimetic force:            CL=%+11.5f  CD=%+11.5f\n" CL_mim CD_mim
-
-    println("\n#===== conclusion cue =====#")
-    @printf "The current PressureLaplace RHS uses material acceleration with the same two-point edge weights as L.\n"
-    @printf "The old conormal-flux and kinetic-pressure RHS values are diagnostic references only.\n"
-    @printf "surface_velocity residual mean abs=%11.4e, median abs=%11.4e\n" mean(abs.(residual_sv)) median(abs.(residual_sv))
+    c = baseline.constants
+    println("\n#===== Normalization check =====#")
+    @printf("Sref=b^2/AR=%.8f  c_ref=b/AR=%.8f  q=0.5*rho*V^2=%.8f\n",
+        c.Sref, c.c_ref, 0.5 * c.rho * c.magVinf^2)
+    @printf "rho cancels in CL when pressure and force normalization both use rho consistently.\n"
 end
 
-main()
+# Allow other scripts to include this file for its helpers without triggering
+# the full diagnostic sweep.
+get(ENV, "SWEPTWING_POISSON_MAIN", "true") == "true" && main()

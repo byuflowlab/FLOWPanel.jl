@@ -24,7 +24,7 @@ import Rotations: RotX, RotY, RotZ
 
 run_name        = "blendedwing"             # Name of this run
 
-save_path       = run_name                  # Where to save outputs
+save_path       = joinpath("data", run_name) # Where to save outputs
 paraview        = true                      # Whether to visualize with Paraview
 read_path       = joinpath(pnl.examples_path, "data") # Where to read Gmsh files from
 
@@ -101,10 +101,10 @@ spantips = extrema(X -> pnl.dot(X, spandir), eachcol(trailingedge))
 span = spantips[2] - spantips[1]
 
 # Generate paneled body
-body = bodytype(grid; CPoffset=(-1)^flip * 1e-14)
+body = bodytype(grid; cp_outer=iseven(flip))
 shedding = pnl.calc_shedding(body.nodes, body.cells, trailingedge; tolerance=0.001*span)
 body = bodytype(body.nodes, body.cells, shedding;
-                CPoffset=(-1)^flip * 1e-14,
+                cp_outer=iseven(flip),
                 ensure_winding=false)
 
 println("Number of panels:\t$(body.ncells)")

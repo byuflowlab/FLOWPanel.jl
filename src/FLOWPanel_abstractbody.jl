@@ -31,11 +31,11 @@ Implementations of AbstractBody are expected to have the following fields
 * `velocity::Matrix{TF}`              : 3xncells apparent fluid velocity at control points (body frame)
 * `velocity_kinematic::Matrix{TF}`    : 3xncells rigid-body kinematic velocity at control points (inertial frame)
 * `potential::Vector{TF}`             : Total scalar potential at control points
-* `CPoffset::Real`                    : Control point offset in normal direction
 * `characteristiclength::Function`    : Function for computing the characteristic
-                                        length of each panel used to offset each
-                                        control point
-* `kerneloffset::Real`                : Kernel offset to avoid singularities
+                                        length of each panel
+* `kerneloffset::Real`                : Active kernel offset to avoid singularities
+* `kerneloffset_panel::Real`          : Kernel offset used for panel solves and panel-panel interactions
+* `kerneloffset_targets::Real`        : Kernel offset used for panel influence on external targets
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
 * `watertight::Bool`                  : Whether the body is watertight or not
 * `Cps::Vector{TF}`                   : Pressure coefficient at each cell
@@ -95,11 +95,10 @@ abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
     body.velocity_gradient .= 0.0
+    body.induced_vorticity .= 0.0
     body.velocity_kinematic .= 0.0
     body.angular_velocity .= 0.0
     body.potential .= 0.0
-    body.P .= 0.0
-    body.F .= 0.0
     extra_reset!(body)
     return nothing
 end
@@ -376,8 +375,33 @@ strength_names(::AbstractBody{VortexRing, <:Any}) = ("gamma",)
 strength_names(::AbstractBody{Union{ConstantSource, ConstantDoublet}, <:Any}) = ("sigma", "mu")
 strength_names(::AbstractBody{Union{ConstantSource, VortexRing}, <:Any}) = ("sigma", "gamma")
 
+mutable struct VTKFieldNameAllocator
+    used::Set{String}
+end
+
+_vtk_field_name_allocator(names) = VTKFieldNameAllocator(Set{String}(String.(names)))
+
+function _vtk_monitor_field_name!(allocator::VTKFieldNameAllocator,
+                                  base_name::AbstractString,
+                                  monitor,
+                                  i_monitor::Integer)
+    name = String(base_name)
+    if !(name in allocator.used)
+        push!(allocator.used, name)
+        return name
+    end
+
+    suffixed = "$(name) ($(nameof(typeof(monitor))) #$(i_monitor))"
+    push!(allocator.used, suffixed)
+    return suffixed
+end
+
+function _vtk_body_field_name_allocator(body::AbstractBody)
+    return _vtk_field_name_allocator(("normals", "potential", "velocity", strength_names(body)...))
+end
+
 """
-    write_vtk(name, body::AbstractBody, idx, t; overwrite=false)
+    write_vtk(name, body::AbstractBody, idx, t; monitors=(), i_system=1, overwrite=false)
 
 Write the body mesh and its solution fields to VTK files at timestep `idx` with
 simulation time `t`, following the same pattern as `write_vtk` for `PanelWake`.
@@ -387,9 +411,10 @@ Generates:
 - `<name>_<idx>.vtm`      — VTK multiblock
 - `<name>_<idx>_body.vtu` — unstructured triangular surface mesh with data
 
-All fields stored on the body (strength, `Uinf`, `U`, `phi`, `P`, `Cps`,
-`Gamma`, `F`) are written when non-empty.  Body-type-specific fields are added
-via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
+Common body state (normals, potential, velocity, and strengths) is always
+written. Monitor-owned fields such as pressure and distributed force are added
+by monitors passed through the `monitors` keyword. Body-type-specific fields are
+added via the internal `_write_vtk_body_fields!` hook so that subtypes (e.g.
 `RigidWakeBody`) can contribute additional data without duplicating the common
 code.
 
@@ -398,10 +423,59 @@ code.
 - `body`      : Body instance to write
 - `idx`       : Integer timestep index (embedded in filenames)
 - `t`         : Simulation time (used as the PVD collection key)
+- `monitors`  : Monitor tuple whose configured VTK fields should be written
+- `i_system`  : One-based body index used to select monitor-owned per-body data
 - `overwrite` : Start a fresh PVD file when `true`; append when `false` (default)
 """
+# In-process PVD cache: avoid re-parsing .pvd XML on every write_vtk call.
+# Keyed by absolute PVD path; value is the time-ordered list of dataset entries.
+# Seeded from disk on first touch of an existing .pvd.
+const _PVD_CACHE = Dict{String, Vector{Tuple{Float64, String}}}()
+
+# Mirrors the format `WriteVTK.paraview_collection` emits — extracts the
+# `timestep` and `file` attributes from each `<DataSet>` line.
+function _read_pvd_entries(pvd_path::AbstractString)
+    entries = Tuple{Float64, String}[]
+    for line in eachline(pvd_path)
+        m_t = match(r"timestep=\"([^\"]+)\"", line)
+        m_f = match(r"file=\"([^\"]+)\"", line)
+        if !isnothing(m_t) && !isnothing(m_f)
+            push!(entries, (parse(Float64, m_t.captures[1]), String(m_f.captures[1])))
+        end
+    end
+    return entries
+end
+
+function _write_pvd_from_cache(pvd_path::AbstractString, entries)
+    open(pvd_path, "w") do io
+        println(io, "<?xml version=\"1.0\" encoding=\"utf-8\"?>")
+        println(io, "<VTKFile type=\"Collection\" version=\"1.0\" byte_order=\"LittleEndian\">")
+        println(io, "  <Collection>")
+        for (t, f) in entries
+            println(io, "    <DataSet timestep=\"$(t)\" part=\"0\" file=\"$(f)\"/>")
+        end
+        println(io, "  </Collection>")
+        println(io, "</VTKFile>")
+    end
+end
+
+function _pvd_append!(pvd_path::AbstractString, t::Real, file_relpath::AbstractString;
+                     overwrite::Bool=false)
+    key = abspath(pvd_path)
+    if overwrite
+        _PVD_CACHE[key] = Tuple{Float64, String}[]
+    elseif !haskey(_PVD_CACHE, key)
+        _PVD_CACHE[key] = isfile(pvd_path) ? _read_pvd_entries(pvd_path) :
+                                              Tuple{Float64, String}[]
+    end
+    push!(_PVD_CACHE[key], (Float64(t), String(file_relpath)))
+    _write_pvd_from_cache(pvd_path, _PVD_CACHE[key])
+    return pvd_path
+end
+
 function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
-                   overwrite::Bool=false)
+                   monitors=(), i_system::Int=1, overwrite::Bool=false,
+                   compress::Bool=true)
 
     # Route block files to a subdirectory named after the PVD
     _parent, _base = splitdir(name)
@@ -409,48 +483,46 @@ function write_vtk(name::String, body::AbstractBody, idx::Int=0, t::Real=0.0;
     mkpath(subdir)
     block_name = joinpath(subdir, _base)
 
-    files = WriteVTK.paraview_collection(name; append=!overwrite) do pvd
-        vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
+    vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
 
-        WriteVTK.vtk_grid(vtm, block_name * ".$(idx).vtu", body.nodes, body.vtk_cells) do vtk
+    WriteVTK.vtk_grid(vtm, block_name * ".$(idx).vtu", body.nodes, body.vtk_cells; compress) do vtk
 
-            # --- Common solution fields ---
+        # --- Common solution fields ---
 
-            # normals
-            vtk["normals", VTKCellData()] = body.normals
+        # normals
+        vtk["normals", VTKCellData()] = body.normals
 
-            # Velocity potential  (ncells,)
-            vtk["potential", VTKCellData()] = body.potential
+        # Velocity potential  (ncells,)
+        vtk["potential", VTKCellData()] = body.potential
 
-            # Surface velocity  (3 × ncells)
-            vtk["velocity", VTKCellData()] = body.velocity
+        # Surface velocity  (3 × ncells)
+        vtk["velocity", VTKCellData()] = body.velocity
 
-            # Gauge pressure (ncells,)
-            vtk["gauge pressure", VTKCellData()] = body.P
-
-            # Distributed forces  (3 × ncells)
-            vtk["F", VTKCellData()] = body.F
-
-            # add strength fields
-            for (i,name) in enumerate(strength_names(body))
-                vtk[name, VTKCellData()] = view(body.strength, :, i)
-            end
-
-            # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
-            _write_vtk_body_fields!(vtk, body)
+        # add strength fields
+        for (i,name) in enumerate(strength_names(body))
+            vtk[name, VTKCellData()] = view(body.strength, :, i)
         end
-        
-        _write_vtk_other_fields!(vtm, block_name, body, idx)
 
-        pvd[t] = vtm
+        field_names = _vtk_body_field_name_allocator(body)
+        for (i_monitor, monitor) in enumerate(monitors)
+            write_vtk_fields!(vtk, monitor, body, i_system, idx, field_names, i_monitor)
+        end
+
+        # Body-type-specific fields (overload _write_vtk_body_fields! for subtypes)
+        _write_vtk_body_fields!(vtk, body)
     end
+
+    _write_vtk_other_fields!(vtm, block_name, body, idx; compress)
+
+    files = WriteVTK.vtk_save(vtm)
+    _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
 
     return join(files, ", ")
 end
 
 # Default hook — no extra fields for generic AbstractBody
 _write_vtk_body_fields!(vtk, ::AbstractBody) = nothing
-_write_vtk_other_fields!(vtm, name, body::AbstractBody, idx) = nothing
+_write_vtk_other_fields!(vtm, name, body::AbstractBody, idx; compress::Bool=true) = nothing
 
 function _vtk_stem(filename::AbstractString; path=nothing, num=nothing)
     stem = isnothing(num) ? filename : filename * ".$num"
@@ -464,6 +536,7 @@ function _write_vtk_points_or_lines(filename::AbstractString, points;
                                     path=nothing,
                                     num=nothing,
                                     override_cell_type=nothing,
+                                    compress::Bool=true,
                                     optargs...)
     pts = points isa AbstractMatrix ? points : reduce(hcat, collect(points))
     vtk_cells = if isnothing(cells)
@@ -476,7 +549,7 @@ function _write_vtk_points_or_lines(filename::AbstractString, points;
     end
 
     stem = _vtk_stem(filename; path, num)
-    saved = WriteVTK.vtk_grid(stem * ".vtu", pts, vtk_cells) do vtk
+    saved = WriteVTK.vtk_grid(stem * ".vtu", pts, vtk_cells; compress) do vtk
         for data in point_data
             vtk[data["field_name"], WriteVTK.VTKPointData()] = data["field_data"]
         end
@@ -697,23 +770,16 @@ function characteristiclength_sqrtarea(nodes, panel)
 end
 
 function calc_controlpoints!(nodes::AbstractMatrix, cells::AbstractMatrix,
-                                controlpoints, normals; off::Real=0.005,
+                                controlpoints, normals;
                                 characteristiclength::Function=characteristiclength_sqrtarea)
 
     for pi in axes(cells, 2)
         i1, i2, i3 = cells[1, pi], cells[2, pi], cells[3, pi]
 
-        # Centroid of triangle (average of vertices; equals centroid for triangles)
+        # Centroid of triangle — control points sit exactly on the panel surface
         controlpoints[1, pi] = (nodes[1, i1] + nodes[1, i2] + nodes[1, i3]) * 0.3333333333333333
         controlpoints[2, pi] = (nodes[2, i1] + nodes[2, i2] + nodes[2, i3]) * 0.3333333333333333
         controlpoints[3, pi] = (nodes[3, i1] + nodes[3, i2] + nodes[3, i3]) * 0.3333333333333333
-
-        l = characteristiclength(nodes, view(cells, :, pi))
-
-        # Offset the controlpoint in the normal direction
-        controlpoints[1, pi] += off * l * normals[1, pi]
-        controlpoints[2, pi] += off * l * normals[2, pi]
-        controlpoints[3, pi] += off * l * normals[3, pi]
     end
 
     return controlpoints
@@ -723,8 +789,8 @@ end
     calc_controlpoints!(body::AbstractBody, controlpoints::Matrix, normals::Matrix)
 
 Calculates the control point of every cell in `body` and stores them in the 3xN
-matrix `controlpoints`. It uses `body.CPoffset`, `body.charateristiclength`, and
-`normals` to offset the control points off the surface in the normal direction.
+matrix `controlpoints`. Control points sit exactly on the panel surface
+(centroid); `normals` is unused and retained for backwards compatibility.
 
 **Output:** `controlpoints[:, i]` is the control point of the i-th cell (linearly
 indexed).
@@ -732,24 +798,22 @@ indexed).
 !!! tip
     Use `normals = calc_normals(body)` to calculate the normals.
 """
-function calc_controlpoints!(self::AbstractBody, normals=self.normals; 
-        off=self.CPoffset, characteristiclength=self.characteristiclength)
+function calc_controlpoints!(self::AbstractBody, normals=self.normals;
+        characteristiclength=self.characteristiclength)
     return calc_controlpoints!(self.nodes, self.cells, self.controlpoints, normals;
-                                off, characteristiclength)
+                                characteristiclength)
 end
 
 function calc_controlpoints(nodes::AbstractMatrix, cells::AbstractMatrix, normals;
-        off::Real=0.005,
         characteristiclength::Function=characteristiclength_sqrtarea)
     controlpoints = zeros(promote_type(eltype(nodes), eltype(normals)), 3, size(cells, 2))
-    calc_controlpoints!(nodes, cells, controlpoints, normals; off, characteristiclength)
+    calc_controlpoints!(nodes, cells, controlpoints, normals; characteristiclength)
     return controlpoints
 end
 
 function calc_controlpoints(self::AbstractBody, normals=self.normals;
-        off=self.CPoffset,
         characteristiclength=self.characteristiclength)
-    return calc_controlpoints(self.nodes, self.cells, normals; off, characteristiclength)
+    return calc_controlpoints(self.nodes, self.cells, normals; characteristiclength)
 end
 
 const _calc_controlpoints = calc_controlpoints
@@ -812,12 +876,8 @@ function calc_normals!(nodes::AbstractMatrix, cells::AbstractMatrix, normals)
     end
 end
 
-function calc_normals!(self::AbstractBody, normals=self.normals; flipbyCPoffset=false)
+function calc_normals!(self::AbstractBody, normals=self.normals)
     calc_normals!(self.nodes, self.cells, normals)
-    if flipbyCPoffset
-        normals .*= sign(self.CPoffset) != 0 ? sign(self.CPoffset) : 1
-    end
-
     return normals
 end
 
@@ -1046,7 +1106,7 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     # normal_x = dy1*dz2 - dz1*dy2
     # normal_y = dz1*dx2 - dx1*dz2
     # normal_z = dx1*dy2 - dy1*dx2
-    # norm_inv = system.CPoffset / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
+    # norm_inv = 1 / sqrt(normal_x * normal_x + normal_y * normal_y + normal_z * normal_z)
     # normal_x *= norm_inv
     # normal_y *= norm_inv
     # normal_z *= norm_inv
@@ -1119,33 +1179,55 @@ FastMultipole.strength_dims(system::AbstractBody) = size(system.strength, 2)
 
 FastMultipole.get_n_bodies(system::AbstractBody) = system.ncells
 
-function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+FastMultipole.metadata_per_body(system::AbstractBody) = 2
+FastMultipole.previous_potential_metadata_index(system::AbstractBody) = 1
+FastMultipole.previous_gradient_metadata_index(system::AbstractBody) = 2
+
+function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::AbstractBody, i_body)
+    vx = system.velocity[1, i_body]
+    vy = system.velocity[2, i_body]
+    vz = system.velocity[3, i_body]
+    buffer[FastMultipole.metadata_index(switch, 1), i_buffer] = system.potential[i_body]
+    buffer[FastMultipole.metadata_index(switch, 2), i_buffer] = sqrt(vx*vx + vy*vy + vz*vz)
+    return nothing
+end
+
+function FastMultipole.buffer_to_target_system!(target_system::AbstractBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     throw("an <:AbstractBody cannot be used as a target system in FastMultipole calculations")
 end
 
-function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_system::AbstractBody, i_target) where {PS,VS,GS}
+function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_system::AbstractBody, i_target) where {PS,VS,GS,NO,NM}
     if PS
-        target_buffer[4, i_buffer] = target_system.potential[i_target]
+        target_buffer[FastMultipole.scalar_potential_index(switch), i_buffer] = target_system.potential[i_target]
     end
 
     if VS
         vx, vy, vz = target_system.velocity[1, i_target], target_system.velocity[2, i_target], target_system.velocity[3, i_target]
-        target_buffer[5, i_buffer] = vx
-        target_buffer[6, i_buffer] = vy
-        target_buffer[7, i_buffer] = vz
+        r = FastMultipole.gradient_range(switch)
+        target_buffer[r[1], i_buffer] = vx
+        target_buffer[r[2], i_buffer] = vy
+        target_buffer[r[3], i_buffer] = vz
     end
 
     # Seed the per-pass Hessian accumulator with the body's current
     # velocity_gradient so successive influence! calls (wake-on-body, then
     # body-on-body) accumulate into the same field rather than overwriting.
     if GS
+        r = FastMultipole.hessian_range(switch)
         @inbounds for j in 1:3, i in 1:3
-            target_buffer[7 + (j-1)*3 + i, i_buffer] = target_system.velocity_gradient[i, j, i_target]
+            target_buffer[r[(j-1)*3 + i], i_buffer] = target_system.velocity_gradient[i, j, i_target]
+        end
+    end
+
+    if NO == 3
+        r = FastMultipole.extra_output_range(switch)
+        for j in 1:3
+            target_buffer[r[j], i_buffer] = target_system.induced_vorticity[j, i_target]
         end
     end
 end
 
-function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS}
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS,NO,NM}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
@@ -1168,18 +1250,13 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
 
         # store results
         if PS
-            target_system[4, i_target] += phi_out
+            FastMultipole.set_scalar_potential!(target_system, derivatives_switch, i_target, phi_out)
         end
         if GS
-            target_system[5, i_target] += U_out[1]
-            target_system[6, i_target] += U_out[2]
-            target_system[7, i_target] += U_out[3]
+            FastMultipole.set_gradient!(target_system, derivatives_switch, i_target, U_out)
         end
         if HS
-            # column-major SMatrix → buffer rows 8..16 per FastMultipole.get_hessian
-            @inbounds for j in 1:3, i in 1:3
-                target_system[7 + (j-1)*3 + i, i_target] += H_out[i, j]
-            end
+            FastMultipole.set_hessian!(target_system, derivatives_switch, i_target, H_out)
         end
     end
 end
@@ -1188,9 +1265,9 @@ function FastMultipole.buffer_to_system_strength!(system::AbstractBody{<:Any,1,<
     system.strength[i_body, 1] = source_buffer[5, i_buffer]
 end
 
-function FastMultipole.influence!(influence, target_buffer, source_system::AbstractBody, source_buffer)
+function FastMultipole.influence!(influence, target_buffer, derivatives_switch::FastMultipole.DerivativesSwitch, source_system::AbstractBody, source_buffer)
     for i in 1:size(target_buffer, 2)
-        v = FastMultipole.get_gradient(target_buffer, i)
+        v = FastMultipole.get_gradient(target_buffer, derivatives_switch, i)
         n = FastMultipole.get_normal(source_buffer, source_system, i)
         influence[i] = dot(v, n)
     end

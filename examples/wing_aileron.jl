@@ -35,14 +35,12 @@ function generate_body(
 
     grid = pnl.gt.GridTriangleSurface(msh)
 
-    CPoffset = 1e-6
     empty_shedding = zeros(Int, 6, 0)
 
     # --- Step 1: build body WITHOUT relying on TE shedding ---
     body = bodytype(
         grid,
         [empty_shedding];
-        CPoffset,
         kerneloffset,
         flip_normals = false
     )
@@ -65,7 +63,6 @@ function generate_body(
         body.nodes,
         body.cells,
         [shedding];
-        CPoffset,
         kerneloffset,
         flip_normals = false,
         ensure_winding = false
@@ -108,7 +105,7 @@ end
 # Extract nodes and cells from Meshes object
 nodes, cells = pnl.meshes2nodes_cells(msh)
 # 6enerate the paneled body
-body = bodytype(nodes, cells; CPoffset = (-1)^flip * 1e-14)
+body = bodytype(nodes, cells)
 
 run_names       = ["wing.msh", "surface.msh"]
 file_path       = "examples"
@@ -172,7 +169,7 @@ AR_body1 = b / c_body1                             # (m) span length
 AR_body2 = b / c_body2                             # (m) span length
 
 chords = [c_body1, c_body2]
-ARs = [AR_body1, AR_body2] 
+ARs = [AR_body1, AR_body2]
 Sref = b * (c_body1 + c_body2)
 scaling = m
 trs = [

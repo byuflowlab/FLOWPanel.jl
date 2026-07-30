@@ -128,9 +128,11 @@ target body's boundary-condition flag (the 4th type parameter of
 `(target_system.ncells, source_system.ncells)`.
 
 If `update_geometry=true`, the target body's normals and control points are
-recomputed before assembling `G`, with the sign of `target_system.CPoffset`
-forced to match the formulation (negative/interior for Dirichlet, positive/
-exterior for Neumann). The original `CPoffset` is restored on return.
+recomputed before assembling `G`. Control points sit exactly on the panel
+surface (no offset); no separate diagonal jump term is added because `induced`
+returns the side-aware one-sided self limit (e.g. the interior `+μ/2` doublet
+limit for Dirichlet bodies), with the side selected by the source body's DBC
+type parameter.
 """
 function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
              source_system::AbstractBody{<:Any,NK,TF};
@@ -145,11 +147,8 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
     end
 
     if update_geometry
-        CPoffset_old = target_system.CPoffset
-        target_system.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
         calc_normals!(target_system)
         calc_controlpoints!(target_system)
-        target_system.CPoffset = CPoffset_old
     end
 
     kernel, strength_index = _G_kernel_and_strength_index(source_system)
@@ -162,9 +161,17 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
     source_system.strength .= zero(eltype(source_system.strength))
     source_system.strength[:, strength_index] .= 1.0
 
+    # operator mode: the affine attached-wake correction (TraceCorrected
+    # formulation) is a right-hand-side constant and must not enter the
+    # assembled linear operator
+    correction_was_active = _operator_mode_begin!(source_system)
+
     CPs = target_system.controlpoints
     normals = target_system.normals
 
+    # `induced` returns the §3 side-aware self limit at self pairs
+    # (dispatched on the source body's DBC type parameter), so no explicit
+    # ±0.5 jump add is needed here.
     Threads.@threads for i_source in 1:N
         for i_target in 1:M
             tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
@@ -181,7 +188,8 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
         end
     end
 
-    # Restore strength
+    # Restore strength and correction mode
+    _operator_mode_end!(source_system, correction_was_active)
     source_system.strength .= old_strength
 
     return G
@@ -216,30 +224,18 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     update_geometry = true
-    _G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=update_geometry)
+    _G!(G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=update_geometry)
     Glu = lu!(G)
 
     return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
 end
 
-function _set_formulation_geometry!(body::AbstractBody{<:Any,<:Any,<:Any,DBC},
-                                    update_cps_normals::Bool) where DBC
-    CPoffset_old = body.CPoffset
-    if update_cps_normals
-        body.CPoffset = abs(CPoffset_old) * (DBC ? -1 : 1)
-        normals = calc_normals!(body)
-        calc_controlpoints!(body, normals)
-    end
-    return CPoffset_old
-end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolver;
         backend=DirectBackend(),
-        update_cps_normals::Bool=true,
         update_G=false,
         optargs...)
 
-    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     potential_old = copy(body.potential)
     tb = 0.0
     ts = 0.0
@@ -253,8 +249,6 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
         tb, ts = _solve!(body, solver; backend, update_G, optargs...)
     finally
-        # body.potential .= potential_old
-        body.CPoffset = CPoffset_old
         body.potential .= potential_old
     end
 
@@ -263,7 +257,6 @@ end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
         backend=DirectBackend(),
-        update_cps_normals::Bool=true,
         update_G::Bool=true,
         optargs...)
  
@@ -277,12 +270,7 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
               "surfaces, or remove a cap to make the surface non-watertight." maxlog=1
     end
 
-    CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
-    try
-        tb, ts = _solve!(body, solver; backend, update_G, optargs...)
-    finally
-        body.CPoffset = CPoffset_old
-    end
+    tb, ts = _solve!(body, solver; backend, update_G, optargs...)
 
     return tb, ts
 end
@@ -336,7 +324,8 @@ function KrylovSolver(body::AbstractBody;
     Uext = zeros(TF, 3, body.ncells)
     source_strengths = zeros(TF, body.ncells)
     unabbreviated_strengths = zeros(TF, body.ncells)
-    normals = _calc_normals(body)
+    calc_normals!(body)
+    calc_controlpoints!(body)
 
     # build block Jacobi preconditioner if requested
     if preconditioner_cell_size > 0
@@ -345,7 +334,7 @@ function KrylovSolver(body::AbstractBody;
         preconditioner = nothing
     end
 
-    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, normals, source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner)
+    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, copy(body.normals), source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -387,7 +376,8 @@ function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B
     solver.unabbreviated_strengths .= B
     _set_strength(solver.body, solver.unabbreviated_strengths)
 
-    # get induced velocity at control points
+    # `induced` (called via `influence!`) returns the §3 side-aware self limit
+    # at self pairs, so no extra jump add is needed.
     solver.body.velocity .= 0
     influence!(solver.body, solver.body, solver.backend; velocity=true)
 
@@ -604,7 +594,6 @@ end
 
 function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, optargs...)
     offsets = _coupled_offsets(bodies)
-    CPoffset_old = map(body -> body.CPoffset, bodies)
     velocity_old = [copy(body.velocity) for body in bodies]
     potential_old = [copy(body.potential) for body in bodies]
     fixed_sources = Vector{Any}(undef, length(bodies))
@@ -613,9 +602,8 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
 
     try
         for (i, body) in enumerate(bodies)
-            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
-            normals = calc_normals!(body)
-            calc_controlpoints!(body, normals)
+            calc_normals!(body)
+            calc_controlpoints!(body)
             set_strengths!(body)
             fixed_sources[i] = has_dirichlet_bc(body) ? copy(body.strength[:, 1]) : nothing
             # influence! accumulates onto body.potential (see BackslashCoupled's identical
@@ -659,7 +647,6 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
     finally
         for (i, body) in enumerate(bodies)
-            body.CPoffset = CPoffset_old[i]
             body.velocity .= velocity_old[i]
             body.potential .= potential_old[i]
         end
@@ -714,11 +701,10 @@ function FGSSolver(body::AbstractBody;
                 solution_history_length::Int=0,      # 0 disables history & projection
         project_solution::Bool=false,        # warm-start next solve via polynomial extrapolation
         project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
+        build_fgs::Bool=true,                # false skips the FastGaussSeidel build;
+                                             # the solver then only carries options
+                                             # (e.g. as a formulation green_solver)
     )
-
-    # save and set CPoffset to negative for Dirichlet bodies (interior solve)
-    CPoffset_old = body.CPoffset
-    body.CPoffset = abs(body.CPoffset) * (-1)^has_dirichlet_bc(body)
 
     # calculate control points if needed
     if calc_cps
@@ -729,10 +715,9 @@ function FGSSolver(body::AbstractBody;
     # generate solver
     TF = numtype(body)
     bodies = (body,)
-    fgs = FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)))
-
-    # restore CPoffset
-    body.CPoffset = CPoffset_old
+    fgs = build_fgs ?
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
+        nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
@@ -752,7 +737,7 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     if update_G
         solver.G .= zero(eltype(solver.G))
         tb = @elapsed begin
-            _G!(solver.G, body, body; optargs...)
+            _G!(solver.G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false, optargs...)
             solver.Glu = lu!(solver.G)
         end
     end
@@ -776,7 +761,7 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
     if update_G
         solver.G .= 0.0
         tb += @elapsed begin
-            _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
+            _G!(solver.G, self, self; kerneloffset=self.kerneloffset_panel, update_geometry=false)
             solver.Glu = lu!(solver.G)
         end
     end
@@ -846,6 +831,12 @@ end
 end
 
 @inline _fgs_solved_strength_index(body::AbstractBody) = has_dirichlet_bc(body) && size(body.strength, 2) >= 2 ? 2 : 1
+
+function _solve!(body::AbstractBody, solver::FGSSolver{Nothing}; optargs...)
+    error("This FGSSolver was constructed with build_fgs=false and only "*
+          "carries options (e.g. as a formulation green_solver); it cannot "*
+          "run the FastGaussSeidel body solve.")
+end
 
 function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
@@ -925,7 +916,6 @@ function solve!(bodies::Tuple, solvers::Tuple;
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-6,
     verbose::Bool = false,
-    update_cps_normals::Bool = true,
     update_G::Bool = false,
     optargs...)
 
@@ -937,16 +927,6 @@ function solve!(bodies::Tuple, solvers::Tuple;
 
     prev_velocity = [copy(body.velocity) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
-    
-    # update control points and normals
-    if update_cps_normals
-        CPoffsets_old = map(body -> body.CPoffset, bodies)
-        for body in bodies
-            body.CPoffset = abs(body.CPoffset) * (has_dirichlet_bc(body) ? -1 : 1)
-            normals = calc_normals!(body)
-            calc_controlpoints!(body, normals)
-        end
-    end
 
     converged = false
     t_solve = 0.0
@@ -965,7 +945,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
                     velocity=true,
                     optargs...)
             end
-            tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false, update_G=iter_update_G)
+            tb, ts = solve!(body, solver; backend=backends[i], update_G=iter_update_G)
             # TEMPORARY diagnostic (warm-start investigation) -- remove after use
             println("  [outer diag] iter=$iter body=$i t_influence=$t_influence tb=$tb ts=$ts")
             t_build += tb
@@ -997,12 +977,9 @@ function solve!(bodies::Tuple, solvers::Tuple;
         println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
     end
 
-    # restore velocities and CPoffsets
+    # restore velocities
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
-        if update_cps_normals
-            body.CPoffset = CPoffsets_old[i]
-        end
     end
 
     return t_build, t_solve
@@ -1208,12 +1185,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views solver.phi_ext[r]  .= body.potential
     end
 
-    # flip CP offset
-    CPoffset_old = map(b -> b.CPoffset, bodies)
-    for b in bodies
-        b.CPoffset = abs(b.CPoffset) * (-1)^(has_dirichlet_bc(b))
-    end
-
     for body in bodies
         # update normals/controlpoints
         calc_normals!(body)
@@ -1273,7 +1244,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         r = offsets[bi]+1 : offsets[bi+1]
         write_solution!(b, view(sol, r))
 
-        b.CPoffset = CPoffset_old[bi]
         @views b.velocity  .= solver.Uext[:, r]
         @views b.potential .= solver.phi_ext[r]
     end

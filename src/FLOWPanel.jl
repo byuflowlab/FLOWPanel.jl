@@ -22,9 +22,16 @@ export  solve, save, influence!,
         PressureBernoulli, PressureLaplace,
         JacobiPressurePreconditioner, NoPressurePreconditioner,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
-        ForceMonitor, KuttaJoukowskiForce,
+        ForceMonitor, KuttaJoukowskiForce, SurfaceVorticityForce,
+        BoundCirculationMonitor, SpanwiseLoadingMonitor, DragPolarMonitor,
         WingNormalization, NoNormalization, RotorNormalization,
-        simulate_warmstart!, initialize_Das!
+        NoSectionalNormalization, FreestreamSectionalNormalization,
+        RotorSectionalNormalization,
+        steady!, simulate_warmstart!, initialize_Das!,
+        AbstractSolveFormulation, VelocityThroughSources,
+        GreenReconstruction, TraceCorrected, DirectWakePotential,
+        set_wake_correction!, clear_wake_correction!,
+        replay, ReplayResult, migrate_metadata_toml
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA
@@ -36,8 +43,10 @@ import Requires: @require
 # import SimpleNonlinearSolve
 import FastMultipole
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
+import ReadVTK
 using WriteVTK
 import Meshes
+import TOML
 
 # ------------ FLOW LAB MODULES ------------------------------------------------
 import ImplicitAD as IAD
@@ -75,7 +84,8 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "simulate", "warmstart",
+                    "wake", "formulation", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
+                    "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")
 end

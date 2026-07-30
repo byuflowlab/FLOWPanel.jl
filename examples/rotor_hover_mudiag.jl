@@ -9,6 +9,9 @@ using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
 
+run_name = "rotor_hover_mudiag"
+save_path = joinpath("data", run_name)
+
 ## =========================================================
 # SIMULATION PARAMETERS
 # ==========================================================
@@ -27,7 +30,7 @@ t_range = range(0.0, step=dt, length=n_steps)[1:10]
 # ==========================================================
 # Sensitivity parameters
 # ==========================================================
-CPoffset     = R * 1e-6
+cp_outer=true
 kerneloffset = R * 1e-3
 kernelcutoff = R * 1e-13
 p_per_step   = 2
@@ -82,14 +85,13 @@ kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 # kernel = pnl.VortexRing
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-            CPoffset,
             kerneloffset,
             kernelcutoff,
             semiinfinite_wake=false,
             watertight=true,
             DBC)
 
-pnl.write_vtk("rotor_hover_check", rotor)
+pnl.write_vtk(joinpath(save_path, "rotor_hover_check"), rotor)
 
 # update shedding
 bbox = (pnl.SVector{3}(-R*1.2, -1.0, -1.0), pnl.SVector{3}(-R*0.1, 1.0, 1.0))
@@ -100,7 +102,6 @@ bbox = nothing
 shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2]; bbox, end_node=te_indices_2[3], normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-                        CPoffset,
                         kerneloffset,
                         kernelcutoff,
                         semiinfinite_wake=false,
@@ -108,7 +109,7 @@ rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding
                         ensure_winding=true,
                         DBC)
 
-pnl.write_vtk("rotor_hover", rotor)
+pnl.write_vtk(joinpath(save_path, run_name), rotor)
 
 println("Rotor: $(rotor.nnodes) nodes, $(rotor.ncells) panels, $(rotor.nsheddings) shedding edges")
 
@@ -128,8 +129,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                         r_hash=R*merge_r_hash_factor,
                         sigma_relative=false,
                         max_sigma_ratio=2.0,
-                        skip_static=true,
-                        check_neighboring_cells=false),
+                        skip_static=true),
                 )))
 
 ## =========================================================
@@ -280,6 +280,7 @@ function wake_v_monitor(systems, wakes, frames, uinf, i_step)
 end
 
 monitors = (pnl.PressureBernoulli(rho; unsteady=true,
+                    allow_partial=true,
                     correct_kuttacondition=p_correct_kuttacondition_flag),
             pnl.ForceMonitor(length(t_range), 1; # un-normalized, global frame
                     i_frame=-1,
@@ -304,7 +305,7 @@ name = "rotor_hover"
     # set_Das_eta_freestream=0.1,
     monitors,
     body_solvers, backend, verbose=true,
-    path="rotor_hover_mudiag", name,
+    path=save_path, name,
 )
 
 println("Thrust Coefficient: ", monitors[2].force[2,:])

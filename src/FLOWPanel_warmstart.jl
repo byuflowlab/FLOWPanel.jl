@@ -1,9 +1,9 @@
 #=##############################################################################
 # DESCRIPTION
     Warm-start support for `simulate!`. Resume a time-marching panel-method
-    simulation from VTK files produced by a previous run, plus a small companion
-    `{name}.frames.toml` that captures `ReferenceFrame` state (which the VTK
-    output cannot represent).
+    simulation from VTK files produced by a previous run, using the unified
+    `{name}.metadata.toml` manifest when available and falling back to the
+    legacy `{name}.frames.toml` companion file for older saved runs.
 =###############################################################################
 
 import ReadVTK
@@ -24,18 +24,6 @@ function _frame_to_dict(frame::ReferenceFrame, i::Int)
     )
 end
 
-function _step_dict(frames, i_step::Int, t::Real)
-    return Dict{String, Any}(
-        "i_step" => i_step,
-        "t"      => float(t),
-        "frame"  => [_frame_to_dict(frames[i], i) for i in eachindex(frames)],
-    )
-end
-
-function _frames_toml_path(path, name)
-    return joinpath(path, name * ".frames.toml")
-end
-
 """
 Write or append the per-step ReferenceFrame state to `{path}/{name}.frames.toml`.
 At `truncate=true`, the file is overwritten with `[meta]` and the first
@@ -45,6 +33,11 @@ function _write_frame_state_toml(path, name, frames, i_step::Int, t::Real; trunc
     isnothing(frames) && return nothing
 
     file = _frames_toml_path(path, name)
+    stepdict = Dict{String, Any}(
+        "i_step" => i_step,
+        "t" => float(t),
+        "frame" => [_frame_to_dict(frames[i], i) for i in eachindex(frames)],
+    )
     if truncate
         open(file, "w") do io
             meta = Dict{String, Any}(
@@ -54,36 +47,46 @@ function _write_frame_state_toml(path, name, frames, i_step::Int, t::Real; trunc
             )
             TOML.print(io, Dict("meta" => meta))
             println(io)
-            TOML.print(io, Dict("step" => [_step_dict(frames, i_step, t)]))
+            TOML.print(io, Dict("step" => [stepdict]))
         end
     else
         open(file, "a") do io
-            TOML.print(io, Dict("step" => [_step_dict(frames, i_step, t)]))
+            TOML.print(io, Dict("step" => [stepdict]))
         end
     end
     return file
 end
 
 """
-Load `frames` state from `{path}/{name}.frames.toml` for the entry whose
-`i_step == restart_step`. Replaces each `frames[i]` in place.
+Load `frames` state from `{path}/{name}.metadata.toml` for the entry whose
+`i_step == restart_step`. Falls back to `{path}/{name}.frames.toml` for legacy
+saved runs. Replaces each `frames[i]` in place.
 """
 function _load_frame_state_toml!(frames, path, name, restart_step::Int)
     isnothing(frames) && error("simulate_warmstart! requires frames; ReferenceFrame state is not available from VTK output alone.")
 
-    file = _frames_toml_path(path, name)
-    isfile(file) || error("Warm-start frames file not found: $(file). The original simulate! run must produce this file.")
+    data = _read_metadata_toml(path, name)
+    step = nothing
+    if data !== nothing
+        framedicts = _metadata_step_frames(data, restart_step)
+        if framedicts !== nothing
+            step = framedicts
+        end
+    end
 
-    data = TOML.parsefile(file)
-    steps = data["step"]
-    idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
-    isnothing(idx_in_toml) && error("restart_step=$(restart_step) not found in $(file)")
-    step = steps[idx_in_toml]
+    if step === nothing
+        file = _frames_toml_path(path, name)
+        isfile(file) || error("Warm-start frames file not found: $(file). The original simulate! run must produce this file.")
+        legacy = TOML.parsefile(file)
+        steps = get(legacy, "step", Any[])
+        idx_in_toml = findfirst(s -> Int(s["i_step"]) == restart_step, steps)
+        isnothing(idx_in_toml) && error("restart_step=$(restart_step) not found in $(file)")
+        step = steps[idx_in_toml]["frame"]
+    end
 
-    framedicts = step["frame"]
-    @assert length(framedicts) == length(frames) "frames file has $(length(framedicts)) frames, but `frames` argument has $(length(frames))"
+    @assert length(step) == length(frames) "frames file has $(length(step)) frames, but `frames` argument has $(length(frames))"
 
-    for (i, fd) in enumerate(framedicts)
+    for (i, fd) in enumerate(step)
         old = frames[i]
         TF = eltype(old.x)
         x          = FastMultipole.SVector{3,TF}(fd["x"]...)
@@ -236,45 +239,33 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     pf = wake.pfield
     @assert np <= size(pf.particles, 2) "Loaded $(np) particles but pfield has capacity $(size(pf.particles, 2))"
 
-    # first reset any existing particles
-    while pf.np > 0
-        FLOWVPM.remove_particle(pf, pf.np)
-    end
-
+    # Clear all active storage so replay/restart cannot retain stale rows from
+    # a previously loaded state with more particles.
+    pf.particles[:, :] .= zero(eltype(pf.particles))
     pf.np = 0
     if np == 0
         return wake
     end
 
-    # positions
-    points = ReadVTK.get_points(vtk)  # 3 × np
-    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
-
     # per-particle fields
     point_data = ReadVTK.get_point_data(vtk)
-    if "gamma" in keys(point_data)
-        pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
-    end
-    if "sigma" in keys(point_data)
-        pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
-    end
-    if "vol" in keys(point_data)
-        pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
-    end
-    if "circulation" in keys(point_data)
-        pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
-    end
-    if "velocity" in keys(point_data)
-        pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
-    end
-    if "vorticity" in keys(point_data)
-        pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
-    end
-    if "velocity_gradient" in keys(point_data)
-        J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
-        # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
-        pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
-    end
+    required_fields = ("gamma", "sigma", "vol", "circulation", "velocity", "vorticity", "C", "SFS", "velocity_gradient")
+    missing = filter(field -> !(field in keys(point_data)), required_fields)
+    isempty(missing) || throw(ArgumentError("Loaded particle VTK is missing required field(s): $(join(missing, ", "))."))
+
+    points = ReadVTK.get_points(vtk)  # 3 × np
+    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
+    pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
+    pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
+    pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
+    pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
+    pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
+    pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
+    pf.particles[FLOWVPM.C_INDEX, 1:np] .= ReadVTK.get_data(point_data["C"])
+    pf.particles[FLOWVPM.SFS_INDEX, 1:np] .= ReadVTK.get_data(point_data["SFS"])
+    J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
+    # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
+    pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
 
     pf.np = np
     return wake
@@ -285,8 +276,9 @@ end
 """
     simulate_warmstart!(systems, wakes, frames, maneuver!, Uinf, t_range; restart_path, restart_name, restart_step=-1, body_solvers, backend_wake=backend, backend_solve=backend, backend_system=backend, optargs...)
 
-Resume a simulation from VTK output and a `{name}.frames.toml` companion file
-written by a previous `simulate!` call. The body and wake objects must be
+Resume a simulation from VTK output and the unified `{name}.metadata.toml`
+manifest written by a previous `simulate!` call, falling back to the legacy
+`{name}.frames.toml` file when needed. The body and wake objects must be
 constructed identically to the original run; their state is overwritten from
 disk.
 
@@ -298,7 +290,7 @@ on the final step of a run), then forwards to `simulate!` with
 TOML output.
 """
 function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::Function, t_range;
-        name="default_sim", path="./default_simulation",
+        name="default_sim", path=joinpath("data", "default_simulation"),
         restart_path=nothing, restart_name=nothing,
         restart_step::Int=-1,
         body_solvers,
@@ -313,7 +305,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         monitors=(),
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
+        set_Das_min_kinematic_displacement=0.0,
         verbose=false,
+        optargs...,
     )
     systems_tuple = _systems_tuple(systems)
     wakes_tuple = _wakes_tuple(systems, wakes)
@@ -332,7 +326,15 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     if restart_step < 0
         restart_step = idxs[end]
     end
-    @assert restart_step in idxs "restart_step=$(restart_step) not found in $(body_pvd) (available: $(idxs))"
+    if !(restart_step in idxs)
+        # The PVD manifest can be stale (e.g. overwritten by a later short run
+        # into the same directory) while the per-step files are intact. Trust an
+        # explicit restart_step if its body file exists on disk.
+        probe = joinpath(rpath, rname * "_body1", rname * "_body1.$(restart_step).vtu")
+        isfile(probe) || error("restart_step=$(restart_step) not found in $(body_pvd) " *
+            "(available: $(idxs)) and $(probe) does not exist")
+        @warn "restart_step=$(restart_step) missing from PVD manifest $(body_pvd) (stale manifest?); proceeding because $(probe) exists"
+    end
     @assert restart_step + 1 < length(t_range) "restart_step=$(restart_step) leaves no steps to simulate (t_range has $(length(t_range)) entries)"
 
     if verbose
@@ -342,7 +344,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # 2. Mirror simulate!'s pre-loop initialization on the freshly-constructed bodies.
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
@@ -361,12 +363,53 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
             end
             kinematic_velocity!(systems_tuple, frames)
             for sys in systems_tuple
-                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic)
+                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
+                    min_displacement=set_Das_min_kinematic_displacement)
             end
         end
         for sys in systems_tuple
             reset!(sys)
         end
+    end
+
+    # 2.5 Frame + rotation-carried body state: ALWAYS reconstruct by replaying
+    # the kinematics exactly as simulate!'s loop applies them: maneuver! at
+    # t_range[i+1], then propagate_kinematics! with dt = t_range[i+2]-t_range[i+1],
+    # for steps 0..restart_step-1, plus step restart_step's maneuver! (its
+    # end-of-step propagate is replayed in section 5 below). Body-node motion
+    # during the replay is harmless — nodes are overwritten from disk in
+    # section 3. The replay is REQUIRED even when the frame manifest is intact:
+    # propagate_kinematics! also rotates body-fixed vectors that are not
+    # persisted to disk — notably the trailing-edge shed offsets `Das`
+    # (rotate_Das!), which update_TE! adds to the body TE to place the first
+    # wake row. Loading frames from the manifest alone leaves Das at its
+    # construction-time orientation, misplacing the wake buffer row by O(|Das|)
+    # and corrupting the Kutta condition at the first continued solve.
+    for i in 0:(restart_step - 1)
+        maneuver!(frames, systems_tuple, wakes_tuple, t_range[i+1])
+        propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
+    end
+    maneuver!(frames, systems_tuple, wakes_tuple, t_range[restart_step+1])
+
+    # Cross-check the replayed frames against the saved manifest when available
+    # (they should agree to floating-point accuracy; a mismatch means the
+    # continuation was configured differently from the original run).
+    try
+        frames_manifest = deepcopy(frames)
+        _load_frame_state_toml!(frames_manifest, rpath, rname, restart_step)
+        for (fr, fm) in zip(frames, frames_manifest)
+            dev = max(maximum(abs, fr.R .- fm.R), maximum(abs, fr.x .- fm.x))
+            if dev > 1e-8
+                @warn "simulate_warmstart!: replayed frame state deviates from saved manifest (max dev $(dev)); check that maneuver!/t_range match the original run. Using the manifest frame state." maxlog=1
+            end
+        end
+        # manifest is authoritative for the frames themselves
+        for i in eachindex(frames)
+            frames[i] = frames_manifest[i]
+        end
+    catch err
+        verbose && println("simulate_warmstart!: frame manifest for step $(restart_step) " *
+            "unavailable ($(sprint(showerror, err))); using kinematic-replay frame state")
     end
 
     # 3. Load on-disk state at restart_step.
@@ -387,12 +430,12 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         end
     end
 
-    _load_frame_state_toml!(frames, rpath, rname, restart_step)
+    # (frame state was restored/reconstructed in section 2.5 above)
 
     # 4. Refresh derived geometry that wasn't persisted.
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
 
     # 5. Replay the end-of-step-`restart_step` actions that simulate! skipped
@@ -406,7 +449,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     propagate_kinematics!(systems_tuple, frames, dt_end)
     for sys in systems_tuple
         calc_normals!(sys)
-        calc_controlpoints!(sys; off=abs(sys.CPoffset))
+        calc_controlpoints!(sys)
     end
     for (sys, w) in zip(systems_tuple, wakes_tuple)
         !isnothing(w) && shed_wake!(w, sys)
@@ -423,8 +466,10 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         monitors=monitors,
         set_Das_eta_kinematic=set_Das_eta_kinematic,
         set_Das_eta_freestream=set_Das_eta_freestream,
+        set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
         start_step=restart_step + 1,
         verbose=verbose,
+        optargs...,
     )
 
     return systems, wakes, frames

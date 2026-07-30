@@ -38,21 +38,19 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     Oaxis::Array{TF,2}                  # Coordinate system of original grid
     O::Array{TF,1}                      # Position of CS of original grid
 
-    # Fields
-    P::Vector{TF}
-    F::Matrix{TF}
-
     # Internal variables
     strength::Array{TF, 2}              # strength[i,j] is the stength of the i-th panel with the j-th element type
     potential::Array{TF,1}              # Potential at control points
     velocity::Array{TF,2}               # Apparent fluid velocity at control points (body frame)
     velocity_gradient::Array{TF,3}      # 3x3xncells velocity gradient at control points; only populated when needs_velocity_gradient[]
+    induced_vorticity::Matrix{TF}       # 3xncells vorticity at control points; bound surface vorticity initialized in simulate!, then populated by extra_outputs=3
     velocity_kinematic::Matrix{TF}      # Rigid-body kinematic velocity at control points (inertial frame)
     angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
-    CPoffset::Float64                   # Control point offset in normal direction
-    kerneloffset::Float64               # Kernel offset to avoid singularities
+    kerneloffset::Float64               # Active kernel offset to avoid singularities
+    kerneloffset_panel::Float64         # Kernel offset for panel solves/interactions
+    kerneloffset_targets::Float64       # Kernel offset for panel influence on targets
     kernelcutoff::Float64               # Kernel cutoff to avoid singularities
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
@@ -66,18 +64,18 @@ function NonLiftingBody{E, N, TF, DBC}(
                 neighbor=nothing,
                 nnodes=size(nodes, 2), ncells=size(cells, 2),
                 Oaxis=Array{TF,2}(1.0I, 3, 3), O=zeros(TF,3),
-                P=zeros(TF, size(cells, 2)),
-                F=zeros(TF, 3, size(cells, 2)),
                 strength=zeros(size(cells, 2), N),
                 potential=zeros(size(cells, 2)),
                 velocity=zeros(3, size(cells, 2)),
                 velocity_gradient=zeros(TF, 3, 3, size(cells, 2)),
+                induced_vorticity=zeros(TF, 3, size(cells, 2)),
                 velocity_kinematic=zeros(TF, 3, size(cells, 2)),
                 angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
-                CPoffset=1e-14,
                 kerneloffset=1e-8,
+                kerneloffset_panel=kerneloffset,
+                kerneloffset_targets=kerneloffset,
                 kernelcutoff=1e-14,
                 characteristiclength=characteristiclength_sqrtarea,
                 watertight=false,
@@ -99,17 +97,18 @@ function NonLiftingBody{E, N, TF, DBC}(
                 nodes, vtk_cells, neighbor,
                 nnodes, ncells, cells,
                 Oaxis, O,
-                P, F,
                 strength,
                 potential,
                 velocity,
                 velocity_gradient,
+                induced_vorticity,
                 velocity_kinematic,
                 angular_velocity,
                 controlpoints,
                 normals,
-                CPoffset,
-                kerneloffset,
+                kerneloffset_panel,
+                Float64(kerneloffset_panel),
+                Float64(kerneloffset_targets),
                 kernelcutoff,
                 characteristiclength,
                 watertight,
@@ -249,14 +248,14 @@ function FastMultipole.value_to_strength!(source_buffer, ::NonLiftingBody, i_bod
     source_buffer[5, i_body] = value
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, ::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_buffer, i_buffer) where {PS,VS,GS}
+function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     if PS
-        phi = target_buffer[4, i_buffer]
+        phi = FastMultipole.get_scalar_potential(target_buffer, switch, i_buffer)
         target_system.potential[i_target] += phi
     end
 
     if VS
-        vx, vy, vz = target_buffer[5, i_buffer], target_buffer[6, i_buffer], target_buffer[7, i_buffer]
+        vx, vy, vz = FastMultipole.get_gradient(target_buffer, switch, i_buffer)
         target_system.velocity[1, i_target] += vx
         target_system.velocity[2, i_target] += vy
         target_system.velocity[3, i_target] += vz
@@ -265,8 +264,16 @@ function FastMultipole.buffer_to_target_system!(target_system::NonLiftingBody, i
     # Accumulate the 3x3 velocity gradient from rows 8..16 (column-major
     # SMatrix layout per FastMultipole.get_hessian).
     if GS
+        H = FastMultipole.get_hessian(target_buffer, switch, i_buffer)
         @inbounds for j in 1:3, i in 1:3
-            target_system.velocity_gradient[i, j, i_target] += target_buffer[7 + (j-1)*3 + i, i_buffer]
+            target_system.velocity_gradient[i, j, i_target] += H[i, j]
+        end
+    end
+
+    if NO == 3
+        @inbounds for j in 1:3
+            target_system.induced_vorticity[j, i_target] +=
+                FastMultipole.get_extra_output(target_buffer, switch, i_buffer, j)
         end
     end
 end

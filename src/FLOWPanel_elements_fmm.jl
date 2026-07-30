@@ -124,6 +124,109 @@ function get_vertices(source_system::AbstractBody, i_source::Int)
 end
 
 """
+    _self_limit(phi_raw, u_raw, ug_raw, ::Type{TK}, strength, n_gt)
+
+Override the on-centroid `_induced` result with FLOWPanel's fixed self limit.
+
+The evaluation point is NOT moved (`_induced` does not nudge target_Rz). At
+`target_Rz == 0`, `compute_source_dipole` returns the principal value of the
+solid-angle term (forces `tan_term = 0`), so the kernel outputs at a self pair
+are clean PVs:
+* doublet/ring potential PV = 0           (jump = ∓μ across the panel)
+* source `u·n_GT` PV = 0                   (jump = ±σ across the panel)
+* source potential PV: finite, from log_term integral (continuous)
+* doublet/ring tangential & normal velocity PV: finite (continuous)
+
+`_self_limit` therefore applies the fixed physical convention used by
+FLOWPanel's exact control-point path:
+* self-pair velocity is always the exterior surface limit, so source
+  `u_s·n_GT = +σ/2`;
+* self-pair potential is always the interior surface limit, so
+  `φ_d = +μ/2` or `φ_Γ = +Γ/2`;
+* continuous components keep their principal-value result.
+
+For a self panel, the exterior doublet/ring potential can be recovered from the
+returned interior value by subtracting the panel's doublet or vortex strength.
+
+Consumers (`_G!`, Krylov matvec, post-processing) receive the actual
+surface-limit value and do not add their own ±0.5 jump. Wake contributions from
+`_induced_wake` are still added on top by the caller. The velocity gradient
+self-limit is zeroed (out of scope).
+"""
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantSource}, strength, n_gt)
+    # source phi is continuous (PV in phi_raw is correct); source u·n_GT has the jump.
+    sigma = strength[1]
+    half_n = sigma * 0.5
+    u_n_raw = u_raw[1]*n_gt[1] + u_raw[2]*n_gt[2] + u_raw[3]*n_gt[3]
+    u_self = u_raw + (half_n - u_n_raw) * n_gt
+    return phi_raw, u_self, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{ConstantDoublet}, strength, n_gt)
+    # doublet velocity at the centroid is continuous (u_raw is the clean PV);
+    # potential uses the interior half-jump (PV = 0).
+    mu = strength[1]
+    phi_self = mu * 0.5
+    return phi_self, u_raw, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{VortexRing}, strength, n_gt)
+    gamma = strength[1]
+    phi_self = gamma * 0.5
+    return phi_self, u_raw, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, ConstantDoublet}}, strength, n_gt)
+    # phi_raw = source PV (clean) + 0 (doublet PV).  Add interior doublet half-jump.
+    # u_raw   = doublet PV (clean) + source tangential PV (clean) + 0 (source normal PV).
+    # Add only the exterior source half-jump so the continuous doublet velocity is preserved.
+    sigma = strength[1]
+    mu    = strength[2]
+    phi_self = phi_raw + mu * 0.5
+    half_n   = sigma * 0.5
+    u_self   = u_raw + half_n * n_gt
+    return phi_self, u_self, zero(ug_raw)
+end
+
+@inline function _self_limit(phi_raw, u_raw, ug_raw, ::Type{Union{ConstantSource, VortexRing}}, strength, n_gt)
+    sigma = strength[1]
+    gamma = strength[2]
+    phi_self = phi_raw + gamma * 0.5
+    half_n   = sigma * 0.5
+    u_self   = u_raw + half_n * n_gt
+    return phi_self, u_self, zero(ug_raw)
+end
+
+# Relative tolerance for self-pair detection: ||target - centroid|| < ε_rel * √A.
+const SELF_PAIR_EPS_REL = 1.0e-12
+
+@inline function _is_self_pair(target, control_point, vertices)
+    v1, v2, v3 = vertices
+    e1 = v2 - v1
+    e2 = v3 - v1
+    nx = e1[2]*e2[3] - e1[3]*e2[2]
+    ny = e1[3]*e2[1] - e1[1]*e2[3]
+    nz = e1[1]*e2[2] - e1[2]*e2[1]
+    area = 0.5 * sqrt(nx*nx + ny*ny + nz*nz)
+    char_len_sq = area  # √A squared = A
+    dx = target[1] - control_point[1]
+    dy = target[2] - control_point[2]
+    dz = target[3] - control_point[3]
+    return (dx*dx + dy*dy + dz*dz) < (SELF_PAIR_EPS_REL * SELF_PAIR_EPS_REL) * char_len_sq
+end
+
+@inline function _panel_normal_gt(vertices)
+    v1, v2, v3 = vertices
+    e1 = v2 - v1
+    e2 = v3 - v1
+    nx = e1[2]*e2[3] - e1[3]*e2[2]
+    ny = e1[3]*e2[1] - e1[1]*e2[3]
+    nz = e1[1]*e2[2] - e1[2]*e2[1]
+    inv_n = 1.0 / sqrt(nx*nx + ny*ny + nz*nz)
+    return FastMultipole.StaticArrays.SVector{3,Float64}(nx*inv_n, ny*inv_n, nz*inv_n)
+end
+
+"""
     induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
     induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
 
@@ -143,9 +246,15 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
+    # self-pair short-circuit: exterior velocity limit and interior potential limit.
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt)
+    end
+
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
-    
+
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
@@ -161,6 +270,12 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # evaluate influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
 
+    # self-pair short-circuit: exterior velocity limit and interior potential limit.
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, TK, strength, n_gt)
+    end
+
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
 
@@ -171,15 +286,22 @@ end
 
 "Overload for non-rotated kernels"
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
-    
+
     # get vertices
     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
-    
+
     # strength = FastMultipole.get_strength(source_buffer, source_system, i_source)
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # influence
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    # self-pair short-circuit
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt)
+    end
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, source_buffer, i_source, derivatives_switch)
@@ -188,13 +310,20 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
 end
 
 function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
-    
+
     # get vertices
     v1, v2, v3 = get_vertices(source_system, i_source)
-    
+
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
     potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+
+    # self-pair short-circuit
+    control_point = (v1 + v2 + v3) * 0.3333333333333333
+    if _is_self_pair(target, control_point, (v1, v2, v3))
+        n_gt = _panel_normal_gt((v1, v2, v3))
+        potential, velocity, velocity_gradient = _self_limit(potential, velocity, velocity_gradient, VortexRing, strength, n_gt)
+    end
 
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
@@ -302,7 +431,7 @@ end
 
 #------- constant source, normal doublet, source + normal doublet -------#
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,TF}
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
     #--- compute values ---#
 
@@ -310,8 +439,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     num = max(eps(typeof(ri)), ri + rip1 - ds)
     log_term = log(num / (ri + rip1 + ds))
 
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -373,10 +506,14 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,TF}
-    
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantDoublet}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
+
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -442,15 +579,19 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{Union{ConstantSource, ConstantDoublet}}, R_dot_s, reg_term) where {PS,VS,GS,TF}
+function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{Union{ConstantSource, ConstantDoublet}}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
     # singularity if probing on a side
     # println("\nTESTING...")
     num = max(eps(typeof(ri)), ri + rip1 - ds)
     log_term = log(num / (ri + rip1 + ds))
 
-    # singularity at extension of the panel side
-    if abs(abs(R_dot_s) - ri * ds) < 1e-12
+    # singularity at extension of the panel side; also force principal value
+    # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
+    # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
+    # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
+    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+       abs(abs(R_dot_s) - ri * ds) < 1e-12
         tan_term = zero(target_Rz)
     else
         # println("NOT HERE")
@@ -551,17 +692,15 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS}, targ
     return potential, velocity, velocity_gradient
 end
 
-function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TFP,NS,PS,VS,GS}
+function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TFP,NS,PS,VS,GS,NO,NM}
     #--- prelimilary computations ---#
 
     # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     TFT = eltype(target)
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
-    # check if we're on the centroid
-    to_centroid = target_Rx * target_Rx + target_Ry * target_Ry + target_Rz * target_Rz
-    if to_centroid < eps(eltype(target))
-        target_Rz += eps(eltype(target))
-    end
+    # No on-centroid nudge: when target_Rz == 0 the kernel returns the principal
+    # value (compute_source_dipole forces tan_term = 0 at target_Rz == 0), and
+    # `_self_limit` applies the fixed exterior velocity and interior potential limits at self pairs.
 
     #--- first recursive quantities ---#
 
@@ -654,7 +793,7 @@ end
 
 #------- vortex ring panel -------#
 
-function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {NS,PS,VS,GS}
+function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {NS,PS,VS,GS,NO,NM}
     TFT = eltype(target)
     TFP = eltype(strength)
     TF = promote_type(TFT,TFP)
@@ -671,7 +810,7 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
         v1, v2, v3 = vertices
         control_point = (v1 + v2 + v3) * 0.3333333333333333
         R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], v3[1], v3[2], v3[3])
-        p, _ = _induced(target, vertices, control_point, strength, ConstantDoublet, core_size, R, FastMultipole.DerivativesSwitch{true, false, false}())
+        p, _ = _induced(target, vertices, control_point, strength, ConstantDoublet, core_size, R, FastMultipole.DerivativesSwitch(true, false, false))
         potential += p
     end
 
@@ -862,7 +1001,13 @@ get_wake_kernel(::AbstractBody{Union{ConstantSource, VortexRing}}) = VortexRing
 get_wake_kernel(::AbstractBody{VortexRing}) = VortexRing
 get_wake_kernel(::AbstractBody{ConstantDoublet}) = ConstantDoublet
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,PS,VS,GS}
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,PS,VS,GS,NO,NM}
+    # body-only operator assembly (e.g. the Green-system B matrix) skips the
+    # attached wake entirely
+    if source_system.suppress_attached_wake[]
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
     # check if this panel has a wake
     idx_1 = source_system.shedding_full[1, i_source]
     if idx_1 > 0
@@ -885,8 +1030,13 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         das_col_2 = source_system.shedding_full[6, i_source]  # Das column for TE2
         Dax, Day, Daz = source_system.Das[i_surf][1, das_col_1], source_system.Das[i_surf][2, das_col_1], source_system.Das[i_surf][3, das_col_1]
 
-        # get strength
+        # get strength; in physical mode the affine attached-wake correction
+        # shifts the transition-panel strength (∓c/2 across a paired edge, so
+        # the net attached circulation is γ = μ_u − μ_l − c)
         strength = get_strength_doublet(source_system, i_source)
+        if source_system.wake_correction_active[]
+            strength += source_system.wake_strength_shift[i_source]
+        end
         TK = get_wake_kernel(source_system)
 
         # evaluate potential
@@ -934,7 +1084,12 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
     end
 end
 
-function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {TF,NK,PS,VS,GS}
+function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_system::RigidWakeBody{<:Any,NK,<:Any}, source_buffer::Matrix, i_source::Int, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TF,NK,PS,VS,GS,NO,NM}
+    # body-only operator mode (e.g. Green-system B products): no attached wake
+    if source_system.suppress_attached_wake[]
+        return zero(TF), zero(FastMultipole.StaticArrays.SVector{3,TF}), zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
     # Buffer layout (rows are 1-indexed, NK = number of element types):
     #   1-3:       center (cx, cy, cz)
     #   4:         radius
@@ -1019,7 +1174,7 @@ function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}
     return p+dp, vel+dvel, g+dg
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS}) where {PS,VS,GS}
+function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
     if PS
         # influence of first triangle
         v1 = vertices[1]
@@ -1045,7 +1200,7 @@ function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args
     return induced_semiinfinite(target, ConstantDoublet, args...; kerneloffset)
 end
 
-function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS}; kerneloffset) where {TF,PS,VS,GS}
+function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; kerneloffset) where {TF,PS,VS,GS,NO,NM}
     potential = zero(TF)
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
@@ -1119,7 +1274,7 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
         this_strength = FastMultipole.StaticArrays.SVector{1,TF}(strength)
 
         # other arguments
-        derivatives_switch = FastMultipole.DerivativesSwitch{true, false, false}()
+        derivatives_switch = FastMultipole.DerivativesSwitch(true, false, false)
 
         # compute potential
         potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, kerneloffset, R, derivatives_switch)

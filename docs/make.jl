@@ -15,6 +15,7 @@ makedocs(
     pages = [
                 "Intro"             => "index.md",
                 "Potential Flow"    => "potentialflow.md",
+                "Prescribed Helical Wake" => "prescribed_helical_wake.md",
                 "Elements"          => [
                                         "elements/paneldefinition.md",
                                         "Constant Source"  => "elements/constantsource.md",

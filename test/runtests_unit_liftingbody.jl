@@ -118,6 +118,33 @@ using StaticArrays: SVector, SMatrix
         @test all(body_helper.Das[i] == body_inline.Das[i] for i in eachindex(body_helper.Das))
     end
 
+    @testset "kinematic Das minimum displacement" begin
+        eta = 0.1
+        min_displacement = 0.2
+
+        body_default = make_plate_vortex_body()
+        body_default.velocity_te[1] .= [3.0 0.01;
+                                        4.0 0.0;
+                                        0.0 0.0]
+        initial_default = copy(body_default.Das[1])
+        expected_default = initial_default .+ copy(body_default.velocity_te[1]) .* eta
+        pnl._accumulate_Das!(body_default, eta)
+        @test body_default.Das[1] ≈ expected_default
+
+        body_floored = make_plate_vortex_body()
+        body_floored.velocity_te[1] .= body_default.velocity_te[1]
+        initial_floored = copy(body_floored.Das[1])
+        pnl._accumulate_Das!(body_floored, eta; min_displacement)
+
+        @test body_floored.Das[1][:, 1] ≈ initial_floored[:, 1] .+ [0.3, 0.4, 0.0]
+        @test body_floored.Das[1][:, 2] ≈ initial_floored[:, 2] .+ [min_displacement, 0.0, 0.0]
+
+        body_zero = make_plate_vortex_body()
+        initial_zero = copy(body_zero.Das[1])
+        pnl._accumulate_Das!(body_zero, eta; min_displacement)
+        @test body_zero.Das[1] ≈ initial_zero
+    end
+
     @testset "seeded shedding trace" begin
         nodes, cells = make_seeded_te_mesh()
         final_cells = pnl.ensure_consistent_winding(nodes, cells; watertight=false)

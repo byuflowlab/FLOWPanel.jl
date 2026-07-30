@@ -29,6 +29,9 @@ import DataFrames: DataFrame
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm
 
+run_name = "two_ducts_vpm"
+save_path = joinpath("data", run_name)
+
 # ----------------- SIMULATION PARAMETERS --------------------------------------
 AOA             = 5                             # (deg) angle of attack
 magVinf         = 30.0                          # (m/s) freestream velocity
@@ -64,7 +67,7 @@ function make_lifting_duct(; semiinfinite_wake=false)
     points = hcat(xs, ys)
 
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
                              semiinfinite_wake))
@@ -83,7 +86,7 @@ function make_nonlifting_duct()
     points = hcat(xs, ys)
 
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(CPoffset=1e-10, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio))
 end
@@ -147,8 +150,8 @@ for (i, body) in enumerate((ref1, ref2))
 end
 
 # write VTK for reference solution
-pnl.write_vtk("two_ducts_vpm/reference_solution_1", ref1, 0, 0.0)
-pnl.write_vtk("two_ducts_vpm/reference_solution_2", ref2, 0, 0.0)
+pnl.write_vtk(joinpath(save_path, "reference_solution_1"), ref1, 0, 0.0)
+pnl.write_vtk(joinpath(save_path, "reference_solution_2"), ref2, 0, 0.0)
 
 println()
 
@@ -204,7 +207,7 @@ body_solvers = (solver1, solver2)
 println("\nBegin two-duct simulation ($(n_steps) steps)...")
 @time pnl.simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
     body_solvers, backend, verbose=true,
-    path="two_ducts_vpm", name="two_ducts"
+    path=save_path, name="two_ducts"
 )
 
 # ----------------- REPORT RESULTS ---------------------------------------------

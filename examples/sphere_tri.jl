@@ -19,7 +19,7 @@ import DataFrames: DataFrame
 import GeometricTools: plt, @L_str
 import GeoIO
 
-save_path       = "temps/"                  # Where to save results
+save_path       = joinpath("data", file_name) # Where to save results
 file_name       = "sphere00"                # Prefix of output files
 paraview        = true                      # Whether to visualize results in paraview
 
@@ -59,12 +59,12 @@ solver = pnl.Backslash(body)
 # -------- Postprocess -------------------------------------------------------------
 # induced velocity
 normals = pnl._calc_normals(body)
-ctrlpts = pnl._calc_controlpoints(body, normals; off=1e-8)
+ctrlpts = pnl._calc_controlpoints(body, normals)
 U = zeros(3, size(ctrlpts, 2))
 U = pnl.calcfield_U!(U, body, body, ctrlpts, Vinfs)
 
 # contribution due to gradient of doublet strength
-Ugradmu = pnl.calcfield_Ugradmu(body; off=1e-8, force_cellTE=false, sharpTE=false, Gammai=2)
+Ugradmu = pnl.calcfield_Ugradmu(body; force_cellTE=false, sharpTE=false, Gammai=2)
 
 # total velocity
 pnl.addfields(body, "Ugradmu", "U")
