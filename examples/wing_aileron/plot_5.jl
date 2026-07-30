@@ -7,16 +7,10 @@ using CairoMakie
 
 # ------------------------------------------------------------
 
-df = CSV.read("examples/wing_aileron/second.csv", DataFrame)
+df = CSV.read("examples/wing_aileron/times_bench.csv", DataFrame)
 
-# ------------------------------------------------------------
-
-# Filter 15152-panel rows for both solvers
-
-# ------------------------------------------------------------
-
-df_coupled = filter(r -> r.nps == 15152 && r.solver == "BackslashCoupled", df)
-df_iter    = filter(r -> r.nps == 15152 && r.solver == "BackslashIterative", df)
+# df_coupled = filter(r -> r.nps == 15152 && r.solver == "BackslashCoupled", df)
+# df_iter    = filter(r -> r.nps == 15152 && r.solver == "BackslashIterative", df)
 
 # Ensure same ordering
 

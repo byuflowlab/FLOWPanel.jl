@@ -5,7 +5,7 @@ import numpy as np
 # ------------------------------------------------------------
 # Load CSV
 # ------------------------------------------------------------
-df = pd.read_csv("examples/wing_aileron/second.csv")
+df = pd.read_csv("examples/wing_aileron/third.csv")
 
 # ------------------------------------------------------------
 # Filter panel count
@@ -24,6 +24,7 @@ build_c = coupled["t_build"].values
 solve_c = coupled["t_solve"].values
 
 build_i = iterative["t_build"].values
+solve_i = iterative["t_solve"].values
 
 # ------------------------------------------------------------
 # Plot setup
@@ -61,12 +62,20 @@ ax.bar(
     label="Iterative build",
 )
 
+ax.bar(
+    x + width/2,
+    solve_i,
+    width,
+    bottom=build_i,
+    label="Iterative solve",
+)
+
 # ------------------------------------------------------------
 # Formatting
 # ------------------------------------------------------------
 ax.set_xlabel("Angle of Attack (deg)")
 ax.set_ylabel("Time (s)")
-ax.set_title("15152 Panels: Build + Solve Timing")
+# ax.set_title("15152 Panels: Build + Solve Timing")
 
 # Use actual AOA values as ticks
 ax.set_xticks(x)
@@ -74,7 +83,9 @@ ax.set_xticklabels([f"{v:.1f}" for v in aoa], rotation=45)
 
 ax.legend()
 ax.set_yscale("log")
-ax.grid(axis="y", alpha=0.3)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+# ax.grid(axis="y", alpha=0.3)
 
 plt.tight_layout()
 plt.show()
