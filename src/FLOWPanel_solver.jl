@@ -202,7 +202,7 @@ The formulation (Neumann or Dirichlet) is chosen automatically from the body's
 `DBC` type parameter: control points are placed exterior for Neumann,
 interior for Dirichlet.
 """
-struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
+mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
     Glu::TGLU
     rhs::Vector{TF}
@@ -215,8 +215,8 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
     rhs = zeros(TF, body.ncells)
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
-
-    _G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=true)
+    update_geometry = true
+    _G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=update_geometry)
     Glu = lu!(G)
 
     return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
@@ -236,11 +236,11 @@ end
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolver;
         backend=DirectBackend(),
         update_cps_normals::Bool=true,
+        update_G=false,
         optargs...)
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     potential_old = copy(body.potential)
-    ti = 0.0
     tb = 0.0
     ts = 0.0
 
@@ -250,23 +250,23 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         # the interior self/source potential and the solve is homogeneous unless
         # external influences have already been assembled into that workspace.
         body.potential .= zero(eltype(body.potential))
-        ti = @elapsed influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
-        tb, ts = _solve!(body, solver; backend, optargs...)
+        influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        tb, ts = _solve!(body, solver; backend, update_G, optargs...)
     finally
         # body.potential .= potential_old
         body.CPoffset = CPoffset_old
         body.potential .= potential_old
     end
 
-    return ti, tb, ts
+    return tb, ts
 end
 
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
         backend=DirectBackend(),
         update_cps_normals::Bool=true,
+        update_G::Bool=true,
         optargs...)
-    
-    ti = 0.0
+ 
     tb = 0.0
     ts = 0.0
 
@@ -279,12 +279,12 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
 
     CPoffset_old = _set_formulation_geometry!(body, update_cps_normals)
     try
-        tb, ts = _solve!(body, solver; backend, optargs...)
+        tb, ts = _solve!(body, solver; backend, update_G, optargs...)
     finally
         body.CPoffset = CPoffset_old
     end
 
-    return ti, tb, ts
+    return tb, ts
 end
 
 function numtype(self::AbstractBody)
@@ -326,7 +326,7 @@ end
 
 function KrylovSolver(body::AbstractBody;
         method::Symbol=:gmres,    # Krylov method to use
-        itmax::Int=20,         # Maximum number of iterations
+        itmax::Int=100,         # Maximum number of iterations
         atol::Real=1e-6,            # Convergence tolerance
         rtol::Real=1e-6,            # Relative convergence tolerance
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
@@ -445,6 +445,15 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
 
     # allocate and launch krylov solver
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
+    # Warm-start from this body's previously-converged strength (e.g. from
+    # the prior outer Gauss-Seidel sweep, when this solver is reused across
+    # solve!(bodies::Tuple, solvers::Tuple) iterations). On the very first
+    # call this is still all zeros (the constructor's default), so behavior
+    # is unchanged there; on later calls it lets GMRES resume from a guess
+    # that's already close to the answer instead of restarting from zero
+    # every sweep.
+    x0_norm = LA.norm(solver.unabbreviated_strengths)  # TEMPORARY diagnostic
+    Krylov.warm_start!(workspace, solver.unabbreviated_strengths)
     if solver.preconditioner !== nothing
         ts = @elapsed begin
             Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
@@ -454,7 +463,8 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
         Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
         end
     end
-    @show workspace.stats
+    # TEMPORARY diagnostic (warm-start investigation) -- remove after use
+    println("    [gmres diag/Neumann] ncells=$(self.ncells)  ||x0||=$x0_norm  niter=$(workspace.stats.niter)  solved=$(workspace.stats.solved)  ts=$ts")
 
     # store solution
     solver.unabbreviated_strengths .= workspace.x
@@ -489,12 +499,17 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
     RHS .= -self.potential
 
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
+    # Warm-start from this body's previously-converged doublet strength --
+    # see the analogous comment in the Neumann _solve! above.
+    x0_norm = LA.norm(solver.unabbreviated_strengths)  # TEMPORARY diagnostic
+    Krylov.warm_start!(workspace, solver.unabbreviated_strengths)
     if solver.preconditioner !== nothing
         ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    else 
+    else
         ts = @elapsed Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     end
-    @show workspace.stats
+    # TEMPORARY diagnostic (warm-start investigation) -- remove after use
+    println("    [gmres diag/Dirichlet] ncells=$(self.ncells)  ||x0||=$x0_norm  niter=$(workspace.stats.niter)  solved=$(workspace.stats.solved)  ts=$ts")
 
     solver.unabbreviated_strengths .= workspace.x
     self.strength[:, 1] .= solver.source_strengths
@@ -522,7 +537,7 @@ end
 
 function KrylovCoupled(bodies::Tuple;
         method::Symbol=:gmres,
-        itmax::Int=20,
+        itmax::Int=50,
         atol::Real=1e-6,
         rtol::Real=1e-6,
         backend::AbstractBackend=FastMultipoleBackend())
@@ -595,7 +610,6 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
     fixed_sources = Vector{Any}(undef, length(bodies))
     tb = 0.0
     ts = 0.0
-    ti = 0.0
 
     try
         for (i, body) in enumerate(bodies)
@@ -604,16 +618,26 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
             calc_controlpoints!(body, normals)
             set_strengths!(body)
             fixed_sources[i] = has_dirichlet_bc(body) ? copy(body.strength[:, 1]) : nothing
+            # influence! accumulates onto body.potential (see BackslashCoupled's identical
+            # zero-before-influence! pattern above), so it must start from zero here too --
+            # otherwise potential_old gets added once implicitly (via this un-zeroed
+            # accumulation) and once more explicitly below, double-counting it in the RHS.
+            body.potential .= zero(eltype(body.potential))
         end
 
         scalar_potential = [has_dirichlet_bc(body) for body in bodies]
         velocity = [!has_dirichlet_bc(body) for body in bodies]
-        ti += @elapsed influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
+        influence!(bodies, bodies, backend; scalar_potential, velocity, optargs...)
         for (i, body) in enumerate(bodies)
             if has_dirichlet_bc(body)
                 body.potential .+= potential_old[i]
             end
         end
+        # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
+        # overwriting it, so solver.rhs must start at zero every call -- true by construction
+        # the first time, but not guaranteed if this KrylovCoupled object is reused across
+        # multiple solve! calls (e.g. an AOA sweep).
+        fill!(solver.rhs, 0)
         boundary_condition!(bodies, solver, backend; optargs...)
 
         TF = eltype(solver.rhs)
@@ -641,7 +665,7 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
     end
 
-    return ti, tb, ts
+    return tb, ts
 end
 
 ###############################################################################
@@ -725,12 +749,11 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     ) where {TK, NK, TF}
 
     tb = 0.0
-    Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
         tb = @elapsed begin
             _G!(solver.G, body, body; optargs...)
-            Glu = lu!(solver.G)
+            solver.Glu = lu!(solver.G)
         end
     end
 
@@ -738,7 +761,7 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     rhs .= zero(eltype(rhs))
     calc_bc_noflowthrough!(rhs, body.velocity, body.normals)
 
-    ts = @elapsed ldiv!(view(body.strength, :, strength_index), Glu, rhs)
+    ts = @elapsed ldiv!(view(body.strength, :, strength_index), solver.Glu, rhs)
 
     return tb, ts
 end
@@ -749,15 +772,16 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
 
     solver.rhs .= -self.potential
 
-    Glu = solver.Glu
     tb = 0.0
     if update_G
         solver.G .= 0.0
-        tb += _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
-        Glu = lu!(solver.G)
+        tb += @elapsed begin
+            _G!(solver.G, self, self; kerneloffset=self.kerneloffset)
+            solver.Glu = lu!(solver.G)
+        end
     end
 
-    ts = @elapsed ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    ts = @elapsed ldiv!(view(self.strength, :, 2), solver.Glu, solver.rhs)
 
     return tb, ts
 end
@@ -879,12 +903,30 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
     save_solution!(body, solver)
 end
 
+"""
+    solve!(bodies::Tuple, solvers::Tuple; update_G=false, optargs...)
+
+Matrix-full solvers (e.g. `Backslash`) already assemble and LU-factor their
+`G` matrix at construction time, so `G` is current for whatever body geometry
+and wake state (e.g. `Das`) existed when the solver was built. This outer
+Gauss-Seidel loop therefore trusts that pre-built `G` by default
+(`update_G=false`) and never re-assembles it: cross-body coupling is handled
+entirely through the per-body RHS (via `influence!` from the other bodies),
+not through `G` itself, so `G` does not need to change between outer
+iterations.
+
+Pass `update_G=true` only when a solver is being reused across a change that
+invalidates its cached `G` (e.g. body geometry or wake direction changed
+since the solver was constructed/last rebuilt). In that case `G` is rebuilt
+once, on the first outer iteration, and reused for the remaining iterations.
+"""
 function solve!(bodies::Tuple, solvers::Tuple;
     backend = fill(DirectBackend(), length(bodies)),
     max_outer_iterations::Int = 50,
-    outer_tolerance::Real = 1e-8,
+    outer_tolerance::Real = 1e-6,
     verbose::Bool = false,
     update_cps_normals::Bool = true,
+    update_G::Bool = false,
     optargs...)
 
     println("Tuple of bodies")
@@ -909,21 +951,23 @@ function solve!(bodies::Tuple, solvers::Tuple;
     converged = false
     t_solve = 0.0
     t_build = 0.0
-    t_inf = 0.0
     for iter in 1:max_outer_iterations
+        iter_update_G = iter == 1 && update_G
+
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
 
             sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
+            t_influence = 0.0  # TEMPORARY diagnostic
             if !isempty(sources)
-                ti = @elapsed influence!((body,), sources, backends[i];
+                t_influence = @elapsed influence!((body,), sources, backends[i];
                     scalar_potential=false,
                     velocity=true,
                     optargs...)
-                t_inf += ti
             end
-            ti2, tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false)
-            t_inf += ti2
+            tb, ts = solve!(body, solver; backend=backends[i], update_cps_normals=false, update_G=iter_update_G)
+            # TEMPORARY diagnostic (warm-start investigation) -- remove after use
+            println("  [outer diag] iter=$iter body=$i t_influence=$t_influence tb=$tb ts=$ts")
             t_build += tb
             t_solve += ts
         end
@@ -961,7 +1005,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
         end
     end
 
-    return t_inf, t_build, t_solve
+    return t_build, t_solve
 end
 
 
@@ -1181,8 +1225,8 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         # reset potential
         body.potential .= zero(eltype(body.potential))
     end
-
-    ti = @elapsed influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
+    
+    influence!(bodies, bodies, backend; scalar_potential=[has_dirichlet_bc(target) for target in bodies], velocity=[!has_dirichlet_bc(target) for target in bodies], optargs...)
 
     for (bi, body) in enumerate(bodies)
         if has_dirichlet_bc(body)
@@ -1192,6 +1236,11 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
     end
 
     ### get the boundary_condition for each body to write the RHS
+    # calc_bc_dirichlet accumulates onto RHS (RHS .-= body.potential) rather than
+    # overwriting it, so solver.rhs must start at zero every call -- true by
+    # construction the first time (rhs = zeros(...)), but not guaranteed on
+    # subsequent calls if the same solver object is reused across solves.
+    fill!(solver.rhs, 0)
     boundary_condition!(bodies, solver, backend)
     t_solve = 0.0
 
@@ -1215,8 +1264,6 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         end
     end
 
-    update_G=false
-
     # solve with cached LU
     sol = similar(solver.rhs)
     t_solve += @elapsed ldiv!(sol, solver.Glu, solver.rhs)
@@ -1231,7 +1278,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views b.potential .= solver.phi_ext[r]
     end
 
-    return ti, t_build, t_solve
+    return t_build, t_solve
 end
 
 
