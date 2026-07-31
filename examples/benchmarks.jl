@@ -150,8 +150,8 @@ end
 # ============================================================
 # EXPERIMENT SETUP
 # ============================================================
-# run_names = ["wing_13_13.msh", "surface_13_13.msh"]
-run_names = ["wing_20_20.msh", "surface_20_20.msh"]
+run_names = ["wing_13_13.msh", "surface_13_13.msh"]
+# run_names = ["wing_20_20.msh", "surface_20_20.msh"]
 # run_names = ["wing_40_40.msh", "surface_40_40.msh"]
 # run_names = ["wing_60_60.msh", "surface_60_60.msh"]
 
@@ -197,12 +197,54 @@ rts = [0.0, 10.0]
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 bodytype = pnl.RigidWakeBody{kernel}
 
-out_file = joinpath(pnl.examples_path, "wing_aileron", "results", "krylov_solvers.csv")
+# BENCH_CONFIG selects which KrylovCoupled configuration to run so the preconditioned and
+# unpreconditioned sweeps can be driven as two separate processes writing two separate CSVs.
+# Separate processes matter here: a single process would let the first configuration's FMM
+# tree/buffer allocations and compilation state carry into the second, which is exactly what
+# the timing comparison is trying to isolate. "both" reproduces the previous single-run behavior.
+#   BENCH_CONFIG = "plain" | "precond" | "both"  (default "both")
+#   BENCH_OUT    = output CSV filename (default "clean_krylov_solvers.csv")
+const BENCH_CONFIG = get(ENV, "BENCH_CONFIG", "both")
+BENCH_CONFIG in ("plain", "precond", "both") ||
+    error("BENCH_CONFIG must be one of \"plain\", \"precond\", \"both\"; got $(repr(BENCH_CONFIG))")
+
+out_file = joinpath(pnl.examples_path, "wing_aileron", "results",
+                    get(ENV, "BENCH_OUT", "clean_krylov_solvers.csv"))
+
+# Diagnostic iteration ceiling for this benchmark only -- NOT the library default (KrylovCoupled
+# still defaults to itmax=20). Set high enough that every configuration reports the iteration
+# count it actually needs rather than saturating the cap, which is what makes the cold-vs-warm
+# and preconditioned-vs-not comparisons meaningful. Measured on this geometry: unpreconditioned
+# needs 60, preconditioned needs 20.
+const DIAG_ITMAX = 100
+
+# ============================================================
+# SOLVER DIAGNOSTICS
+# ============================================================
+# Only the matrix-free Krylov solvers carry a KrylovStats. Everything else (Backslash*,
+# FGSSolver, and tuples of per-body solvers driven by the outer Gauss-Seidel loop) writes
+# empty fields so the CSV schema stays uniform across solvers.
+const _N_DIAG_FIELDS = 8   # niter,solved,resid,resid_rel,n_matvec,t_setup,t_matvec,t_precond
+
+solver_diagnostics(::Any) = join(fill("", _N_DIAG_FIELDS), ",")
+
+function solver_diagnostics(solver::pnl.KrylovCoupled)
+    s = solver.stats
+    return "$(s.niter),$(s.solved),$(s.resid),$(s.resid_rel),$(s.n_matvec)," *
+           "$(s.t_setup),$(s.t_matvec),$(s.t_precond)"
+end
 
 # ============================================================
 # SOLVER RUNNER (WRITES DIRECTLY)
 # ============================================================
-function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool=false, solve_kwargs=NamedTuple())
+function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool=false, solve_kwargs=NamedTuple(),
+                    reuse_solver::Bool=false)
+
+    # reuse_solver=true keeps one KrylovCoupled alive across the whole AOA sweep and rebinds it
+    # to each angle's freshly built bodies, so GMRES warm-starts from the previous angle's
+    # converged strengths (and the block-Jacobi preconditioner is built once, not per angle).
+    # Default false preserves the original build-fresh-per-AOA behavior for A/B comparison.
+    solver_cache = Ref{Any}(nothing)
 
     CLs = Float64[]
     nps_tot = 0
@@ -220,11 +262,11 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
     left_center = [12.0*0.5*m, -b/2 * m - tol, 0.0]
     left_normal = [0.0, 1.0, 0.0]
     left_radius = 12.0 * 0.1
-    left_plate = pnl.FlatGround(left_center, left_normal, left_radius; panel_length=12.0*0.1*m)
+    left_plate = pnl.FlatGround(left_center, left_normal, left_radius; panel_length=12.0*0.2*m)
     right_center = [12.0*0.5*m, b/2* m + tol, 0.0]
     right_normal = [0.0, -1.0, 0.0]
     right_radius = 12.0 * 0.1
-    right_plate = pnl.FlatGround(right_center, right_normal, right_radius; panel_length=12.0*0.1*m)
+    right_plate = pnl.FlatGround(right_center, right_normal, right_radius; panel_length=12.0*0.2*m)
     println(left_plate.ncells + right_plate.ncells)
 
     for (i, (AOA, expCL)) in enumerate(zip(AOAs, experimental_CL))
@@ -251,7 +293,13 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
 
         @show p = sum(b.ncells for b in bodies)
 
-        solver, t_build = solver_builder(bodies)
+        if reuse_solver && solver_cache[] isa pnl.KrylovCoupled
+            solver = solver_cache[]
+            t_build = @elapsed pnl.rebind_bodies!(solver, bodies)
+        else
+            solver, t_build = solver_builder(bodies)
+            reuse_solver && (solver_cache[] = solver)
+        end
 
         t_build_solve, t_solve = pnl.solve!(bodies, solver; solve_kwargs...)
         t_build += t_build_solve
@@ -289,8 +337,12 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
         # sq_error += (CL - expCL)^2
 
         write(io,
-            "$name,$nps_tot,$AOA,$CL,$CD,$t_build,$t_solve,$(t_build + t_solve)\n"
+            "$name,$nps_tot,$AOA,$CL,$CD,$t_build,$t_solve,$(t_build + t_solve)," *
+            "$(solver_diagnostics(solver)),$(Threads.nthreads())\n"
         )
+        # Flush per row: the preconditioned FMM config can take down the process natively,
+        # and buffered rows from configs that already succeeded would be lost with it.
+        flush(io)
     end
 
 end
@@ -321,7 +373,7 @@ is_new_file = !isfile(out_file) || filesize(out_file) == 0
 
 open(out_file, "a") do io
     if is_new_file
-        write(io, "solver,nps,AOA,CL,CD,t_build,t_solve,total_time\n")
+        write(io, "solver,nps,AOA,CL,CD,t_build,t_solve,total_time,niter,solved,resid,resid_rel,n_matvec,t_setup,t_matvec,t_precond,nthreads\n")
     end
 
     # BackslashCoupled(bodies) only allocates dummy placeholder storage (not
@@ -470,29 +522,43 @@ open(out_file, "a") do io
     # solver::KrylovCoupled) method rather than the Gauss-Seidel outer loop --
     # solver_builder just needs to return (solver, t_build) directly, no inner
     # tuple-of-solvers like KrylovSolver above.
-    try
-        run_solver(io, "KrylovCoupled-FMM",
-            bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend()), 0.0), AOAs, experimental;
-            solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
-        )
-    catch e
-        println("Error running KrylovCoupled-FMM: ", e)
+    if BENCH_CONFIG in ("plain", "both")
+        try
+            run_solver(io, "KrylovCoupled-FMM",
+                bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend(), itmax=DIAG_ITMAX), 0.0), AOAs, experimental;
+                solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
+            )
+        catch e
+            println("Error running KrylovCoupled-FMM: ", e)
+        end
     end
 
-    # KrylovCoupled-FMM-Preconditioned disabled (2026-07-30): segfaults (native crash, not a catchable Julia
-    # exception) on this real geometry partway into the solve. A small synthetic 2-body Dirichlet case with the
-    # same KrylovCoupled+JacobiPreconditioner+FastMultipoleBackend combination passed cleanly, so this is scale-
-    # or geometry-specific (candidates: multithreaded-only code path -- extra_farfield!'s m2l_list bug above was
-    # also multithread-only -- or an interaction between JacobiPreconditioner's cell partitioning and semi-infinite
-    # wake panels), not a fundamental incompatibility. Root cause not yet isolated; re-enable once found.
-    # try
-    #     run_solver(io, "KrylovCoupled-FMM-Preconditioned",
-    #         bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25), 0.0), AOAs, experimental;
-    #         solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
-    #     )
-    # catch e
-    #     println("Error running KrylovCoupled-FMM-Preconditioned: ", e)
-    # end
+    # Fixed 2026-07-31 (was: native crash on this geometry). Two independent bugs:
+    #   1. KrylovCoupled built the preconditioner in its constructor, before anything called
+    #      calc_controlpoints!, so every panel reported position (0,0,0) and hashed into one
+    #      cell -- the "block" became the whole ncells x ncells dense matrix.
+    #   2. FastMultipole's save_strengths built a tuple from a generator indexing a
+    #      heterogeneous system tuple by a runtime index; with differing strength_dims across
+    #      systems (2 for the doublet+source wings, 1 for the source-only plates) that is
+    #      type-unstable and miscompiled to an access violation. Homogeneous tuples were fine,
+    #      which is why the synthetic 2-body test passed.
+    # Measured on this geometry: preconditioning cuts GMRES from 60 iterations to 20 and the
+    # solve from 65.8 s to 22.6 s, for a ~4.5 s one-time build and 0.02 s of apply.
+    if BENCH_CONFIG in ("precond", "both")
+        try
+            run_solver(io, "KrylovCoupled-FMM-Preconditioned",
+                bodies -> (pnl.KrylovCoupled(bodies; backend=pnl.FastMultipoleBackend(), preconditioner_cell_size=0.25, itmax=DIAG_ITMAX), 0.0), AOAs, experimental;
+                solve_kwargs=(backend=pnl.FastMultipoleBackend(),)
+            )
+        catch e
+            println("Error running KrylovCoupled-FMM-Preconditioned: ", e)
+        end
+    end
+
+    # Warm-start variants disabled 2026-07-31: scope narrowed to the two configurations above
+    # (KrylovCoupled + FMM, with and without the preconditioner). The `reuse_solver=true` path
+    # and `rebind_bodies!` remain available in the library if the sweep-level optimization is
+    # wanted later; nothing here depends on them.
 
     # TEMPORARY comparison: is FastMultipoleBackend's per-call tree-rebuild
     # overhead (expansion_order=10, rebuilt from scratch every single GMRES

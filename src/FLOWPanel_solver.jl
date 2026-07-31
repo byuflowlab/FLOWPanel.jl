@@ -291,6 +291,91 @@ get_strength_name(::AbstractBody{ConstantDoublet, 1, <:Any}) = "mu"
 get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
 
 ################################################################################
+# KRYLOV SOLVE DIAGNOSTICS
+################################################################################
+
+"""
+    KrylovStats()
+
+Diagnostics for a single matrix-free Krylov solve, overwritten by each `solve!`.
+
+`niter`, `solved`, `status` and `resid` come from the `Krylov` workspace; `resid_rel`
+normalizes `resid` by `‖rhs‖`. The `t_*` fields decompose the single `t_solve` number that
+`solve!` returns: `t_setup` is backend/operator construction outside the iteration loop,
+`t_matvec` is cumulative time inside the operator (which includes the backend evaluation),
+and `t_precond` is cumulative time applying the preconditioner. `n_matvec` counts operator
+applications, which exceeds `niter` by the setup application(s) a method performs.
+"""
+mutable struct KrylovStats
+    niter::Int
+    solved::Bool
+    status::String
+    resid::Float64
+    resid_rel::Float64
+    n_matvec::Int
+    t_setup::Float64
+    t_matvec::Float64
+    t_precond::Float64
+end
+
+KrylovStats() = KrylovStats(0, false, "not solved", NaN, NaN, 0, 0.0, 0.0, 0.0)
+
+"""
+    reset_stats!(stats::KrylovStats)
+
+Zero the counters before a solve. Named to avoid colliding with `FastMultipole.reset!`.
+"""
+function reset_stats!(stats::KrylovStats)
+    stats.niter = 0
+    stats.solved = false
+    stats.status = "not solved"
+    stats.resid = NaN
+    stats.resid_rel = NaN
+    stats.n_matvec = 0
+    stats.t_setup = 0.0
+    stats.t_matvec = 0.0
+    stats.t_precond = 0.0
+    return stats
+end
+
+"""
+    record_stats!(stats, workspace, rhs)
+
+Copy the `Krylov` workspace's termination state into `stats`. The residual history is only
+populated when `krylov_solve!` is called with `history=true`; without it `resid` stays `NaN`
+rather than silently reporting a wrong number.
+"""
+function record_stats!(stats::KrylovStats, workspace, rhs::AbstractVector)
+    ks = workspace.stats
+    stats.niter = ks.niter
+    stats.solved = ks.solved
+    stats.status = string(ks.status)
+    if !isempty(ks.residuals)
+        stats.resid = Float64(last(ks.residuals))
+        nb = LA.norm(rhs)
+        stats.resid_rel = nb > 0 ? stats.resid / nb : NaN
+    end
+    return stats
+end
+
+"""
+    TimedPreconditioner(inner, stats)
+
+Wraps a preconditioner so each `ldiv!` accumulates into `stats.t_precond`. Krylov applies
+the preconditioner internally, so this wrapper is the only way to separate its cost from
+the matvec cost.
+"""
+struct TimedPreconditioner{TP}
+    inner::TP
+    stats::KrylovStats
+end
+
+function LA.ldiv!(y::AbstractVector, P::TimedPreconditioner, x::AbstractVector)
+    P.stats.t_precond += @elapsed LA.ldiv!(y, P.inner, x)
+    return y
+end
+
+################################################################################
 # GMRES Solver
 ################################################################################
 
@@ -316,7 +401,7 @@ end
 
 function KrylovSolver(body::AbstractBody;
         method::Symbol=:gmres,    # Krylov method to use
-        itmax::Int=100,         # Maximum number of iterations
+        itmax::Int=20,          # Maximum number of iterations
         atol::Real=1e-6,            # Convergence tolerance
         rtol::Real=1e-6,            # Relative convergence tolerance
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
@@ -445,7 +530,6 @@ function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolv
     # that's already close to the answer instead of restarting from zero
     # every sweep.
     Krylov.warm_start!(workspace, solver.unabbreviated_strengths)
-    # IMPROVEMENT : 2026-07-30 : remove the TEMPORARY warm-start diagnostic println (and its now-unused x0_norm) : it fired unconditionally on every GMRES solve, polluting stdout on any batch run (e.g. an AOA/panel-count sweep) with no way to opt out
     if solver.preconditioner !== nothing
         ts = @elapsed begin
             Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
@@ -522,11 +606,12 @@ mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number,TP} <: Abst
     atol::Float64
     rtol::Float64
     preconditioner::TP     # nothing or JacobiPreconditioner
+    stats::KrylovStats     # diagnostics from the most recent solve!
 end
 
 function KrylovCoupled(bodies::Tuple;
         method::Symbol=:gmres,
-        itmax::Int=50,
+        itmax::Int=20,
         atol::Real=1e-6,
         rtol::Real=1e-6,
         backend::AbstractBackend=FastMultipoleBackend(),
@@ -540,13 +625,57 @@ function KrylovCoupled(bodies::Tuple;
 
     # build block Jacobi preconditioner if requested
     if preconditioner_cell_size > 0
+        # JacobiPreconditioner partitions bodies by get_position, which reads controlpoints.
+        # On a freshly constructed body those are still all zeros, so without this every panel
+        # hashes to a single cell no matter what cell_size is: the "block" becomes the entire
+        # ncells x ncells dense matrix (341 MB at 6.5k panels, 5.2 GB at 25.6k, before the LU
+        # copy), assembled one element at a time. That is the native crash previously attributed
+        # to a badly chosen cell_size, and it also silently produced a meaningless preconditioner
+        # whenever it did fit in memory. KrylovSolver's constructor already does this before its
+        # own identical preconditioner branch; KrylovCoupled did not.
+        for body in bodies
+            calc_normals!(body)
+            calc_controlpoints!(body)
+        end
         preconditioner = FastMultipole.JacobiPreconditioner(bodies; cell_size=preconditioner_cell_size)
     else
         preconditioner = nothing
     end
 
     return KrylovCoupled{typeof(bodies),typeof(backend),TF,typeof(preconditioner)}(
-        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol), preconditioner)
+        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol), preconditioner,
+        KrylovStats())
+end
+
+"""
+    rebind_bodies!(solver::KrylovCoupled, bodies::Tuple)
+
+Point an existing solver at a freshly built body tuple while retaining `solver.x`, so the next
+`solve!` warm-starts from the previous solution instead of from zero.
+
+Intended for AOA sweeps. `RigidWakeBody`'s rigid wake direction `Das` is set from `Vinf`, so the
+bodies must be rebuilt at every angle, but the *surface* panels are unchanged in count and
+ordering — which is exactly the condition under which the previous angle's solution is a good
+initial guess. Rebuilding the solver instead (the usual pattern) throws that away.
+
+The preconditioner is retained too. It partitions on control points, which do not move with AOA,
+so the partition stays exact; only the wake contribution to each block drifts, and a
+preconditioner only has to approximate. This also avoids paying its build cost per angle.
+
+Errors if the new tuple differs in type or per-body cell count, since either would make the
+retained `x` meaningless.
+"""
+function rebind_bodies!(solver::KrylovCoupled, bodies::Tuple)
+    @assert typeof(bodies) === typeof(solver.bodies) ""*
+        "rebind_bodies! requires an identically-typed body tuple;"*
+        " got $(typeof(bodies)) for a solver built on $(typeof(solver.bodies))."
+    old_ncells = [body.ncells for body in solver.bodies]
+    new_ncells = [body.ncells for body in bodies]
+    @assert old_ncells == new_ncells ""*
+        "rebind_bodies! requires identical per-body cell counts;"*
+        " got $new_ncells for a solver built on $old_ncells."
+    solver.bodies = bodies
+    return solver
 end
 
 function _coupled_offsets(bodies::Tuple)
@@ -582,20 +711,23 @@ function _collect_coupled_operator!(Ax::AbstractVector, bodies::Tuple)
 end
 
 function (solver::KrylovCoupled)(C, B, α, β)
-    _write_coupled_unknowns!(solver.bodies, B)
+    solver.stats.n_matvec += 1
+    solver.stats.t_matvec += @elapsed begin
+        _write_coupled_unknowns!(solver.bodies, B)
 
-    for body in solver.bodies
-        body.velocity .= zero(eltype(body.velocity))
-        body.potential .= zero(eltype(body.potential))
+        for body in solver.bodies
+            body.velocity .= zero(eltype(body.velocity))
+            body.potential .= zero(eltype(body.potential))
+        end
+
+        scalar_potential = [has_dirichlet_bc(body) for body in solver.bodies]
+        velocity = [!has_dirichlet_bc(body) for body in solver.bodies]
+        influence!(solver.bodies, solver.bodies, solver.backend; scalar_potential, velocity)
+        _collect_coupled_operator!(solver.Ax, solver.bodies)
+
+        C .*= β
+        C .+= α .* solver.Ax
     end
-
-    scalar_potential = [has_dirichlet_bc(body) for body in solver.bodies]
-    velocity = [!has_dirichlet_bc(body) for body in solver.bodies]
-    influence!(solver.bodies, solver.bodies, solver.backend; scalar_potential, velocity)
-    _collect_coupled_operator!(solver.Ax, solver.bodies)
-
-    C .*= β
-    C .+= α .* solver.Ax
     return nothing
 end
 
@@ -641,15 +773,32 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         TF = eltype(solver.rhs)
         n = length(solver.rhs)
         prod! = (y, x, α, β) -> solver(y, x, α, β)
-        tb += @elapsed begin
+        # Counters must be zeroed after the RHS assembly above, since that path does not go
+        # through the operator, and before the operator is first applied below.
+        reset_stats!(solver.stats)
+        solver.stats.t_setup += @elapsed begin
             A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
+            workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
+            # Warm-start from the previously converged solution, matching what KrylovSolver
+            # already does unconditionally at its own solve site. On a freshly constructed
+            # solver `x` is still all zeros, so this is a no-op then; it only bites when the
+            # same solver is reused across solves (see `rebind_bodies!` for AOA sweeps).
+            Krylov.warm_start!(workspace, solver.x)
         end
-        workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
+        tb += solver.stats.t_setup
         # IMPROVEMENT : 2026-07-30 : pass the optional JacobiPreconditioner to krylov_solve! : mirrors KrylovSolver's identical branch -- previously KrylovCoupled built no preconditioner at all and this call never passed M
+        # history=true fills workspace.stats.residuals so record_stats! can report a real
+        # residual instead of NaN; the history is one Float64 per iteration, so at itmax=20
+        # it is free next to a single matvec.
         if solver.preconditioner !== nothing
-            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+            M = TimedPreconditioner(solver.preconditioner, solver.stats)
+            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; M, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax, history=true)
         else
-            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+            ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax, history=true)
+        end
+        record_stats!(solver.stats, workspace, solver.rhs)
+        if !solver.stats.solved
+            @warn "KrylovCoupled did not converge; strengths are from capped/stalled iterations and must not be treated as converged." niter=solver.stats.niter itmax=solver.itmax status=solver.stats.status resid=solver.stats.resid resid_rel=solver.stats.resid_rel
         end
         solver.x .= workspace.x
 
