@@ -58,7 +58,7 @@ output-log, and error-log directives. Use `set -euo pipefail` so a failed
 workflow stage stops the job. Slurm opens log paths before the script runs, so
 any requested log directory must already exist when the user submits the job.
 
-If a run should use Julia or Python, include the appropriate module with `module load julia python` etc.
+If a run should use Julia or Python, include the appropriate module with `module load julia python` etc. Note that Julia 1.11 is used on the HPC, in constrast with 1.12 which is currently used on this Mac.
 
 Set the single `THREADS=<N>` variable explicitly to the same CPU count requested
 by `#SBATCH --ntasks=<N>`, and export it consistently through

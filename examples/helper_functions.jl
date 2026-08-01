@@ -200,6 +200,115 @@ function generate_revolution_liftbody(bodytype::Type{B}, args...;
     end
 end
 
+"""
+    open_boundary_loops(cells) -> Vector{Vector{Int}}
+
+Chain the open (singly-referenced) edges of a triangle mesh into node loops.
+Each returned loop lists its nodes in the direction the *surface* cells traverse
+them, so a cap face closing edge `(a, b)` must traverse `b -> a` to stay wound
+consistently with the surface. Returns an empty vector for a watertight mesh.
+
+This is the connectivity half of `pnl.iswatertight`, kept here because the
+library returns open *cells* rather than the ordered boundary chains a cap
+needs.
+"""
+function open_boundary_loops(cells::AbstractMatrix{<:Integer})
+    incidence = Dict{Tuple{Int, Int}, Int}()
+    for ci in axes(cells, 2)
+        n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+        for (a, b) in ((n1, n2), (n2, n3), (n3, n1))
+            key = a < b ? (a, b) : (b, a)
+            incidence[key] = get(incidence, key, 0) + 1
+        end
+    end
+
+    successor = Dict{Int, Int}()
+    for ci in axes(cells, 2)
+        n1, n2, n3 = cells[1, ci], cells[2, ci], cells[3, ci]
+        for (a, b) in ((n1, n2), (n2, n3), (n3, n1))
+            key = a < b ? (a, b) : (b, a)
+            incidence[key] == 1 || continue
+            haskey(successor, a) && error("open boundary is not a simple loop: " *
+                "node $a starts two boundary edges (non-manifold boundary, or " *
+                "inconsistent surface winding)")
+            successor[a] = b
+        end
+    end
+
+    loops = Vector{Vector{Int}}()
+    visited = Set{Int}()
+    for start in sort!(collect(keys(successor)))
+        start in visited && continue
+        loop = Int[]
+        node = start
+        while !(node in visited)
+            push!(visited, node)
+            push!(loop, node)
+            haskey(successor, node) || error("open boundary chain dead-ends at " *
+                "node $node; the boundary is not a closed loop")
+            node = successor[node]
+        end
+        node == start || error("open boundary loops are not disjoint (chain from " *
+            "node $start re-entered an earlier loop at node $node)")
+        push!(loops, loop)
+    end
+    return loops
+end
+
+"""
+    add_flat_tip_caps(nodes, cells) -> (nodes, cells, cap_nodes, cap_cells)
+
+Close every open boundary loop of a triangle mesh with a flat centroid-fan cap:
+one new node at the mean of each loop's nodes, fanned to every loop edge. New
+nodes and cells are *appended*, so existing node and cell indices — and hence
+any shedding matrix already expressed in them — are unchanged.
+
+Centroid-fan is chosen because it inherits the contour's symmetry: if the loop
+nodes are invariant (as a set) under a reflection, so is the fan, since the
+centroid maps to the centroid and each fan face to the fan face of the image
+edge. A single quad/ear triangulation would not.
+
+`cap_nodes` and `cap_cells` are the appended indices, for symmetry and
+watertightness checks. Returns copies; the inputs are not mutated.
+
+Motivation: the interior-Dirichlet Green identity assumes a closed surface, so
+an open-tip lofted wing is outside the formulation's assumptions.
+"""
+function add_flat_tip_caps(nodes::AbstractMatrix, cells::AbstractMatrix{<:Integer})
+    loops = open_boundary_loops(cells)
+    if isempty(loops)
+        return copy(nodes), Matrix{Int}(cells), Int[], Int[]
+    end
+
+    n_node0 = size(nodes, 2)
+    n_cell0 = size(cells, 2)
+    out_nodes = Matrix{eltype(nodes)}(undef, 3, n_node0 + length(loops))
+    out_cells = Matrix{Int}(undef, 3, n_cell0 + sum(length, loops))
+    out_nodes[:, 1:n_node0] .= nodes
+    out_cells[:, 1:n_cell0] .= cells
+
+    cap_nodes = Int[]
+    cap_cells = Int[]
+    ni, ci = n_node0, n_cell0
+    for loop in loops
+        ni += 1
+        for d in 1:3
+            out_nodes[d, ni] = sum(nodes[d, n] for n in loop) / length(loop)
+        end
+        push!(cap_nodes, ni)
+        for k in eachindex(loop)
+            a = loop[k]
+            b = loop[k == length(loop) ? firstindex(loop) : k + 1]
+            ci += 1
+            # Reverse the surface's traversal of (a, b) so the cap face is wound
+            # consistently with the cell it closes against.
+            out_cells[:, ci] .= (b, a, ni)
+            push!(cap_cells, ci)
+        end
+    end
+    return out_nodes, out_cells, cap_nodes, cap_cells
+end
+
 function simplewing(b::Number, ar::Number, tr::Number, twist_root::Number,
                     twist_tip::Number, lambda::Number, gamma::Number;
                     bodytype::Type{<:pnl.AbstractBody}=pnl.RigidWakeBody{Union{pnl.ConstantSource,pnl.ConstantDoublet}},
@@ -261,6 +370,7 @@ function simplewing_mirrored(b::Number, ar::Number, tr::Number, twist_root::Numb
                              verify_rflspline::Bool=true,
                              mirror_tol::Real=100eps(Float64),
                              bodyoptargs=(;),
+                             caps::Symbol=:none,
                              opt_args...)
     c_tip = b/ar
     c_root = c_tip/tr
@@ -329,6 +439,15 @@ function simplewing_mirrored(b::Number, ar::Number, tr::Number, twist_root::Numb
     for ci in pos_order
         out_ci += 1
         cells[:, out_ci] .= half_cells[:, ci]
+    end
+
+    if caps === :flat
+        # Close the two open tips before anything reads the connectivity: the
+        # interior-Dirichlet Green identity assumes a closed surface. Caps are
+        # appended, so `half_cells`-derived TE node indices stay valid.
+        nodes, cells, _, _ = add_flat_tip_caps(nodes, cells)
+    elseif caps !== :none
+        throw(ArgumentError("caps must be :none or :flat; got $caps"))
     end
 
     watertight, _ = pnl.iswatertight(nodes, cells)

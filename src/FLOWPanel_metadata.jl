@@ -319,8 +319,9 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
         clean_files::Bool=true,
-        solver_options::NamedTuple=(;))
-    return Dict{String, Any}(
+        solver_options::NamedTuple=(;),
+        kutta=nothing)
+    manifest = Dict{String, Any}(
         "meta" => Dict{String, Any}(
             "schema_version" => 1,
             "purpose" => "FLOWPanel restart/replay metadata",
@@ -343,6 +344,9 @@ function _metadata_manifest_dict(name, systems::Tuple, wakes::Tuple, frames,
         "frame" => [_frame_static_dict(frame, i) for (i, frame) in enumerate(frames)],
         "monitor" => [_monitor_metadata(m) for m in monitors],
     )
+    # non-default wake-attachment/Kutta-closure configuration (BRAINSTORM 015)
+    isnothing(kutta) || (manifest["kutta"] = kutta)
+    return manifest
 end
 
 function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
@@ -352,21 +356,25 @@ function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
         clean_files::Bool=true,
-        solver_options::NamedTuple=(;))
+        solver_options::NamedTuple=(;),
+        kutta=nothing)
     mkpath(path)
     file = _metadata_toml_path(path, name)
     open(file, "w") do io
         TOML.print(io, _metadata_manifest_dict(name, systems, wakes, frames,
             t_range, body_solvers, backend_wake, backend_solve, backend_system,
             monitors; start_step, set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement, clean_files, solver_options))
+            set_Das_min_kinematic_displacement, clean_files, solver_options,
+            kutta))
     end
     return file
 end
 
-function _append_metadata_step_toml(path, name, frames, i_step::Int, t::Real; uinf=nothing)
+function _append_metadata_step_toml(path, name, frames, i_step::Int, t::Real;
+        uinf=nothing, kutta=nothing)
     file = _metadata_toml_path(path, name)
     step = _step_dict(frames, i_step, t; uinf)
+    isnothing(kutta) || (step["kutta"] = kutta)
     data = isfile(file) ? TOML.parsefile(file) : Dict{String, Any}()
     steps = get(data, "step", Any[])
     existing = findfirst(s -> Int(s["i_step"]) == i_step, steps)

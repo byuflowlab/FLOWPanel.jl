@@ -20,6 +20,87 @@ end
 
 _accumulate_Das!(::AbstractBody, eta; min_displacement=0.0) = nothing
 
+# --- arc-following kinematic Das ---
+#
+# `_accumulate_Das!` lays the offset along the trailing-edge velocity, i.e. along
+# the *tangent* to the path the trailing edge sweeps. That is only first-order
+# accurate in θ = |ω|τ: for a rotor it lands at radius r√(1+θ²) rather than r.
+# `accumulate_Das_arc!` (FLOWPanel_frames.jl) follows the actual arc instead.
+
+_das_stash(sys::AbstractLiftingBody) = [copy(d) for d in sys.Das]
+_das_stash(::AbstractBody) = nothing
+
+function _das_zero!(sys::AbstractLiftingBody)
+    for d in sys.Das
+        fill!(d, zero(eltype(d)))
+    end
+    return nothing
+end
+_das_zero!(::AbstractBody) = nothing
+
+# Apply the minimum-displacement floor to the freshly computed kinematic
+# contribution, then add back whatever was already in `Das` (e.g. a freestream
+# contribution accumulated earlier). This preserves `_accumulate_Das!`'s
+# semantics, where the floor applies to the kinematic increment alone.
+function _das_floor_restore!(sys::AbstractLiftingBody, saved, min_displacement)
+    for (k, Das) in enumerate(sys.Das)
+        Vte = sys.velocity_te[k]
+        for j in axes(Das, 2)
+            len = sqrt(Das[1,j]^2 + Das[2,j]^2 + Das[3,j]^2)
+            if len < min_displacement
+                if len > zero(len)
+                    scale = min_displacement / len
+                    for i in 1:3
+                        Das[i,j] *= scale
+                    end
+                else
+                    # degenerate (stationary node): fall back to the TE velocity
+                    speed = sqrt(Vte[1,j]^2 + Vte[2,j]^2 + Vte[3,j]^2)
+                    if speed > zero(speed)
+                        scale = min_displacement / speed
+                        for i in 1:3
+                            Das[i,j] = Vte[i,j] * scale
+                        end
+                    end
+                end
+            end
+            for i in 1:3
+                Das[i,j] += saved[k][i,j]
+            end
+        end
+    end
+    return nothing
+end
+_das_floor_restore!(::AbstractBody, saved, min_displacement) = nothing
+
+"""
+    _accumulate_Das_kinematic!(systems_tuple, frames, τ; min_displacement, arc)
+
+Accumulate the kinematic first-wake-row offset over time `τ`. With `arc=true`
+(default) the offset follows the trailing edge's swept arc; with `arc=false` it
+uses the legacy tangent-vector construction. The two agree to first order in
+`|ω|τ` and are identical for purely translating bodies.
+"""
+function _accumulate_Das_kinematic!(systems_tuple::Tuple, frames, τ;
+        min_displacement=0.0, arc::Bool=true)
+    if !arc
+        for sys in systems_tuple
+            _accumulate_Das!(sys, τ; min_displacement)
+        end
+        return nothing
+    end
+
+    saved = map(_das_stash, systems_tuple)
+    for sys in systems_tuple
+        _das_zero!(sys)
+    end
+    accumulate_Das_arc!(systems_tuple, frames, τ)
+    for (i, sys) in enumerate(systems_tuple)
+        _das_floor_restore!(sys, saved[i], min_displacement)
+    end
+    return nothing
+end
+
 #--- wake tuple helpers ---#
 
 function _systems_tuple(systems::Tuple)
@@ -281,7 +362,8 @@ end
 function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
-        set_Das_min_kinematic_displacement=0.0)
+        set_Das_min_kinematic_displacement=0.0,
+        set_Das_kinematic_arc::Bool=true)
     if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic)
         return systems
     end
@@ -302,10 +384,9 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
             extra_reset!(sys)
         end
         kinematic_velocity!(systems_tuple, frames)
-        for sys in systems_tuple
-            _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
-                min_displacement=set_Das_min_kinematic_displacement)
-        end
+        _accumulate_Das_kinematic!(systems_tuple, frames, dt0 * set_Das_eta_kinematic;
+            min_displacement=set_Das_min_kinematic_displacement,
+            arc=set_Das_kinematic_arc)
     end
 
     # reset velocity fields modified during Das computation
@@ -314,6 +395,42 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
     end
 
     return systems
+end
+
+# ------------------------------------------------------------------------
+# Stage helpers of _steady_aerodynamics! (pure code motion; BRAINSTORM 015
+# Phase 3). The legacy function calls them in the identical statement order;
+# the non-default Kutta runtime (_kutta_step! in FLOWPanel_kutta.jl) reuses
+# them so both paths share one implementation of each stage.
+# ------------------------------------------------------------------------
+
+"Collect wake probes/targets/sources (pure; stage helper of
+`_steady_aerodynamics!`)."
+function _sa_collect(systems_tuple::Tuple, wakes_tuple::Tuple)
+    wake_probes = _collect_wake_probes(wakes_tuple)
+    targets = (systems_tuple..., wake_probes...)
+    wake_sources = _collect_wake_sources(wakes_tuple)
+    return wake_probes, targets, wake_sources
+end
+
+"Reset wakes and bodies, apply the freestream, and add kinematic velocities
+(stage helper of `_steady_aerodynamics!`)."
+function _sa_reset_freestream_kinematic!(systems_tuple::Tuple,
+        wakes_tuple::Tuple, frames, uinf)
+    for w in wakes_tuple
+        !isnothing(w) && reset!(w)
+    end
+    for sys in systems_tuple
+        reset!(sys)
+    end
+
+    apply_freestream!(systems_tuple, uinf)
+    for w in wakes_tuple
+        !isnothing(w) && apply_freestream!(w, uinf)
+    end
+
+    kinematic_velocity!(systems_tuple, frames)
+    return nothing
 end
 
 function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple,
@@ -334,23 +451,9 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         i_step::Int=0)
     normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
         default_basis=:quad)
-    for w in wakes_tuple
-        !isnothing(w) && reset!(w)
-    end
-    for sys in systems_tuple
-        reset!(sys)
-    end
 
-    wake_probes = _collect_wake_probes(wakes_tuple)
-    targets = (systems_tuple..., wake_probes...)
-    wake_sources = _collect_wake_sources(wakes_tuple)
-
-    apply_freestream!(systems_tuple, uinf)
-    for w in wakes_tuple
-        !isnothing(w) && apply_freestream!(w, uinf)
-    end
-
-    kinematic_velocity!(systems_tuple, frames)
+    wake_probes, targets, wake_sources = _sa_collect(systems_tuple, wakes_tuple)
+    _sa_reset_freestream_kinematic!(systems_tuple, wakes_tuple, frames, uinf)
 
     if update_trailing_edges
         for (sys, w) in zip(systems_tuple, wakes_tuple)
@@ -362,6 +465,39 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     # the wake-only contribution afterwards (no-op for the default)
     formulation_prewake!(formulation, formulation_state, systems_tuple)
 
+    _sa_wake_influence!(targets, wake_sources, backend_wake;
+        needs_induced_vorticity, wakerow_no_hessian_to_particles,
+        panel_wake_on_particles, particle_hessian_self)
+
+    _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
+    solve_formulation!(formulation, formulation_state, systems, systems_tuple,
+        wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
+
+    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
+        grad_mu_options=normalized_grad_mu_options)
+
+    _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+    _sa_body_influence!(targets, systems_tuple, backend_system;
+        needs_induced_vorticity, body_on_wake, body_hessian_to_particles,
+        body_gradient_kerneloffset)
+
+    if diagnose_particle_influence
+        _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
+            needs_induced_vorticity, particle_hessian_self, diagnostic_vertical)
+    end
+
+    _sa_half_jump!(systems_tuple, normalized_grad_mu_options)
+
+    return nothing
+end
+
+"Frozen wake-influence stage of `_steady_aerodynamics!` (pure code motion):
+wake sources → bodies and wake probes, with the legacy diagnostic gates."
+function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
+        needs_induced_vorticity::Bool=false,
+        wakerow_no_hessian_to_particles::Bool=false,
+        panel_wake_on_particles::Bool=true,
+        particle_hessian_self::Bool=true)
     if length(wake_sources) > 0
         # Diagnostic gates:
         #   wakerow_no_hessian_to_particles: ablate the panel-wake-row ->
@@ -449,15 +585,19 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
                 extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
         end
     end
+    return nothing
+end
 
-    _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
-    solve_formulation!(formulation, formulation_state, systems, systems_tuple,
-        wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
-
-    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
-        grad_mu_options=normalized_grad_mu_options)
-
-    _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+"Post-solve body-influence stage of `_steady_aerodynamics!` (pure code
+motion): body → (bodies, wake probes) at `kerneloffset_targets`, with the
+legacy `body_on_wake` and split-gradient gates. The caller sets the target
+kernel offsets first."
+function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
+        backend_system;
+        needs_induced_vorticity::Bool=false,
+        body_on_wake::Bool=true,
+        body_hessian_to_particles::Bool=false,
+        body_gradient_kerneloffset::Float64=NaN)
     if !body_on_wake
         # body-on-body only; skip the body-on-wake-probes pass so the wake
         # never receives body-induced velocity this step.
@@ -513,18 +653,16 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
             _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
         end
     end
+    return nothing
+end
 
-    if diagnose_particle_influence
-        _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
-            needs_induced_vorticity, particle_hessian_self, diagnostic_vertical)
-    end
-
-    # Add the +½∇μ tangential half-jump on each surface so body.velocity is
-    # the EXTERIOR surface limit (matching OLD calcfield_U!). The kernel-
-    # induced velocity at the on-surface centroid is the PV (continuous
-    # through the doublet sheet); the exterior limit requires this extra
-    # tangential half-jump that depends on neighbor strengths, which
-    # _self_limit cannot supply locally.
+"Exterior half-jump stage of `_steady_aerodynamics!` (pure code motion): add
+the +½∇μ tangential half-jump on each surface so body.velocity is the
+EXTERIOR surface limit (matching OLD calcfield_U!). The kernel-induced
+velocity at the on-surface centroid is the PV (continuous through the doublet
+sheet); the exterior limit requires this extra tangential half-jump that
+depends on neighbor strengths, which _self_limit cannot supply locally."
+function _sa_half_jump!(systems_tuple::Tuple, normalized_grad_mu_options)
     for body in systems_tuple
         if has_grad_mu(body)
             compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
@@ -536,7 +674,6 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
                 grad_mu_options=normalized_grad_mu_options)
         end
     end
-
     return nothing
 end
 
@@ -587,6 +724,8 @@ function steady!(systems, frames, uinf;
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
         grad_mu_options=(;),
+        wake_attachment::AbstractWakeAttachment=RigidTransitionAttachment(),
+        kutta_closure::AbstractKuttaClosure=JumpKutta(),
         verbose=false
     )
     i_run >= 1 || throw(ArgumentError("i_run must be >= 1, got $(i_run)."))
@@ -598,6 +737,15 @@ function steady!(systems, frames, uinf;
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
     audit_monitors(monitors)
+
+    # Non-default wake-attachment/Kutta-closure configuration (BRAINSTORM 015):
+    # steady! supports Route A only, validated before any state is mutated.
+    kutta_is_legacy = _is_legacy_kutta(wake_attachment, kutta_closure)
+    if !kutta_is_legacy
+        _validate_kutta_configuration(:steady, systems_tuple, wakes_tuple,
+            body_solvers, VelocityThroughSources(), backend_system,
+            wake_attachment, kutta_closure)
+    end
 
     i_step = i_run - 1
     verbose && println("\tsteady run $(i_run)")
@@ -618,17 +766,32 @@ function steady!(systems, frames, uinf;
         calc_controlpoints!(sys)
     end
 
-    _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
-        body_solvers; backend_solve, backend_system, needs_induced_vorticity,
-        wakerow_no_hessian_to_particles,
-        body_hessian_to_particles,
-        body_gradient_kerneloffset,
-        body_on_wake,
-        panel_wake_on_particles,
-        particle_hessian_self,
-        diagnose_particle_influence,
-        diagnostic_vertical,
-        grad_mu_options)
+    if kutta_is_legacy
+        _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
+            body_solvers; backend_solve, backend_system, needs_induced_vorticity,
+            wakerow_no_hessian_to_particles,
+            body_hessian_to_particles,
+            body_gradient_kerneloffset,
+            body_on_wake,
+            panel_wake_on_particles,
+            particle_hessian_self,
+            diagnose_particle_influence,
+            diagnostic_vertical,
+            grad_mu_options)
+    else
+        kutta_runtime = _initialize_kutta(:steady, systems_tuple[1],
+            _single_body_solver(body_solvers), nothing,
+            wake_attachment, kutta_closure)
+        _kutta_step!(kutta_runtime, systems_tuple, wakes_tuple, frames, uinf;
+            backend_solve, backend_system, needs_induced_vorticity,
+            grad_mu_options, i_step,
+            wakerow_no_hessian_to_particles,
+            body_hessian_to_particles,
+            body_gradient_kerneloffset,
+            body_on_wake,
+            panel_wake_on_particles,
+            particle_hessian_self)
+    end
 
     monitor_context = MonitorContext()
     monitor_set_time!(monitor_context, i_step * dt)
@@ -677,6 +840,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
+        set_Das_kinematic_arc::Bool=true,
+        set_Das_refresh::Bool=false,
         start_step::Int=0,
         clean_files::Bool=true,
         compress_vtk::Bool=true,
@@ -693,6 +858,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         diagnostic_vertical=(0.0, 0.0, 1.0),
         grad_mu_options=(;),
         formulation::AbstractSolveFormulation=VelocityThroughSources(),
+        wake_attachment::AbstractWakeAttachment=RigidTransitionAttachment(),
+        kutta_closure::AbstractKuttaClosure=JumpKutta(),
         verbose=false
     )
     @assert 0 <= start_step < length(t_range) "start_step ($(start_step)) must be in [0, $(length(t_range))-1)"
@@ -703,6 +870,20 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
     audit_monitors(monitors)
+
+    # Non-default wake-attachment/Kutta-closure configurations (BRAINSTORM 015)
+    # are validated in full before any body, wake, or solver state is mutated.
+    # The exact legacy pair skips this entirely and branches into the
+    # pre-existing call sequence with no new allocation.
+    kutta_is_legacy = _is_legacy_kutta(wake_attachment, kutta_closure)
+    if !kutta_is_legacy
+        _validate_kutta_configuration(:simulate, systems_tuple, wakes_tuple,
+            body_solvers, formulation, backend_system, wake_attachment,
+            kutta_closure;
+            bound_strength_rlx, set_Das_eta_kinematic, set_Das_eta_freestream,
+            set_Das_min_kinematic_displacement, set_Das_kinematic_arc,
+            set_Das_refresh)
+    end
 
     # Flip body.needs_velocity_gradient based on monitor contracts so that
     # requires_hessian(body) propagates the right HS flag into the per-step
@@ -729,7 +910,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     if !isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic)
         initialize_Das!(systems_tuple, frames, Uinf, t_range[1], t_range[2] - t_range[1];
             set_Das_eta_kinematic, set_Das_eta_freestream,
-            set_Das_min_kinematic_displacement)
+            set_Das_min_kinematic_displacement, set_Das_kinematic_arc)
     end
 
     # Validate the wake→body solve formulation and build its runtime state
@@ -738,6 +919,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     # trailing-edge wake directions.
     formulation_state = initialize_formulation(formulation, systems_tuple,
         wakes_tuple, body_solvers, backend_solve, backend_system)
+
+    # Build the non-default Kutta runtime after geometry/Das initialization so
+    # Route A's one-time attachment operator sees the final trailing-edge wake
+    # directions (nothing on the legacy default path).
+    kutta_runtime = kutta_is_legacy ? nothing :
+        _initialize_kutta(:simulate, systems_tuple[1],
+            _single_body_solver(body_solvers), wakes_tuple[1],
+            wake_attachment, kutta_closure)
 
     # Body bound-circulation low-pass (item 005 E4.8): when bound_strength_rlx < 1
     # we blend each step's freshly solved strength with the previous (relaxed)
@@ -772,21 +961,48 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         # dt for this step
         dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
 
-        _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
-            body_solvers; backend_wake, backend_solve, backend_system,
-            needs_induced_vorticity, update_trailing_edges=true,
-            wakerow_no_hessian_to_particles,
-            body_hessian_to_particles,
-            body_gradient_kerneloffset,
-            body_on_wake,
-            panel_wake_on_particles,
-            particle_hessian_self,
-            diagnose_particle_influence,
-            diagnostic_vertical,
-            grad_mu_options,
-            formulation,
-            formulation_state,
-            i_step)
+        # Re-derive the first-wake-row offset from the *current* kinematic state
+        # (BRAINSTORM 014). By default Das is frozen at its t=0 magnitude and
+        # only rotated by propagate_kinematics!, so it does not track the
+        # operating condition (e.g. it retains a spin-up-fraction RPM). Zeroing
+        # first is mandatory: the accumulate helpers are `+=`-based.
+        if set_Das_refresh &&
+                (!isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic))
+            for sys in systems_tuple
+                _das_zero!(sys)
+            end
+            initialize_Das!(systems_tuple, frames, Uinf, t, dt;
+                set_Das_eta_kinematic, set_Das_eta_freestream,
+                set_Das_min_kinematic_displacement, set_Das_kinematic_arc)
+        end
+
+        if isnothing(kutta_runtime)
+            _steady_aerodynamics!(systems, systems_tuple, wakes_tuple, frames, uinf,
+                body_solvers; backend_wake, backend_solve, backend_system,
+                needs_induced_vorticity, update_trailing_edges=true,
+                wakerow_no_hessian_to_particles,
+                body_hessian_to_particles,
+                body_gradient_kerneloffset,
+                body_on_wake,
+                panel_wake_on_particles,
+                particle_hessian_self,
+                diagnose_particle_influence,
+                diagnostic_vertical,
+                grad_mu_options,
+                formulation,
+                formulation_state,
+                i_step)
+        else
+            _kutta_step!(kutta_runtime, systems_tuple, wakes_tuple, frames, uinf;
+                backend_wake, backend_solve, backend_system,
+                needs_induced_vorticity, grad_mu_options, i_step,
+                wakerow_no_hessian_to_particles,
+                body_hessian_to_particles,
+                body_gradient_kerneloffset,
+                body_on_wake,
+                panel_wake_on_particles,
+                particle_hessian_self)
+        end
 
         # body bound-circulation low-pass (item 005 E4.8): damp body↔wake feedback
         # by under-relaxing the solved strength before it is shed into the wake.
@@ -844,6 +1060,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                     set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
                     clean_files=clean_files,
                     solver_options=(;
+                        set_Das_kinematic_arc,
+                        set_Das_refresh,
                         particle_relax,
                         body_on_wake,
                         panel_wake_on_particles,
@@ -852,7 +1070,9 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                         body_gradient_kerneloffset,
                         wakerow_no_hessian_to_particles,
                         bound_strength_rlx,
-                    ))
+                    ),
+                    kutta=isnothing(kutta_runtime) ? nothing :
+                        _kutta_manifest_dict(kutta_runtime))
             end
 
             for (i, sys) in enumerate(systems_tuple)
@@ -870,7 +1090,9 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 end
             end
 
-            _append_metadata_step_toml(path, name, frames, i_step, t; uinf)
+            _append_metadata_step_toml(path, name, frames, i_step, t; uinf,
+                kutta=isnothing(kutta_runtime) ? nothing :
+                    _kutta_step_dict(kutta_runtime))
         end
 
         #------- propagate system -------#
@@ -903,6 +1125,12 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             for (sys, w) in zip(systems_tuple, wakes_tuple)
                 !isnothing(w) && shed_wake!(w, sys)
             end
+
+            # Route B topology advancement bookkeeping (BRAINSTORM 015): the
+            # accepted live block was just shifted into old-wake storage and
+            # the fresh row-1 deposit is the reserved next live slot.
+            isnothing(kutta_runtime) ||
+                _kutta_advance_topology!(kutta_runtime, i_step)
 
         end
 

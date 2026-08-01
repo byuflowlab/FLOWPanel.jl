@@ -306,6 +306,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
+        set_Das_kinematic_arc::Bool=true,
+        wake_attachment::AbstractWakeAttachment=RigidTransitionAttachment(),
+        kutta_closure::AbstractKuttaClosure=JumpKutta(),
         verbose=false,
         optargs...,
     )
@@ -316,6 +319,22 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
     audit_monitors(monitors)
+
+    # BRAINSTORM 015: validate a non-default attachment/closure configuration
+    # up front, before any state is mutated — the Kutta restore in section 4.5
+    # below writes body and wake state, so without this early check an
+    # unsupported configuration (or a non-PanelWake wake) would fail only
+    # after mutation and with a raw field error instead of an ArgumentError.
+    if !_is_legacy_kutta(wake_attachment, kutta_closure)
+        _validate_kutta_configuration(:simulate, systems_tuple, wakes_tuple,
+            body_solvers,
+            get(optargs, :formulation, VelocityThroughSources()),
+            backend_system, wake_attachment, kutta_closure;
+            bound_strength_rlx=get(optargs, :bound_strength_rlx, 1.0),
+            set_Das_eta_kinematic, set_Das_eta_freestream,
+            set_Das_min_kinematic_displacement, set_Das_kinematic_arc,
+            set_Das_refresh=get(optargs, :set_Das_refresh, false))
+    end
 
     rpath = isnothing(restart_path) ? path : restart_path
     rname = isnothing(restart_name) ? name : restart_name
@@ -362,10 +381,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
                 extra_reset!(sys)
             end
             kinematic_velocity!(systems_tuple, frames)
-            for sys in systems_tuple
-                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
-                    min_displacement=set_Das_min_kinematic_displacement)
-            end
+            _accumulate_Das_kinematic!(systems_tuple, frames, dt0 * set_Das_eta_kinematic;
+                min_displacement=set_Das_min_kinematic_displacement,
+                arc=set_Das_kinematic_arc)
         end
         for sys in systems_tuple
             reset!(sys)
@@ -438,6 +456,15 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         calc_controlpoints!(sys)
     end
 
+    # 4.5 Kutta warm-start restoration (BRAINSTORM 015): validate the saved
+    # attachment/closure configuration and reinstall the committed correction
+    # BEFORE the end-of-step replay below, so the replayed shed_wake! deposits
+    # γ = Cμ − c. Route B live-block metadata is restored here and its
+    # physical-step identifier advanced after the replayed shed.
+    metadata = _read_metadata_toml(rpath, rname)
+    _kutta_warmstart_restore!(systems_tuple, wakes_tuple, metadata,
+        restart_step, wake_attachment, kutta_closure)
+
     # 5. Replay the end-of-step-`restart_step` actions that simulate! skipped
     #    because that step was the final step of the previous run. Use the dt
     #    that simulate! itself would use at that step.
@@ -455,6 +482,15 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         !isnothing(w) && shed_wake!(w, sys)
     end
 
+    # Route B topology advancement bookkeeping for the replayed shed (mirrors
+    # simulate!'s end-of-step hook); complete restored state resumes directly
+    # and never repeats :startup_jump.
+    if wake_attachment isa TEAnchoredAttachment
+        wake = wakes_tuple[1]
+        wake.live_rows[] = 1
+        wake.live_step_id[] = restart_step + 1
+    end
+
     # 6. Forward to simulate! with start_step pointing at the next step.
     simulate!(systems, wakes, frames, maneuver!, Uinf, t_range;
         name=name, path=path,
@@ -467,6 +503,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_eta_kinematic=set_Das_eta_kinematic,
         set_Das_eta_freestream=set_Das_eta_freestream,
         set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
+        set_Das_kinematic_arc=set_Das_kinematic_arc,
+        wake_attachment=wake_attachment,
+        kutta_closure=kutta_closure,
         start_step=restart_step + 1,
         verbose=verbose,
         optargs...,

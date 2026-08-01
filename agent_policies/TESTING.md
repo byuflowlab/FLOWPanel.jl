@@ -32,12 +32,21 @@ higher-level suite.
 - Warm-start changes: `test/runtests_unit_warmstart.jl`
 - FGS convergence-history changes: `test/runtests_unit_fgs_history.jl`
 - Lifting-line changes: `test/runtests_liftingline.jl`
-- Pitching-wing experimental data handling: `test/runtests_unit_pitching_wing_exp.jl`
 - Analytical consistency checks: `test/runtests_analytical.jl`
 - Example-level pitching-wing regressions (long-running; run only when the change targets those examples): `test/runtests_example_pitching_wing.jl`, `test/runtests_example_pitching_wing_convergence.jl`, `test/runtests_example_pitching_wing_pressure_comparison.jl`
 
 `test/dirichlet_potential_test.jl` is an ad hoc diagnostic script, not part of the
 matrix. `test/test_helpers.jl` is shared setup included by the suites.
+
+`test/runtests_unit_pitching_wing_exp.jl` was **removed on 2026-08-01** (Ryan
+directive). It tested the experimental lift/moment/drag curve loader whose source
+lives in `data/pitching_wing_exp/load.jl` — a directory that `.gitignore` intends
+to track (lines 13-15) but that was never committed and is now absent from disk,
+so the test aborted `runtests.jl` outright and no fresh clone could ever run the
+suite to completion. `examples/pitching_wing.jl` and
+`examples/pitching_wing_replot.jl` still consume that loader for
+experimental-comparison plots, so the `.gitignore` negations were left in place;
+those examples simply require the data locally.
 
 ## Examples As Integration Checks
 

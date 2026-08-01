@@ -740,7 +740,10 @@ agglomerate-centroid stencil with a tangential least-squares fit. Writes
 `local_grad` (which holds `-scale·∇μ`) on the member triangles of every
 agglomerate. Agglomerates with too few/ill-posed neighbors throw an
 `ArgumentError` after permitted growth instead of falling back to a triangle
-gradient.
+gradient — except *isolated* agglomerates (empty stencil: every edge neighbor
+rejected by the TE barrier or fold test, as for degenerate sliver panels),
+which receive a zero gradient with a warning, since no growth depth can ever
+produce a stencil for them.
 
 When `grow=true`, agglomerates are grown by BFS on the agglomerate graph.
 `grow_stop=:cond` grows only ill-posed agglomerates (LS condition number
@@ -853,7 +856,17 @@ function _quad_mu_diff_gradient!(local_grad::AbstractMatrix{Float64},
         if !(isfinite(cnd) && isfinite(gx) && isfinite(gy) && isfinite(gz))
             m2 = partner[ag]
             members = m2 == 0 ? string(ag) : string(ag, ",", m2)
-            throw(ArgumentError("basis=:quad failed to reconstruct a finite μ gradient for agglomerate $(ag) (members=$(members), stencil_size=$(length(stencil)), cond=$(cnd), quad_grow=$(grow), quad_grow_stop=$(grow_stop), quad_grow_max_depth=$(grow_max_depth))."))
+            if isempty(stencil)
+                # Isolated agglomerate: every edge neighbor was rejected by the
+                # TE barrier or the fold test (degenerate sliver panels whose
+                # normal disagrees with all neighbors). No stencil can exist at
+                # any growth depth, so use a zero surface gradient rather than
+                # abort: such panels carry negligible area by construction.
+                @warn "basis=:quad found an isolated agglomerate; using zero μ gradient there" agglomerate=ag members=members maxlog=8
+                gx = 0.0; gy = 0.0; gz = 0.0
+            else
+                throw(ArgumentError("basis=:quad failed to reconstruct a finite μ gradient for agglomerate $(ag) (members=$(members), stencil_size=$(length(stencil)), cond=$(cnd), quad_grow=$(grow), quad_grow_stop=$(grow_stop), quad_grow_max_depth=$(grow_max_depth))."))
+            end
         end
 
         # Scatter agglomerate ∇μ to member triangles, projected onto each tangent

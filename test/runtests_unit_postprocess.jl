@@ -1707,10 +1707,17 @@ end
             ensure_winding=false)
         pnl.calc_normals!(one_body)
         pnl.calc_controlpoints!(one_body)
-        @test_throws ArgumentError pnl.compute_mu_gradient!(zeros(3, one_body.ncells),
+        # An isolated agglomerate (here: a one-cell body) has an empty stencil
+        # at every growth depth; it degrades to a zero gradient with a warning
+        # instead of aborting (degenerate-sliver tolerance, 2026-07-31).
+        # compute_mu_gradient! accumulates, so a finite sentinel distinguishes
+        # a zero increment from garbage.
+        one_grad = fill(7.0, 3, one_body.ncells)
+        @test_logs (:warn, r"isolated agglomerate") pnl.compute_mu_gradient!(one_grad,
             one_body.controlpoints, one_body.normals, one_body.cells,
             one_body.neighbor, [1.0], zeros(Int, 2, one_body.ncells);
             scale=1.0, nodes=one_body.nodes, grad_mu_options=(; basis=:quad))
+        @test all(==(7.0), one_grad)
     end
 
     @testset "compute_surface_velocity_gradient! interior recovery" begin

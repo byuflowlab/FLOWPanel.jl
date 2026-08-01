@@ -1,0 +1,34 @@
+Task 1b alternative-formulation quantification — FULL run
+
+[E2] straight-chord interiority (midpoint side of TE panel planes; interior <= 0):
+     max over stations: upper-side -1.971e-04, lower-side -1.971e-04; |d| midspan = 0.0004005 m
+     All chord midpoints interior: straight centroid-to-centroid chord valid.
+
+[E3] Kutta-trace vector c per shedding edge (nst=15):
+     sign pairing u_f vs probed potential: u_f = +grad(phi) (cor(c_trap_raw, C·phi_tr) = +1.0000)
+     station means: c_exact=0.0161406  c_trap=0.0161389  c_simp=0.0161406
+     quadrature error vs exact: trap max-rel 1.016e-04 (rms 1.026e-04), Simpson max-rel 2.916e-09 (rms 2.950e-09)
+     mid-span: c_exact=0.0193078 c_trap=0.0193058 c_simp=0.0193078 (dmu_A=-5.64489)
+
+[E4] Three-way + variants, identical frozen geometry+wake (ratios vs scheme A):
+     scheme                              sum-ratio   mid-span  deficit-recov
+     A  (semiinfinite, frozen geom)         1.0000     1.0000             --
+     B  (marched, velocity-through-σ)       0.9168     0.9131            0.0%
+     A' (explicit potential, one-shot)      0.9415     0.9384           29.7%
+     ALT c-exact (affine Kutta)             0.9318     0.9284           18.0%
+     ALT c-trapezoid                        0.9318     0.9284           18.0%
+     ALT c-Simpson                          0.9318     0.9284           18.0%
+     ALT c=0 (sanity -> B)                  0.9168     0.9131             --
+     c=0 sanity: max|γ(c=0) − Δμ*| = 0.000e+00 (must be ~solver eps)
+     implied CL (linear scaling of settled CL=0.262051 with sum γ): A'=0.26911  ALT-exact=0.26633  ALT-trap=0.26633
+
+[E5] Analytic prediction test (orchestrator): γ(c-exact) − Δμ_A' =?= −C·G_B⁻¹·e4a
+     station means: measured 0.0463683, predicted 0.0463683; max|meas−pred| = 1.939e-13 (rel 3.428e-12)
+     retained-e4a term as fraction of measured deficit D1: mean = +11.7% (G_A-route E2b was +37.4%)
+     P5-elimination check: γ(c-exact) removes trace-shift exactly by construction;
+     measured recovery ALT-exact vs A': 18.0% vs 29.7% of deficit (gap = retained e4a).
+
+[E6] Doc check 2 (discrete Green identity, no Kutta columns, direct):
+     ||K_int·1 − 1||_inf = 2.345e-13 (closed-body constant mode)
+     ||e4a||/||φ_σ,fw|| = 0.01549 (gauge-invariant: (I−K_int)·1 = 0 to machine precision)
+     -> irreducible P1/P2 sampling residual; ALT formulation retains it, A' removes it.

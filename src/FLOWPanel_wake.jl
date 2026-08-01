@@ -75,10 +75,10 @@ requires_hessian(pw::ProbeWrapper) = requires_hessian(pw.system)
 """
     PanelWake(shedding, kernel, TF=Float64; core_size=1e-3, nwakerows=100,
         shed_with_induced_velocity=true, unsteady_filament=true,
-        include_final_filament=true)
+        include_final_filament=true, freestream_convection=false)
     PanelWake(body; kernel=get_wake_kernel(body), nwakerows=100,
         shed_with_induced_velocity=true, unsteady_filament=true,
-        include_final_filament=true)
+        include_final_filament=true, freestream_convection=false)
 
 Wake model that stores a panelized wake sheet behind one or more shedding-edge
 chains. Set `shed_with_induced_velocity=false` to convect the first wake row
@@ -88,6 +88,10 @@ last wake row instead of representing the shifted-out previous row.
 Set `include_final_filament=false` for a strictly finite, panel-only wake whose
 sources all expose scalar potential (for example a ConstantDoublet pressure
 oracle); wake-length convergence must then be checked explicitly.
+Set `freestream_convection=true` to convect *every* wake row with the freestream
+only (no rollup), so the sheet stays straight along `U∞`; this reproduces the
+geometry of the semi-infinite wake and exists to test consistency between the
+two wake representations. It overrides `shed_with_induced_velocity`.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
@@ -100,6 +104,16 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     shed_with_induced_velocity::Bool
     unsteady_filament::Bool
     include_final_filament::Bool
+    freestream_convection::Bool
+    # Live-block reservation metadata (BRAINSTORM 015 Route B / TEAnchoredAttachment).
+    # live_rows[] newest panel rows are the reserved live block: their strengths
+    # are owned by the body-side attachment operator during the coupled solve and
+    # they are excluded from old-wake source views (see get_n_bodies and the
+    # index maps). 0 on the legacy path — all arithmetic then reduces exactly to
+    # the pre-existing behavior. live_step_id[] is the physical-step identifier
+    # of the current live block (-1 = none).
+    live_rows::Array{Int, 0}
+    live_step_id::Array{Int, 0}
 end
 
 """
@@ -123,7 +137,8 @@ end
 
 function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
         core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true,
-        unsteady_filament=true, include_final_filament=true
+        unsteady_filament=true, include_final_filament=true,
+        freestream_convection=false
     )
     # nwakes
     nwakes = Array{Int,0}(undef)
@@ -146,10 +161,17 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     overflowed = Array{Bool,0}(undef)
     overflowed[] = false
 
+    # live-block reservation metadata (0/-1 = legacy, no live block)
+    live_rows = Array{Int,0}(undef)
+    live_rows[] = 0
+    live_step_id = Array{Int,0}(undef)
+    live_step_id[] = -1
+
     return PanelWake{kernel, dim, TF}(
         nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
         Bool(shed_with_induced_velocity), Bool(unsteady_filament),
-        Bool(include_final_filament),
+        Bool(include_final_filament), Bool(freestream_convection),
+        live_rows, live_step_id,
     )
 end
 
@@ -174,10 +196,19 @@ function apply_freestream!(wake::PanelWake, uinf)
 end
 
 # FastMultipole compatibility
+
+"Number of panel rows exposed as old-wake sources: the newest `live_rows[]`
+rows are the reserved live block owned by the body-side attachment operator
+(BRAINSTORM 015 Route B) and are excluded to prevent double counting. 0 live
+rows (the legacy default) reduces every source-view expression to the
+pre-existing arithmetic."
+_n_wake_source_rows(wake::PanelWake) = wake.nwakes[] - wake.live_rows[]
+
 function global_to_matrix_index(wake::PanelWake, i_wake)
 
-    # determine which shedding surface we're on
-    nwakes = wake.nwakes[]
+    # determine which shedding surface we're on (old-wake source rows only;
+    # the reserved live block is excluded from the source view)
+    nwakes = _n_wake_source_rows(wake)
     isurf = 1
     i_wake_local = i_wake
     npanels = 0
@@ -194,6 +225,7 @@ function global_to_matrix_index(wake::PanelWake, i_wake)
     icol, irow = divrem(i_wake_local - 1, nwakes)
     icol += 1 # adjust for 1-based indexing
     irow += 1 # adjust for 1-based indexing
+    irow += wake.live_rows[] # skip the reserved live block (row 1 is newest)
 
     return isurf, irow, icol
 end
@@ -223,12 +255,14 @@ function global_to_matrix_index(wake::ProbeWrapper{<:PanelWake}, i_wake)
 end
 
 function matrix_to_global_index(wake::PanelWake, isurf, irow, icol)
-    # convert matrix indices to local index
-    i_wake = (icol - 1) * wake.nwakes[] + irow
+    # convert matrix indices to local index (inverse of the source view above:
+    # absolute row numbering, with the reserved live block excluded)
+    nwakes = _n_wake_source_rows(wake)
+    i_wake = (icol - 1) * nwakes + (irow - wake.live_rows[])
 
     # account for previous surfaces
     for i in 1:(isurf-1)
-        i_wake += size(wake.strength[i], 3) * wake.nwakes[]
+        i_wake += size(wake.strength[i], 3) * nwakes
     end
 
     return i_wake
@@ -334,7 +368,7 @@ end
 
 FastMultipole.strength_dims(system::PanelWake) = size(system.strength[1], 1)
 
-FastMultipole.get_n_bodies(system::PanelWake) = system.nwakes[] * sum(size(s, 3) for s in system.strength)
+FastMultipole.get_n_bodies(system::PanelWake) = _n_wake_source_rows(system) * sum(size(s, 3) for s in system.strength)
 
 FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
 
@@ -486,7 +520,14 @@ FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args..
 
 function propagate!(wake::PanelWake, dt; step=0, frames=nothing)
     for i_surf in eachindex(wake.nodes)
-        if wake.shed_with_induced_velocity
+        if wake.freestream_convection
+            # every row convects with the freestream only: the sheet stays
+            # straight along U∞ (semi-infinite-wake geometry). The `reshape` is
+            # required because this is a 3×R×C view, not the 3×C view used by
+            # the row-1-only branch below.
+            view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+=
+                dt .* reshape(wake.freestream, 3, 1, 1)
+        elseif wake.shed_with_induced_velocity
             view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) .*= dt # displacements
             view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :) .+= view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) # update nodes
             view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :) ./= dt # restore velocities
@@ -630,6 +671,11 @@ function _shed_particles!(pfield, r1, r2, Γ, method::SigmaOverlap)
 end
 
 function _shed_particles!(pfield, r1, r2, Γ, method::SigmaPPS)
+    # A zero-strength particle carries no vorticity but its zero |Γ| divides
+    # relaxation (corrected Pedrizzetti) into NaN, which then contaminates the
+    # whole field. Exact zeros occur generically on symmetric wings (mid-span
+    # trailing difference) and at impulsive starts (zero-strength first row).
+    Γ == 0 && return nothing
     sigma = method.sigma
     p_per_step = method.p_per_step
     distance_vector = (r2 - r1) / p_per_step
@@ -643,6 +689,398 @@ end
 
 function _shed_particles!(pfield, r1, r2, Γ, ::NoShed)
     return nothing
+end
+
+"""
+Sentinel used as the *implementation* default of `PanelParticleWake`'s
+`method_trailing` and `method_unsteady` keywords, so the constructor can tell
+"caller said nothing" from "caller explicitly asked for the legacy default".
+
+The legacy conversion resolves it to a fresh `OverlapPPS(1.3, 2)`, which is the
+unchanged public default. The surface-vorticity conversion has no line policies
+to resolve and stores the sentinel itself, so an accidental use is an error
+rather than a silently-different shedding rule.
+"""
+struct DefaultWakeSheddingMethod <: WakeSheddingMethod end
+
+function _shed_particles!(pfield, r1, r2, Γ, ::DefaultWakeSheddingMethod)
+    throw(ArgumentError("DefaultWakeSheddingMethod is an unresolved constructor " *
+                        "sentinel and must never be used to shed particles"))
+end
+
+#--- Panel-to-particle conversion strategies (BRAINSTORM 016) ---#
+
+"""
+    AbstractPanelParticleConversion
+
+Abstract supertype for strategies that convert the outgoing row of a
+[`PanelWake`](@ref) into vortex particles inside a
+[`PanelParticleWake`](@ref).
+
+Select one through the single `conversion` keyword of `PanelParticleWake`.
+There is no automatic fallback between strategies.
+"""
+abstract type AbstractPanelParticleConversion end
+
+"""
+    LegacyEdgeJumpConversion()
+
+Convert the outgoing panel row from panel-edge strength *jumps*: a streamwise
+trailing filament carrying the spanwise jump, a spanwise unsteady filament
+carrying the streamwise (time) jump, and a closing filament at the tip of a
+non-wrapping chain. Line policies come from `method_trailing` and
+`method_unsteady`.
+
+This is the exact default and is unchanged by BRAINSTORM 016.
+"""
+struct LegacyEdgeJumpConversion <: AbstractPanelParticleConversion end
+
+"""
+    SurfaceVorticityConversion(sigma; overlap=1.3, rank_rtol, geometry_rtol,
+                               diagnose_nearfield=false)
+
+Opt-in conversion that reconstructs the *smooth* surface vorticity of the
+outgoing sheet and deposits area-weighted particles
+
+```math
+\\boldsymbol\\Gamma_p = \\boldsymbol\\kappa(\\boldsymbol x_p)\\,\\Delta A_p,
+\\qquad
+\\boldsymbol\\kappa = \\boldsymbol n \\times \\nabla_s \\mu
+                    = -\\boldsymbol n \\times \\nabla_s \\hat\\mu ,
+```
+
+where ``\\hat\\mu = -\\mu`` is the stored wake strength. Internal panel-to-panel
+edges are cancelled rather than reproduced as filaments; only the true open
+root and tip streamwise closures are retained, sampled with
+`SigmaOverlap(sigma, overlap)`. All surface and line sampling targets spacing
+``h = \\sigma/\\mathrm{overlap}``, so every particle this wake deposits shares
+the fixed smoothing width `sigma`.
+
+`rank_rtol` sets the relative singular-value threshold of the two-point
+gradient stencil (rank deficiency is diagnostic, not fatal); `geometry_rtol`
+rejects a vanishing metric scale. `diagnose_nearfield` additionally records
+panel-induced velocity-gradient distributions at every candidate particle,
+separately for interior, root/tip, and perimeter classes.
+
+This strategy does not use `method_trailing` or `method_unsteady`; supplying
+either alongside it is a configuration error.
+
+See BRAINSTORM item 016.
+"""
+struct SurfaceVorticityConversion{TF} <: AbstractPanelParticleConversion
+    sigma::TF
+    overlap::TF
+    rank_rtol::TF
+    geometry_rtol::TF
+    diagnose_nearfield::Bool
+end
+
+function SurfaceVorticityConversion(sigma;
+        overlap = 1.3,
+        rank_rtol = sqrt(eps(float(typeof(sigma)))),
+        geometry_rtol = sqrt(eps(float(typeof(sigma)))),
+        diagnose_nearfield::Bool = false,
+    )
+    sigma_f, overlap_f, rank_f, geom_f =
+        promote(float(sigma), float(overlap), float(rank_rtol), float(geometry_rtol))
+
+    for (name, val) in (("sigma", sigma_f), ("overlap", overlap_f),
+                        ("rank_rtol", rank_f), ("geometry_rtol", geom_f))
+        isfinite(val) ||
+            throw(ArgumentError("SurfaceVorticityConversion $name must be finite (got $val)"))
+    end
+    sigma_f > 0 ||
+        throw(ArgumentError("SurfaceVorticityConversion sigma must be positive (got $sigma_f)"))
+    overlap_f > 0 ||
+        throw(ArgumentError("SurfaceVorticityConversion overlap must be positive (got $overlap_f)"))
+    rank_f >= 0 ||
+        throw(ArgumentError("SurfaceVorticityConversion rank_rtol must be nonnegative (got $rank_f)"))
+    geom_f > 0 ||
+        throw(ArgumentError("SurfaceVorticityConversion geometry_rtol must be positive (got $geom_f)"))
+
+    return SurfaceVorticityConversion{typeof(sigma_f)}(
+        sigma_f, overlap_f, rank_f, geom_f, diagnose_nearfield)
+end
+
+"""
+Resolve one of the legacy line-policy keywords against the selected conversion
+strategy. `field` names the keyword for error messages.
+"""
+_resolve_line_policy(::LegacyEdgeJumpConversion, ::DefaultWakeSheddingMethod, field) =
+    OverlapPPS(1.3, 2)
+
+_resolve_line_policy(::LegacyEdgeJumpConversion, method::WakeSheddingMethod, field) = method
+
+_resolve_line_policy(::SurfaceVorticityConversion, sentinel::DefaultWakeSheddingMethod, field) =
+    sentinel
+
+function _resolve_line_policy(::SurfaceVorticityConversion, method::WakeSheddingMethod, field)
+    throw(ArgumentError(
+        "SurfaceVorticityConversion does not use $field; it samples its root/tip " *
+        "closure with SigmaOverlap(sigma, overlap). Remove the $field keyword " *
+        "rather than leaving it silently ignored (got $(method))."))
+end
+
+#--- Surface-vorticity reconstruction core (BRAINSTORM 016 Phase 2 sec. 5) ---#
+
+"""
+    WakeGeometryError
+
+A wake panel or gradient stencil failed geometric validation: a repeated or
+metric-singular vertex, a vanishing or inconsistently oriented Jacobian, a
+folded or inverted bilinear panel, or a non-finite coordinate.
+"""
+struct WakeGeometryError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::WakeGeometryError) = print(io, "WakeGeometryError: ", e.msg)
+
+"""
+    _deterministic_tangent_basis(n)
+
+Orthonormal tangent basis `(t1, t2)` of the plane with unit normal `n`, chosen
+deterministically: project the Cartesian axis *least* aligned with `n` (ties
+broken in x, y, z order) and complete with `t2 = n x t1`.
+
+Fixing the basis this way keeps rigid-rotation fixtures reproducible. It is a
+reporting convenience only -- the reconstructed physical gradient is
+independent of which tangent basis is used.
+"""
+function _deterministic_tangent_basis(n::SVector{3,TF}) where {TF}
+    ax = 1
+    best = abs(n[1])
+    for i in 2:3
+        if abs(n[i]) < best
+            best = abs(n[i])
+            ax = i
+        end
+    end
+    e = SVector{3,TF}(ax == 1, ax == 2, ax == 3)
+    t1 = e - LA.dot(e, n) * n
+    nt1 = LA.norm(t1)
+    nt1 > 0 || throw(WakeGeometryError("degenerate normal $(n); no tangent basis exists"))
+    t1 = t1 / nt1
+    return t1, LA.cross(n, t1)
+end
+
+"""
+Outcome of the two-point surface-gradient reconstruction on one wake panel.
+
+`gradient` is the physical tangential gradient of the *stored* strength
+``\\hat\\mu``. `singular_values`, `rank`, `condition`, and
+`observable_directions` describe the scaled geometry matrix and are diagnostic:
+rank deficiency is supported, not an error.
+"""
+struct SurfaceGradientResult{TF}
+    gradient::SVector{3,TF}
+    rank::Int
+    singular_values::SVector{2,TF}
+    rank_threshold::TF
+    condition::TF
+    observable_directions::SVector{2,SVector{3,TF}}
+    observable::SVector{2,Bool}
+    geometry_scale::TF
+end
+
+"""
+    _reconstruct_surface_gradient(n, d1, dmu1, d2, dmu2, rank_rtol, geometry_rtol,
+                                  reference_length)
+
+Reconstruct the tangential gradient of the stored strength on a panel whose
+unit normal is `n`, from two centroid-difference equations
+
+```math
+\\boldsymbol d_k \\cdot \\nabla_s\\hat\\mu = \\Delta\\hat\\mu_k ,
+\\qquad k = 1, 2 ,
+```
+
+where `d1` is the streamwise displacement to the upstream neighbour and `d2`
+the spanwise displacement (centered where both neighbours exist, one-sided at a
+true root or tip).
+
+The `2 x 2` system is formed in the deterministic tangent basis and scaled by
+the largest stencil length before its SVD, so `rank_rtol` is a genuine relative
+threshold. Rank 2 uses the full solve, rank 1 the minimum-norm pseudoinverse,
+and rank 0 returns a zero gradient; in every case the returned `gradient` is
+the same physical vector regardless of basis or SVD sign conventions.
+"""
+function _reconstruct_surface_gradient(n::SVector{3,TF},
+        d1::SVector{3,TF}, dmu1::TF,
+        d2::SVector{3,TF}, dmu2::TF,
+        rank_rtol::TF, geometry_rtol::TF, reference_length::TF) where {TF}
+
+    all(isfinite, n) && all(isfinite, d1) && all(isfinite, d2) &&
+        isfinite(dmu1) && isfinite(dmu2) ||
+        throw(WakeGeometryError("non-finite gradient stencil"))
+
+    scale = max(LA.norm(d1), LA.norm(d2))
+    scale > geometry_rtol * reference_length ||
+        throw(WakeGeometryError(
+            "gradient stencil has vanishing metric scale $(scale) relative to " *
+            "reference length $(reference_length)"))
+
+    t1, t2 = _deterministic_tangent_basis(n)
+
+    # Column-major fill: A = [d1.t1  d1.t2 ; d2.t1  d2.t2], scaled by `scale`
+    # so the singular values are dimensionless and rank_rtol is relative.
+    A = SMatrix{2,2,TF}(LA.dot(d1, t1) / scale, LA.dot(d2, t1) / scale,
+                        LA.dot(d1, t2) / scale, LA.dot(d2, t2) / scale)
+    b = SVector{2,TF}(dmu1 / scale, dmu2 / scale)
+
+    F = LA.svd(A)
+    s = SVector{2,TF}(F.S[1], F.S[2])
+    threshold = rank_rtol * s[1]
+    rnk = count(>(threshold), s)
+
+    g = SVector{2,TF}(zero(TF), zero(TF))
+    for i in 1:rnk
+        # Minimum-norm solution: only the observable singular directions
+        # contribute, so rank 1 falls out of the same expression as rank 2.
+        g += (LA.dot(view(F.U, :, i), b) / s[i]) * SVector{2,TF}(F.V[1, i], F.V[2, i])
+    end
+
+    dirs = SVector{2,SVector{3,TF}}(
+        F.V[1, 1] * t1 + F.V[2, 1] * t2,
+        F.V[1, 2] * t1 + F.V[2, 2] * t2)
+    obs = SVector{2,Bool}(1 <= rnk, 2 <= rnk)
+    cond = rnk == 2 ? s[1] / s[2] : TF(Inf)
+
+    return SurfaceGradientResult{TF}(g[1] * t1 + g[2] * t2, rnk, s, threshold,
+                                     cond, dirs, obs, scale)
+end
+
+"""
+    _surface_vorticity(n, grad_muhat)
+
+Surface vorticity from the *stored* strength gradient, using the package sign
+convention ``\\hat\\mu = -\\mu``:
+
+```math
+\\boldsymbol\\kappa = \\boldsymbol n \\times \\nabla_s\\mu
+                    = -\\boldsymbol n \\times \\nabla_s\\hat\\mu .
+```
+"""
+_surface_vorticity(n::SVector{3,TF}, grad_muhat::SVector{3,TF}) where {TF} =
+    -LA.cross(n, grad_muhat)
+
+"""
+    _bilinear_position(v1, v2, v3, v4, xi, eta)
+
+Point on the bilinear wake panel in the package's contiguous vertex order
+`x(0,0)=v1`, `x(1,0)=v2`, `x(1,1)=v3`, `x(0,1)=v4`.
+"""
+_bilinear_position(v1, v2, v3, v4, xi, eta) =
+    (1 - xi) * (1 - eta) * v1 + xi * (1 - eta) * v2 + xi * eta * v3 + (1 - xi) * eta * v4
+
+"""
+    _bilinear_derivatives(v1, v2, v3, v4, xi, eta)
+
+Covariant derivatives `(dx/dxi, dx/deta)` of the bilinear panel.
+"""
+function _bilinear_derivatives(v1, v2, v3, v4, xi, eta)
+    dxi = (1 - eta) * (v2 - v1) + eta * (v3 - v4)
+    deta = (1 - xi) * (v4 - v1) + xi * (v3 - v2)
+    return dxi, deta
+end
+
+"""
+    _bilinear_normal(v1, v2, v3, v4, xi, eta)
+
+Oriented unit normal and Jacobian magnitude `|dx/dxi x dx/deta|` at a
+parametric point. Throws [`WakeGeometryError`](@ref) where the panel is
+metric-singular.
+"""
+function _bilinear_normal(v1, v2, v3, v4, xi, eta, geometry_rtol, reference_length)
+    dxi, deta = _bilinear_derivatives(v1, v2, v3, v4, xi, eta)
+    c = LA.cross(dxi, deta)
+    jac = LA.norm(c)
+    isfinite(jac) ||
+        throw(WakeGeometryError("non-finite Jacobian at (xi, eta) = ($xi, $eta)"))
+    # A bilinear quad may be warped, but its metric must never vanish: that is
+    # a repeated edge, a folded panel, or a self-intersection.
+    jac > geometry_rtol * reference_length^2 ||
+        throw(WakeGeometryError(
+            "vanishing Jacobian $(jac) at (xi, eta) = ($xi, $eta) relative to " *
+            "reference area $(reference_length^2)"))
+    return c / jac, jac
+end
+
+"""
+    _subdivision_counts(v1, v2, v3, v4, h)
+
+Number of quadrature subcells in each parametric direction so that subcell
+edges do not exceed the target spacing `h`. At least one subdivision is used in
+both directions, per the Phase 2 resolution floor.
+"""
+function _subdivision_counts(v1, v2, v3, v4, h)
+    l_xi = max(LA.norm(v2 - v1), LA.norm(v3 - v4))
+    l_eta = max(LA.norm(v4 - v1), LA.norm(v3 - v2))
+    return (max(1, ceil(Int, l_xi / h)), max(1, ceil(Int, l_eta / h)))
+end
+
+# Two-point Gauss-Legendre nodes/weights on [-1, 1].
+const _GAUSS2_NODE = 1 / sqrt(3)
+
+"""
+    _subcell_area(v1, v2, v3, v4, xi0, xi1, eta0, eta1, geometry_rtol, reference_length)
+
+Physical area of one parametric subcell of the bilinear panel, by a `2 x 2`
+Gauss rule applied to the norm of the bilinear Jacobian. Exact for a planar
+parallelogram and second-order accurate on a warped quad.
+"""
+function _subcell_area(v1, v2, v3, v4, xi0, xi1, eta0, eta1,
+                       geometry_rtol, reference_length)
+    dxi = xi1 - xi0
+    deta = eta1 - eta0
+    half_xi = dxi / 2
+    half_eta = deta / 2
+    mid_xi = (xi0 + xi1) / 2
+    mid_eta = (eta0 + eta1) / 2
+
+    area = zero(eltype(v1))
+    for sx in (-_GAUSS2_NODE, _GAUSS2_NODE), sy in (-_GAUSS2_NODE, _GAUSS2_NODE)
+        xi = mid_xi + half_xi * sx
+        eta = mid_eta + half_eta * sy
+        _, jac = _bilinear_normal(v1, v2, v3, v4, xi, eta, geometry_rtol, reference_length)
+        area += jac
+    end
+    return area * half_xi * half_eta
+end
+
+"""
+    _validate_wake_panel(v1, v2, v3, v4, geometry_rtol)
+
+Validate one bilinear wake panel before it is sampled: finite vertices, a
+nondegenerate scale, a metric that never vanishes, and an orientation that is
+consistent across the panel (no fold or inversion). Returns the panel's
+reference length.
+"""
+function _validate_wake_panel(v1, v2, v3, v4, geometry_rtol)
+    for v in (v1, v2, v3, v4)
+        all(isfinite, v) || throw(WakeGeometryError("non-finite wake panel vertex $(v)"))
+    end
+
+    reference_length = max(LA.norm(v2 - v1), LA.norm(v3 - v4),
+                           LA.norm(v4 - v1), LA.norm(v3 - v2))
+    reference_length > 0 ||
+        throw(WakeGeometryError("wake panel has zero extent (all vertices coincide)"))
+
+    # Sample the four corners plus the center. A bilinear Jacobian is bilinear
+    # in (xi, eta), so a sign flip anywhere on the panel shows up at a corner;
+    # the center guards the warped-but-corner-consistent case.
+    reference_normal = nothing
+    for (xi, eta) in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5))
+        n, _ = _bilinear_normal(v1, v2, v3, v4, xi, eta, geometry_rtol, reference_length)
+        if reference_normal === nothing
+            reference_normal = n
+        elseif LA.dot(n, reference_normal) <= 0
+            throw(WakeGeometryError(
+                "wake panel is folded or inverted: normal reverses between the " *
+                "reference corner and (xi, eta) = ($xi, $eta)"))
+        end
+    end
+    return reference_length
 end
 
 #--- Particle Maintenance Policies ---#
@@ -990,7 +1428,7 @@ plane_filtered_relaxation(base::FLOWVPM.Relaxation, point, normal; i_frame::Int=
     FLOWVPM.Relaxation(base.relax, base.nsteps_relax, base.rlxf,
                        RelaxationPlaneFilter(point, normal; i_frame))
 
-struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT} <: AbstractFreeWake
+struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT,TC,TW,TD} <: AbstractFreeWake
     panel_wake::PanelWake{TK,NK,TF}
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
@@ -998,12 +1436,20 @@ struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT} <: AbstractFreeWake
     particle_maintenance::TPM             # particle merge/trim policy chain
     particle_kerneloffset::Float64        # NaN uses source body kerneloffset
     pfield_optargs::TNT                   # resolved FLOWVPM optargs (for reproduction metadata)
+    # Panel-to-particle conversion strategy (BRAINSTORM 016). Legacy instances
+    # carry `nothing` for the workspace and diagnostics and must not acquire any
+    # new per-step allocation.
+    conversion::TC
+    conversion_workspace::TW
+    conversion_diagnostics::TD
+    conversion_count::Array{Int,0}        # successful smooth conversions committed
 end
 
 function PanelParticleWake(body::AbstractLiftingBody;
         nwakerows=3, max_particles=10000,
-        method_trailing::WakeSheddingMethod=OverlapPPS(1.3, 2),
-        method_unsteady::WakeSheddingMethod=OverlapPPS(1.3, 2),
+        conversion::AbstractPanelParticleConversion=LegacyEdgeJumpConversion(),
+        method_trailing::WakeSheddingMethod=DefaultWakeSheddingMethod(),
+        method_unsteady::WakeSheddingMethod=DefaultWakeSheddingMethod(),
         particle_maintenance=ParticleMaintenance(),
         particle_kerneloffset::Real=NaN,
         viscous=FLOWVPM.Inviscid(),
@@ -1013,6 +1459,11 @@ function PanelParticleWake(body::AbstractLiftingBody;
         # ParticleField default (CorrectedPedrizzetti) to preserve prior behavior.
         relaxation=FLOWVPM.relaxation_correctedpedrizzetti,
         kwargs...)
+
+    # Resolve the legacy line policies against the selected strategy before any
+    # allocation, so a configuration error costs nothing.
+    trailing = _resolve_line_policy(conversion, method_trailing, "method_trailing")
+    unsteady = _resolve_line_policy(conversion, method_unsteady, "method_unsteady")
 
     panel_wake = PanelWake(body; nwakerows, kwargs...)
     TF = FastMultipole.numtype(panel_wake)
@@ -1042,10 +1493,21 @@ function PanelParticleWake(body::AbstractLiftingBody;
     if !isnan(particle_kerneloffset)
         body.kerneloffset_targets = Float64(particle_kerneloffset)
     end
-    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(method_trailing),typeof(method_unsteady),typeof(maintenance),typeof(pfield_optargs)}(
-        panel_wake, pfield, method_trailing, method_unsteady, maintenance, Float64(particle_kerneloffset), pfield_optargs
+    workspace = _make_conversion_workspace(conversion, panel_wake, TF)
+    diagnostics = _make_conversion_diagnostics(conversion, TF)
+    conversion_count = Array{Int,0}(undef)
+    conversion_count[] = 0
+
+    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(trailing),typeof(unsteady),typeof(maintenance),typeof(pfield_optargs),typeof(conversion),typeof(workspace),typeof(diagnostics)}(
+        panel_wake, pfield, trailing, unsteady, maintenance, Float64(particle_kerneloffset), pfield_optargs,
+        conversion, workspace, diagnostics, conversion_count
     )
 end
+
+# Legacy conversion allocates no workspace and no diagnostics; the smooth
+# strategy's concrete types arrive with the Stage 3 transaction.
+_make_conversion_workspace(::LegacyEdgeJumpConversion, panel_wake, ::Type{TF}) where {TF} = nothing
+_make_conversion_diagnostics(::LegacyEdgeJumpConversion, ::Type{TF}) where {TF} = nothing
 
 """
 Run SFS pre-calculations for particle field before evaluating the velocity field.
@@ -1227,7 +1689,18 @@ FastMultipole.numtype(pf::FLOWVPM.ParticleField) = eltype(pf)
 
 # --- Save and convert last row to particles ---
 
-function _convert_to_particles!(wake::PanelParticleWake)
+"""
+    _convert_to_particles!(wake::PanelParticleWake)
+
+Convert the outgoing panel-wake row into particles using the wake's configured
+[`AbstractPanelParticleConversion`](@ref) strategy. Called by `shed_wake!`
+before the panel rows are shifted, so the outgoing row is the current final
+active row.
+"""
+_convert_to_particles!(wake::PanelParticleWake) =
+    _convert_to_particles!(wake, wake.conversion)
+
+function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConversion)
 
     nwakes = wake.panel_wake.nwakes[]
     

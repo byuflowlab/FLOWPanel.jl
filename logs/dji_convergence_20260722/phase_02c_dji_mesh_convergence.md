@@ -6,11 +6,38 @@ Dashboard: [DJI convergence progress](../../plans/dji_convergence_20260722/dji_c
 
 ## Current snapshot
 
-Status: **Phase 2c — COMPLETE; decision recorded, awaiting Ryan's Phase 3 approval.**
+Status: **Phase 2c — COMPLETE (full chordwise ladder to n=249, incl. HPC); attribution
+DIRECTION supported but gap NOT converged; awaiting Ryan's Phase 3 approval.**
 
 Goal: verify on the actual DJI 9443 rotor mesh that the Dirichlet–Neumann
 bound-circulation gap converges under chordwise refinement, as the Phase 2b oracle
 predicted.
+
+**FINAL Phase 2c result (extended ladder 81→249, 2026-07-24; corrected after per-station
+tip inspection):**
+
+- **Attribution DIRECTION supported, but the DJI gap is NOT converged (~2.2% and still
+  decreasing).** The **inboard (root) gap is the trustworthy signal**: it converges
+  smoothly and monotonically (4.05→2.16%) with Dirichlet climbing toward the flat Neumann
+  reference — the Phase 2b chordwise-under-resolution mechanism — but is still ~2% at the
+  finest rung.
+- **The outboard (tip) "convergence to ~0.28% at 185/201" was a TIP-CAP MESH ARTIFACT, not
+  real convergence** (this corrects the earlier CONFIRMED claim). Diagnostic: the tip
+  circulation at r/R≳0.9 is NON-monotonic in n_airfoil ({145,249} low ≈ Dir<Neu, {185,201}
+  high ≈ Dir *overshoots* Neu — non-physical), while the uncapped/Neumann tip is identical
+  across all rungs. So the tip Dirichlet is set by tip-CAP meshing, not chordwise
+  resolution; the ~0.3% outboard integral gap at 185/201 is a coincidental cancellation
+  from that overshoot.
+- **grad_mu ruled out** as a confound for the 145→185 jump: re-solving dji45_145 with the
+  robust `basis=:tri, tri_robust=true` gives bit-identical circulation vs the default
+  `:quad` (Γ_TE = μ-jump is grad_mu-independent).
+- Neumann fully converged throughout.
+
+**Next steps:** (1) confirm with Ryan how the tip caps were generated across the
+{145,185,201,249} meshes (the {145,249} vs {185,201} split suggests two cap recipes / a tip
+defect on 185/201); (2) add an intermediate rung (~165) to test tip behavior; (3) refine
+the *root* chordwise to push the inboard gap down. Supersedes both the earlier "FINER MESH
+DESIRABLE" and the (now-corrected) "attribution CONFIRMED / outboard converged" claims.
 
 **Decision: FINER MESH DESIRABLE (attribution direction supported, not converged; one
 outlier rung flagged).** All 6 solves clean (monitor/direct error 0.0, blade symmetry
@@ -47,25 +74,45 @@ converged. **Regenerate/replace the 30_97 capped mesh (or use 60_97).** The gap 
 Attribution NOT challenged. **Do NOT proceed to Phase 3/5 until Ryan approves.** Artifacts:
 `spanwise_report.md`, `spanwise_metrics.csv`; driver mode `PHASE2C_MODE=spanwise`.
 
-**Extended chordwise addendum (2026-07-24, Ryan-supplied 45-span 145/185/201/249):** the
-DJI Dir–Neu gap **converges monotonically toward the Neumann reference under chordwise
-refinement — the Phase 2b oracle mechanism, now confirmed on the real DJI mesh — but
-slowly.** Best-point-per-n_airfoil ladder (n=97 from the corrected 60-span solve):
+**Extended chordwise addendum (2026-07-24, Ryan-supplied 45-span 145/185/201/249) —
+COMPLETE. Attribution DIRECTION supported (inboard trend), but gap NOT converged; the
+outboard is a tip-cap artifact.** Best-point-per-n_airfoil ladder (n=97 = corrected
+60-span; 145 local, 185/201/249 on HPC job 12892031), gap % = 100·(Neu−Dir)/|Dir|:
 
-| n_airfoil | ∫Γ gap % | outboard gap % |
-|---:|---:|---:|
-| 81  | 3.76 | 3.33 |
-| 97  | 3.30 | 2.87 |
-| 121 | 2.98 | 2.69 |
-| 145 | 2.73 | 2.55 |
-| 185/201/249 | pending HPC | pending HPC |
+| n_airfoil | full ∫Γ gap % | outboard (tip) gap % | inboard (root) gap % |
+|---:|---:|---:|---:|
+| 81  | 3.76 | 3.33 | 4.05 |
+| 97  | 3.30 | 2.87 | 3.57 |
+| 121 | 2.98 | 2.69 | 3.17 |
+| 145 | 2.73 | 2.55 | 2.86 |
+| 185 | 1.65 | 0.30 ⚠ | 2.42 |
+| 201 | 1.65 | 0.28 ⚠ | 2.43 |
+| 249 | 2.24 | 2.41 | 2.16 |
 
-Neumann is flat (Δ ≤ 0.32%/rung), Dirichlet now nearly flat (Δ 0.11% at 145), gap closing
-~0.24 pts/rung. Not yet ≤1% at n=145; extrapolation suggests many more chordwise panels
-to reach 1% (decay is slow). Only n=145 solved locally (27608/25344 panels, ~6 GB dense
-Backslash, 413/112 s, error 0.0). **185/201/249 deferred to HPC** (dense Backslash needs
-10/12/18 GB > the 17 GB laptop; 249 exceeds RAM entirely — Ryan chose "145 local, rest
-HPC"). Artifacts: `extended_report.md`, `extended_fixed_bin.csv`; driver mode
+**Findings (reviewed; corrected after per-station tip inspection):**
+
+- **Neumann fully converged** (chordwise-flat, inboard and outboard, all rungs).
+- **Inboard (root) gap = the trustworthy signal:** 4.05→3.57→3.17→2.86→2.42→2.43→2.16%,
+  smooth monotone decrease, Dirichlet climbing toward Neumann — the Phase 2b
+  chordwise-under-resolution mechanism. Still **~2.2% at the finest rung → NOT converged.**
+- **Outboard (tip) gap is NON-monotonic and is a TIP-CAP ARTIFACT, not convergence.** The
+  ⚠ 0.28–0.30% at 185/201 is spurious. Per-station diagnostic (Dir Γ at r/R≈0.95): 145 and
+  249 ≈ 0.139 (Dir just *below* the flat Neumann tip 0.143, as expected), but 185 and 201
+  ≈ 0.153 — i.e. Dirichlet *overshoots* Neumann at the tip (non-physical). The uncapped
+  Neumann tip is identical across all four rungs, so this lives entirely in the tip CAPS.
+  The tip Dirichlet is set by tip-cap meshing, not chordwise resolution; the two mesh
+  groups {145,249} and {185,201} evidently used different cap recipes. (This corrects the
+  earlier "outboard converged / 249 is the outlier" reading — 185/201 are the anomaly.)
+- **Full ∫Γ gap:** the 1.65% at 185/201 is pulled down by the tip overshoot; the honest,
+  interior-governed gap is **~2.2% and still decreasing**. Pushing it below 1% needs finer
+  *root* chordwise resolution; the tip needs a cap-meshing fix, not more n_airfoil.
+- **grad_mu ruled out** for the 145→185 jump: dji45_145 re-solved with `basis=:tri,
+  tri_robust=true` gives bit-identical Γ vs the default `:quad` (Δ=0).
+
+**Next:** (1) confirm tip-cap generation across {145,185,201,249}; (2) intermediate rung
+(~165) to test the tip; (3) refine root chordwise. Solves: 145 local (27608/25344 panels,
+413/112 s); 185/201/249 on HPC (Slurm 12892031, 69/50/98/54/116/87 s, error 0.0).
+Artifacts: `extended_report.md`, `extended_fixed_bin.csv`, `case_metrics.csv`; mode
 `PHASE2C_MODE=extend`.
 
 **Mesh-format note:** Ryan's first 45_145/45_185 exports were MSH 2.2 (GeoIO needs ≥4.1);
@@ -183,6 +230,65 @@ trimmed to common station support.
   slowly — not yet ≤1% at n=145.** Provisional pending the HPC tail.
 - 185/201/249 prepared for HPC (six per-case Backslash solves), NOT submitted — study
   rule requires Ryan's approval before deployment. Handoff steps in the snapshot above.
+
+### 2026-07-24 — HPC job 12890990 caught two bugs; resubmitted as 12892016
+
+Job 12890990 completed 185c/u and 201c/u but **FAILED on 249c**, and its outputs were
+**invalid** — two problems, both now fixed:
+
+1. **grad_mu crash on 249c** (`basis=:quad` failed to reconstruct a finite μ gradient,
+   agglomerate 737, cond=Inf, stencil_size=0 — the finest mesh has a degenerate
+   agglomerate). The bound-circulation observable (TE μ-jump) does not use grad_mu, but
+   `steady!`'s standard aero post-processing does. Fix: the driver now passes
+   `grad_mu_options=(basis=:tri, tri_robust=true)` — the robust path — **verified
+   bit-identical circulation on dji81c** (Δ=0), so result-neutral.
+2. **Cluster source was stale.** The cluster repo sat at commit `1d13e65`, but the local
+   working tree (which produced the 81/97/121/145 points) is at `d98d397` **plus
+   uncommitted edits** to `src/FLOWPanel_liftingbody.jl` and
+   `src/FLOWPanel_simulate_monitors.jl`. The older `BoundCirculationMonitor` wrote a
+   **degenerate `r_over_R`** (every section = 0.1001/0.1106 instead of 0.11–0.99), making
+   the 185/201 raws unusable for radial binning. Fix: `scp`'d those two src files to the
+   cluster (checksums now match local); no git ops on the cluster (its unrelated dirty
+   files untouched). Deleted the degenerate cluster + local raws.
+
+Cancelled the 249-only re-run (12892005, would have hit bug 2) and **resubmitted the full
+185/201/249 set as job `12892016`** with the corrected driver + src. Queued behind
+`AssocGrpBillingRunMinutes`.
+
+### 2026-07-24 — Ryan pushed/pulled the fix; job 12892031 completed all six
+
+- Ryan committed the driver+src fixes and pushed; the cluster pulled to commit `5615ada`
+  (local matches). Verified cluster driver has the grad_mu fix + `hpc_ext` mode and the
+  two monitor src files md5-match local.
+- The queued jobs (12892016/12892027) were blocked by `AssocGrpBillingRunMinutes` — Ryan
+  had two other 24 h/192 GB jobs consuming the allocation's billing-minutes budget. That
+  limit scales with requested **wall-time**; cut the launcher from 12 h → **2.5 h** (six
+  solves need <30 min). Job **12892031** then started immediately.
+- All six solved cleanly (185/201/249 c+u; 69/50/98/54/116/87 s; monitor/direct 0.0). The
+  robust `grad_mu` path handled 249c with no crash. Verified `r_over_R` non-degenerate
+  (0.110–0.987), pulled the six raws locally, ran `PHASE2C_MODE=extend` (7/7 points).
+
+### 2026-07-24 — CORRECTION: the 145→185 jump is a tip-cap artifact, not convergence
+
+Ryan flagged the large full-∫Γ gap drop 145→185 (2.73→1.65%) and asked whether grad_mu
+changed across that boundary. Investigation:
+
+- **grad_mu ruled out.** 81/97/121/145 were solved with default `basis=:quad`; 185/201/249
+  with `basis=:tri, tri_robust=true` (the fix for the 249c crash). But re-solving dji45_145
+  c+u with tri_robust gives **bit-identical** Γ (Δ=0) vs :quad — Γ_TE=μ-jump is
+  grad_mu-independent. So the jump is real, not a grad_mu confound.
+- **Per-station tip inspection** (r/R≳0.9) shows the jump is entirely at the tip and is
+  **non-monotonic in n_airfoil**: Dir Γ at r/R≈0.95 = 0.138(145), 0.153(185), 0.154(201),
+  0.139(249); the Neumann tip is ~0.143 and identical across all four. So 185/201 Dirichlet
+  *overshoots* Neumann at the tip (non-physical), while 145/249 sit just below it (expected).
+  The variation is confined to the capped/Dirichlet solve → **tip-CAP mesh artifact**, with
+  {145,249} and {185,201} behaving as two groups (likely two cap recipes).
+- **Consequence:** the earlier "outboard converged to ~0.28% at 185/201 → attribution
+  CONFIRMED, full gap ~1.65%" is WITHDRAWN. The tip ~0.28% was a coincidental integral
+  cancellation from the overshoot. The honest conclusion: **attribution DIRECTION supported
+  by the smooth inboard (root) convergence, but the DJI gap is ~2.2% and NOT converged.**
+  Updated the driver's decision logic (tip-artifact detection), report, snapshot, and
+  dashboard accordingly.
 
 ### 2026-07-24 — Ryan approved HPC; submitted job 12890990
 

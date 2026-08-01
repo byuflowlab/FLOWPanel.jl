@@ -2,7 +2,7 @@ using Test
 import FLOWPanel as pnl
 import FastMultipole
 import FLOWVPM
-using LinearAlgebra: dot, norm
+using LinearAlgebra: dot, norm, cross
 
 if !isdefined(@__MODULE__, :make_plate_vortex_body)
     include("test_helpers.jl")
@@ -467,4 +467,217 @@ end
         correct_kuttacondition=false)
     static_pressure((body,), (nothing,), pnl.ReferenceFrame(body), uinf, 0, 1.0)
     @test static_pressure.pressure[1] ≈ pressure.pressure[1]
+end
+
+@testset "kinematic Das arc construction" begin
+    SV3 = FastMultipole.SVector{3, Float64}
+
+    # --- unit level: _rigid_back_displacement -------------------------------
+
+    origin = SV3(0.0, 0.0, 0.0)
+    te = SV3(0.75, 0.0, 0.0)
+
+    # Pure translation: the arc form must reduce to the tangent form exactly,
+    # so translating bodies (the wing cases) are bit-for-bit unaffected.
+    v = SV3(1.3, -0.4, 0.2)
+    ω0 = SV3(0.0, 0.0, 0.0)
+    τ = 0.05
+    Δ_trans = pnl._rigid_back_displacement(te, origin, v, ω0, τ)
+    @test Δ_trans ≈ -v * τ atol=1e-14
+
+    # Pure rotation about z through a finite angle: the displaced point must lie
+    # on the circle the trailing edge actually sweeps, i.e. the radius is
+    # preserved exactly and the azimuth is rotated by exactly -θ.
+    Ω = 2.0
+    ω = SV3(0.0, 0.0, Ω)
+    for τ_test in (0.01, 0.1, 0.35)          # θ = 0.02, 0.2, 0.7 rad
+        θ = Ω * τ_test
+        Δ = pnl._rigid_back_displacement(te, origin, SV3(0.0, 0.0, 0.0), ω, τ_test)
+        p = te + Δ
+        @test hypot(p[1], p[2]) ≈ hypot(te[1], te[2]) rtol=1e-13   # radius preserved
+        @test atan(p[2], p[1]) ≈ -θ rtol=1e-12                     # exact arc angle
+        @test p[3] ≈ te[3] atol=1e-14
+    end
+
+    # The legacy tangent construction instead lands at radius r*sqrt(1+θ²). Check
+    # that the arc form removes exactly that error, and that the two agree to
+    # O(θ²) so nothing changes in the small-angle limit.
+    for τ_test in (0.001, 0.01, 0.35)
+        θ = Ω * τ_test
+        Δ_arc = pnl._rigid_back_displacement(te, origin, SV3(0.0, 0.0, 0.0), ω, τ_test)
+        Δ_tan = -cross(ω, te - origin) * τ_test
+        r = hypot(te[1], te[2])
+        @test hypot((te + Δ_tan)[1], (te + Δ_tan)[2]) ≈ r * sqrt(1 + θ^2) rtol=1e-12
+        @test norm(Δ_arc - Δ_tan) ≤ r * θ^2                  # second-order difference
+    end
+
+    # --- integration level: initialize_Das! ---------------------------------
+
+    Uinf_zero = t -> SV3(0.0, 0.0, 0.0)
+    axis = SV3(0.0, 0.0, 1.0)
+    Ω_body = 3.0
+    dt = 0.2                       # θ = eta*Ω*dt; large on purpose
+    eta = 1.0
+
+    function _das_endpoints(; arc::Bool)
+        body = make_plate_vortex_body()
+        body.Das[1] .= 0.0
+        frames = pnl.ReferenceFrame(body;
+            origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+            ω_axis=axis, ω=Ω_body,
+            R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            name="vehicle", child_index=Int[], dependent_index=[1])
+        pnl.initialize_Das!((body,), frames, Uinf_zero, 0.0, dt;
+            set_Das_eta_kinematic=eta, set_Das_kinematic_arc=arc)
+        return body, frames
+    end
+
+    body_arc, _ = _das_endpoints(arc=true)
+    body_tan, _ = _das_endpoints(arc=false)
+
+    shedding = body_arc.shedding[1]
+    θ_body = eta * Ω_body * dt
+    radii_ok_arc = true
+    radii_ok_tan = true
+    for j in axes(shedding, 2)
+        node_idx = body_arc.cells[shedding[3, j], shedding[1, j]]
+        n = SV3(body_arc.nodes[1, node_idx], body_arc.nodes[2, node_idx], body_arc.nodes[3, node_idx])
+        r = hypot(n[1], n[2])
+        r == 0 && continue
+        pa = n + SV3(body_arc.Das[1][1, j], body_arc.Das[1][2, j], body_arc.Das[1][3, j])
+        pt = n + SV3(body_tan.Das[1][1, j], body_tan.Das[1][2, j], body_tan.Das[1][3, j])
+        radii_ok_arc &= isapprox(hypot(pa[1], pa[2]), r; rtol=1e-12)
+        radii_ok_tan &= isapprox(hypot(pt[1], pt[2]), r * sqrt(1 + θ_body^2); rtol=1e-12)
+    end
+    # The arc construction keeps every shed node on the swept circle; the legacy
+    # tangent construction inflates its radius by sqrt(1+θ²).
+    @test radii_ok_arc
+    @test radii_ok_tan
+    @test !isapprox(body_arc.Das[1], body_tan.Das[1]; rtol=1e-6)   # they really differ here
+
+    # `arc=false` must reproduce the legacy path exactly.
+    body_legacy = make_plate_vortex_body()
+    body_legacy.Das[1] .= 0.0
+    frames_legacy = pnl.ReferenceFrame(body_legacy;
+        origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+        ω_axis=axis, ω=Ω_body,
+        R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle", child_index=Int[], dependent_index=[1])
+    pnl.kinematic_velocity!((body_legacy,), frames_legacy)
+    pnl._accumulate_Das!(body_legacy, eta * dt)
+    @test body_legacy.Das[1] ≈ body_tan.Das[1] atol=1e-14
+
+    # Small angle: arc and tangent must converge on each other.
+    dt_small = 1e-3
+    function _das_small(; arc::Bool)
+        body = make_plate_vortex_body()
+        body.Das[1] .= 0.0
+        frames = pnl.ReferenceFrame(body;
+            origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+            ω_axis=axis, ω=Ω_body,
+            R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            name="vehicle", child_index=Int[], dependent_index=[1])
+        pnl.initialize_Das!((body,), frames, Uinf_zero, 0.0, dt_small;
+            set_Das_eta_kinematic=eta, set_Das_kinematic_arc=arc)
+        return body
+    end
+    d_arc = _das_small(arc=true).Das[1]
+    d_tan = _das_small(arc=false).Das[1]
+    # The two differ by the second-order arc-vs-chord term: |Δ_arc - Δ_tan| ≈ rθ²/2
+    # against |Δ_tan| ≈ rθ, so the relative difference is θ/2.
+    θ_small = eta * Ω_body * dt_small
+    @test norm(d_arc - d_tan) / norm(d_tan) ≈ θ_small / 2 rtol=1e-3
+
+    # Minimum-displacement floor still applies to the kinematic increment, with
+    # the same semantics as the legacy path: nodes with zero kinematic velocity
+    # (i.e. sitting on the rotation axis) have no defined direction and are left
+    # untouched by both. Compare per-column magnitudes against legacy.
+    function _das_floored(; arc::Bool)
+        body = make_plate_vortex_body()
+        body.Das[1] .= 0.0
+        frames = pnl.ReferenceFrame(body;
+            origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+            ω_axis=axis, ω=Ω_body,
+            R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            name="vehicle", child_index=Int[], dependent_index=[1])
+        pnl.initialize_Das!((body,), frames, Uinf_zero, 0.0, dt_small;
+            set_Das_eta_kinematic=eta, set_Das_min_kinematic_displacement=min_disp,
+            set_Das_kinematic_arc=arc)
+        return body.Das[1]
+    end
+    min_disp = 1.0e3      # far above any physical displacement here
+    d_floor_arc = _das_floored(arc=true)
+    d_floor_tan = _das_floored(arc=false)
+    n_floored = 0
+    for j in axes(d_floor_arc, 2)
+        @test norm(d_floor_arc[:, j]) ≈ norm(d_floor_tan[:, j]) rtol=1e-12
+        if norm(d_floor_tan[:, j]) > 0
+            @test norm(d_floor_arc[:, j]) ≈ min_disp rtol=1e-12
+            n_floored += 1
+        end
+    end
+    @test n_floored > 0   # the floor actually fired somewhere
+end
+
+@testset "simulate! set_Das_refresh re-derives Das from the current state" begin
+    # Time-growing freestream: with the default frozen Das the offset keeps its
+    # t=0 magnitude for the whole run; with set_Das_refresh=true it is re-derived
+    # each step from the current |Uinf|. BRAINSTORM 014.
+    Uinf = t -> [1.0 + t, 0.0, 0.0]
+    maneuver = (frames, systems, wakes, t) -> nothing
+    t_range = [0.0, 0.1, 0.2]
+    eta = 0.5
+    dt = 0.1
+
+    # finite attached wake: the semi-infinite kernel requires |Das| = 1 and
+    # would reject an eta-scaled offset
+    function _das_refresh_body()
+        nodes = Float64[0 1 1 0; 0 0 1 1; 0 0 0 0]
+        cells = Int[1 1; 2 3; 3 4]
+        shedding = [pnl.calc_shedding_from_seed(nodes, cells, 1, 3)]
+        body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, shedding;
+            DBC=false, check_mesh=false, watertight=false,
+            semiinfinite_wake=false)
+        pnl.calc_normals!(body)
+        pnl.calc_controlpoints!(body)
+        return body
+    end
+
+    function _run_das_refresh(; refresh::Bool)
+        body = _das_refresh_body()
+        body.Das[1] .= 0.0
+        frames = pnl.ReferenceFrame(body)
+        pnl.simulate!(body, nothing, frames, maneuver, Uinf, t_range;
+            body_solvers=SimNoopSolver(),
+            backend=pnl.DirectBackend(),
+            path=nothing,
+            set_Das_eta_freestream=eta,
+            set_Das_refresh=refresh,
+            grad_mu_options=(; basis=:tri),
+        )
+        return body.Das[1]
+    end
+
+    das_frozen = _run_das_refresh(refresh=false)
+    das_refreshed = _run_das_refresh(refresh=true)
+
+    # frozen: |Das| = eta*dt*|Uinf(0)| everywhere, along +x
+    # refreshed: last refresh happens at the final step t = 0.2
+    for j in axes(das_frozen, 2)
+        @test das_frozen[:, j] ≈ [eta * dt * 1.0, 0.0, 0.0] atol=1e-13
+        @test das_refreshed[:, j] ≈ [eta * dt * 1.2, 0.0, 0.0] atol=1e-13
+    end
+
+    # refresh with both etas NaN is a documented no-op (guard clause)
+    body = _das_refresh_body()
+    body.Das[1] .= 0.123
+    frames = pnl.ReferenceFrame(body)
+    pnl.simulate!(body, nothing, frames, maneuver, Uinf, t_range;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        path=nothing,
+        set_Das_refresh=true,
+        grad_mu_options=(; basis=:tri),
+    )
+    @test all(body.Das[1] .== 0.123)
 end

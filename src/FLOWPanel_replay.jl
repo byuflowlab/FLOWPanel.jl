@@ -292,6 +292,7 @@ function _wake_manifest_dict(wake, i::Int)
         d["core_size"] = wake.panel_wake.core_size
         d["shed_with_induced_velocity"] = wake.panel_wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.panel_wake.unsteady_filament
+        d["freestream_convection"] = wake.panel_wake.freestream_convection
         d["particle_kerneloffset"] = wake.particle_kerneloffset
         d["method_trailing"] = _wake_shedding_manifest(wake.method_trailing)
         d["method_unsteady"] = _wake_shedding_manifest(wake.method_unsteady)
@@ -307,6 +308,7 @@ function _wake_manifest_dict(wake, i::Int)
         d["shed_with_induced_velocity"] = wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.unsteady_filament
         d["include_final_filament"] = wake.include_final_filament
+        d["freestream_convection"] = wake.freestream_convection
     else
         d["type"] = string(nameof(typeof(wake)))
     end
@@ -464,7 +466,8 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
                 unsteady_filament=Bool(get(wmeta, "unsteady_filament", true)),
                 # Preserve the historical default for manifests written before
                 # finite panel-only wakes recorded this setting explicitly.
-                include_final_filament=Bool(get(wmeta, "include_final_filament", true))))
+                include_final_filament=Bool(get(wmeta, "include_final_filament", true)),
+                freestream_convection=Bool(get(wmeta, "freestream_convection", false))))
         elseif wtype == "PanelParticleWake"
             systems[i] isa AbstractLiftingBody ||
                 throw(ArgumentError("Cannot reconstruct PanelParticleWake for non-lifting body $(i)."))
@@ -484,6 +487,7 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
                 core_size=Float64(get(wmeta, "core_size", 1e-3)),
                 shed_with_induced_velocity=Bool(get(wmeta, "shed_with_induced_velocity", true)),
                 unsteady_filament=Bool(get(wmeta, "unsteady_filament", true)),
+                freestream_convection=Bool(get(wmeta, "freestream_convection", false)),
                 method_trailing=method_trailing,
                 method_unsteady=method_unsteady,
                 particle_maintenance=particle_maintenance,
@@ -949,6 +953,15 @@ function replay(path::AbstractString, run_name::AbstractString;
         verbose=false)
     timesteps, idxs, selected = _selected_replay_steps(path, run_name, steps)
     metadata = _read_metadata_toml(path, run_name)
+    # BRAINSTORM 015: replay has no wake_attachment/kutta_closure plumbing, so
+    # a run recorded with a non-default configuration would silently replay as
+    # a legacy run and reconstruct wrong fields. Refuse until supported.
+    if !isnothing(metadata) && haskey(metadata, "kutta")
+        throw(ArgumentError("this run was recorded with a non-default "*
+            "wake_attachment/kutta_closure configuration (manifest has a "*
+            "[kutta] table); replay does not yet support it and would "*
+            "silently reconstruct legacy fields."))
+    end
     first_step = first(selected)
     systems, body_metadata = _read_body_metadata(path, run_name, first_step, metadata)
     wakes = _construct_wakes_from_manifest(systems, metadata)

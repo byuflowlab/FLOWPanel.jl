@@ -93,9 +93,13 @@ using StaticArrays: SVector, SMatrix
         eta_freestream = 0.3
         eta_kinematic = 0.2
 
+        # `set_Das_kinematic_arc=false` selects the legacy tangent construction,
+        # which is what the inline logic below reproduces. The default is now the
+        # arc construction; it is compared separately at the end of this testset.
         pnl.initialize_Das!(systems_helper, frames_helper, Uinf, t0, dt0;
             set_Das_eta_freestream=eta_freestream,
-            set_Das_eta_kinematic=eta_kinematic)
+            set_Das_eta_kinematic=eta_kinematic,
+            set_Das_kinematic_arc=false)
 
         uinf0 = Uinf(t0)
         for sys in systems_inline
@@ -116,6 +120,28 @@ using StaticArrays: SVector, SMatrix
 
         @test length(body_helper.Das) == length(body_inline.Das)
         @test all(body_helper.Das[i] == body_inline.Das[i] for i in eachindex(body_helper.Das))
+
+        # The default (arc) construction follows the trailing edge's swept path
+        # instead of its tangent. Here θ = eta_kinematic*ω*dt0 = 0.02 rad, so the
+        # two agree closely but are not identical.
+        body_arc = make_plate_vortex_body()
+        frames_arc = pnl.ReferenceFrame(body_arc;
+            origin=SVector{3}(0.0, 0.0, 0.0),
+            v=SVector{3}(0.0, 0.0, 0.0),
+            ω_axis=SVector{3}(0.0, 0.0, 1.0),
+            ω=2.0,
+            R=SMatrix{3,3}(1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0),
+            name="test",
+            child_index=Int[],
+            dependent_index=[1])
+        pnl.initialize_Das!((body_arc,), frames_arc, Uinf, t0, dt0;
+            set_Das_eta_freestream=eta_freestream,
+            set_Das_eta_kinematic=eta_kinematic)
+        @test all(isapprox(body_arc.Das[i], body_helper.Das[i]; rtol=1e-2)
+                  for i in eachindex(body_arc.Das))
+        @test !all(body_arc.Das[i] == body_helper.Das[i] for i in eachindex(body_arc.Das))
     end
 
     @testset "kinematic Das minimum displacement" begin

@@ -87,6 +87,25 @@ end
                    interior_path=:straight, path_depth=1.0,
                    recompute_interval=1, relaxation=1.0)
 
+!!! warning "Deprecated (2026-07-29)"
+    Use [`GreenReconstruction`](@ref) instead. Deprecated for three reasons:
+    (1) Gate A0 of the DJI convergence campaign
+    (`logs/dji_convergence_20260722/phase_02b_formulation_attribution.md`)
+    found the whole affine-`c` channel moves integrated circulation by only
+    ~0.74% and rejected it as the Dirichlet–Neumann lever; (2) its `:green`
+    estimator equals `GreenReconstruction` to displayed precision (the Stage 6
+    consistency identity), making it redundant; (3) its downstream velocity
+    channel is vacuous — `influence!` never applies `wake_strength_shift`
+    under any backend (including `DirectBackend`, which also routes through
+    the FastMultipole source buffers), so post-solve surface velocities and
+    Bernoulli pressures/forces silently omit the affine −c attached-strip
+    term. The shed circulation (`shed_wake!` via `_get_wakestrength_mu`) and
+    the solve itself are unaffected. Kept functional for archived scripts
+    (`examples/dji9443_formulation_attribution.jl`, `test/formulation_test.jl`)
+    and old-run replay; construction warns once. If a corrected-velocity
+    variant is ever needed, `_add_affine_attached_velocity!`
+    (`src/FLOWPanel_kutta.jl`) is the ready-made exact fix.
+
 Velocity-only trace-corrected formulation: solve the production system with one
 added right-hand-side vector, `G·μ̃ = −S(σ0+σ) + W·c`, and apply the affine
 Kutta relation `γ = C·μ̃ − c` downstream (shedding, influence evaluation, VTK,
@@ -374,6 +393,12 @@ end
 
 function initialize_formulation(f::TraceCorrected, systems_tuple, wakes_tuple,
         body_solvers, backend_solve, backend_system)
+    @warn "TraceCorrected is deprecated (2026-07-29): use GreenReconstruction "*
+        "instead. Its :green estimator is identical to GreenReconstruction, "*
+        "the affine-c channel was rejected as a lever by Gate A0, and its "*
+        "post-solve velocity channel is vacuous (influence! never applies "*
+        "wake_strength_shift under any backend, so surface velocities omit "*
+        "the -c attached-strip term). See the TraceCorrected docstring." maxlog=1
     body, _ = _validate_formulation_common(f, systems_tuple, wakes_tuple,
         body_solvers)
     backend_system isa DirectBackend ||

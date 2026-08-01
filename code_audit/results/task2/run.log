@@ -1,0 +1,356 @@
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mPressureBernoulli(unsteady=true, allow_partial=true) excludes vector-potential-only wake sources from scalar-potential history and the scalar ALE contraction. Continuing with a partial diagnostic: their velocity is retained only in inertial kinetic energy.
+[33m[1m└ [22m[39m[90m@ FLOWPanel ~/Dropbox/research/projects/FLOWPanel.jl/src/FLOWPanel_simulate_monitors.jl:214[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+[33m[1m┌ [22m[39m[33m[1mWarning: [22m[39mfmm! called but either sources or targets are empty; foregoing calculation
+[33m[1m└ [22m[39m[90m@ FastMultipole ~/Dropbox/research/projects/FastMultipole/src/fmm.jl:1300[39m
+Task 2 — unsteady panel vs particle wake
+  forcing: alpha = 3.94 + 1.99 sin(2*pi*4.01 t) deg
+  [panel]    done in 1086.8 s (495 steps)
+  [particle] done in 1084.6 s (495 steps, np=62)
+  steps/cycle = 164.7, k = omega*c/(2U) = 0.0382
+
+=== Cycle-3 fits (y = mean + A sin(wt + phi); phase rel. to alpha forcing) ===
+station        |    A_panel     A_part     dA % |   ph_panel    ph_part  dph deg | mean_pnl mean_prt
+CL             |   0.114607   0.114617   +0.009 |    -1.1129    -1.1128  +0.0000 |  0.23246  0.23248
+cl(eta=0.15)   |   0.134481   0.134493   +0.009 |    -1.5803    -1.5802  +0.0000 |  0.27283  0.27285
+cl(eta=0.3)    |   0.133178   0.133190   +0.009 |    -1.5835    -1.5835  +0.0000 |  0.27023  0.27025
+cl(eta=0.45)   |   0.124140   0.124150   +0.009 |    -1.1723    -1.1722  +0.0000 |  0.25171  0.25174
+cl(eta=0.6)    |   0.113117   0.113127   +0.009 |    -0.8034    -0.8034  +0.0000 |  0.22927  0.22929
+cl(eta=0.75)   |   0.095573   0.095581   +0.009 |    -0.2728    -0.2728  +0.0000 |  0.19359  0.19360
+cl(eta=0.9)    |   0.067271   0.067277   +0.009 |     0.4623     0.4624  +0.0000 |  0.13605  0.13606
+
+=== Washout evidence: cycle-2 -> cycle-3 change (same model) ===
+station        | panel: dA %           dph deg | particle: dA %           dph deg | resid3 pnl/prt
+CL             |      +0.0002     -0.00266 |         +0.0002     -0.00245 | 1.08e-03 1.08e-03
+cl(eta=0.15)   |      +0.0000      0.00001 |         +0.0001      0.00023 | 9.97e-04 9.97e-04
+cl(eta=0.3)    |      +0.0000      0.00001 |         +0.0001      0.00023 | 1.02e-03 1.02e-03
+cl(eta=0.45)   |      +0.0000      0.00001 |         +0.0001      0.00022 | 1.01e-03 1.01e-03
+cl(eta=0.6)    |      +0.0000      0.00001 |         +0.0001      0.00021 | 1.03e-03 1.03e-03
+cl(eta=0.75)   |      +0.0000      0.00001 |         +0.0001      0.00019 | 1.02e-03 1.02e-03
+cl(eta=0.9)    |      -0.0035     -0.02073 |         -0.0034     -0.02056 | 8.72e-04 8.72e-04
+
+Wrote CSVs under /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/code_audit/scripts/../results/task2
+Wrote plots under /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/code_audit/scripts/../results/task2

@@ -1,0 +1,54 @@
+Task 1b numerics — FULL run
+  wing: c=0.3048 m, b=1.219 m, n_span=15 n_airfoil=31 n_endcap=5
+  alpha=4.50 deg, U=100.6 m/s, dt=0.5 chords/step, nsteps=80, das=0.0152 m (0.05c)
+  marched 80 steps in 93.7 s; settled CL = 0.26205059 (Task 1: 0.262051)
+  phi_tr probed (direct, 0.6 s); |phi_tr| median=0.03174 max=0.1246
+  direct-vs-FMM probe agreement: max|diff| = 2.547e-07 (rel to max|phi_tr| = 2.045e-06)
+  G_B 0.1 s, K_int 0.1 s, G_A 0.1 s (n=1124)
+
+(§5.1) scheme B sanity: ||G_B mu* + phi_sigma*|| / ||phi_sigma*|| = 1.826e-15 (max row 5.360e-15)
+(§5.2) scheme A on frozen geometry: sum(dmu*)/sum(dmu_A) = 0.9168 (Task 1: 0.916)
+        mid-span dmu*/dmu_A = 0.9131 (Task 1: 0.912)
+(§5.3) cross-substitution r_A = G_A mu* + phi_sigma_A:
+        rms(all)=0.02886 rms(TE rows)=0.00532 rms(non-TE)=0.02924 max|r_A|=0.05188 (at cell 472)
+        scale: max|phi_sigma_A| = 2.068
+
+  station-mean values: D1(measured)=-0.3968 D2(A-A')=-0.27905 D3(A'-marched)=-0.11775
+  P5 predictions:      D4(-C.phi_tr)=-0.016141 D5(eq.3 full)=-0.071386
+  correlations: cor(D1,D4)=0.9959 cor(D1,D3)=0.9978 cor(D3,D5)=0.9991 cor(D1,D2)=0.9997
+  magnitude ratios: mean(D3)/mean(D1)=0.2968 mean(D4)/mean(D1)=0.0407 mean(D5)/mean(D3)=0.6062 mean(D2)/mean(D1)=0.7032
+  mid-span TE CP pair separation |xu-xl| = 0.0004005 m (das = 0.01524 m)
+  mid-span: D1=-0.49037 D2=-0.34784 D3=-0.14253 D4=-0.019308 D5=-0.086145 dmu*=-5.1545
+  mid-span TE upper CP (cell 479):
+    (i)   semiinf attached phi   = +0.21031
+    (ii)  das attached phi       = +0.196432
+    (iii) free-wake phi_tr       = +0.0041421
+    (iv)  phi_sigma_fw           = +0.00798104
+    (ii)+(iii)-(i) [naive P3 gauge-confounded on-body] = -0.0097357
+  mid-span TE lower CP (cell 421):
+    (i)   semiinf attached phi   = -0.0817792
+    (ii)  das attached phi       = -0.0763422
+    (iii) free-wake phi_tr       = -0.0151657
+    (iv)  phi_sigma_fw           = -0.0122162
+    (ii)+(iii)-(i) [naive P3 gauge-confounded on-body] = -0.0097287
+
+(§5.4a) ||phi_sigma_fw - (I-K_int)phi_tr|| / ||phi_sigma_fw|| = 0.01549
+        max|err| = 0.002844, max|phi_sigma_fw| = 0.08246, cor = 0.99990
+        TE-row rms(err)=0.0004586 vs non-TE rms(err)=0.0006271
+  point (dx/c,dz/c)   phi_A,att     phi_B,att+phi_fw   rel.err
+  (+0.5,+0.5)      +1.975560e+00   +1.959697e+00   8.030e-03
+  (+0.5,-0.5)      -1.826609e+00   -1.837375e+00   5.894e-03
+  (+1.0,+0.5)      +2.018457e+00   +1.996239e+00   1.101e-02
+  (+1.0,-0.5)      -1.918006e+00   -1.934534e+00   8.618e-03
+  (+2.0,+0.5)      +2.044690e+00   +2.009617e+00   1.715e-02
+  (+2.0,-0.5)      -1.993616e+00   -2.023599e+00   1.504e-02
+
+  exact split of measured deficit (station means):
+    D1 = -0.3968;  E1(T1, composite-sheet) = -0.019947 (5.0%);  E2(T2, potential-vs-sigma) = -0.37685 (95.0%)
+    E2 split: E2a(P5 trace/Kutta) = -0.22842 (57.6% of D1); E2b(P1/P2 sampling) = -0.14844 (37.4% of D1)
+    closure: max|E1+E2-D1| = 5.917e-13, max|E2a+E2b-E2| = 9.992e-16
+    A' vs A: sum(dmu_Ap)/sum(dmu_A) = 0.9415 (marched/A = 0.9168)
+  T1 split (station means of C-image through G_A^-1):
+    E1_geom(relaxed wake geometry) = -0.018939 (4.8% of D1)
+    E1_rest(truncation+row-discretization+regularization) = -0.0010086 (0.3% of D1)
+  relaxed wake z-displacement off rigid sheet: median=-0.1137 m, max|.|=0.361 m (c=0.3048 m)
