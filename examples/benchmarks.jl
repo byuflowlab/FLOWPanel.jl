@@ -251,6 +251,7 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
     experimental_AOA = experimental[:, 1]
     experimental_CL = experimental[:, 2]
     println("Running $name")
+    flush(stdout)
 
     sq_error = 0.0
     m = 0.0254
@@ -301,13 +302,27 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
             reuse_solver && (solver_cache[] = solver)
         end
 
+        println("  AOA=$AOA: solving...")
+        flush(stdout)
         t_build_solve, t_solve = pnl.solve!(bodies, solver; solve_kwargs...)
         t_build += t_build_solve
         @show t_build, t_solve
+        flush(stdout)
 
-        CL, CD = postprocess!(bodies, Vinf, rho, chords, b, m)
-
-        push!(CLs, CL)
+        # Post-processing reconstructs a surface mu gradient and throws (rather than returning
+        # a bad number) when the strengths it is handed are not a converged solution. That is
+        # the right behavior for it, but it must not abort the sweep: the solver diagnostics
+        # for this angle are exactly what we want recorded when the solve fails to converge,
+        # and the remaining angles are still worth running. Record NaN forces and continue.
+        local CL, CD
+        try
+            CL, CD = postprocess!(bodies, Vinf, rho, chords, b, m)
+            push!(CLs, CL)
+        catch e
+            CL = NaN; CD = NaN
+            println("  postprocess! failed at AOA=$AOA for $name: ", e)
+            flush(stdout)
+        end
 
         if i == 1
             nps_tot = sum(b.ncells for b in bodies)
@@ -343,6 +358,10 @@ function run_solver(io, name, solver_builder, AOAs, experimental; paraview::Bool
         # Flush per row: the preconditioned FMM config can take down the process natively,
         # and buffered rows from configs that already succeeded would be lost with it.
         flush(io)
+        # Julia block-buffers stdout when it is redirected to a file, so without this the
+        # progress log stays empty until the process exits -- and is lost entirely if the
+        # process dies natively, which is precisely the case worth diagnosing.
+        flush(stdout)
     end
 
 end

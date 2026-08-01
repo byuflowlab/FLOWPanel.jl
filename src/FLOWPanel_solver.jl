@@ -797,8 +797,21 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
             ts += @elapsed Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax, history=true)
         end
         record_stats!(solver.stats, workspace, solver.rhs)
+        # Distinguish the two ways a solve can fail to converge, which the iteration count alone
+        # cannot: genuinely-slow convergence, versus a non-finite value entering the iteration
+        # (after which the residual can never drop and GMRES always burns to itmax). Observed
+        # intermittently on this path with the FMM backend -- runs that converge are bitwise
+        # reproducible, while failures run to exactly itmax and hand non-finite strengths to
+        # post-processing, which then reports a misleading "failed to reconstruct a finite mu
+        # gradient" from a well-conditioned stencil. Reporting it here names the real cause at
+        # the point it happens instead of downstream.
+        n_nonfinite = count(!isfinite, workspace.x)
+        if n_nonfinite > 0
+            i_first = findfirst(!isfinite, workspace.x)
+            @warn "KrylovCoupled produced non-finite entries in the solution; this is corruption in the operator evaluation, not slow convergence." n_nonfinite n_unknowns=length(workspace.x) first_index=i_first first_value=workspace.x[i_first] niter=solver.stats.niter
+        end
         if !solver.stats.solved
-            @warn "KrylovCoupled did not converge; strengths are from capped/stalled iterations and must not be treated as converged." niter=solver.stats.niter itmax=solver.itmax status=solver.stats.status resid=solver.stats.resid resid_rel=solver.stats.resid_rel
+            @warn "KrylovCoupled did not converge; strengths are from capped/stalled iterations and must not be treated as converged." niter=solver.stats.niter itmax=solver.itmax status=solver.stats.status resid=solver.stats.resid resid_rel=solver.stats.resid_rel n_nonfinite
         end
         solver.x .= workspace.x
 
