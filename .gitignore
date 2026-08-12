@@ -13,6 +13,8 @@ temp*
 data/*
 !data/pitching_wing_exp/
 !data/pitching_wing_exp/**
+!data/surface_vorticity_conversion_static/
+!data/surface_vorticity_conversion_static/**
 
 # Jupyter notebook temps
 .ipynb_checkpoints
@@ -21,6 +23,17 @@ data/*
 *.vtu
 *.vtm
 *.pvd
+
+# 021 smoke-harness simulate! outputs (CSVs are kept; VTK sim dirs are not)
+benchmark/results/smoke/*/sim_*/
 test/*.vtu
 test/*.vtm
 test/*.pvd
+
+# LaTeX/TikZ figure build artifacts (figures policy: commit only .tex + CSVs)
+BRAINSTORM/**/figures/*.pdf
+BRAINSTORM/**/figures/*.aux
+BRAINSTORM/**/figures/*.log
+BRAINSTORM/**/figures/*.fls
+BRAINSTORM/**/figures/*.fdb_latexmk
+BRAINSTORM/**/figures/*.synctex.gz

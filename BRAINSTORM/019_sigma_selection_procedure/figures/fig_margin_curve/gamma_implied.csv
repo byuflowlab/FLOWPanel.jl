@@ -1,0 +1,11 @@
+run,sigma_over_R,viscous,nt,M_direct,gamma_implied_m2s,outcome
+scr_p019_s015,0.01496,false,36,1.750188e+00,0.112914,ignited
+scr_p019_s025,0.02493,false,36,1.326863e+00,0.237802,ignited
+scr_p019_s038,0.03808,false,36,1.412350e-01,0.059041,survivor
+scr_p019_s015v,0.01496,true,36,1.258469e+01,0.811905,ignited
+scr_p019_s020v,0.01995,true,36,2.824016e+01,3.238971,ignited
+scr_p019_s025v,0.02493,true,36,1.116329e+00,0.200070,ignited
+scr_p019_s030v,0.02992,true,36,2.953716e-01,0.076227,survivor
+scr_p019_s038v,0.03808,true,36,1.122855e-01,0.046939,survivor
+scr_p019_sstab,0.03117,true,36,1.337900e-01,0.037465,survivor
+scr_p019_fid144,0.02094,true,144,3.234717e+00,1.636145,ignited

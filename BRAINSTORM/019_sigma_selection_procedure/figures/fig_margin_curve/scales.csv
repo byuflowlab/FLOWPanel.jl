@@ -1,0 +1,5 @@
+name,value
+eps,0.200
+sigma_eq_over_R,0.01779
+sigma_stab_over_R,0.03105
+sigma_0_over_R,0.03557

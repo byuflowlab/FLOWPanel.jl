@@ -1,0 +1,48 @@
+% fig_p4b_hist: P4b viscous-fidelity discriminator — sigma/sigma_shed
+% distributions of the in-band NT=144 run vs the above-band reference.
+% Data: fig_p4b_hist/{fid144_mid,fid144_late,s038v_ref}_hist.csv
+% (pooled 10-step windows, 60 bins over [0,1.5]; produced by
+% scripts/vtp_sigma_reduce.py from retained particle VTPs).
+% Log-y to expose the tail; the pre-registered discriminator compared
+% MEDIANS (dotted verticals) — the verdict lives in the bulk peak, the
+% failure mode in the left tail.  Compile: pdflatex (from this dir).
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\definecolor{cinb}{HTML}{D55E00}   % in-band (fid144, 1.18 sigma_eq)
+\definecolor{cref}{HTML}{0072B2}   % above-band reference (s038v)
+\definecolor{cgry}{HTML}{707070}
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[
+  width=12.2cm, height=8.0cm,
+  xmin=0, xmax=1.5, ymode=log, ymin=1e-7, ymax=0.4,
+  xlabel={$\sigma/\sigma_{\mathrm{shed}}$},
+  ylabel={fraction of particles per bin},
+  grid=major, grid style={cgry!25, very thin},
+  axis line style={cgry!70},
+  tick label style={font=\small}, label style={font=\small},
+  legend style={font=\footnotesize, at={(0.015,0.985)}, anchor=north west,
+    legend cell align=left, draw=cgry!50, fill=white, fill opacity=0.9,
+    text opacity=1, row sep=-1pt},
+]
+% sigma_eq markers (sigma_eq/sigma_shed differs per run: in-band 0.849,
+% reference 0.467 — values from the P4b scoring section)
+\draw[cinb, dash dot, thin] (axis cs:0.849,1e-7) -- (axis cs:0.849,0.4)
+  node[pos=0.13, above left, rotate=90, font=\scriptsize, text=cinb]
+  {$\sigma_{eq}$ (in-band)};
+\draw[cref, dash dot, thin] (axis cs:0.467,1e-7) -- (axis cs:0.467,0.4)
+  node[pos=0.13, above left, rotate=90, font=\scriptsize, text=cref]
+  {$\sigma_{eq}$ (ref.)};
+\addplot[cref, semithick, const plot]
+  table[col sep=comma, x=bin_lo, y=frac]{fig_p4b_hist/s038v_ref_hist.csv};
+\addlegendentry{reference $\sigma=2.14\sigma_{eq}$ (s038v, settled)}
+\addplot[cinb, semithick, const plot]
+  table[col sep=comma, x=bin_lo, y=frac]{fig_p4b_hist/fid144_late_hist.csv};
+\addlegendentry{in-band $\sigma=1.18\sigma_{eq}$ (NT=144, pre-onset)}
+\addplot[cinb, thin, densely dotted, const plot]
+  table[col sep=comma, x=bin_lo, y=frac]{fig_p4b_hist/fid144_mid_hist.csv};
+\addlegendentry{in-band, one rev earlier}
+\end{axis}
+\end{tikzpicture}
+\end{document}

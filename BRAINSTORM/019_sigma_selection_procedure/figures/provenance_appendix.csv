@@ -1,0 +1,26 @@
+label,run,job_id,provenance_source,sigma_method,role
+prod-0.0381-visc-NT36,p018_L1_visc,unknown,case_metadata,sgm0/R (x-checked vs tip-arc),L1 40-rev viscous certification (no wake-health CSV; stability point only)
+prod-0.0193-visc-NT36,p018_L2_visc,unknown,MISSING,registry constant (PROVISIONAL),"L2 viscous, forensics-only ingestion (ignition point)"
+prod-0.0299-inv-NT36,p018_ufront_n1,13057253,banner_config,sgm0/R (x-checked vs tip-arc),production inviscid 0.0299R
+prod-0.0299-visc-NT36,p018_ufront_n1_visc,13058534,banner_config,sgm0/R (x-checked vs tip-arc),production viscous 0.0299R (known FAILED)
+prod-0.0349-visc-NT36,p018_ufront_s035_visc,13058988,banner_config,sgm0/R (x-checked vs tip-arc),production viscous 0.0349R hedge (CANCELLED by user at step 997/1080; monitors valid through ~996)
+screen-0.0873-inv-NT36,scr_b0,unknown,case_metadata,sgm0/R (x-checked vs tip-arc),B0 carrier (sigma 0.0873R)
+screen-0.0209-visc-NT144,scr_p019_fid144,13061089,banner_config,sgm0/R (x-checked vs tip-arc),"P4b fidelity discriminator NT144 (sigma 0.0209R = 1.18 sigma_eq; IGNITED ~step 910 = 6.4 revs, OOM)"
+screen-0.0150-inv-NT36,scr_p019_s015,13061166,banner_config,sgm0/R (x-checked vs tip-arc),"P4 grid 0.015R inviscid (ignited, OOM)"
+screen-0.0150-visc-NT36,scr_p019_s015v,13060963,banner_config,sgm0/R (x-checked vs tip-arc),"P4 grid 0.015R viscous (ignited, OOM)"
+screen-0.0199-visc-NT36,scr_p019_s020v,13060964,banner_config,sgm0/R (x-checked vs tip-arc),"P4 grid 0.020R viscous (ignited, OOM)"
+screen-0.0249-inv-NT36,scr_p019_s025,13061167,banner_config,sgm0/R (x-checked vs tip-arc),"P4 grid 0.025R inviscid (ignited, OOM)"
+screen-0.0249-visc-NT36,scr_p019_s025v,13060965,banner_config,sgm0/R (x-checked vs tip-arc),P4 grid 0.025R viscous (ignited; Julia crash post-ignition)
+screen-0.0299-visc-NT36,scr_p019_s030v,13060966,case_metadata,sgm0/R (x-checked vs tip-arc),P4 grid 0.030R viscous (COMPLETED 8 revs)
+screen-0.0381-inv-NT36,scr_p019_s038,13061168,case_metadata,sgm0/R (x-checked vs tip-arc),P4 grid 0.038R inviscid (COMPLETED 8 revs)
+screen-0.0381-visc-NT36,scr_p019_s038v,13061169,case_metadata,sgm0/R (x-checked vs tip-arc),P4 grid 0.038R viscous (P4b reference; COMPLETED 8 revs)
+screen-0.0312-visc-NT36,scr_p019_sstab,13064696,case_metadata,sgm0/R (x-checked vs tip-arc),sigma_stab-alone initializer probe (sigma 0.0312R; COMPLETED 8 revs)
+screen-0.0299-inv-NT36-N1d2.6,scr_uf_n1_d2p6,13058036,banner_config,sgm0/R (x-checked vs tip-arc),"sigma 0.0299R, N1 d2.6"
+screen-0.0299-inv-NT36-N1d3.4,scr_uf_n1_d3p4,unknown,case_metadata,sgm0/R (x-checked vs tip-arc),"sigma 0.0299R, N1 d3.4"
+screen-0.0299-inv-NT36-N1d5.0,scr_uf_n1_d5p0,13058038,banner_config,sgm0/R (x-checked vs tip-arc),"sigma 0.0299R, N1 d5.0"
+screen-0.0299-inv-NT36-N2d6.5,scr_uf_n2_d6p5,unknown,case_metadata,sgm0/R (x-checked vs tip-arc),"sigma 0.0299R, N2 d6.5"
+screen-0.0299-inv-NT36-N2d8.5,scr_uf_n2_d8p5,13058040,banner_config,sgm0/R (x-checked vs tip-arc),"sigma 0.0299R, N2 d8.5"
+screen-0.0291-inv-NT36,scr_ufdt_nt36,13058041,banner_config,sgm0/R (x-checked vs tip-arc),dt study NT36 (sigma 0.0291R)
+screen-0.0291-inv-NT72,scr_ufdt_nt72,13058042,banner_config,sgm0/R (x-checked vs tip-arc),"dt study NT72 (sigma 0.0291R, half dt)"
+screen-0.0199-inv-NT36,scr_ufsig_0p02,13058044,banner_config,sgm0/R (x-checked vs tip-arc),sigma ladder 0.020R
+screen-0.0499-inv-NT36,scr_ufsig_0p05,unknown,case_metadata,sgm0/R (x-checked vs tip-arc),sigma ladder 0.050R

@@ -1,0 +1,26 @@
+sigma_over_R,M,M_p999,M_direct,M_proxy,method,class,viscous,outcome,label
+0.03808,-,-,-,-,none (no wake-health CSV),production,true,stable,prod-0.0381-visc-NT36
+0.01930,8.571946e-01,8.571946e-01,-,8.571946e-01,proxy -dln(min_sr),production,true,ignited,prod-0.0193-visc-NT36
+0.02992,6.240178e-02,6.240178e-02,-,6.240178e-02,proxy -dln(min_sr),production,false,ignited,prod-0.0299-inv-NT36
+0.02992,1.195030e+00,1.195030e+00,-,1.195030e+00,proxy -dln(min_sr),production,true,ignited,prod-0.0299-visc-NT36
+0.03491,7.161686e-01,7.161686e-01,-,7.161686e-01,proxy -dln(min_sr),production,true,ignited,prod-0.0349-visc-NT36
+0.08727,9.706625e-03,9.706625e-03,-,9.706625e-03,proxy -dln(min_sr),screen,false,survivor,screen-0.0873-inv-NT36
+0.02094,3.234717e+00,3.234717e+00,3.234717e+00,2.262983e-02,direct max_dtZ,screen,true,ignited,screen-0.0209-visc-NT144
+0.01496,1.750188e+00,1.750188e+00,1.750188e+00,1.512318e-01,direct max_dtZ,screen,false,ignited,screen-0.0150-inv-NT36
+0.01496,1.258469e+01,1.258469e+01,1.258469e+01,1.384209e+00,direct max_dtZ,screen,true,ignited,screen-0.0150-visc-NT36
+0.01995,2.824016e+01,2.824016e+01,2.824016e+01,1.416196e+00,direct max_dtZ,screen,true,ignited,screen-0.0199-visc-NT36
+0.02493,1.326863e+00,1.326863e+00,1.326863e+00,1.830446e+00,direct max_dtZ,screen,false,ignited,screen-0.0249-inv-NT36
+0.02493,1.116329e+00,1.116329e+00,1.116329e+00,5.889249e-01,direct max_dtZ,screen,true,ignited,screen-0.0249-visc-NT36
+0.02992,2.953716e-01,2.953716e-01,2.953716e-01,7.920391e-02,direct max_dtZ,screen,true,survivor,screen-0.0299-visc-NT36
+0.03808,1.412350e-01,1.412350e-01,1.412350e-01,3.028474e-02,direct max_dtZ,screen,false,survivor,screen-0.0381-inv-NT36
+0.03808,1.122855e-01,1.122855e-01,1.122855e-01,2.744340e-02,direct max_dtZ,screen,true,survivor,screen-0.0381-visc-NT36
+0.03117,1.337900e-01,1.337900e-01,1.337900e-01,4.829940e-02,direct max_dtZ,screen,true,survivor,screen-0.0312-visc-NT36
+0.02992,3.602800e-02,3.602800e-02,-,3.602800e-02,proxy -dln(min_sr),screen,false,ignited,screen-0.0299-inv-NT36-N1d2.6
+0.02992,1.198238e-01,1.198238e-01,-,1.198238e-01,proxy -dln(min_sr),screen,false,survivor,screen-0.0299-inv-NT36-N1d3.4
+0.02992,1.642617e-01,1.642617e-01,-,1.642617e-01,proxy -dln(min_sr),screen,false,ignited,screen-0.0299-inv-NT36-N1d5.0
+0.02992,4.324737e-02,4.324737e-02,-,4.324737e-02,proxy -dln(min_sr),screen,false,survivor,screen-0.0299-inv-NT36-N2d6.5
+0.02992,8.011619e-02,8.011619e-02,-,8.011619e-02,proxy -dln(min_sr),screen,false,ignited,screen-0.0299-inv-NT36-N2d8.5
+0.02909,3.812878e-02,3.812878e-02,-,3.812878e-02,proxy -dln(min_sr),screen,false,ignited,screen-0.0291-inv-NT36
+0.02909,2.252935e-02,2.252935e-02,-,2.252935e-02,proxy -dln(min_sr),screen,false,ignited,screen-0.0291-inv-NT72
+0.01995,2.870321e-01,2.870321e-01,-,2.870321e-01,proxy -dln(min_sr),screen,false,ignited,screen-0.0199-inv-NT36
+0.04987,3.363944e-02,3.363944e-02,-,3.363944e-02,proxy -dln(min_sr),screen,false,survivor,screen-0.0499-inv-NT36
