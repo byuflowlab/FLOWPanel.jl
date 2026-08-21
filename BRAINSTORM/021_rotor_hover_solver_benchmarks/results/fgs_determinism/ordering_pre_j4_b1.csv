@@ -1,0 +1,11 @@
+config,n_interactions,method,rep,t_seconds,minimum
+pre_j4_b1,1760,generic_lexicographic,1,3.6958e-05,2.4625e-05
+pre_j4_b1,1760,generic_lexicographic,2,2.8959e-05,2.4625e-05
+pre_j4_b1,1760,generic_lexicographic,3,2.5625e-05,2.4625e-05
+pre_j4_b1,1760,generic_lexicographic,4,2.4792e-05,2.4625e-05
+pre_j4_b1,1760,generic_lexicographic,5,2.4625e-05,2.4625e-05
+pre_j4_b1,1760,fm_stable_source_then_target,1,1.45e-05,8.125e-06
+pre_j4_b1,1760,fm_stable_source_then_target,2,8.5e-06,8.125e-06
+pre_j4_b1,1760,fm_stable_source_then_target,3,8.125e-06,8.125e-06
+pre_j4_b1,1760,fm_stable_source_then_target,4,8.5e-06,8.125e-06
+pre_j4_b1,1760,fm_stable_source_then_target,5,8.208e-06,8.125e-06

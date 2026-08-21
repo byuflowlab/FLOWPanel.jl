@@ -1,0 +1,26 @@
+% 021 Phase 2 — solver-internal residual vs wall-clock, R1 (ruling 4).
+% Metrics differ per solver (Krylov preconditioned norm; FGS max-abs) — the
+% shared axis is TIME; matched stopping is certified separately via the BC
+% metric. Data: convergence_R1/<config>.csv (benchmark/phase2_analysis.jl).
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[width=11cm, height=8cm,
+    xlabel={wall-clock time [s]}, ylabel={solver-internal residual},
+    legend pos=north east, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35}]
+\addplot[color=red!70!black, mark=o, thick] table [col sep=comma, x=t_wall, y=residual] {convergence_R1/krylov_gmres.csv};
+\addlegendentry{GMRES}
+\addplot[color=orange!80!black, mark=triangle*, thick] table [col sep=comma, x=t_wall, y=residual] {convergence_R1/krylov_jacobi.csv};
+\addlegendentry{GMRES+Jacobi}
+\addplot[color=blue!70!black, mark=diamond*, thick] table [col sep=comma, x=t_wall, y=residual] {convergence_R1/krylov_ilu.csv};
+\addlegendentry{GMRES+ILU}
+\addplot[color=green!50!black, mark=*, thick] table [col sep=comma, x=t_wall, y=residual] {convergence_R1/fgs.csv};
+\addlegendentry{FGS}
+\addplot[color=violet, mark=pentagon*, thick] table [col sep=comma, x=t_wall, y=residual] {convergence_R1/fgmres_fgs.csv};
+\addlegendentry{FGMRES+FGS}
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

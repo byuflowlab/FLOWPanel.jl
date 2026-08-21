@@ -511,10 +511,19 @@ every trailing, unsteady, and root/tip contribution distinct and nonzero.
 
 `nwakes[]` is set to `nwakerows`, i.e. the buffer is full and the outgoing row
 is the final active row -- the state in which `shed_wake!` converts.
+
+`conversion` selects the panel-to-particle strategy, `strength_fun(irow, icol)`
+overrides the default affine strength field, and `node_fun(irow, icol)` returns
+a 3-vector overriding the default node layout (used to build stretched, warped,
+non-uniform sheets). `node_fun` is applied before the `wrap` ring closure, so a
+wrapping chain still closes exactly.
 """
-function make_conversion_fixture(; nwakerows::Int, wrap::Bool, max_particles=2000)
+function make_conversion_fixture(; nwakerows::Int, wrap::Bool, max_particles=2000,
+        conversion=pnl.LegacyEdgeJumpConversion(), strength_fun=nothing,
+        node_fun=nothing, optargs...)
     body = make_dirichlet_diamond_body(; nspan=3)
-    wake = pnl.PanelParticleWake(body; nwakerows=nwakerows, max_particles=max_particles)
+    wake = pnl.PanelParticleWake(body; nwakerows=nwakerows, max_particles=max_particles,
+        conversion=conversion, optargs...)
     pw = wake.panel_wake
     nodes = pw.nodes[1]
     strength = pw.strength[1]
@@ -522,7 +531,9 @@ function make_conversion_fixture(; nwakerows::Int, wrap::Bool, max_particles=200
     n_node_cols = size(nodes, 3)
 
     for irow in 1:n_node_rows, icol in 1:n_node_cols
-        if wrap
+        if node_fun !== nothing
+            nodes[:, irow, icol] .= node_fun(irow, icol)
+        elseif wrap
             theta = 2pi * (icol - 1) / (n_node_cols - 1)
             nodes[1, irow, icol] = cos(theta)
             nodes[2, irow, icol] = sin(theta)
@@ -537,8 +548,9 @@ function make_conversion_fixture(; nwakerows::Int, wrap::Bool, max_particles=200
     # accurately cos/sin round-trips at 2pi.
     wrap && (nodes[:, :, n_node_cols] .= nodes[:, :, 1])
 
+    f = strength_fun === nothing ? (irow, icol) -> 0.1 * irow + 0.3 * icol : strength_fun
     for irow in 1:size(strength, 2), icol in 1:size(strength, 3)
-        strength[1, irow, icol] = 0.1 * irow + 0.3 * icol
+        strength[1, irow, icol] = f(irow, icol)
     end
 
     pw.nwakes[] = nwakerows

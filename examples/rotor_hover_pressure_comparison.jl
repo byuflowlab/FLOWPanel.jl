@@ -6,7 +6,7 @@ import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
 import GeoIO
-using LinearAlgebra: norm
+using LinearAlgebra: norm, dot, cross
 import LinearAlgebra
 
 # BLAS threads: honor BLAS_NUM_THREADS, else OMP_NUM_THREADS, else Julia's
@@ -28,7 +28,11 @@ AOA = 0.0
 rho = 1.179 # from NASA paper
 RPM = parse(Float64, get(ENV, "RPM", "6000"))
 R = 0.119
-shedding_r_over_R = 0.1
+# Modeling root clip: the trailing edge inboard of this radius does not shed.
+# Kept at 0.1 for comparability across the whole 018 campaign; inert on hub
+# meshes, whose blade root is outboard of it. NOT cap protection -- see the
+# end_node anchoring below.
+shedding_r_over_R = parse(Float64, get(ENV, "SHEDDING_R_OVER_R", "0.1"))
 nrevs = parse(Float64, get(ENV, "NREVS", "10"))
 nt = parse(Int, get(ENV, "NT", "36"))
 dt = 60 / RPM / nt
@@ -77,6 +81,20 @@ kernelcutoff = R * 1e-13
 p_per_step = parse(Int, get(ENV, "P_PER_STEP", "2"))
 overlap = parse(Float64, get(ENV, "OVERLAP", "3.0"))
 particle_shedding = lowercase(get(ENV, "PARTICLE_SHEDDING", "overlap_pps"))
+# BRAINSTORM/016 opt-in smooth surface-vorticity conversion. "legacy" (default)
+# is the historical edge-jump conversion and is bit-identical to before this
+# knob existed. "smooth" selects SurfaceVorticityConversion, which replaces
+# method_trailing/method_unsteady entirely and REQUIRES unsteady_filament=true
+# (supplying either method alongside it is a configuration error the wake
+# constructor rejects). CONVERSION_SIGMA defaults to the same tip sigma the
+# sigma_overlap trailing policy uses, so "smooth" sheds at the ladder's sigma.
+conversion_mode = lowercase(get(ENV, "CONVERSION", "legacy"))
+conversion_overlap = parse(Float64, get(ENV, "CONVERSION_OVERLAP", "1.3"))
+conversion_sigma_env = get(ENV, "CONVERSION_SIGMA", "")
+conversion_attribution = Symbol(lowercase(get(ENV, "ATTRIBUTION", "upstream")))
+conversion_diagnose = lowercase(get(ENV, "CONVERSION_DIAGNOSE", "false")) == "true"
+conversion_mode in ("legacy", "smooth") ||
+    error("Unknown CONVERSION=$(repr(conversion_mode)); use legacy or smooth")
 merge_r_factor = parse(Float64, get(ENV, "MERGE_R_FACTOR", "0.02"))
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
@@ -87,6 +105,48 @@ merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
 # particle sigma: `_shed_particles!` spans node row 1 -> row 2, whose separation
 # is one step's TE travel (the Das cancels between the rows).
 init_Das_eta_kinematic = parse(Float64, get(ENV, "DAS_ETA_KINEMATIC", "0.2"))
+# Chord-proportional first-row offset (BRAINSTORM/018, 2026-08-04): when
+# finite, |Das| at each shedding station = DAS_CHORD_FRACTION * local chord,
+# direction along the local kinematic TE tangent. This replaces the eta
+# parameterization (Das = eta*dt*|V_te| ~ r), whose wedge-shaped Das/c_local
+# distribution cannot place the whole span on the 014 plateau (0.25-1.5c) at
+# any single eta. dt-independent by construction; the 0.4x spin-up freeze
+# factor and the min_displacement floor become irrelevant. NaN = off (legacy).
+das_chord_fraction = parse(Float64, get(ENV, "DAS_CHORD_FRACTION", "NaN"))
+# Span-uniform handoff clearance (BRAINSTORM/018 phase_13 section 4b,
+# 2026-08-05): when finite, per-station |Das|_j = D*sigma - (N-1)*|w x r_j|*dt
+# with D = DAS_UNIFORM_DSIGMA, so the TE -> front-of-first-free-row distance
+# d_front,j = |Das_j| + (N-1)*travel_j equals D*sigma IDENTICALLY at every
+# station and timestep -- Das absorbs the dt dependence by construction (at
+# N=1 there is no travel term: |Das| = D*sigma, span-uniform absolute).
+# sigma is the SigmaOverlap shed sigma (tip_sigma_default). NaN = off.
+# Mutually exclusive with DAS_CHORD_FRACTION and DAS_REFRESH.
+das_uniform_dsigma = parse(Float64, get(ENV, "DAS_UNIFORM_DSIGMA", "NaN"))
+# Chord–sigma co-scaling (BRAINSTORM/018 Phase 16, 2026-08-14): when
+# SIGMA_CHORD_FRACTION = s* is finite, the shed sigma becomes PER-STATION,
+# sigma_j = max(s* * c_local_j, SIGMA_FLOOR_R * R), replacing the span-uniform
+# PARTICLE_SHEDDING sigma law (StationSigmaOverlap; OVERLAP still sets the
+# particle count per filament). DAS_SIGMA_LAMBDA = lambda then sets
+# |Das|_j = lambda * sigma_j, so Das/c AND Das/sigma are span-uniform
+# simultaneously — the unique one-parameter family satisfying the 014 chord
+# band, the Phase-12 clearance band, and dt-independence at once (see
+# phase_16_chord_sigma_coscaling.md). NaN = off (both).
+sigma_chord_fraction = parse(Float64, get(ENV, "SIGMA_CHORD_FRACTION", "NaN"))
+sigma_floor_r = parse(Float64, get(ENV, "SIGMA_FLOOR_R", "0.0"))
+das_sigma_lambda = parse(Float64, get(ENV, "DAS_SIGMA_LAMBDA", "NaN"))
+# Phase 16 F1: curvature cap |Das|_j = min(lambda*sigma_j, beta*r_j/N) so the
+# rigid extent never subtends more than beta radians of the local helix
+# circle (theta_j = N*|Das|_j/r_j <= beta). NaN = off (pure co-scaling).
+das_curvature_beta = parse(Float64, get(ENV, "DAS_CURVATURE_BETA", "NaN"))
+# Phase 16 F1b (Route B): place the Das ENDPOINT on the frozen-wake path
+# (backward swept arc + induced drift) at arc length lambda*sigma_j, instead
+# of along the straight TE tangent. DAS_ARC_HELIX_SOURCE=steady reads the
+# per-station induced-drift table DAS_ARC_TABLE (CSV written by the TE
+# downwash probe, components in the local TE basis); =kinematic uses zero
+# drift (pure backward arc).
+das_arc_placed = parse(Bool, get(ENV, "DAS_ARC_PLACED", "false"))
+das_arc_source = lowercase(get(ENV, "DAS_ARC_HELIX_SOURCE", "steady"))
+das_arc_table = get(ENV, "DAS_ARC_TABLE", "")
 set_Das_min_kinematic_displacement = parse(Float64, get(ENV, "DAS_MIN_DISPLACEMENT_R", "0.01")) * R
 # Lay the offset along the arc the TE actually sweeps (true) rather than along
 # the tangent to it (false, legacy). The two differ by ~r*θ²/2 with θ = eta*dψ:
@@ -101,6 +161,33 @@ set_Das_refresh = parse(Bool, get(ENV, "DAS_REFRESH", "false"))
 # Proposal 1): row 1 is rigid (re-placed at TE+Das each step), rows 2..N convect
 # freely, particles shed from rows N -> N+1. Handoff distance ~ Das+(N-1)*travel.
 nwakerows = parse(Int, get(ENV, "NWAKEROWS", "1"))
+# BRAINSTORM 024: NWAKEROWS=0 selects convert-at-shed — no free wake-panel row
+# survives a solve; the just-shed row becomes particles in the same step, so
+# particles appear at the Das line. The driver's legacy conversion mode
+# hardcodes unsteady_filament=false and method_unsteady=NoShed, both
+# incompatible with N=0 (the retained final filament at the Das line is the
+# sheet/particle interface carrier), so N=0 requires CONVERSION=smooth with
+# ATTRIBUTION=downstream (the only circulation-conserving attribution at N=0).
+nwakerows >= 0 || error("NWAKEROWS must be >= 0 (got $(nwakerows))")
+if nwakerows == 0
+    # Legacy mode at N=0 (2026-08-20 amendment, first cluster A/B): the wake
+    # constructor permits LegacyEdgeJumpConversion at N=0 as long as the
+    # final-filament carrier is enabled, so the legacy kwargs below switch
+    # unsteady_filament to true when N=0 instead of requiring CONVERSION=smooth.
+    # DISCLOSED A/B DELTA vs the N=1 production carrier: {no free row} AND
+    # {unsteady_filament false->true}; the latter is forced (N=0 has no
+    # surviving sheet, the Das-line filament must carry the interface).
+    conversion_mode == "smooth" && conversion_attribution != :downstream && error(
+        "NWAKEROWS=0 (convert-at-shed) with CONVERSION=smooth requires " *
+        "ATTRIBUTION=downstream: upstream/split attribution would strand " *
+        "the per-step unsteady circulation on a filament row that no " *
+        "longer exists (got ATTRIBUTION=$(conversion_attribution))")
+end
+# Extent-scaling analog of N for the Das curvature/clearance formulas below:
+# at N=0 the rigid Das row is the entire near-wake extent, so formulas that
+# scale with the number of rows use max(N, 1) and the (N-1)*travel free-row
+# terms vanish (particles are deposited at the Das line itself).
+nwakerows_extent = max(nwakerows, 1)
 # Shed the wake at the local induced velocity rather than the kinematic one.
 shed_with_induced_velocity = parse(Bool, get(ENV, "SHED_WITH_INDUCED_VELOCITY", "false"))
 p_correct_kuttacondition_flag = false
@@ -226,12 +313,90 @@ end
 # pnl.write_vtk(vtk_path, rotor)
 # sherlock
 
-bbox1 = make_shedding_bbox(rotor.nodes, te_indices_1[1:2], radial_dimension, R, shedding_r_over_R)
-shedding1 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
-    bbox=bbox1, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-bbox2 = make_shedding_bbox(rotor.nodes, te_indices_2[1:2], radial_dimension, R, shedding_r_over_R)
-shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
-    bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+# Anchor the trailing-edge walk at BOTH ends. `find_dji9443_trailing_edge_indices`
+# already identifies the complete TE chain intrinsically -- edges that are
+# predominantly radial AND sharp -- validates it as a simple open path, and
+# returns `[outer, second_outer, inner]`. Passing `inner` as `end_node` makes
+# `calc_shedding_from_seed` trace exactly that chain and ERROR if it cannot
+# reach it.
+#
+# This replaces an earlier, wrong approach. `shedding_r_over_R` had been doing
+# three unrelated jobs at once: separating the two blades, clipping the root as
+# a modeling choice, and -- only by coincidence -- stopping the walk before it
+# wrapped onto the ROOT CAP. Any mesh that moves the blade root breaks that
+# coincidence, and it failed SILENTLY in both directions: too small and the
+# chain wrapped the whole cap perimeter (measured on the 0.15R hub mesh: 136
+# shedding edges of which 92 were cap edges; that run diverged in 17 steps,
+# BRAINSTORM/018 phase_05 job 13031568), too large and it quietly discarded real
+# trailing edge (raising the cutoff to root+0.05 dropped 3 genuine TE edges at
+# the hub). With `end_node` the walk is anchored by geometry instead, and a
+# wrong turn is loud rather than silent.
+#
+# `shedding_r_over_R` is now ONLY what its name says: an explicit modeling root
+# clip, plus blade separation via the bbox half-space. It is deliberately left
+# at 0.1 for comparability with the whole 018 campaign on the stock blade
+# (which sheds from r/R 0.111, not from the true root 0.0095). On any hub
+# variant the blade root is OUTBOARD of 0.1, so the clip is inert and the blade
+# sheds its full trailing edge down to the root -- which is the desired
+# behavior, and needs no special-casing.
+# The two jobs must be separated, because they conflict: the modeling clip
+# deliberately truncates the TE on the stock blade (whose true root TE node sits
+# at r/R 0.0095, inboard of the 0.1 clip), so a walk confined by the clip can
+# never reach `end_node`. So: TRACE the full trailing edge, anchored end-to-end
+# and therefore cap-free, then CLIP it afterwards as an explicit modeling choice.
+# The bbox now only separates the two blades (cutoff 0).
+te_end_1 = length(te_indices_1) >= 3 ? te_indices_1[3] : nothing  # legacy hardcoded
+te_end_2 = length(te_indices_2) >= 3 ? te_indices_2[3] : nothing  # seeds give only 2
+blade_root_r_over_R = minimum(abs.(rotor.nodes[radial_dimension, :])) / R
+
+bbox1 = make_shedding_bbox(rotor.nodes, te_indices_1[1:2], radial_dimension, R, 0.0)
+shedding1_full = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
+    bbox=bbox1, end_node=te_end_1, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+bbox2 = make_shedding_bbox(rotor.nodes, te_indices_2[1:2], radial_dimension, R, 0.0)
+shedding2_full = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
+    bbox=bbox2, end_node=te_end_2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+
+# Modeling root clip, applied to the traced chain. Identical criterion to the old
+# bbox test (edge MIDPOINT radius), so the retained set -- and hence stock
+# behavior -- is unchanged; it is only applied after tracing instead of during.
+function clip_shedding_root(nodes, shedding, cells, radial_dimension, R, clip_r_over_R)
+    keep = Int[]
+    for j in axes(shedding, 2)
+        p, nia, nib = shedding[1, j], shedding[2, j], shedding[3, j]
+        na, nb = cells[nia, p], cells[nib, p]
+        mid = (nodes[radial_dimension, na] + nodes[radial_dimension, nb]) / 2
+        abs(mid) / R >= clip_r_over_R && push!(keep, j)
+    end
+    return shedding[:, keep]
+end
+shedding1 = clip_shedding_root(rotor.nodes, shedding1_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
+shedding2 = clip_shedding_root(rotor.nodes, shedding2_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
+println("Trailing edge traced: blade1 $(size(shedding1_full, 2)) edges -> $(size(shedding1, 2)) after root clip at r/R $(shedding_r_over_R) (blade root r/R $(round(blade_root_r_over_R, digits=4)))")
+
+# Regression net: no shed edge may run CIRCUMFERENTIALLY. A trailing-edge edge
+# runs radially (spanwise); a root-cap perimeter edge runs around the cap, i.e.
+# perpendicular to radial. Testing edge DIRECTION rather than edge RADIUS is
+# what makes this work now that the chain legitimately reaches the blade root --
+# a radius test could not tell a root TE edge from a cap edge. Threshold is
+# loose (0.3 vs the detector's 0.7) because this only needs to catch cap wrap
+# (ratio ~0), not re-do the detector's selection.
+function count_circumferential_shedding(nodes, shedding, cells, radial_dimension; tol=0.3)
+    n = 0
+    for j in axes(shedding, 2)
+        p, nia, nib = shedding[1, j], shedding[2, j], shedding[3, j]
+        na, nb = cells[nia, p], cells[nib, p]
+        delta = nodes[:, na] - nodes[:, nb]
+        len = sqrt(sum(abs2, delta))
+        len > 0 && abs(delta[radial_dimension]) / len < tol && (n += 1)
+    end
+    return n
+end
+for (i, shed) in enumerate((shedding1, shedding2))
+    nbad = count_circumferential_shedding(rotor.nodes, shed, rotor.cells, radial_dimension)
+    nbad == 0 || error("shedding$(i) includes $(nbad) of $(size(shed, 2)) circumferential " *
+        "edges -- the trailing-edge chain has wrapped onto the ROOT CAP. The walk should " *
+        "be anchored by end_node (te_indices[3]); check that the TE detector returned it.")
+end
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
     kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
@@ -330,6 +495,52 @@ end
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
 FV = pnl.FLOWVPM
 
+# Local chord at each Das STATION. Das/velocity_te are vertex-based: station
+# j (1..nshed) is edge j's nib node, station nshed+1 is the last edge's nia
+# node (`_kinematic_velocity_te!`, src/FLOWPanel_frames.jl). Chord = max
+# distance from the station's TE node to any same-blade node within a radius
+# band (one ring spacing) — the same 3D LE-TE section measure
+# `scripts/p018_mesh_profile.py` reports for interior rings; chord varies
+# slowly spanwise so band smoothing is benign. (Defined here, before the
+# shedding-method construction, because Phase 16's per-station sigma needs it.)
+function station_chords(nodes, shedding, cells, radial_dimension; band)
+    nshed = size(shedding, 2)
+    station_nodes = Vector{Int}(undef, nshed + 1)
+    for j in 1:nshed
+        station_nodes[j] = cells[shedding[3, j], shedding[1, j]]   # nib
+    end
+    station_nodes[nshed + 1] = cells[shedding[2, nshed], shedding[1, nshed]]  # final nia
+    chords = zeros(nshed + 1)
+    for (j, node_idx) in enumerate(station_nodes)
+        te = nodes[:, node_idx]
+        rj = te[radial_dimension]
+        best = 0.0
+        for k in axes(nodes, 2)
+            rk = nodes[radial_dimension, k]
+            sign(rk) == sign(rj) || continue      # same blade only
+            abs(rk - rj) <= band || continue
+            d2 = (nodes[1, k] - te[1])^2 + (nodes[2, k] - te[2])^2 +
+                 (nodes[3, k] - te[3])^2
+            d2 > best && (best = d2)
+        end
+        best > 0 || error("station_chords: no nodes within band at station $(j)")
+        chords[j] = sqrt(best)
+    end
+    return chords
+end
+
+# Per-station TE radii along a shedding edge set, vertex-based to match
+# Das/velocity_te (station j = edge j's nib node, station nshed+1 = last nia).
+function station_radii(nodes, shedding, cells, radial_dimension)
+    nshed = size(shedding, 2)
+    r = zeros(nshed + 1)
+    for j in 1:nshed
+        r[j] = abs(nodes[radial_dimension, cells[shedding[3, j], shedding[1, j]]])
+    end
+    r[nshed + 1] = abs(nodes[radial_dimension, cells[shedding[2, nshed], shedding[1, nshed]]])
+    return r
+end
+
 method_trailing = if particle_shedding == "overlap_pps"
     pnl.OverlapPPS(overlap, p_per_step)
 elseif particle_shedding == "sigma_overlap"
@@ -339,17 +550,109 @@ else
     error("Unknown PARTICLE_SHEDDING=$(repr(particle_shedding)); use overlap_pps or sigma_overlap")
 end
 
+# Phase 16 chord–sigma co-scaling: per-station sigma_j = s* * c_local_j
+# (floored at SIGMA_FLOOR_R * R) replaces the span-uniform sigma law above.
+# The floor, where it binds, re-introduces sigma/c non-uniformity outboard of
+# the crossing station — reported below, not glossed.
+station_sigmas = nothing
+if !isnan(sigma_chord_fraction)
+    particle_shedding == "sigma_overlap" || error(
+        "SIGMA_CHORD_FRACTION replaces the shed-sigma law and expects " *
+        "PARTICLE_SHEDDING=sigma_overlap (got $(repr(particle_shedding)))")
+    conversion_mode == "smooth" && error(
+        "SIGMA_CHORD_FRACTION is incompatible with CONVERSION=smooth " *
+        "(SurfaceVorticityConversion owns shedding with a single scalar sigma)")
+    band_cs = 0.02 * R  # ~ one spanwise ring spacing on the 45-ring blade
+    station_sigmas = [
+        max.(sigma_chord_fraction .*
+                station_chords(rotor.nodes, shed, rotor.cells, radial_dimension;
+                               band=band_cs),
+             sigma_floor_r * R)
+        for shed in rotor.shedding]
+    method_trailing = pnl.StationSigmaOverlap(station_sigmas, overlap)
+    for (k, sig) in enumerate(station_sigmas)
+        n_floored = count(s -> s == sigma_floor_r * R, sig)
+        println("Sigma chord mode: shedding$(k) sigma/R range " *
+            "$(round(minimum(sig)/R, digits=4))-$(round(maximum(sig)/R, digits=4)) " *
+            "(s* = $(sigma_chord_fraction), floor $(sigma_floor_r)R binds at " *
+            "$(n_floored)/$(length(sig)) stations)")
+    end
+end
+
+tip_sigma_default = 2 * pi * R / nt * overlap / p_per_step
+conversion_sigma = isempty(conversion_sigma_env) ? tip_sigma_default :
+    parse(Float64, conversion_sigma_env)
+
+# Viscous scheme (BRAINSTORM 018, 2026-08-03 finding). The CoreSpreading
+# passed here was silently inert in every prior run: the pfield declared
+# integration=rungekutta3 while FLOWPanel steps with _euler, so
+# viscousdiffusion no-opped (no spreading, no beta resets). That src mismatch
+# is now fixed (PanelParticleWake declares integration=euler), which would
+# have turned CoreSpreading ON and changed physics under every existing case
+# tag. To keep default runs bit-identical to the campaign baseline, the de
+# facto behavior (inviscid wake) is now the EXPLICIT default; set
+# CORE_SPREADING_ACTIVE=true to get working core spreading. sgm0 (the reset
+# core size and beta-trigger reference) defaults to the shed sigma, not
+# wake_core_size=1e-3: resets stamp EVERY particle to sgm0, so it must be the
+# ladder's sigma or a reset would collapse the resolution to 1e-3 m.
+core_spreading_active = parse(Bool, get(ENV, "CORE_SPREADING_ACTIVE", "false"))
+core_spreading_sgm0 = parse(Float64,
+    get(ENV, "CORE_SPREADING_SGM0", string(tip_sigma_default)))
+# iterror=false: an RBF (beta-reset) solve that misses tolerance must WARN,
+# not kill a 40 h run — the projection over heavily-overlapped particles is
+# known to be ill-conditioned (BRAINSTORM 008/M6), so best-effort resets are
+# accepted and disclosed. itmax raised from the FLOWVPM default 15.
+core_spreading_itmax = parse(Int, get(ENV, "CORE_SPREADING_ITMAX", "50"))
+core_spreading_tol = parse(Float64, get(ENV, "CORE_SPREADING_TOL", "1e-3"))
+core_spreading_iterror = parse(Bool, get(ENV, "CORE_SPREADING_ITERROR", "false"))
+viscous_scheme = core_spreading_active ?
+    pnl.FLOWVPM.CoreSpreading(wake_nu, core_spreading_sgm0,
+        pnl.FLOWVPM.zeta_fmm; beta=wake_core_beta,
+        itmax=core_spreading_itmax, tol=core_spreading_tol,
+        iterror=core_spreading_iterror, verbose=true) :
+    pnl.FLOWVPM.Inviscid()
+# Phase 16 guard: a CoreSpreading beta-reset stamps EVERY particle to the
+# scalar sgm0, which would destroy a per-station sigma distribution in one
+# event. Production runs spreading-only (beta=1e9, resets unreachable); any
+# finite-beta viscous config is incompatible with chord–sigma co-scaling.
+!isnan(sigma_chord_fraction) && core_spreading_active && wake_core_beta < 1e6 &&
+    error("SIGMA_CHORD_FRACTION requires spreading-only viscosity " *
+          "(WAKE_CORE_BETA >= 1e6): a beta-reset would stamp the uniform " *
+          "sgm0 = $(core_spreading_sgm0) over the per-station sigmas")
+
+# Frozen-gradient geometric local integrator, BRAINSTORM 020 Phase 2R.
+# Default false = stock forward Euler (bit-identical off-state).
+wake_expint = parse(Bool, get(ENV, "WAKE_EXPINT", "false"))
+
+# The two conversions need mutually exclusive wake options, so build the
+# differing kwargs once rather than duplicating the constructor call.
+# legacy: method_trailing/method_unsteady drive shedding, no unsteady filament.
+# smooth: SurfaceVorticityConversion owns shedding; passing either method is a
+#         configuration error, and unsteady_filament MUST be true.
+conversion_kwargs = if conversion_mode == "smooth"
+    (conversion = pnl.SurfaceVorticityConversion(conversion_sigma;
+         overlap = conversion_overlap,
+         attribution = conversion_attribution,
+         diagnose_nearfield = conversion_diagnose),
+     unsteady_filament = true)
+else
+    (method_trailing = method_trailing,
+     method_unsteady = pnl.NoShed(),
+     # false when a free row exists (NoShed pairs with no unsteady filament);
+     # at N=0 (convert-at-shed) the wake constructor REQUIRES true — the
+     # Das-line filament is the sheet/particle interface carrier (BRAINSTORM
+     # 024; disclosed A/B delta vs the N=1 carrier).
+     unsteady_filament = (nwakerows == 0))
+end
+
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows, max_particles=500_000, core_size=wake_core_size,
     particle_kerneloffset=kerneloffset_targets,
-    viscous=pnl.FLOWVPM.CoreSpreading(wake_nu, wake_core_size, pnl.FLOWVPM.zeta_fmm;
-        beta=wake_core_beta),
+    viscous=viscous_scheme,
     SFS=sfs_choice,
     relaxation=relaxation_scheme,
-    method_trailing,
-    method_unsteady=pnl.NoShed(),
-    # method_unsteady=pnl.OverlapPPS(1.3, 2),
-    unsteady_filament=false, # should be false if method_unsteady is NoShed
+    expint=wake_expint,
+    conversion_kwargs...,
     shed_with_induced_velocity,
     particle_maintenance=pnl.ParticleMaintenance((
             pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], 1.5R),
@@ -406,12 +709,292 @@ frames = pnl.ReferenceFrame(rotor;
 # With DAS_REFRESH the pre-init is skipped: simulate! re-derives Das at every
 # step (including the first) from the same eta, so pre-initializing here would
 # double-accumulate through simulate!'s own initialize_Das! call.
+!isnan(das_chord_fraction) && set_Das_refresh && error(
+    "DAS_CHORD_FRACTION is incompatible with DAS_REFRESH (chord-proportional " *
+    "Das is frozen by construction)")
+!isnan(das_uniform_dsigma) && set_Das_refresh && error(
+    "DAS_UNIFORM_DSIGMA is incompatible with DAS_REFRESH (uniform-clearance " *
+    "Das is frozen by construction)")
+!isnan(das_uniform_dsigma) && !isnan(das_chord_fraction) && error(
+    "DAS_UNIFORM_DSIGMA and DAS_CHORD_FRACTION are mutually exclusive Das laws")
+!isnan(das_sigma_lambda) && isnan(sigma_chord_fraction) && error(
+    "DAS_SIGMA_LAMBDA requires SIGMA_CHORD_FRACTION (|Das|_j = lambda * sigma_j " *
+    "needs the per-station sigma law)")
+!isnan(das_sigma_lambda) && set_Das_refresh && error(
+    "DAS_SIGMA_LAMBDA is incompatible with DAS_REFRESH (co-scaled Das is " *
+    "frozen by construction)")
+!isnan(das_sigma_lambda) && (!isnan(das_chord_fraction) || !isnan(das_uniform_dsigma)) && error(
+    "DAS_SIGMA_LAMBDA, DAS_CHORD_FRACTION, and DAS_UNIFORM_DSIGMA are " *
+    "mutually exclusive Das laws")
+!isnan(das_curvature_beta) && isnan(das_sigma_lambda) && error(
+    "DAS_CURVATURE_BETA requires DAS_SIGMA_LAMBDA (the F1 cap applies to " *
+    "the co-scaled law)")
+!isnan(das_curvature_beta) && das_curvature_beta <= 0 && error(
+    "DAS_CURVATURE_BETA must be > 0 (radians of local helix arc)")
+das_arc_placed && isnan(das_sigma_lambda) && error(
+    "DAS_ARC_PLACED requires DAS_SIGMA_LAMBDA (the endpoint-on-arc placement " *
+    "applies to the co-scaled law)")
+das_arc_placed && !isnan(das_curvature_beta) && error(
+    "DAS_ARC_PLACED and DAS_CURVATURE_BETA are mutually exclusive Phase-16 " *
+    "fallbacks (arc placement vs F1 cap)")
+das_arc_placed && !(das_arc_source in ("steady", "kinematic")) && error(
+    "DAS_ARC_HELIX_SOURCE must be steady or kinematic (live is deferred: " *
+    "Kutta attachment operator is assembled once per run)")
+das_arc_placed && das_arc_source == "steady" && !isfile(das_arc_table) && error(
+    "DAS_ARC_HELIX_SOURCE=steady requires DAS_ARC_TABLE=<csv> (per-station " *
+    "induced-drift table from the TE downwash probe); got " *
+    "$(repr(das_arc_table))")
+theta_max_cs = NaN   # curvature diagnostic; finite only under the lambda law
 if !set_Das_refresh
-    pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
-        set_Das_eta_kinematic=init_Das_eta_kinematic,
-        set_Das_min_kinematic_displacement,
-        set_Das_kinematic_arc)
+    if !isnan(das_sigma_lambda)
+        # Phase 16: |Das|_j = lambda * sigma_j = lambda * s* * c_local_j, so
+        # Das/c AND Das/sigma are span-uniform at once. Curvature diagnostic:
+        # theta_j = N * |Das|_j / r_j is the arc the rigid extent subtends on
+        # the local helix circle — under chord-scaling the binding station is
+        # INBOARD (large chord, small r), the reverse of the eta law.
+        das_station_lengths = (Tuple(
+            begin
+                lens_k = das_sigma_lambda .* station_sigmas[k]
+                if !isnan(das_curvature_beta)
+                    # F1 (2026-08-17 ladder verdict): cap the rigid extent at
+                    # beta radians of local helix arc, theta_j <= beta.
+                    r_k = station_radii(rotor.nodes, rotor.shedding[k],
+                                        rotor.cells, radial_dimension)
+                    lens_k = min.(lens_k, das_curvature_beta .* r_k ./ nwakerows_extent)
+                end
+                lens_k
+            end
+            for k in eachindex(rotor.shedding)),)
+        println("Das co-scaling mode: |Das|_j = $(das_sigma_lambda) * sigma_j " *
+            "(= $(round(das_sigma_lambda * sigma_chord_fraction, digits=3)) * " *
+            "c_local; DAS_ETA_KINEMATIC ignored)")
+        if !isnan(das_curvature_beta)
+            ncap = count(das_station_lengths[1][1] .<
+                         das_sigma_lambda .* station_sigmas[1] .- eps())
+            println("  F1 curvature cap ACTIVE: theta_j <= beta = " *
+                "$(das_curvature_beta) rad (blade1: cap binds at $(ncap) of " *
+                "$(length(station_sigmas[1])) stations)")
+        end
+        let lens = das_station_lengths[1][1],
+            r = station_radii(rotor.nodes, rotor.shedding[1], rotor.cells, radial_dimension),
+            sig = station_sigmas[1],
+            c = station_chords(rotor.nodes, rotor.shedding[1], rotor.cells,
+                               radial_dimension; band=0.02 * R)
+            theta = nwakerows_extent .* lens ./ r
+            println("  blade1 station table (r/R, c/R, sigma/R, |Das|/R, theta rad):")
+            for j in eachindex(lens)
+                println("    $(round(r[j]/R, digits=4)) $(round(c[j]/R, digits=4)) " *
+                    "$(round(sig[j]/R, digits=4)) $(round(lens[j]/R, digits=4)) " *
+                    "$(round(theta[j], digits=4))")
+            end
+        end
+        theta_max_cs = maximum(
+            maximum(nwakerows_extent .* das_station_lengths[1][k] ./
+                    station_radii(rotor.nodes, rotor.shedding[k], rotor.cells,
+                                  radial_dimension))
+            for k in eachindex(rotor.shedding))
+        println("  theta_max (all blades) = $(round(theta_max_cs, digits=4)) rad")
+        das_station_drifts = nothing
+        if das_arc_placed
+            # F1b Route B: per-station drift vectors in the GLOBAL frame,
+            # reconstructed from the table's local-TE-basis components using
+            # the current geometry (basis co-rotates with the body by
+            # construction). Basis: e_t = kinematic TE tangent -ω̂×d̂,
+            # e_r = radial (spanwise) unit, e_n = e_t × e_r.
+            axis_hat = frames[1].ω_axis / norm(frames[1].ω_axis)
+            frame_origin = frames[1].x
+            table_r = Float64[]; table_ut = Float64[]
+            table_ur = Float64[]; table_un = Float64[]
+            if das_arc_source == "steady"
+                for line in eachline(das_arc_table)
+                    sline = strip(line)
+                    (isempty(sline) || startswith(sline, '#') ||
+                        occursin("r_over_R", sline)) && continue
+                    parts = split(sline, ',')
+                    length(parts) >= 4 || continue
+                    push!(table_r, parse(Float64, parts[1]))
+                    push!(table_ut, parse(Float64, parts[2]))
+                    push!(table_ur, parse(Float64, parts[3]))
+                    push!(table_un, parse(Float64, parts[4]))
+                end
+                length(table_r) >= 2 || error("DAS_ARC_TABLE $(das_arc_table) " *
+                    "has $(length(table_r)) usable rows; need >= 2")
+                if !issorted(table_r)
+                    perm = sortperm(table_r)
+                    table_r = table_r[perm]; table_ut = table_ut[perm]
+                    table_ur = table_ur[perm]; table_un = table_un[perm]
+                end
+                issorted(table_r) || error("DAS_ARC_TABLE r_over_R not sortable")
+            end
+            _interp(xs, ys, x) = begin   # linear, flat extrapolation
+                x <= xs[1] && return ys[1]
+                x >= xs[end] && return ys[end]
+                i = searchsortedlast(xs, x)
+                t = (x - xs[i]) / (xs[i+1] - xs[i])
+                (1 - t) * ys[i] + t * ys[i+1]
+            end
+            das_station_drifts = (Tuple(
+                begin
+                    shed = rotor.shedding[k]
+                    nshed = size(shed, 2)
+                    drift = zeros(3, nshed + 1)
+                    for j in 1:(nshed + 1)
+                        node_idx = j <= nshed ?
+                            rotor.cells[shed[3, j], shed[1, j]] :
+                            rotor.cells[shed[2, nshed], shed[1, nshed]]
+                        p = SVector{3}(rotor.nodes[1, node_idx],
+                            rotor.nodes[2, node_idx], rotor.nodes[3, node_idx])
+                        d = p - frame_origin
+                        d_perp = d - axis_hat * dot(axis_hat, d)
+                        rj = norm(d_perp)
+                        rj > 0 || continue        # on-axis station: no basis
+                        e_r = d_perp / rj
+                        vte = -cross(axis_hat, d_perp)   # ∝ kinematic TE tangent
+                        nv = norm(vte)
+                        nv > 0 || continue
+                        e_t = vte / nv
+                        e_n = cross(e_t, e_r)
+                        if das_arc_source == "steady"
+                            roR = rj / R
+                            u = _interp(table_r, table_ut, roR) .* e_t .+
+                                _interp(table_r, table_ur, roR) .* e_r .+
+                                _interp(table_r, table_un, roR) .* e_n
+                            drift[:, j] .= u
+                        end # kinematic: leave zero
+                    end
+                    drift
+                end
+                for k in eachindex(rotor.shedding)),)
+            umax = maximum(maximum(sqrt.(sum(abs2, d; dims=1))) for d in das_station_drifts[1])
+            println("  F1b endpoint-on-arc ACTIVE: source=$(das_arc_source)" *
+                (das_arc_source == "steady" ? " table=$(basename(das_arc_table))" : "") *
+                ", max |u| = $(round(umax, sigdigits=4)) m/s " *
+                "($(round(umax / (ω_full * R), sigdigits=3)) of tip speed)")
+        end
+        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_station_lengths=das_station_lengths,
+            set_Das_station_drifts=das_station_drifts,
+            set_Das_min_kinematic_displacement)
+    elseif !isnan(das_uniform_dsigma)
+        # phase_13 section 4b: |Das|_j = D*sigma - (N-1)*travel_j so that
+        # d_front = D*sigma uniformly. travel at FULL rpm (the frozen-Das
+        # convention would otherwise re-introduce the 0.4x spin-up factor
+        # through the velocity magnitude; lengths here are absolute).
+        dt_das = t_range[2] - t_range[1]
+        lens_uniform = map(rotor.shedding) do shed
+            r = station_radii(rotor.nodes, shed, rotor.cells, radial_dimension)
+            das_uniform_dsigma * tip_sigma_default .- (nwakerows_extent - 1) .* ω_full .* r .* dt_das
+        end
+        for (k, lens) in enumerate(lens_uniform)
+            minimum(lens) > 0 || error("DAS_UNIFORM_DSIGMA=$(das_uniform_dsigma) " *
+                "infeasible: shedding$(k) min |Das| = $(minimum(lens)) <= 0 at " *
+                "N=$(nwakerows) (tip travel exceeds D*sigma; raise D or lower N)")
+        end
+        band = 0.02 * R
+        chords1 = station_chords(rotor.nodes, rotor.shedding[1], rotor.cells, radial_dimension; band)
+        dasc = lens_uniform[1] ./ chords1
+        println("Das uniform-clearance mode: |Das|_j = $(das_uniform_dsigma)*sigma" *
+            " - (N-1)*travel_j (DAS_ETA_KINEMATIC ignored), sigma = " *
+            "$(round(tip_sigma_default, sigdigits=5)) m, N = $(nwakerows)")
+        println("  blade1 |Das|/R range $(round(minimum(lens_uniform[1])/R, digits=4))" *
+            "-$(round(maximum(lens_uniform[1])/R, digits=4)); Das/c_local range " *
+            "$(round(minimum(dasc), digits=3))-$(round(maximum(dasc), digits=3)) " *
+            "(014 band 0.25-1.5)")
+        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_station_lengths=(Tuple(lens_uniform),),
+            set_Das_min_kinematic_displacement)
+    elseif !isnan(das_chord_fraction)
+        band = 0.02 * R  # ~ one spanwise ring spacing on the 45-ring blade
+        chords1 = station_chords(rotor.nodes, rotor.shedding[1], rotor.cells, radial_dimension; band)
+        chords2 = station_chords(rotor.nodes, rotor.shedding[2], rotor.cells, radial_dimension; band)
+        das_station_lengths = ((das_chord_fraction .* chords1,
+                                das_chord_fraction .* chords2),)
+        println("Das chord mode: |Das| = $(das_chord_fraction) * local chord " *
+            "(DAS_ETA_KINEMATIC ignored)")
+        println("  blade1 chords/R: min $(round(minimum(chords1)/R, digits=4)) " *
+            "max $(round(maximum(chords1)/R, digits=4)); " *
+            "|Das|/R range $(round(das_chord_fraction*minimum(chords1)/R, digits=4))" *
+            "-$(round(das_chord_fraction*maximum(chords1)/R, digits=4))")
+        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_station_lengths=das_station_lengths,
+            set_Das_min_kinematic_displacement)
+    else
+        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_eta_kinematic=init_Das_eta_kinematic,
+            set_Das_min_kinematic_displacement,
+            set_Das_kinematic_arc)
+    end
 end
+
+# --- Panel->particle handoff clearance profile (BRAINSTORM/018 S0c) ---------
+# The distance from the TE at which the panel wake hands off to particles is
+# NOT a knob: it is emergent from (Das, nwakerows, dt). Row 1 is rigidly pinned
+# at TE+Das; rows 2..N convect freely and are separated by one step of TE
+# travel (the Das cancels between consecutive rows); particles are deposited on
+# the segment spanning node rows N -> N+1 (`_convert_to_particles!`,
+# src/FLOWPanel_wake.jl). Hence, per station j,
+#
+#     d_front,j = |Das_j| + (N-1) * |w x r_j| * dt
+#
+# and the quantity that governs whether the blade sees a particle singularity
+# is d_front/sigma -- BRAINSTORM/018 Phase 12 C1 measured the admissible value
+# as d/sigma* ~ 2.6 (median) / 3.4 (p95). This block reports the profile so the
+# clearance is auditable from the run's own banner instead of being inferred.
+#
+# NOTE the span dependence: |w x r| ~ r while sigma is span-uniform under
+# SigmaOverlap, so d/sigma rises outboard and the BINDING station is the
+# innermost one. Judge the pin on the minimum, not the tip.
+#
+# Placed before `Backslash` deliberately: that constructor assembles and
+# LU-factors a dense ncells^2 matrix (~10 GB at 45_185_ct4), so gating an early
+# exit here makes the profile a seconds-long query.
+function das_handoff_profile(nodes, shedding, cells, Das, radial_dimension,
+                             omega_full, dt, nrows, sigma)
+    nshed = size(shedding, 2)
+    station_nodes = Vector{Int}(undef, nshed + 1)
+    for j in 1:nshed
+        station_nodes[j] = cells[shedding[3, j], shedding[1, j]]   # nib
+    end
+    station_nodes[nshed + 1] = cells[shedding[2, nshed], shedding[1, nshed]]  # final nia
+    r = [abs(nodes[radial_dimension, n]) for n in station_nodes]
+    das = [sqrt(Das[1, j]^2 + Das[2, j]^2 + Das[3, j]^2) for j in axes(Das, 2)]
+    travel = omega_full .* r .* dt          # one step of TE travel at FULL rpm
+    d_front = das .+ (nrows - 1) .* travel
+    return (; station_nodes, r, das, travel, d_front, dsigma=d_front ./ sigma)
+end
+
+let sigma_handoff = tip_sigma_default, dt_handoff = t_range[2] - t_range[1]
+    println("Handoff clearance (d_front = |Das| + (N-1)*|w x r|*dt, N=$(nwakerows)):")
+    println("  sigma = $(round(sigma_handoff, sigdigits=5)) m  " *
+            "(sigma/R = $(round(sigma_handoff / R, digits=5)), " *
+            "one-step tip travel = $(round(ω_full * R * dt_handoff, sigdigits=5)) m)")
+    csv_path = get(ENV, "RHPC_HANDOFF_CSV", "")
+    rows = String[]
+    for (k, shed) in enumerate(rotor.shedding)
+        p = das_handoff_profile(rotor.nodes, shed, rotor.cells, rotor.Das[k],
+                                radial_dimension, ω_full, dt_handoff,
+                                nwakerows_extent, sigma_handoff)
+        jmin = argmin(p.dsigma)
+        println("  shedding$(k): d/sigma min $(round(p.dsigma[jmin], digits=3)) " *
+                "at r/R $(round(p.r[jmin] / R, digits=3)); " *
+                "max $(round(maximum(p.dsigma), digits=3)) " *
+                "at r/R $(round(p.r[argmax(p.dsigma)] / R, digits=3)); " *
+                "median $(round(sort(p.dsigma)[cld(length(p.dsigma), 2)], digits=3))")
+        for j in eachindex(p.dsigma)
+            push!(rows, "$(k),$(j),$(p.r[j] / R),$(p.das[j]),$(p.travel[j])," *
+                        "$(p.d_front[j]),$(p.dsigma[j])")
+        end
+    end
+    if !isempty(csv_path)
+        mkpath(dirname(csv_path))
+        open(csv_path, "w") do io
+            println(io, "i_shed,station,r_over_R,das,step_travel,d_front,d_over_sigma")
+            for row in rows; println(io, row); end
+        end
+        println("  wrote $(csv_path)")
+    end
+end
+parse(Bool, get(ENV, "RHPC_HANDOFF_PROFILE_ONLY", "false")) && exit(0)
 
 solver_rotor = pnl.Backslash(rotor)
 # RHPC_BACKEND=direct is the BRAINSTORM/018 Phase-2 discriminator for the FMM
@@ -520,6 +1103,36 @@ monitors = !run_monitors ? () : run_kj ? (
         bound_circulation,
     )
 
+# Wake tripwire (BRAINSTORM/018 S0a). Appended LAST so existing monitor indices
+# -- and therefore existing monitor CSV filenames -- are unchanged. Diagnostic
+# only: provides/requires nothing and mutates no simulation state, so runs stay
+# bit-identical; it adds one CSV. Default ON deliberately: a divergence tripwire
+# you have to remember to enable is not a tripwire.
+wake_health_active = parse(Bool, get(ENV, "WAKE_HEALTH", "true"))
+# Default-off extra column: max per-step core contraction max_p dt*Z_p (see
+# WakeHealthMonitor docstring). Off keeps the CSV bit-identical to legacy.
+wake_health_dtz = parse(Bool, get(ENV, "WAKE_HEALTH_DTZ", "false"))
+# min_sr attribution columns (BRAINSTORM/018 phase 15): p1 percentile of
+# sigma/sigma_shed + argmin position, appended AFTER the legacy columns so
+# positional readers of the existing columns are unaffected. Default ON so
+# campaign runs carry the attribution for free.
+wake_health_attribution = parse(Bool, get(ENV, "WAKE_HEALTH_ATTRIBUTION", "true"))
+if run_monitors && wake_health_active
+    monitors = (monitors..., pnl.WakeHealthMonitor(dtz=wake_health_dtz,
+                                 attribution=wake_health_attribution))
+end
+
+# Banded wake inventory (BRAINSTORM/018 phase 15 drift-source study): per-step
+# per-band count, sum|Gamma|, vector-sum Gamma, and sigma quantiles. Appended
+# LAST so existing monitor CSV names are unchanged; diagnostic only. Bands end
+# at the MEASURED deletion boundary 3.5R downstream (the GlobalCylinder above
+# starts 0.5R upstream, so its 4R length = 3.5R downstream extent). Default ON
+# so the dt-ladder rungs double as the H1/H3 measurement runs.
+wake_inventory_active = parse(Bool, get(ENV, "WAKE_INVENTORY", "true"))
+if run_monitors && wake_inventory_active
+    monitors = (monitors..., pnl.WakeInventoryMonitor(R))
+end
+
 if spinup_revs > 0
     println("\nRotor spin-up enabled: $(spinup_revs) nominal revs from $(spinup_start_fraction)×RPM to full RPM")
 end
@@ -535,8 +1148,8 @@ let
 end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
-        "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows) das_refresh=$(set_Das_refresh)")
-println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical)")
+        "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows)$(nwakerows == 0 ? " (convert-at-shed)" : "") das_refresh=$(set_Das_refresh)")
+println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint)")
 name = run_name
 
 # Allow other scripts to `include` this file purely for setup (geometry,
@@ -613,6 +1226,30 @@ end
 
 sim_wall_seconds = time() - sim_wall_start
 println("\nTime marching wall time: $(round(sim_wall_seconds, digits=1)) s")
+
+# BRAINSTORM/016: external conservation evidence for the smooth conversion.
+# Sibling file (same shape as the SSW driver's conversion_diagnostics.csv);
+# legacy runs carry `conversion_diagnostics === nothing` and emit nothing, so
+# their outputs stay bit-identical. On a restart-chained run this ledger covers
+# only the final segment (in-memory accumulator).
+let wake = wakes[1]
+    if save_path !== nothing && wake isa pnl.PanelParticleWake &&
+            wake.conversion_diagnostics !== nothing
+        d = wake.conversion_diagnostics
+        ledger_path = joinpath(save_path, "$(run_name)_conversion_diagnostics.csv")
+        open(ledger_path, "w") do io
+            println(io, "conversions,particles,expected_x,expected_y," *
+                "expected_z,deposited_x,deposited_y,deposited_z,residual_norm")
+            println(io, "$(wake.conversion_count[]),$(d.total_particles)," *
+                "$(d.total_expected[1]),$(d.total_expected[2])," *
+                "$(d.total_expected[3]),$(d.total_deposited[1])," *
+                "$(d.total_deposited[2]),$(d.total_deposited[3])," *
+                "$(norm(d.total_residual))")
+        end
+        println("Wrote conversion ledger: $ledger_path " *
+            "(residual_norm = $(norm(d.total_residual)))")
+    end
+end
 
 if !run_monitors
     println("\nRUN_MONITORS=false; skipping pressure/force history summary.")
@@ -791,9 +1428,18 @@ if save_path !== nothing
         println(io, "p_per_step = $(p_per_step)")
         println(io, "overlap = $(overlap)")
         println(io, "particle_shedding = \"$(particle_shedding)\"")
+        println(io, "conversion = \"$(conversion_mode)\"")
+        if conversion_mode == "smooth"
+            println(io, "conversion_sigma = $(conversion_sigma)")
+            println(io, "conversion_overlap = $(conversion_overlap)")
+            println(io, "conversion_attribution = \"$(conversion_attribution)\"")
+        end
         println(io, "wake_core_size = $(wake_core_size)")
         println(io, "wake_nu = $(wake_nu)")
         println(io, "wake_core_beta = $(wake_core_beta)")
+        println(io, "core_spreading_active = $(core_spreading_active)")
+        println(io, "core_spreading_sgm0 = $(core_spreading_sgm0)")
+        println(io, "wake_expint = $(wake_expint)")
         println(io, "kerneloffset_panel = $(kerneloffset_panel)")
         println(io, "kerneloffset_targets = $(kerneloffset_targets)")
         println(io, "merge_particles = $(merge_particles)")
@@ -818,6 +1464,16 @@ if save_path !== nothing
         println(io, "convergence_mean_tol = $(convergence_mean_tol)")
         println(io, "convergence_ptp_tol = $(convergence_ptp_tol)")
         println(io, "das_eta_kinematic = $(init_Das_eta_kinematic)")
+        println(io, "das_chord_fraction = $(das_chord_fraction)")
+        println(io, "das_uniform_dsigma = $(das_uniform_dsigma)")
+        println(io, "sigma_chord_fraction = $(sigma_chord_fraction)")
+        println(io, "sigma_floor_r = $(sigma_floor_r)")
+        println(io, "das_sigma_lambda = $(das_sigma_lambda)")
+        println(io, "das_curvature_beta = $(das_curvature_beta)")
+        println(io, "das_arc_placed = $(das_arc_placed)")
+        println(io, "das_arc_source = $(repr(das_arc_source))")
+        println(io, "das_arc_table = $(repr(basename(das_arc_table)))")
+        println(io, "theta_max = $(theta_max_cs)")
         println(io, "das_min_displacement = $(set_Das_min_kinematic_displacement)")
         println(io, "das_kinematic_arc = $(set_Das_kinematic_arc)")
         println(io, "das_refresh = $(set_Das_refresh)")

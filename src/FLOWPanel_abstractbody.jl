@@ -1079,8 +1079,22 @@ extra_apply_freestream!(body::AbstractBody, uinf) = nothing
 
 #------- FastMultipole interface functions -------#
 
-function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractBody, i_body)
-    
+"""
+    FMM_RADIUS_TOL
+
+Relative tolerance used by [`radius_inflation`](@ref) when panel radii are
+written into FastMultipole source buffers: expansions are only admitted beyond
+the distance where the offset-regularized kernel matches the singular kernel to
+this tolerance. Set to `Inf` to disable the inflation (pre-2026-08-13 radii).
+Process-global; override per body by extending [`fmm_radius_tolerance`](@ref).
+"""
+const FMM_RADIUS_TOL = Ref{Float64}(1e-6)
+
+"Radius-inflation tolerance for a source system (defaults to `FMM_RADIUS_TOL[]`)."
+fmm_radius_tolerance(system) = FMM_RADIUS_TOL[]
+
+function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::AbstractBody{E}, i_body) where E
+
     # vertex indices for this panel
     i1, i2, i3 = get_cell(system, i_body)
     
@@ -1130,6 +1144,22 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
     dy = v3y - cy
     dz = v3z - cz
     r = max(r, sqrt(dx*dx + dy*dy + dz*dz))
+
+    # extend the radius to where the singular kernel (which the multipole
+    # expansions represent) matches the offset-regularized direct kernel within
+    # tolerance. Uses the ACTIVE kerneloffset: `_set_kerneloffsets!` selects the
+    # pass's offset immediately before every influence evaluation, and buffers
+    # are filled per call, so the active offset is the one governing this
+    # tree's expansion-evaluated pairs. (Self pairs conditioned back to
+    # `kerneloffset_panel` mid-call are direct-evaluated, so a larger active
+    # target offset only over-covers them — conservative, never wrong.)
+    Δr = radius_inflation(E, system.kerneloffset, fmm_radius_tolerance(system))
+    if Δr > 10 * r
+        @warn "FMM radius inflation ($Δr) exceeds 10× the panel radius ($r): " *
+              "kerneloffset $(system.kerneloffset) is large relative to the " *
+              "panel size, so most interactions will be evaluated directly." maxlog=1
+    end
+    r += Δr
 
     # update buffer
     buffer[1, i_buffer] = cx

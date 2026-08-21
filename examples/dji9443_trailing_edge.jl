@@ -114,7 +114,13 @@ function _find_dji9443_trailing_edge_indices(nodes::AbstractMatrix,
         outer_radius = abs(nodes[2, outer])
         inner_radius = abs(nodes[2, inner])
         outer_radius >= 0.9radius || continue
-        inner_radius <= 0.2radius || continue
+        # Reject short spurious chains by requiring the component to SPAN most of
+        # the blade, rather than by requiring its inner end to reach a fixed
+        # radius. The old test (`inner_radius <= 0.2radius`) assumed the blade
+        # root sits near the axis, so it rejected every hub variant with
+        # `--hub-r-over-r >= 0.2` -- meshes that now generate cleanly. A span
+        # test does the same discriminating job without assuming where the root is.
+        outer_radius - inner_radius >= 0.5radius || continue
         outer in endpoints && inner in endpoints || continue
 
         # For this fixed rotor orientation, y*z > 0 is the trailing side;

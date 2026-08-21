@@ -1,0 +1,7 @@
+config,n_rungs,p_solve,p_setup
+backslash_ldiv,3,1.977,2.315
+krylov_gmres,3,1.565,0.788
+krylov_jacobi,3,1.333,1.902
+krylov_ilu,3,1.828,1.095
+fgs,3,1.753,1.323
+fgmres_fgs,3,1.531,1.52

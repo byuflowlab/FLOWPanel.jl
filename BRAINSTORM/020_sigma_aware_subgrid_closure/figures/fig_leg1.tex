@@ -1,0 +1,61 @@
+% BRAINSTORM 020 Phase 2 Leg 1: measured strain ceiling vs physics target.
+% Data: fig_leg1/leg1_margins.csv (pre-onset direct M per Campaign E rung)
+%       fig_leg1/leg1_gap.csv     (Z_phys bracket, decade gap)
+% Compile: pdflatex fig_leg1.tex
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\usepgfplotslibrary{groupplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{loglogaxis}[
+    width=11cm, height=8cm,
+    xlabel={$\sigma/R$},
+    ylabel={$M=\max \Delta t\,Z$ (direct, pre-onset)},
+    xmin=0.013, xmax=0.045,
+    ymin=0.05, ymax=1500,
+    legend style={at={(0.02,0.02)}, anchor=south west, font=\footnotesize},
+    grid=major, grid style={gray!25},
+    title={Strain ceiling: margins are stability-set, physics is decades away},
+]
+% physics-target band: dtZ_phys = 23.4 (r_c = 0.05c) .. 584.9 (r_c = 0.01c)
+\fill[red!12] (axis cs:0.013,23.4) rectangle (axis cs:0.045,584.9);
+\addplot[red!60, thick, dashed, domain=0.013:0.045, forget plot] {23.4};
+\addplot[red!60, thick, dashed, domain=0.013:0.045, forget plot] {584.9};
+\node[red!70!black, font=\footnotesize, anchor=west]
+    at (axis cs:0.0135,110) {physics target $\Delta t Z_{\mathrm{phys}}$
+    ($r_c = 0.01c$--$0.05c$)};
+
+% epsilon = 0.2 acceptance line (019 pre-registered)
+\addplot[black!60, thin, domain=0.013:0.045, forget plot] {0.2};
+\node[black!60, font=\footnotesize, anchor=west] at (axis cs:0.0345,0.24)
+    {$\varepsilon = 0.2$};
+
+% sigma_stab marker
+\draw[blue!60, thick, dotted] (axis cs:0.03105,0.05) -- (axis cs:0.03105,1500);
+\node[blue!70!black, font=\footnotesize, anchor=south, rotate=90]
+    at (axis cs:0.0303,1.5) {$\sigma_{\mathrm{stab}}$};
+
+% viscous survivors
+\addplot[only marks, mark=*, mark size=2.5pt, blue]
+    table [col sep=comma, x=sigma_over_R, y=M_pre_onset]
+    {fig_leg1/leg1_margins_visc_survivor.csv};
+\addlegendentry{viscous survivor}
+% viscous ignited (pre-onset M)
+\addplot[only marks, mark=square*, mark size=2.5pt, orange!90!black]
+    table [col sep=comma, x=sigma_over_R, y=M_pre_onset]
+    {fig_leg1/leg1_margins_visc_ignited.csv};
+\addlegendentry{viscous ignited (pre-onset)}
+% inviscid points
+\addplot[only marks, mark=triangle*, mark size=3pt, green!50!black]
+    table [col sep=comma, x=sigma_over_R, y=M_pre_onset]
+    {fig_leg1/leg1_margins_inviscid.csv};
+\addlegendentry{inviscid}
+
+% survivor-side p-fit (p = 3.01 over the three viscous survivors)
+\addplot[blue, thin, domain=0.028:0.042]
+    {0.29537*(x/0.02992)^(-3.010)};
+\addlegendentry{fit $M \propto \sigma^{-3.0}$}
+\end{loglogaxis}
+\end{tikzpicture}
+\end{document}

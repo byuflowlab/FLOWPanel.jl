@@ -2136,7 +2136,8 @@ _surface_vorticity_correct_kutta!(F::AbstractMatrix, body::AbstractBody) = F
 
 """
     BoundCirculationMonitor(body, nt, i_system; i_frame, radial_dimension, R,
-                            section_tol=nothing, TF=Float64, verbose=false)
+                            section_tol=nothing, nloop=32, slice_stride=9,
+                            backend=DirectBackend(), TF=Float64, verbose=false)
 
 Storage monitor for rotor-section bound circulation histories. Each shedding
 chain in `body.shedding` is treated as one blade, and each current trailing-edge
@@ -2149,12 +2150,27 @@ circulation in memory only:
 - `valid_section[section, blade]`
 
 The trailing-edge estimate uses the wake-strength convention
-`upper_strength - lower_strength`. The slice estimate transforms panel geometry
-to `frames[i_frame]`, selects panels in a radial tolerance band around the
-station and on the same signed blade side, and sums signed vortex-ring/doublet
-edge crossings through the section plane.
+`upper_strength - lower_strength`.
+
+The slice estimate is a Kelvin circulation loop integral `Γ = ∮ u · dl`
+evaluated by midpoint quadrature over a closed elliptical loop of `nloop`
+segments encircling the blade section at each station: the loop lies in the
+`frames[i_frame]` plane of constant radial coordinate at the station, is sized
+from the local section extents (1.3× chord long, at least 0.5× chord tall, so
+it stays off the surface by a chord-scale margin), and `u` is the total fluid
+velocity (freestream plus all systems' and wakes' induced velocity, evaluated
+via a `FastMultipole.ProbeSystem` on the same `influence!` path as
+`KuttaJoukowskiForce`). The loop orientation is right-handed about the local
+`chordwise × upper-surface-normal` axis projected on the radial axis, which
+matches the sign of the `upper - lower` trailing-edge jump, so settled
+`circulation_slice` and `circulation_te` should agree in sign and roughly in
+magnitude at clean interior stations.
+
+Because the loop evaluation costs `nloop × nstations` probe influences against
+every source, it runs only on steps where `i_step % slice_stride == 0`; skipped
+steps keep `NaN` in `circulation_slice` (and in the CSV column).
 """
-struct BoundCirculationMonitor{TF} <: AbstractMonitor
+struct BoundCirculationMonitor{TF, TB} <: AbstractMonitor
     r_over_R::Matrix{TF}
     circulation_te::Array{TF, 3}
     circulation_slice::Array{TF, 3}
@@ -2165,6 +2181,11 @@ struct BoundCirculationMonitor{TF} <: AbstractMonitor
     radius::TF
     section_tol::Union{Nothing, TF}
     i_strength::Int
+    nloop::Int
+    slice_stride::Int
+    backend::TB
+    probes::FastMultipole.ProbeSystem{TF}
+    loop_dl::Matrix{TF}
     verbose::Bool
     file::Bool
 end
@@ -2186,6 +2207,9 @@ function BoundCirculationMonitor(body::AbstractLiftingBody, nt::Int, i_system::I
                                  radial_dimension::Int,
                                  R::Real,
                                  section_tol=nothing,
+                                 nloop::Int=32,
+                                 slice_stride::Int=9,
+                                 backend::AbstractBackend=DirectBackend(),
                                  TF=Float64,
                                  verbose::Bool=false,
                                  file::Bool=true)
@@ -2221,9 +2245,20 @@ function BoundCirculationMonitor(body::AbstractLiftingBody, nt::Int, i_system::I
         throw(ArgumentError("BoundCirculationMonitor section_tol must be positive; got $(section_tol)."))
     end
 
-    return BoundCirculationMonitor{TF}(
+    nloop >= 4 || throw(ArgumentError(
+        "BoundCirculationMonitor nloop must be at least 4; got $(nloop)."))
+    slice_stride >= 1 || throw(ArgumentError(
+        "BoundCirculationMonitor slice_stride must be at least 1; got $(slice_stride)."))
+
+    n_stations = sum(size(s, 2) for s in body.shedding)
+    n_probes = nloop * n_stations
+    probes = FastMultipole.ProbeSystem(n_probes, TF)
+    loop_dl = zeros(TF, 3, n_probes)
+
+    return BoundCirculationMonitor{TF, typeof(backend)}(
         r_over_R, circulation_te, circulation_slice, valid_section, i_system,
-        i_frame, radial_dimension, TF(R), tol, i_strength, verbose, file)
+        i_frame, radial_dimension, TF(R), tol, i_strength, nloop, slice_stride,
+        backend, probes, loop_dl, verbose, file)
 end
 
 function _bound_circulation_frame_point(body::AbstractBody, node::Integer,
@@ -2300,38 +2335,214 @@ function _bound_circulation_same_side(point, station, radial_dimension::Int)
     return point[side_dim] * station[side_dim] >= zero(eltype(point))
 end
 
-function _bound_circulation_edge_crossing_sign(ra, rb, station_r)
-    if (ra < station_r && station_r < rb)
-        return 1
-    elseif (rb < station_r && station_r < ra)
-        return -1
-    else
-        return 0
+# NOTE on the estimator design: the original `circulation_slice` summed, per
+# panel in the radial band, signed edge crossings of the section plane times
+# that panel's own strength. Any closed triangle crossed by the plane is
+# crossed by exactly two of its edges with opposite signs, so every panel
+# contributed (+1 - 1)·γ = 0 and the estimator telescoped identically to zero
+# by construction (and any per-panel μ/γ sum telescopes either to 0 or to the
+# TE jump, which `circulation_te` already reports). The replacement below is a
+# Kelvin circulation loop integral Γ = ∮ u · dl over an off-surface loop
+# encircling the section, which is a genuinely independent measurement of the
+# bound circulation (it samples the induced velocity field, not the strengths).
+
+"""
+    _bound_circulation_loop_geometry(body, station, tol, radial_dimension,
+                                     shedding_col, origin_global, R_g2f)
+
+Size the Kelvin loop for one station from the panels in the radial band:
+returns `(ok, c1, c2, a1, a2, σ)` in `frames[i_frame]` coordinates, where
+`(c1, c2)` is the loop center and `(a1, a2)` the elliptical semi-axes in the
+two in-plane dimensions, and `σ = ±1` is the traversal sense about the +radial
+frame axis. The loop spans 1.3× the local chord along the longer in-plane
+extent and at least 0.5× chord in the other, so it clears the surface by a
+chord-scale margin. `σ` is chosen right-handed about the local
+`chordwise × upper-normal` axis (projected on the radial axis), which makes
+the measured Γ match the sign of the `upper - lower` TE jump for both wing
+halves and rotor blades at any azimuth. If the band contains no panels the
+tolerance is widened up to 4×; failing that, `ok=false`.
+"""
+function _bound_circulation_loop_geometry(body::AbstractBody, station, tol,
+                                          radial_dimension::Int, shedding_col,
+                                          origin_global, R_g2f)
+    TF = eltype(station)
+    d1 = radial_dimension == 1 ? 2 : 1
+    d2 = radial_dimension == 3 ? 2 : 3
+    station_r = station[radial_dimension]
+
+    lo1 = typemax(TF); hi1 = typemin(TF)
+    lo2 = typemax(TF); hi2 = typemin(TF)
+    found = false
+    band = tol
+    for _ in 1:3
+        @inbounds for panel in 1:body.ncells
+            cp = _bound_circulation_frame_controlpoint(body, panel, origin_global, R_g2f)
+            abs(cp[radial_dimension] - station_r) <= band || continue
+            _bound_circulation_same_side(cp, station, radial_dimension) || continue
+            found = true
+            # size from the panel nodes (not control points) so the loop
+            # clears the actual surface even when the band holds one panel row
+            for i_node in axes(body.cells, 1)
+                p = _bound_circulation_frame_point(
+                    body, body.cells[i_node, panel], origin_global, R_g2f)
+                lo1 = min(lo1, p[d1]); hi1 = max(hi1, p[d1])
+                lo2 = min(lo2, p[d2]); hi2 = max(hi2, p[d2])
+            end
+        end
+        found && break
+        band *= 2
     end
+    zero_t = zero(TF)
+    found || return (false, zero_t, zero_t, zero_t, zero_t, 1)
+
+    e1 = hi1 - lo1
+    e2 = hi2 - lo2
+    c1 = 0.5 * (lo1 + hi1)
+    c2 = 0.5 * (lo2 + hi2)
+    chord = max(e1, e2)
+    chord > zero_t || return (false, zero_t, zero_t, zero_t, zero_t, 1)
+    # 1.3×chord along the long extent; at least 0.5×chord (and 0.3×chord past
+    # the surface extent) in the short one.
+    if e1 >= e2
+        a1 = TF(0.65) * chord
+        a2 = max(TF(0.25) * chord, TF(0.5) * e2 + TF(0.15) * chord)
+    else
+        a2 = TF(0.65) * chord
+        a1 = max(TF(0.25) * chord, TF(0.5) * e1 + TF(0.15) * chord)
+    end
+
+    # Orientation: right-handed about the local (chordwise × upper-normal)
+    # axis projected on the radial frame axis. `chordwise` points from the
+    # section center toward the TE midpoint (the station); `upper-normal` is
+    # the outward normal of the upper TE panel rotated into the frame. The
+    # radial component of their cross product is parity·(ĉ₁ n₂ - ĉ₂ n₁) with
+    # parity the Levi-Civita sign of (d1, d2, radial_dimension).
+    parity = radial_dimension == 2 ? -1 : 1
+    pi_panel = shedding_col[1]
+    n_g = SVector{3, TF}(body.normals[1, pi_panel],
+                         body.normals[2, pi_panel],
+                         body.normals[3, pi_panel])
+    n_f = R_g2f * n_g
+    ĉ1 = station[d1] - c1
+    ĉ2 = station[d2] - c2
+    axis_r = parity * (ĉ1 * n_f[d2] - ĉ2 * n_f[d1])
+    σ = axis_r < zero_t ? -1 : 1
+
+    return (true, c1, c2, a1, a2, σ)
 end
 
-function _bound_circulation_slice(body::AbstractBody, station, tol, radial_dimension::Int,
-                                  i_strength::Int, origin_global, R_g2f)
-    station_r = station[radial_dimension]
-    Γ = zero(eltype(body.strength))
-    @inbounds for panel in 1:body.ncells
-        cp = _bound_circulation_frame_controlpoint(body, panel, origin_global, R_g2f)
-        abs(cp[radial_dimension] - station_r) <= tol || continue
-        _bound_circulation_same_side(cp, station, radial_dimension) || continue
+"""
+    _bound_circulation_kelvin_slices!(m, body, systems, wakes, uinf,
+                                      stations_by_blade, tol,
+                                      origin_global, R_f2g, R_g2f, i_step)
 
-        γ = body.strength[panel, i_strength]
-        nodes = body.cells[:, panel]
-        for i_edge in 1:3
-            na = nodes[i_edge]
-            nb = nodes[i_edge == 3 ? 1 : i_edge + 1]
-            pa = _bound_circulation_frame_point(body, na, origin_global, R_g2f)
-            pb = _bound_circulation_frame_point(body, nb, origin_global, R_g2f)
-            s = _bound_circulation_edge_crossing_sign(
-                pa[radial_dimension], pb[radial_dimension], station_r)
-            Γ += s * γ
+Evaluate `Γ = ∮ u · dl` for every valid station and store the results in
+`m.circulation_slice[:, :, i_step + 1]`. Loop vertices are placed at
+`θ = 2πk/K` on each station's ellipse and the velocity is sampled at segment
+midpoints (midpoint quadrature); the total velocity is the freestream plus the
+induced velocity of all systems and wake sources, evaluated in a single
+`influence!` call on the monitor's `FastMultipole.ProbeSystem` — the same
+probe-velocity path `KuttaJoukowskiForce` uses. Probes are off-body, so every
+system evaluates with its `kerneloffset_targets` (restored afterwards).
+"""
+function _bound_circulation_kelvin_slices!(m::BoundCirculationMonitor{TF}, body,
+                                           systems, wakes, uinf,
+                                           stations_by_blade, tol,
+                                           origin_global, R_f2g, R_g2f,
+                                           i_step::Int) where {TF}
+    K = m.nloop
+    d_r = m.radial_dimension
+    d1 = d_r == 1 ? 2 : 1
+    d2 = d_r == 3 ? 2 : 3
+    parity = d_r == 2 ? -1 : 1
+
+    zero_v = zero(SVector{3, TF})
+    zero_h = zero(SMatrix{3, 3, TF, 9})
+    origin_sv = SVector{3, TF}(origin_global...)
+
+    # 1. Build loop geometry and fill probe positions / segment vectors.
+    station_ok = falses(length(m.probes.position) ÷ K)
+    js = 0
+    for (i_blade, shedding) in pairs(body.shedding)
+        for (i_section, col) in enumerate(eachcol(shedding))
+            js += 1
+            station = stations_by_blade[i_blade][i_section]
+            ok, c1, c2, a1, a2, σ = _bound_circulation_loop_geometry(
+                body, station, tol, d_r, col, origin_global, R_g2f)
+            station_ok[js] = ok
+
+            # Traversal sense: with p(θ) = c + a1 cosθ ê_d1 + s a2 sinθ ê_d2,
+            # increasing θ circulates right-handed about s·parity·ê_radial;
+            # pick s so that this equals σ·ê_radial.
+            s = σ * parity
+            @inbounds for k in 1:K
+                idx = (js - 1) * K + k
+                if !ok
+                    m.probes.position[idx] = origin_sv
+                    m.loop_dl[1, idx] = zero(TF)
+                    m.loop_dl[2, idx] = zero(TF)
+                    m.loop_dl[3, idx] = zero(TF)
+                else
+                    θ0 = 2 * TF(pi) * (k - 1) / K
+                    θ1 = 2 * TF(pi) * k / K
+                    θm = 2 * TF(pi) * (k - TF(0.5)) / K
+                    # frame-coordinates loop points (vertex0, vertex1, midpoint)
+                    assemble(v1, v2) = SVector{3, TF}(ntuple(
+                        i -> i == d_r ? station[d_r] : (i == d1 ? v1 : v2), 3))
+                    p0 = assemble(c1 + a1 * cos(θ0), c2 + s * a2 * sin(θ0))
+                    p1 = assemble(c1 + a1 * cos(θ1), c2 + s * a2 * sin(θ1))
+                    pm = assemble(c1 + a1 * cos(θm), c2 + s * a2 * sin(θm))
+                    m.probes.position[idx] = R_f2g * pm + origin_sv
+                    dl = R_f2g * (p1 - p0)
+                    m.loop_dl[1, idx] = dl[1]
+                    m.loop_dl[2, idx] = dl[2]
+                    m.loop_dl[3, idx] = dl[3]
+                end
+                m.probes.gradient[idx] = zero_v
+                m.probes.scalar_potential[idx] = zero(TF)
+                m.probes.hessian[idx] = zero_h
+            end
         end
     end
-    return Γ
+
+    # 2. Induced velocity from every body and every wake source in one call.
+    wake_sources = _collect_wake_sources(wakes)
+    all_sources = (systems..., wake_sources...)
+    old_offsets = [sys.kerneloffset for sys in systems]
+    try
+        for sys in systems
+            sys.kerneloffset = sys.kerneloffset_targets
+        end
+        influence!((m.probes,), all_sources, m.backend;
+                    precalc=false,
+                    scalar_potential=false,
+                    gradient=true,
+                    hessian=(false,))
+    finally
+        for (sys, offset) in zip(systems, old_offsets)
+            sys.kerneloffset = offset
+        end
+    end
+
+    # 3. Midpoint-quadrature loop integral of total velocity.
+    uinf_sv = SVector{3, TF}(uinf[1], uinf[2], uinf[3])
+    js = 0
+    for (i_blade, shedding) in pairs(body.shedding)
+        for i_section in 1:size(shedding, 2)
+            js += 1
+            station_ok[js] || continue
+            Γ = zero(TF)
+            @inbounds for k in 1:K
+                idx = (js - 1) * K + k
+                u = m.probes.gradient[idx] + uinf_sv
+                Γ += u[1] * m.loop_dl[1, idx] +
+                     u[2] * m.loop_dl[2, idx] +
+                     u[3] * m.loop_dl[3, idx]
+            end
+            m.circulation_slice[i_section, i_blade, i_step + 1] = Γ
+        end
+    end
+    return nothing
 end
 
 function (m::BoundCirculationMonitor{TF})(systems, wakes,
@@ -2370,10 +2581,18 @@ function (m::BoundCirculationMonitor{TF})(systems, wakes,
 
             m.r_over_R[i_section, i_blade] = station[m.radial_dimension] / m.radius
             m.circulation_te[i_section, i_blade, i_step + 1] = upper - lower
-            m.circulation_slice[i_section, i_blade, i_step + 1] =
-                _bound_circulation_slice(body, station, tol, m.radial_dimension,
-                                         m.i_strength, origin_global, R_g2f)
         end
+    end
+
+    # Kelvin loop integral only every `slice_stride` steps: each evaluation
+    # costs nloop × nstations probe influences against every source panel
+    # (e.g. 32 × 180 probes × 36k panels ≈ 2e8 direct kernel pairs, ~15% of
+    # one 36k² matvec), so the default stride of 9 keeps the amortized added
+    # cost below ~2% of a direct solve step. Skipped steps keep NaN.
+    if i_step % m.slice_stride == 0
+        _bound_circulation_kelvin_slices!(m, body, systems, wakes, uinf,
+                                          stations_by_blade, tol,
+                                          origin_global, R_f2g, R_g2f, i_step)
     end
 
     if m.verbose
@@ -3303,6 +3522,491 @@ function write_monitor_csv!(m::DragPolarMonitor, dir::AbstractString, name::Abst
                               m.cl_history[b, col], m.cd_history[b, col],
                               m.drag_force[1, b], m.drag_force[2, b], m.drag_force[3, b],
                               m.inflow_angle_diff[b, col], m.n_probe_skipped[b]), ","))
+        end
+    end
+    return nothing
+end
+
+#--- WakeHealthMonitor (BRAINSTORM/018 S0a tripwire) ---#
+
+"""
+    WakeHealthMonitor(; sigma_ref=NaN, dtz=false, attribution=false,
+                      file=true, verbose=false)
+
+Cheap per-step diagnostic on the particle wake. Emits, per wake and per step,
+the quantities that distinguish a healthy wake from one about to diverge, plus
+the wall-clock cost of the step:
+
+| column | meaning |
+|:--|:--|
+| `n_particles`           | particle count (previously recoverable only by counting points in per-step VTK) |
+| `max_u`                 | largest particle velocity magnitude |
+| `min_sigma`             | smallest core size in the field |
+| `min_sigma_ratio`       | `min_sigma / sigma_ref` — the rVPM core-contraction signal |
+| `max_gamma_over_sigma2` | largest `\\|Gamma\\|/sigma^2`, the velocity-runaway proxy (`\\|u\\| ~ \\|Gamma\\|/sigma^2`) |
+| `wall_s`                | seconds since this monitor last ran, i.e. per-step wall clock |
+| `max_dtZ`               | (only with `dtz=true`) `max_p dt*Z_p`, the largest per-step fractional core contraction `-Delta sigma/sigma` |
+
+`max_dtZ` (default OFF; enable with `dtz=true`) evaluates, for every non-static
+particle, the same strain projection `Z` that FLOWVPM's Euler step applies in
+its core-size update `sigma -= dt*sigma*Z` (`MM4` in
+`FLOWVPM_timeintegration.jl`): with `S` the stretching vector (`(Gamma.grad')U`
+transposed / `(Gamma.grad)U` classic, per `pfield.transposed`),
+
+    Z = [ (f+g)/(1+3f) * S.Gamma - f/(1+3f) * C*eps_SFS.Gamma * sigma^3/zeta(0) ] / |Gamma|^2
+
+with `f`, `g` from `pfield.formulation` (default rVPM `f=0, g=1/5` gives the
+`(1/5) Gamma'*(sym J)*Gamma / |Gamma|^2` prefactor; SFS term vanishes when SFS
+is off) and `Z = 0` where `|Gamma| = 0`. Under a `ClassicVPM` formulation the
+sigma update does not exist and `max_dtZ` is reported as `0`. Timing caveat:
+this monitor runs *after* the wake step, so `J`/`Gamma`/`sigma` are post-update
+values — the readout is step-consistent only to O(dt) relative to the `Z` the
+step actually applied. With `dtz=false` (the default) the column is omitted and
+the CSV is bit-identical to the pre-`dtz` monitor.
+
+`attribution=true` (default OFF; BRAINSTORM/018 phase 15) appends four
+`min_sigma_ratio`-attribution columns that discriminate a field-level
+contraction episode from order-statistic churn of the minimum:
+
+| column | meaning |
+|:--|:--|
+| `p1_sigma_ratio` | 1st percentile of `sigma / sigma_ref` over the field — if IT dips with `min_sigma_ratio`, the contraction is a population, not one particle |
+| `argmin_x/y/z`   | position of the field-minimum-`sigma` particle — does the same region persist through a dip? |
+
+The percentile uses the same type-7 (linear-interpolation) definition as
+`Statistics.quantile`. With `attribution=false` the CSV is unchanged.
+
+Motivation (BRAINSTORM/018 phase 4): `p018_L2` diverged through an rVPM core
+collapse (`sigma_dot = -Z sigma`, with no floor anywhere in FLOWVPM or
+FLOWPanel). The field-minimum sigma fell ~180x over ~1000 steps before `max_u`
+went 733 -> 37,088 m/s in two steps and the run died in the FMM tree build.
+None of those numbers was recorded anywhere, so the collapse was diagnosable
+only in hindsight from saved VTK. `min_sigma_ratio` in particular trends for
+hundreds of steps before anything else moves. `wall_s` closes a second gap:
+there is no per-step timing anywhere in `simulate!`, only one `@time` around
+the whole call, so early-vs-late cost has never been measured.
+
+`sigma_ref` defaults to the shed sigma inferred from each wake's
+`method_trailing` (`SigmaOverlap`/`SigmaPPS` carry it explicitly). Pass a value
+to override. Under `OverlapPPS` sigma is set per segment and no single
+reference exists, so `min_sigma_ratio` is reported as `NaN` unless overridden.
+
+Diagnostic only: declares no `monitor_provides`/`monitor_requires`, mutates no
+simulation state, and touches each particle once (O(np), no allocation).
+`file=false` suppresses the CSV; `verbose=true` also prints per step.
+"""
+mutable struct WakeHealthMonitor{TF} <: AbstractMonitor
+    sigma_ref::TF
+    dtz::Bool                             # write the max_dtZ column (default off)
+    attribution::Bool                     # write the min_sr attribution columns (default off)
+    file::Bool
+    verbose::Bool
+    t_last::Float64                       # wall-clock stamp of the previous call
+    wall_s::Float64                       # seconds since the previous call
+    stats::Vector{NTuple{6, Float64}}     # per-wake cache, filled each step
+    attr::Vector{NTuple{4, Float64}}      # per-wake (p1 sigma ratio, argmin x/y/z)
+    sigma_buf::Vector{Float64}            # reusable scratch for the p1 percentile
+end
+
+function WakeHealthMonitor(; sigma_ref=NaN, dtz::Bool=false,
+                           attribution::Bool=false, file::Bool=true,
+                           verbose::Bool=false)
+    sr = float(sigma_ref)
+    return WakeHealthMonitor{typeof(sr)}(sr, dtz, attribution, file, verbose,
+                                         NaN, NaN, NTuple{6, Float64}[],
+                                         NTuple{4, Float64}[], Float64[])
+end
+
+# Shed-sigma reference, where the shedding policy defines one.
+_shed_sigma_reference(m::SigmaOverlap) = float(m.sigma)
+_shed_sigma_reference(m::SigmaPPS) = float(m.sigma)
+_shed_sigma_reference(::Any) = NaN
+
+_wake_health_pfield(wake::PanelParticleWake) = wake.pfield
+_wake_health_pfield(::Any) = nothing
+
+_wake_health_sigma_ref(m::WakeHealthMonitor, wake::PanelParticleWake) =
+    isnan(m.sigma_ref) ? _shed_sigma_reference(wake.method_trailing) : m.sigma_ref
+_wake_health_sigma_ref(m::WakeHealthMonitor, ::Any) = m.sigma_ref
+
+_wake_health_iterable(wakes::Tuple) = wakes
+_wake_health_iterable(wake) = (wake,)
+
+# (f, g) coefficients of the rVPM core-size update, or `nothing` where the
+# formulation has no sigma update (ClassicVPM).
+_wake_health_fg(formulation::FLOWVPM.ReformulatedVPM) =
+    (float(formulation.f), float(formulation.g))
+_wake_health_fg(::Any) = nothing
+
+"""
+    _wake_health_stats(pfield, sigma_ref, dt)
+
+Single pass over the particle field returning
+`(np, max|u|, min sigma, min sigma/sigma_ref, max |Gamma|/sigma^2, max dt*Z)`,
+where `Z` is the same strain projection (`MM4`) FLOWVPM's Euler step uses in
+`sigma -= dt*sigma*Z` — see the `WakeHealthMonitor` docstring. `max dt*Z` runs
+over non-static particles only (statics are skipped by the sigma update); it is
+`0` under `ClassicVPM` (no sigma update) and `NaN` where no particle
+contributes.
+"""
+function _wake_health_stats(pfield, sigma_ref, dt)
+    np = pfield.np
+    max_u2 = 0.0
+    min_sigma = Inf
+    max_gos2 = 0.0
+    fg = _wake_health_fg(pfield.formulation)
+    zeta0 = pfield.kernel.zeta(0)
+    transposed = pfield.transposed
+    max_dtZ = -Inf
+    @inbounds for i in 1:np
+        u = FLOWVPM.get_U(pfield, i)
+        u2 = u[1]^2 + u[2]^2 + u[3]^2
+        u2 > max_u2 && (max_u2 = u2)
+        s = FLOWVPM.get_sigma(pfield, i)[1]
+        s < min_sigma && (min_sigma = s)
+        g = FLOWVPM.get_Gamma(pfield, i)
+        gnorm2 = g[1]^2 + g[2]^2 + g[3]^2
+        if s > 0
+            gos2 = sqrt(gnorm2) / s^2
+            gos2 > max_gos2 && (max_gos2 = gos2)
+        end
+        if !isnothing(fg) && !FLOWVPM.is_static(FLOWVPM.get_particle(pfield, i))
+            f, gc = fg
+            Z = 0.0
+            if gnorm2 > 0
+                J = FLOWVPM.get_J(pfield, i)
+                if transposed  # S = (Gamma . grad') U
+                    MM1 = J[1]*g[1] + J[2]*g[2] + J[3]*g[3]
+                    MM2 = J[4]*g[1] + J[5]*g[2] + J[6]*g[3]
+                    MM3 = J[7]*g[1] + J[8]*g[2] + J[9]*g[3]
+                else           # S = (Gamma . grad) U
+                    MM1 = J[1]*g[1] + J[4]*g[2] + J[7]*g[3]
+                    MM2 = J[2]*g[1] + J[5]*g[2] + J[8]*g[3]
+                    MM3 = J[3]*g[1] + J[6]*g[2] + J[9]*g[3]
+                end
+                C = FLOWVPM.get_C(pfield, i)[1]
+                SFS = FLOWVPM.get_SFS(pfield, i)
+                Z = (f + gc)/(1 + 3*f) * (MM1*g[1] + MM2*g[2] + MM3*g[3])
+                Z -= f/(1 + 3*f) *
+                     (C*SFS[1]*g[1] + C*SFS[2]*g[2] + C*SFS[3]*g[3]) * s^3/zeta0
+                Z /= gnorm2
+            end
+            dtZ = dt*Z
+            dtZ > max_dtZ && (max_dtZ = dtZ)
+        end
+    end
+    np == 0 && (min_sigma = NaN)
+    if isnothing(fg)
+        max_dtZ = np == 0 ? NaN : 0.0
+    elseif !isfinite(max_dtZ)
+        max_dtZ = NaN
+    end
+    ratio = (isnan(sigma_ref) || sigma_ref <= 0) ? NaN : min_sigma / sigma_ref
+    return (Float64(np), sqrt(max_u2), min_sigma, ratio, max_gos2, max_dtZ)
+end
+
+function (monitor::WakeHealthMonitor)(systems, wakes, frames, uinf,
+                                      i_step::Int, dt::Real)
+    now = time()
+    monitor.wall_s = isnan(monitor.t_last) ? NaN : now - monitor.t_last
+    monitor.t_last = now
+
+    wake_tuple = _wake_health_iterable(wakes)
+    length(monitor.stats) == length(wake_tuple) ||
+        resize!(monitor.stats, length(wake_tuple))
+    monitor.attribution && length(monitor.attr) != length(wake_tuple) &&
+        resize!(monitor.attr, length(wake_tuple))
+    for (i_wake, wake) in enumerate(wake_tuple)
+        pfield = _wake_health_pfield(wake)
+        monitor.stats[i_wake] = isnothing(pfield) ?
+            (NaN, NaN, NaN, NaN, NaN, NaN) :
+            _wake_health_stats(pfield, _wake_health_sigma_ref(monitor, wake), dt)
+        if monitor.attribution
+            monitor.attr[i_wake] = isnothing(pfield) ?
+                (NaN, NaN, NaN, NaN) :
+                _wake_health_attribution!(monitor.sigma_buf, pfield,
+                                          _wake_health_sigma_ref(monitor, wake))
+        end
+    end
+
+    if monitor.verbose
+        for (i_wake, s) in enumerate(monitor.stats)
+            isnan(s[1]) && continue
+            println("\twake $(i_wake): np=$(Int(s[1])) " *
+                    "max|u|=$(round(s[2], sigdigits=4)) " *
+                    "min sigma/sigma_shed=$(round(s[4], sigdigits=4)) " *
+                    "max|G|/sigma^2=$(round(s[5], sigdigits=4)) " *
+                    "wall=$(round(monitor.wall_s, sigdigits=3))s")
+        end
+    end
+    return nothing
+end
+
+function write_monitor_csv!(m::WakeHealthMonitor, dir::AbstractString,
+                            name::AbstractString, i_monitor::Int,
+                            ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    isempty(m.stats) && return nothing
+    header = "step,time,n_particles,max_u,min_sigma,min_sigma_ratio," *
+             "max_gamma_over_sigma2,wall_s" * (m.dtz ? ",max_dtZ" : "") *
+             (m.attribution ? ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z" : "")
+    t = monitor_time(ctx, i_step, dt)
+    for (i_wake, s) in enumerate(m.stats)
+        path = _monitor_csv_path(dir, name, i_monitor, "wake_health", i_wake)
+        _monitor_csv_open(path, i_step, overwrite, header) do io
+            row = join((i_step, t, isnan(s[1]) ? "" : Int(s[1]),
+                        s[2], s[3], s[4], s[5], m.wall_s), ",")
+            m.dtz && (row *= "," * string(s[6]))
+            if m.attribution
+                a = i_wake <= length(m.attr) ? m.attr[i_wake] :
+                    (NaN, NaN, NaN, NaN)
+                row *= "," * join(a, ",")
+            end
+            println(io, row)
+        end
+    end
+    return nothing
+end
+
+"""
+    _monitor_quantile(sorted, p)
+
+Type-7 (linear-interpolation, `Statistics.quantile`-compatible) quantile of an
+ascending-sorted vector. `NaN` on an empty vector. Local so the monitors avoid
+a `Statistics` dependency.
+"""
+function _monitor_quantile(sorted::AbstractVector{<:Real}, p::Real)
+    n = length(sorted)
+    n == 0 && return NaN
+    n == 1 && return Float64(sorted[1])
+    h = (n - 1)*p + 1
+    lo = clamp(floor(Int, h), 1, n)
+    hi = min(lo + 1, n)
+    return Float64(sorted[lo] + (h - lo)*(sorted[hi] - sorted[lo]))
+end
+
+"""
+    _wake_health_attribution!(buf, pfield, sigma_ref)
+
+One extra O(np) pass (plus a sort of `buf`) returning the `min_sigma_ratio`
+attribution tuple `(p1 sigma/sigma_ref, argmin x, argmin y, argmin z)` — see
+the `WakeHealthMonitor` docstring. `buf` is a reusable scratch vector.
+"""
+function _wake_health_attribution!(buf::Vector{Float64}, pfield, sigma_ref)
+    np = pfield.np
+    np == 0 && return (NaN, NaN, NaN, NaN)
+    empty!(buf)
+    imin = 1
+    smin = Inf
+    @inbounds for i in 1:np
+        s = FLOWVPM.get_sigma(pfield, i)[1]
+        push!(buf, s)
+        s < smin && (smin = s; imin = i)
+    end
+    sort!(buf)
+    p1 = _monitor_quantile(buf, 0.01)
+    ratio = (isnan(sigma_ref) || sigma_ref <= 0) ? NaN : p1 / sigma_ref
+    x = FLOWVPM.get_X(pfield, imin)
+    return (ratio, Float64(x[1]), Float64(x[2]), Float64(x[3]))
+end
+
+#--- WakeInventoryMonitor (BRAINSTORM/018 phase 15 drift-source instrumentation) ---#
+
+"""
+    WakeInventoryMonitor(R; origin=(0, 0, 0), axis=(1, 0, 0),
+                         edges=[0.0, 0.5, 1.0, 2.0, 3.0, 3.5], r_split=1.0,
+                         file=true, verbose=false)
+
+Banded per-step inventory of the particle wake, the H1/H3 discriminator of the
+CT drift-source study (BRAINSTORM/018 `phase_15_drift_source.md`). Particles
+are binned by downstream distance `xi = dot(X - origin, axis) / R` into the
+bands defined by `edges` (units of `R`; band `b` is `edges[b] <= xi <=
+edges[b+1]`, internal boundaries assigned to the lower band), with the FIRST
+band split radially at `r_split` (perpendicular distance over `R`) into
+`_rin` / `_rout` cells to separate root/tip contributions near the disk. A
+final `outside` cell catches everything else, so the cells partition the
+non-static field and their sums are conserved totals. Static particles are
+skipped (they are not wake). Per cell and per step the CSV records:
+
+| column | meaning |
+|:--|:--|
+| `<cell>_n`            | particle count |
+| `<cell>_sum_absGamma` | `sum \\|Gamma\\|` — magnitude inventory (cancellation-blind) |
+| `<cell>_Gamma_x/y/z`  | vector `sum Gamma` — the cancellation-aware complement: a declining `sum \\|Gamma\\|` under a stationary vector sum is merge-cancellation, not vorticity leaving the cell |
+| `<cell>_sigma_mean`   | mean core size |
+| `<cell>_sigma_p5/p50/p95` | type-7 core-size quantiles (robust where max is not) |
+
+Defaults match the DJI 9443 hover campaign: disk plane through `origin` with
+downstream `axis` `+x`, outer band edge at the MEASURED particle-deletion
+boundary 3.5R (the driver's `GlobalCylinder` starts 0.5R upstream, so banner
+"depth 4R" = cylinder length, downstream extent 3.5R — ledger 2026-08-12), and
+`r_split=1.0`.
+
+Cost: one O(np) pass plus per-cell sorts of the sigma buffers (reused, no
+steady-state allocation). Diagnostic only: declares no
+`monitor_provides`/`monitor_requires` and mutates no simulation state; append
+it LAST in the monitor tuple so existing monitor CSV names are unchanged.
+`file=false` suppresses the CSV; `verbose=true` prints per-cell counts per
+step.
+"""
+mutable struct WakeInventoryMonitor{TF} <: AbstractMonitor
+    origin::SVector{3, TF}
+    axis::SVector{3, TF}                 # unit downstream axis
+    R::TF
+    edges::Vector{TF}                    # band edges, ascending, units of R
+    r_split::TF                          # radial split of the first band, units of R
+    file::Bool
+    verbose::Bool
+    cell_names::Vector{String}
+    stats::Vector{Vector{Float64}}       # per-wake flat cache, 9 values per cell
+    sigma_bufs::Vector{Vector{Float64}}  # reusable per-cell sigma scratch
+end
+
+function WakeInventoryMonitor(R; origin=(0.0, 0.0, 0.0), axis=(1.0, 0.0, 0.0),
+                              edges=[0.0, 0.5, 1.0, 2.0, 3.0, 3.5],
+                              r_split=1.0, file::Bool=true, verbose::Bool=false)
+    TF = typeof(float(R))
+    issorted(edges) && length(edges) >= 2 ||
+        throw(ArgumentError("WakeInventoryMonitor edges must be ascending with >= 2 entries"))
+    axis_s = SVector{3, TF}(axis)
+    axis_norm = sqrt(sum(abs2, axis_s))
+    axis_norm > 0 || throw(ArgumentError("WakeInventoryMonitor axis must be nonzero"))
+    m = WakeInventoryMonitor{TF}(SVector{3, TF}(origin), axis_s / axis_norm,
+                                 TF(R), TF.(edges), TF(r_split), file, verbose,
+                                 _wake_inventory_cell_names(edges),
+                                 Vector{Float64}[], Vector{Float64}[])
+    return m
+end
+
+# "0.5" -> "0p5" etc., for CSV column names
+_wake_inventory_fmt(x) = replace(string(round(float(x), digits=3)),
+                                 "." => "p", "-" => "m")
+
+function _wake_inventory_cell_names(edges)
+    names = String[]
+    nbands = length(edges) - 1
+    for b in 1:nbands
+        base = "z$(_wake_inventory_fmt(edges[b]))_$(_wake_inventory_fmt(edges[b+1]))"
+        if b == 1
+            push!(names, base * "_rin", base * "_rout")
+        else
+            push!(names, base)
+        end
+    end
+    push!(names, "outside")
+    return names
+end
+
+"""
+    _wake_inventory_stats!(vals, bufs, pfield, m)
+
+Single pass over the non-static particles filling `vals` (flat, 9 values per
+cell: n, sum|Gamma|, sum Gamma x/y/z, sigma mean/p5/p50/p95) and the per-cell
+sigma scratch buffers. Cell layout: band-1 `_rin`, band-1 `_rout`, bands
+2..n, `outside` — matching `_wake_inventory_cell_names`. Sigma statistics of
+an empty cell are `NaN`.
+"""
+function _wake_inventory_stats!(vals::Vector{Float64},
+                                bufs::Vector{Vector{Float64}}, pfield,
+                                m::WakeInventoryMonitor)
+    nbands = length(m.edges) - 1
+    ncells = nbands + 2
+    fill!(vals, 0.0)
+    for buf in bufs
+        empty!(buf)
+    end
+    @inbounds for i in 1:pfield.np
+        FLOWVPM.is_static(FLOWVPM.get_particle(pfield, i)) && continue
+        x = FLOWVPM.get_X(pfield, i)
+        dx1 = x[1] - m.origin[1]
+        dx2 = x[2] - m.origin[2]
+        dx3 = x[3] - m.origin[3]
+        xi = (dx1*m.axis[1] + dx2*m.axis[2] + dx3*m.axis[3]) / m.R
+        r = sqrt(max((dx1^2 + dx2^2 + dx3^2)/m.R^2 - xi^2, 0.0))
+        cell = ncells                        # outside unless a band claims it
+        if m.edges[1] <= xi <= m.edges[end]
+            b = 1
+            while b < nbands && xi > m.edges[b + 1]
+                b += 1
+            end
+            cell = b == 1 ? (r < m.r_split ? 1 : 2) : b + 1
+        end
+        g = FLOWVPM.get_Gamma(pfield, i)
+        base = (cell - 1)*9
+        vals[base + 1] += 1.0
+        vals[base + 2] += sqrt(g[1]^2 + g[2]^2 + g[3]^2)
+        vals[base + 3] += g[1]
+        vals[base + 4] += g[2]
+        vals[base + 5] += g[3]
+        push!(bufs[cell], FLOWVPM.get_sigma(pfield, i)[1])
+    end
+    for c in 1:ncells
+        buf = bufs[c]
+        base = (c - 1)*9
+        if isempty(buf)
+            vals[base + 6] = NaN
+            vals[base + 7] = NaN
+            vals[base + 8] = NaN
+            vals[base + 9] = NaN
+        else
+            sort!(buf)
+            vals[base + 6] = sum(buf) / length(buf)
+            vals[base + 7] = _monitor_quantile(buf, 0.05)
+            vals[base + 8] = _monitor_quantile(buf, 0.50)
+            vals[base + 9] = _monitor_quantile(buf, 0.95)
+        end
+    end
+    return vals
+end
+
+function (monitor::WakeInventoryMonitor)(systems, wakes, frames, uinf,
+                                         i_step::Int, dt::Real)
+    wake_tuple = _wake_health_iterable(wakes)
+    ncells = length(monitor.cell_names)
+    if length(monitor.stats) != length(wake_tuple)
+        monitor.stats = [fill(NaN, 9*ncells) for _ in wake_tuple]
+    end
+    if length(monitor.sigma_bufs) != ncells
+        monitor.sigma_bufs = [Float64[] for _ in 1:ncells]
+    end
+    for (i_wake, wake) in enumerate(wake_tuple)
+        pfield = _wake_health_pfield(wake)
+        if isnothing(pfield)
+            fill!(monitor.stats[i_wake], NaN)
+        else
+            _wake_inventory_stats!(monitor.stats[i_wake], monitor.sigma_bufs,
+                                   pfield, monitor)
+        end
+    end
+    if monitor.verbose
+        for (i_wake, v) in enumerate(monitor.stats)
+            isnan(v[1]) && continue
+            counts = join(("$(monitor.cell_names[c])=$(Int(v[(c-1)*9 + 1]))"
+                           for c in 1:ncells), " ")
+            println("\twake $(i_wake) inventory: $(counts)")
+        end
+    end
+    return nothing
+end
+
+function write_monitor_csv!(m::WakeInventoryMonitor, dir::AbstractString,
+                            name::AbstractString, i_monitor::Int,
+                            ctx::MonitorContext, systems_tuple::Tuple,
+                            i_step::Int, dt::Real; overwrite::Bool=false)
+    m.file || return nothing
+    isempty(m.stats) && return nothing
+    quantities = ("n", "sum_absGamma", "Gamma_x", "Gamma_y", "Gamma_z",
+                  "sigma_mean", "sigma_p5", "sigma_p50", "sigma_p95")
+    header = "step,time," * join(("$(cn)_$(q)" for cn in m.cell_names
+                                  for q in quantities), ",")
+    t = monitor_time(ctx, i_step, dt)
+    for (i_wake, v) in enumerate(m.stats)
+        path = _monitor_csv_path(dir, name, i_monitor, "wake_inventory", i_wake)
+        _monitor_csv_open(path, i_step, overwrite, header) do io
+            cols = (mod1(j, 9) == 1 && isfinite(v[j]) ? string(Int(v[j])) :
+                    string(v[j]) for j in eachindex(v))
+            println(io, join((string(i_step), string(t), cols...), ","))
         end
     end
     return nothing

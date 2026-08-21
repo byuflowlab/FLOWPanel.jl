@@ -1,0 +1,26 @@
+diff --git a/src/solve.jl b/src/solve.jl
+index 2843d83..8fd71ad 100644
+--- a/src/solve.jl
++++ b/src/solve.jl
+@@ -803,7 +803,8 @@ solve!(target_systems, source_systems, solver::FastGaussSeidel; optargs...) = so
+ function solve!(target_systems::Tuple, source_systems::Tuple, solver::FastGaussSeidel{TF,N};
+     scalar_potential=false, gradient=true, hessian=false,
+     max_iterations=10, inner_iterations=1, tolerance=1e-3,
+-    rlx=1.0, reverse_pass=false, verbose=true, final_update=true
++    rlx=1.0, reverse_pass=false, verbose=true, final_update=true,
++    callback=nothing
+ ) where {TF,N}
+ 
+     #--- derivatives switches ---#
+@@ -901,6 +902,11 @@ function solve!(target_systems::Tuple, source_systems::Tuple, solver::FastGaussS
+         # note that `right_hand_side` now contains external, nonself, and farfield influence
+         mse = residual!(residual_vector, self_matrices, strengths, strengths_by_leaf)
+ 
++        # convergence-history hook: called once per outer iteration with the
++        # exact residual the loop's tolerance check uses (max-abs, despite the
++        # MSE label); default nothing → zero behavior change
++        callback === nothing || callback(iteration, mse)
++
+         verbose && println("Iteration $(iteration):\tMSE = $(mse),\tdelta = $(Δ)")
+ 
+         # if mse > mse_best * 10 # stop if mse begins increasing

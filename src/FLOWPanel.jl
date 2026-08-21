@@ -7,6 +7,7 @@ surface models, wake models, solver backends, and post-processing utilities.
 module FLOWPanel
 
 export  solve, save, influence!,
+        ILUPreconditioner,
         get_ndivscells, get_ndivsnodes,
         get_cart2lin_cells, get_cart2lin_nodes,
         get_field, get_fieldval, add_field,
@@ -46,6 +47,7 @@ import SparseArrays
 import Requires: @require
 # import SimpleNonlinearSolve
 import FastMultipole
+import ILUZero
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
 import ReadVTK
 using WriteVTK
@@ -84,7 +86,7 @@ SEMIINFINITE_LENGTH[] = 10.0
 for header_name in ["elements", "fmm",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
-                    "solver",
+                    "instrumentation", "solver",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",

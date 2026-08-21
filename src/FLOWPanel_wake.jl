@@ -92,6 +92,13 @@ Set `freestream_convection=true` to convect *every* wake row with the freestream
 only (no rollup), so the sheet stays straight along `U∞`; this reproduces the
 geometry of the semi-infinite wake and exists to test consistency between the
 two wake representations. It overrides `shed_with_induced_velocity`.
+
+`convert_at_shed` (BRAINSTORM 024) marks the wake as the storage backing of a
+`nwakerows = 0` [`PanelParticleWake`](@ref): single-row (N=1) storage whose
+just-shed row is converted to particles inside `shed_wake!` itself, after
+which `nwakes[]` is reset to zero so no free sheet ever enters a solve. It is
+an internal flag — construct it through `PanelParticleWake(...; nwakerows=0)`,
+not directly. A standalone `PanelWake` requires `nwakerows >= 1`.
 """
 struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     nwakes::Array{Int, 0}
@@ -105,6 +112,11 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     unsteady_filament::Bool
     include_final_filament::Bool
     freestream_convection::Bool
+    # Convert-at-shed marker (BRAINSTORM 024): true only for the N=1 storage
+    # backing a `nwakerows = 0` PanelParticleWake. `nwakes[]` is 0 whenever a
+    # solve sees this wake; the final filament then sits on node row 1 (the
+    # TE+Das line) carrying the full just-shed strength.
+    convert_at_shed::Bool
     # Live-block reservation metadata (BRAINSTORM 015 Route B / TEAnchoredAttachment).
     # live_rows[] newest panel rows are the reserved live block: their strengths
     # are owned by the body-side attachment operator during the coupled solve and
@@ -114,6 +126,19 @@ struct PanelWake{TK,NK,TF} <: AbstractFreeWake
     # of the current live block (-1 = none).
     live_rows::Array{Int, 0}
     live_step_id::Array{Int, 0}
+    # Panel-to-particle handoff state (BRAINSTORM 016). False until a
+    # `SurfaceVorticityConversion` transaction first commits; from then on the
+    # retained final panel filament cancels the *current* final active row's
+    # downstream edge (see `_final_filament_strength`), because that edge's
+    # circulation now lives in the deposited area particles. Legacy edge-jump
+    # wakes never set it, so their filament bookkeeping is untouched.
+    particle_handoff_active::Array{Bool, 0}
+    # Fraction of the panel/particle interface circulation that the conversion
+    # already deposited (`alpha` of BRAINSTORM 016's streamwise attribution).
+    # 1.0 = the whole upstream face went to particles, so the filament cancels
+    # the interface completely; 0.0 = none did, which reproduces the legacy
+    # unsteady filament exactly. Only consulted when the handoff is active.
+    particle_handoff_weight::Array{Float64, 0}
 end
 
 """
@@ -135,11 +160,15 @@ function get_sources(wake::PanelWake)
         (wake, FilamentWrapper(wake)) : (wake,)
 end
 
-function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64; 
+function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
         core_size=1e-3, nwakerows=100, shed_with_induced_velocity=true,
         unsteady_filament=true, include_final_filament=true,
-        freestream_convection=false
+        freestream_convection=false, convert_at_shed=false
     )
+    nwakerows >= 1 || throw(ArgumentError(
+        "PanelWake requires nwakerows >= 1 (got $(nwakerows)); " *
+        "nwakerows = 0 (convert-at-shed) is a PanelParticleWake mode"))
+
     # nwakes
     nwakes = Array{Int,0}(undef)
     nwakes[] = 0
@@ -167,11 +196,18 @@ function PanelWake(shedding::Vector{Matrix{Int}}, kernel, TF=Float64;
     live_step_id = Array{Int,0}(undef)
     live_step_id[] = -1
 
+    # panel-to-particle handoff state (BRAINSTORM 016); false = legacy behavior
+    particle_handoff_active = Array{Bool,0}(undef)
+    particle_handoff_active[] = false
+    particle_handoff_weight = Array{Float64,0}(undef)
+    particle_handoff_weight[] = 1.0
+
     return PanelWake{kernel, dim, TF}(
         nwakes, nodes, strength, velocity, freestream, core_size, overflowed,
         Bool(shed_with_induced_velocity), Bool(unsteady_filament),
         Bool(include_final_filament), Bool(freestream_convection),
-        live_rows, live_step_id,
+        Bool(convert_at_shed),
+        live_rows, live_step_id, particle_handoff_active, particle_handoff_weight,
     )
 end
 
@@ -203,6 +239,13 @@ rows are the reserved live block owned by the body-side attachment operator
 rows (the legacy default) reduces every source-view expression to the
 pre-existing arithmetic."
 _n_wake_source_rows(wake::PanelWake) = wake.nwakes[] - wake.live_rows[]
+
+"Logical `nwakerows` of a wake as configured by the user: 0 for a
+convert-at-shed wake (BRAINSTORM 024), whose N=1 storage is an implementation
+detail, else the storage row count. This is what metadata/manifests record so
+reconstruction reproduces the mode."
+_logical_nwakerows(wake::PanelWake) =
+    wake.convert_at_shed ? 0 : size(wake.nodes[1], 2) - 1
 
 function global_to_matrix_index(wake::PanelWake, i_wake)
 
@@ -280,7 +323,7 @@ function matrix_to_global_index(wake::ProbeWrapper{<:PanelWake}, isurf, irow, ic
     return i_wake
 end
 
-function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::PanelWake, i_body)
+function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::PanelWake{TK}, i_body) where TK
 
     # get surface index of global `i_body` index
     isurf, irow, icol = global_to_matrix_index(system, i_body)
@@ -305,7 +348,11 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::PanelW
     r2y = v4y - v2y
     r2z = v4z - v2z
     r2 = sqrt(r2x*r2x + r2y*r2y + r2z*r2z) * 0.5
-    buffer[4, i_buffer] = max(r1, r2)
+    # + regularization reach: the wake panel kernel is regularized over
+    # `core_size` (see `FastMultipole.direct!` for `PanelWake`), which the
+    # multipole expansions cannot represent
+    buffer[4, i_buffer] = max(r1, r2) +
+        radius_inflation(TK, system.core_size, fmm_radius_tolerance(system))
 
     # get strength
     s = view(system.strength[isurf], :, irow, icol)
@@ -568,6 +615,20 @@ function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Boo
                 vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
             end
         end
+    elseif wake.convert_at_shed
+        # Convert-at-shed (BRAINSTORM 024): the solve-visible sheet is always
+        # empty, but the row-1 node line (TE+Das) and its velocities are live
+        # state — warmstart/replay need them to replay the end-of-step shed —
+        # so write a single-node-row grid with no cells (hence no strengths;
+        # the row-1 strength is carried by the metadata terminal_strength).
+        for i_surf in eachindex(wake.nodes)
+            n_cols = size(wake.nodes[i_surf], 3)
+            pts = reshape(view(wake.nodes[i_surf], :, 1:1, :), 3, 1, n_cols, 1)
+            WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts; compress) do vtk
+                vel = view(wake.velocity[i_surf], :, 1:1, :)
+                vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, 1, n_cols, 1)
+            end
+        end
     end
     WriteVTK.vtk_save(vtm)
     _pvd_append!(name * ".pvd", t, joinpath(_base, _base * ".$idx.vtm"); overwrite)
@@ -692,6 +753,66 @@ function _shed_particles!(pfield, r1, r2, Γ, ::NoShed)
 end
 
 """
+    StationSigmaOverlap(sigmas, overlap)
+
+Station-indexed Gaussian particle shedding (BRAINSTORM 018 Phase 16 chord–σ
+co-scaling): `sigmas[i_surf][j]` is the smoothing width at wake node column
+`j` of shedding surface `i_surf` (one vector per surface, each of length
+`n_cols + 1`). Trailing filaments at node column `j` shed at
+`sigmas[i_surf][j]`; the unsteady filament spanning columns `j → j+1` sheds
+at their mean. Each filament resolves to a [`SigmaOverlap`](@ref), so
+particle count and placement follow the same overlap rule.
+
+Only [`LegacyEdgeJumpConversion`](@ref) resolves stations; calling
+`_shed_particles!` with this method directly is an error.
+"""
+struct StationSigmaOverlap{TF} <: WakeSheddingMethod
+    sigmas::Vector{Vector{TF}}
+    overlap::TF
+
+    function StationSigmaOverlap(sigmas::Vector{Vector{TF}}, overlap::Real) where {TF}
+        isempty(sigmas) && throw(ArgumentError(
+            "StationSigmaOverlap needs at least one per-surface sigma vector"))
+        for (k, sig) in enumerate(sigmas)
+            all(s -> isfinite(s) && s > 0, sig) || throw(ArgumentError(
+                "StationSigmaOverlap: sigmas for surface $(k) must be finite " *
+                "and positive"))
+        end
+        overlap > 0 || throw(ArgumentError("StationSigmaOverlap: overlap must be positive"))
+        return new{TF}(sigmas, TF(overlap))
+    end
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, ::StationSigmaOverlap)
+    throw(ArgumentError("StationSigmaOverlap must be resolved to a station " *
+                        "(via _station_method) before shedding"))
+end
+
+# Station resolution for the legacy conversion loop. Identity for every
+# span-uniform method (zero behavior change); the station-indexed method
+# resolves to a plain SigmaOverlap at the mean of the two node columns the
+# filament touches (j1 == j2 for trailing filaments).
+@inline _station_method(m::WakeSheddingMethod, i_surf, j1, j2) = m
+@inline function _station_method(m::StationSigmaOverlap, i_surf, j1, j2)
+    sig = m.sigmas[i_surf]
+    return SigmaOverlap(0.5 * (sig[j1] + sig[j2]), m.overlap)
+end
+
+# One-shot per-surface validation so a mis-sized sigma vector fails with the
+# expected length instead of an opaque BoundsError mid-conversion. No-op for
+# span-uniform methods.
+_validate_station_method(::WakeSheddingMethod, i_surf, n_node_cols) = nothing
+function _validate_station_method(m::StationSigmaOverlap, i_surf, n_node_cols)
+    i_surf <= length(m.sigmas) || error(
+        "StationSigmaOverlap: no sigma vector for shedding surface $(i_surf) " *
+        "(have $(length(m.sigmas)))")
+    length(m.sigmas[i_surf]) == n_node_cols || error(
+        "StationSigmaOverlap: sigma vector for surface $(i_surf) has length " *
+        "$(length(m.sigmas[i_surf])), expected n_cols + 1 = $(n_node_cols)")
+    return nothing
+end
+
+"""
 Sentinel used as the *implementation* default of `PanelParticleWake`'s
 `method_trailing` and `method_unsteady` keywords, so the constructor can tell
 "caller said nothing" from "caller explicitly asked for the legacy default".
@@ -756,6 +877,15 @@ root and tip streamwise closures are retained, sampled with
 ``h = \\sigma/\\mathrm{overlap}``, so every particle this wake deposits shares
 the fixed smoothing width `sigma`.
 
+`attribution` selects which streamwise face of the outgoing row this conversion
+deposits: `:upstream` (the default retained by the Phase 3 static-equivalence
+acceptance evidence -- the whole
+upstream face, leaving nothing at the panel/particle partition), `:downstream`
+(the legacy attribution), or `:split` (half of each, which makes the streamwise
+difference centered and is second-order accurate on a graded wake, at the cost
+of a retained half-jump filament at the handoff). All three are exactly
+circulation conserving.
+
 `rank_rtol` sets the relative singular-value threshold of the two-point
 gradient stencil (rank deficiency is diagnostic, not fatal); `geometry_rtol`
 rejects a vanishing metric scale. `diagnose_nearfield` additionally records
@@ -765,6 +895,11 @@ separately for interior, root/tip, and perimeter classes.
 This strategy does not use `method_trailing` or `method_unsteady`; supplying
 either alongside it is a configuration error.
 
+The smooth handoff also requires `unsteady_filament=true` and
+`include_final_filament=true`. Its startup ledger assumes the unsteady final
+filament carries the physical aft face before the first conversion, and its
+steady ledger uses that filament to cancel the panel/particle interface.
+
 See BRAINSTORM item 016.
 """
 struct SurfaceVorticityConversion{TF} <: AbstractPanelParticleConversion
@@ -772,15 +907,23 @@ struct SurfaceVorticityConversion{TF} <: AbstractPanelParticleConversion
     overlap::TF
     rank_rtol::TF
     geometry_rtol::TF
+    attribution::Symbol
     diagnose_nearfield::Bool
 end
+
+"Streamwise attribution modes and their upstream-face fraction `alpha`."
+const _ATTRIBUTION_ALPHA = (upstream = 1.0, downstream = 0.0, split = 0.5)
 
 function SurfaceVorticityConversion(sigma;
         overlap = 1.3,
         rank_rtol = sqrt(eps(float(typeof(sigma)))),
         geometry_rtol = sqrt(eps(float(typeof(sigma)))),
+        attribution::Symbol = :upstream,
         diagnose_nearfield::Bool = false,
     )
+    haskey(_ATTRIBUTION_ALPHA, attribution) || throw(ArgumentError(
+        "SurfaceVorticityConversion attribution must be one of " *
+        "$(keys(_ATTRIBUTION_ALPHA)) (got :$(attribution))"))
     sigma_f, overlap_f, rank_f, geom_f =
         promote(float(sigma), float(overlap), float(rank_rtol), float(geometry_rtol))
 
@@ -799,7 +942,7 @@ function SurfaceVorticityConversion(sigma;
         throw(ArgumentError("SurfaceVorticityConversion geometry_rtol must be positive (got $geom_f)"))
 
     return SurfaceVorticityConversion{typeof(sigma_f)}(
-        sigma_f, overlap_f, rank_f, geom_f, diagnose_nearfield)
+        sigma_f, overlap_f, rank_f, geom_f, attribution, diagnose_nearfield)
 end
 
 """
@@ -819,6 +962,20 @@ function _resolve_line_policy(::SurfaceVorticityConversion, method::WakeShedding
         "SurfaceVorticityConversion does not use $field; it samples its root/tip " *
         "closure with SigmaOverlap(sigma, overlap). Remove the $field keyword " *
         "rather than leaving it silently ignored (got $(method))."))
+end
+
+"Validate the final-filament source contract required by a conversion strategy."
+_validate_conversion_filaments(::LegacyEdgeJumpConversion, unsteady, included) = nothing
+
+function _validate_conversion_filaments(::SurfaceVorticityConversion,
+                                        unsteady::Bool, included::Bool)
+    unsteady || throw(ArgumentError(
+        "SurfaceVorticityConversion requires unsteady_filament=true: " *
+        "without the unsteady final filament the startup aft face is absent."))
+    included || throw(ArgumentError(
+        "SurfaceVorticityConversion requires include_final_filament=true: " *
+        "the final filament is the source that cancels the panel/particle interface."))
+    return nothing
 end
 
 #--- Surface-vorticity reconstruction core (BRAINSTORM 016 Phase 2 sec. 5) ---#
@@ -951,6 +1108,16 @@ function _reconstruct_surface_gradient(n::SVector{3,TF},
 end
 
 """
+Placeholder [`SurfaceGradientResult`](@ref) for a panel with no observable
+stencil leg at all (a single-row, single-column wake). Reported as rank 0 rather
+than fabricating a direction.
+"""
+_null_surface_gradient(::Type{TF}) where {TF} = SurfaceGradientResult{TF}(
+    zero(SVector{3,TF}), 0, zero(SVector{2,TF}), zero(TF), TF(Inf),
+    SVector{2,SVector{3,TF}}(zero(SVector{3,TF}), zero(SVector{3,TF})),
+    SVector{2,Bool}(false, false), zero(TF))
+
+"""
     _surface_vorticity(n, grad_muhat)
 
 Surface vorticity from the *stored* strength gradient, using the package sign
@@ -1081,6 +1248,258 @@ function _validate_wake_panel(v1, v2, v3, v4, geometry_rtol)
         end
     end
     return reference_length
+end
+
+#--- Surface-vorticity transaction state (BRAINSTORM 016 Phase 2 sec. 6-8) ---#
+
+"""
+    SurfaceParticleClass
+
+Classification of a candidate particle produced by
+[`SurfaceVorticityConversion`](@ref).
+
+`InteriorSurfaceParticle` and `RootTipSurfaceParticle` are both *area*
+particles ``\\boldsymbol\\Gamma_p = \\boldsymbol\\kappa\\,\\Delta A_p``; they are
+distinguished so the root/tip near-field caveat of Phase 1 sec. 5.7 can be
+diagnosed without pooling those samples with interior ones.
+`PerimeterLineParticle` is the true open-chain root/tip streamwise closure.
+"""
+@enum SurfaceParticleClass begin
+    InteriorSurfaceParticle
+    RootTipSurfaceParticle
+    PerimeterLineParticle
+end
+
+"""
+    PanelParticleCapacityError(requested, available)
+
+The preflight of a surface-vorticity conversion needed `requested` particle
+slots but the `ParticleField` had only `available`. Thrown *before* any
+mutation, so both the particle field and every panel row are bitwise unchanged.
+"""
+struct PanelParticleCapacityError <: Exception
+    requested::Int
+    available::Int
+end
+
+Base.showerror(io::IO, e::PanelParticleCapacityError) = print(io,
+    "PanelParticleCapacityError: surface-vorticity conversion requested ",
+    e.requested, " particles but only ", e.available, " slots remain")
+
+"""
+    WakeConversionStateError(msg)
+
+The wake was not in a state in which a conversion transaction is defined (for
+example the row buffer is not full, or the continuation information a strategy
+needs is unavailable).
+"""
+struct WakeConversionStateError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::WakeConversionStateError) =
+    print(io, "WakeConversionStateError: ", e.msg)
+
+"""
+    WakeContinuationStateError(msg)
+
+A smooth-conversion replay or warm start could not restore an unambiguous
+panel/particle handoff state from its per-step metadata.
+"""
+struct WakeContinuationStateError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::WakeContinuationStateError) =
+    print(io, "WakeContinuationStateError: ", e.msg)
+
+"""
+Reusable staging buffers for one surface-vorticity conversion.
+
+Every candidate particle is materialized here during preflight; nothing touches
+the live `ParticleField` until the whole transaction is validated. The buffers
+are `empty!`-ed (not reallocated) at the start of each conversion, so after the
+first transaction of a run the steady-state path performs no fresh allocation
+for candidate staging.
+"""
+struct SurfaceVorticityWorkspace{TF}
+    positions::Vector{SVector{3,TF}}
+    strengths::Vector{SVector{3,TF}}
+    sigmas::Vector{TF}
+    circulations::Vector{TF}
+    classes::Vector{SurfaceParticleClass}
+    # Per-panel subcell areas. The deposition needs the *summed* panel area
+    # before it can set kappa = V / A, so the subcell areas are computed in a
+    # first pass and reused in the second; taking the sum (rather than an
+    # independently computed area) is what makes sum(kappa * dA) == V exactly.
+    areas::Vector{TF}
+end
+
+SurfaceVorticityWorkspace{TF}() where {TF} = SurfaceVorticityWorkspace{TF}(
+    SVector{3,TF}[], SVector{3,TF}[], TF[], TF[], SurfaceParticleClass[], TF[])
+
+function _reset_workspace!(ws::SurfaceVorticityWorkspace)
+    empty!(ws.positions)
+    empty!(ws.strengths)
+    empty!(ws.sigmas)
+    empty!(ws.circulations)
+    empty!(ws.classes)
+    empty!(ws.areas)
+    return ws
+end
+
+_n_pending(ws::SurfaceVorticityWorkspace) = length(ws.positions)
+
+function _stage_particle!(ws::SurfaceVorticityWorkspace{TF}, X, Gamma, sigma,
+                          circulation, class::SurfaceParticleClass) where {TF}
+    push!(ws.positions, X)
+    push!(ws.strengths, Gamma)
+    push!(ws.sigmas, TF(sigma))
+    push!(ws.circulations, TF(circulation))
+    push!(ws.classes, class)
+    return nothing
+end
+
+"""
+Per-ghost-panel diagnostic record (Phase 2 sec. 8.1). Immutable: the cumulative
+ledger accumulates alongside it and never rewrites a committed record.
+"""
+struct SurfaceVorticityPanelRecord{TF}
+    i_surf::Int
+    j::Int
+    rank::Int
+    singular_values::SVector{2,TF}
+    rank_threshold::TF
+    condition::TF
+    observable_directions::SVector{2,SVector{3,TF}}
+    observable::SVector{2,Bool}
+    n_xi::Int
+    n_eta::Int
+    area::TF
+    deposited_strength::SVector{3,TF}
+    # Deposited surface vorticity (divergence form) and, for comparison only,
+    # what the Stage 2 centroid-stencil reconstruction would have given. They
+    # agree identically on a uniform mesh and differ by O(row-to-row stretch)
+    # otherwise, so `kappa_difference` is a direct grid-nonuniformity measure.
+    kappa_conservative::SVector{3,TF}
+    kappa_reconstruction::SVector{3,TF}
+    kappa_difference::TF
+    handoff::SVector{3,TF}
+    downstream_face::SVector{3,TF}
+    class::SurfaceParticleClass
+    n_requested::Int
+    n_elided::Int
+    geometry_scale::TF
+    min_jacobian::TF
+end
+
+"""
+Immutable summary of panel-wake-induced velocity-gradient magnitudes sampled
+at one class of staged conversion particles. `minimum` through `p95` are `NaN`
+when `count == 0`.
+"""
+struct SurfaceVorticityNearFieldSummary{TF}
+    count::Int
+    minimum::TF
+    maximum::TF
+    mean::TF
+    rms::TF
+    median::TF
+    p95::TF
+end
+
+"""
+Optional near-field diagnostic summaries for one conversion. The three fields
+separate interior area, root/tip area, and true-perimeter line particles.
+"""
+struct SurfaceVorticityNearFieldDiagnostics{TF}
+    interior::SurfaceVorticityNearFieldSummary{TF}
+    roottip::SurfaceVorticityNearFieldSummary{TF}
+    perimeter::SurfaceVorticityNearFieldSummary{TF}
+end
+
+"""
+Per-conversion diagnostic record (Phase 2 sec. 8.2), written only on a
+successful commit.
+"""
+struct SurfaceVorticityConversionRecord{TF}
+    ordinal::Int
+    step_id::Int
+    panels::Vector{SurfaceVorticityPanelRecord{TF}}
+    n_interior::Int
+    n_roottip::Int
+    n_perimeter::Int
+    total_area::TF
+    total_area_strength::SVector{3,TF}
+    root_strength::TF
+    tip_strength::TF
+    root_owned::Bool
+    tip_owned::Bool
+    handoff_active_before::Bool
+    handoff_active_after::Bool
+    attribution::Symbol
+    # True on the conversion that deposits the sheet's physical trailing edge
+    # (the starting vortex) whole, because no earlier conversion took a share.
+    startup_edge_deposited::Bool
+    expected_handoff::SVector{3,TF}
+    # Exact filament content the transaction must transfer: sum_j H_j plus every
+    # streamwise face jump times its edge vector. `residual_*` measures
+    # `deposited_total - expected_total`, which is round-off by construction on
+    # *any* geometry -- not only on a uniform affine fixture.
+    expected_total::SVector{3,TF}
+    deposited_total::SVector{3,TF}
+    residual_abs::TF
+    residual_rel::TF
+    n_elided::Int
+    capacity_requested::Int
+    capacity_available::Int
+    nearfield::Union{Nothing,SurfaceVorticityNearFieldDiagnostics{TF}}
+end
+
+"""
+Live diagnostics for the surface-vorticity conversion: the per-conversion
+records plus a cumulative ledger. Legacy wakes carry `nothing` instead.
+"""
+mutable struct SurfaceVorticityDiagnostics{TF}
+    records::Vector{SurfaceVorticityConversionRecord{TF}}
+    total_particles::Int
+    total_interior::Int
+    total_roottip::Int
+    total_perimeter::Int
+    total_area::TF
+    total_area_strength::SVector{3,TF}
+    total_root_strength::TF
+    total_tip_strength::TF
+    total_expected_handoff::SVector{3,TF}
+    total_expected::SVector{3,TF}
+    total_deposited::SVector{3,TF}
+    total_residual::SVector{3,TF}
+    total_elided::Int
+end
+
+SurfaceVorticityDiagnostics{TF}() where {TF} = SurfaceVorticityDiagnostics{TF}(
+    SurfaceVorticityConversionRecord{TF}[], 0, 0, 0, 0,
+    zero(TF), zero(SVector{3,TF}), zero(TF), zero(TF),
+    zero(SVector{3,TF}), zero(SVector{3,TF}), zero(SVector{3,TF}),
+    zero(SVector{3,TF}), 0)
+
+function _accumulate!(diag::SurfaceVorticityDiagnostics{TF},
+                      rec::SurfaceVorticityConversionRecord{TF}) where {TF}
+    push!(diag.records, rec)
+    diag.total_particles += rec.n_interior + rec.n_roottip + rec.n_perimeter
+    diag.total_interior += rec.n_interior
+    diag.total_roottip += rec.n_roottip
+    diag.total_perimeter += rec.n_perimeter
+    diag.total_area += rec.total_area
+    diag.total_area_strength += rec.total_area_strength
+    diag.total_root_strength += rec.root_strength
+    diag.total_tip_strength += rec.tip_strength
+    diag.total_expected_handoff += rec.expected_handoff
+    diag.total_expected += rec.expected_total
+    diag.total_deposited += rec.deposited_total
+    diag.total_residual += rec.deposited_total - rec.expected_total
+    diag.total_elided += rec.n_elided
+    return diag
 end
 
 #--- Particle Maintenance Policies ---#
@@ -1336,7 +1755,17 @@ end
 Hybrid wake model that combines a near-body panel wake with vortex particles
 shed downstream from the trailing edge. Panel wake options, including
 `shed_with_induced_velocity` and `unsteady_filament`, are forwarded to the
-internal [`PanelWake`](@ref).
+internal [`PanelWake`](@ref). [`SurfaceVorticityConversion`](@ref) requires
+`unsteady_filament=true` and `include_final_filament=true`; the legacy
+conversion retains the full `PanelWake` option set.
+
+`nwakerows = 0` (BRAINSTORM 024) selects **convert-at-shed**: the just-shed
+row is converted to particles inside `shed_wake!` itself, so particles appear
+at the TE+Das line and no free wake-panel row ever enters a solve. Requires
+both final-filament options true (the retained filament on the Das line
+carries the sheet/particle interface) and, with the smooth conversion,
+`attribution = :downstream` (the only circulation-conserving attribution when
+no sheet survives the shed).
 """
 #------- relaxation spatial filters -------#
 
@@ -1454,10 +1883,15 @@ function PanelParticleWake(body::AbstractLiftingBody;
         particle_kerneloffset::Real=NaN,
         viscous=FLOWVPM.Inviscid(),
         SFS=FLOWVPM.SFS_default,
+        unsteady_filament=true,
+        include_final_filament=true,
         # Make the relaxation scheme explicit so it is recorded in metadata rather
         # than silently inherited from FLOWVPM. The default matches the FLOWVPM
         # ParticleField default (CorrectedPedrizzetti) to preserve prior behavior.
         relaxation=FLOWVPM.relaxation_correctedpedrizzetti,
+        # Frozen-gradient geometric local integrator (BRAINSTORM 020 Phase 2R).
+        # Default false = stock forward Euler, bit-identical.
+        expint=false,
         kwargs...)
 
     # Resolve the legacy line policies against the selected strategy before any
@@ -1465,14 +1899,59 @@ function PanelParticleWake(body::AbstractLiftingBody;
     trailing = _resolve_line_policy(conversion, method_trailing, "method_trailing")
     unsteady = _resolve_line_policy(conversion, method_unsteady, "method_unsteady")
 
-    panel_wake = PanelWake(body; nwakerows, kwargs...)
+    use_unsteady_filament = Bool(unsteady_filament)
+    use_final_filament = Bool(include_final_filament)
+    _validate_conversion_filaments(conversion, use_unsteady_filament,
+                                   use_final_filament)
+
+    # BRAINSTORM 024: nwakerows = 0 selects convert-at-shed — the just-shed
+    # row is converted to particles inside shed_wake! itself (particles appear
+    # at the Das line) and no free sheet ever enters a solve. Storage is the
+    # N=1 layout with the convert_at_shed marker set.
+    nwakerows >= 0 || throw(ArgumentError(
+        "PanelParticleWake nwakerows must be >= 0 (got $(nwakerows))"))
+    convert_at_shed = nwakerows == 0
+    if convert_at_shed
+        # The retained final filament on the TE+Das line is the only carrier
+        # of the sheet/particle interface once no sheet survives: it cannot
+        # be opted out of at N=0.
+        use_unsteady_filament && use_final_filament || throw(ArgumentError(
+            "nwakerows = 0 (convert-at-shed) requires unsteady_filament=true " *
+            "and include_final_filament=true: with no surviving sheet the " *
+            "final filament on the TE+Das line is the sheet/particle " *
+            "interface carrier"))
+        # With the row converted in the same solve that produced it, the
+        # upstream (rigid-row) face jump is identically zero and the per-step
+        # unsteady circulation lives on the downstream face; only :downstream
+        # attribution deposits it. :upstream would silently drop ALL unsteady
+        # circulation and :split would strand half on a filament row that no
+        # longer exists.
+        conversion isa SurfaceVorticityConversion &&
+            conversion.attribution != :downstream && throw(ArgumentError(
+                "nwakerows = 0 (convert-at-shed) requires " *
+                "SurfaceVorticityConversion attribution=:downstream (got " *
+                ":$(conversion.attribution)): it is the only " *
+                "circulation-conserving attribution when no sheet survives " *
+                "the shed"))
+    end
+
+    panel_wake = PanelWake(body; nwakerows=(convert_at_shed ? 1 : nwakerows),
+        unsteady_filament=use_unsteady_filament,
+        include_final_filament=use_final_filament,
+        convert_at_shed, kwargs...)
     TF = FastMultipole.numtype(panel_wake)
 
     # Create particle field with default settings (disable autotune_reg_error to avoid convergence issues)
+    # `integration` must name the scheme this wake actually steps with
+    # (`FLOWVPM._euler`, see `step!` below): `viscousdiffusion` branches on
+    # `pfield.integration`, and under the FLOWVPM default (`rungekutta3`) a
+    # CoreSpreading scheme hits the RK3 branch with zeroed stage weights —
+    # no core spreading, no beta resets, silently inviscid.
     pfield = FLOWVPM.ParticleField(max_particles, TF;
         viscous,
         fmm=FLOWVPM.FMM(autotune_reg_error=false),
         SFS,
+        integration=(Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler),
         relaxation)
 
     # Capture the resolved FLOWVPM construction options for reproduction metadata.
@@ -1484,6 +1963,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
         relaxation  = pfield.relaxation,
         formulation = pfield.formulation,
         kernel      = pfield.kernel,
+        integration = pfield.integration,
     )
 
     # Infer type params from the actual panel_wake
@@ -1504,10 +1984,47 @@ function PanelParticleWake(body::AbstractLiftingBody;
     )
 end
 
-# Legacy conversion allocates no workspace and no diagnostics; the smooth
-# strategy's concrete types arrive with the Stage 3 transaction.
+# Legacy conversion allocates no workspace and no diagnostics.
 _make_conversion_workspace(::LegacyEdgeJumpConversion, panel_wake, ::Type{TF}) where {TF} = nothing
 _make_conversion_diagnostics(::LegacyEdgeJumpConversion, ::Type{TF}) where {TF} = nothing
+
+function _make_conversion_workspace(conversion::SurfaceVorticityConversion,
+                                    panel_wake, ::Type{TF}) where {TF}
+    ws = SurfaceVorticityWorkspace{TF}()
+
+    # Pre-size the staging buffers from the geometry that will actually be
+    # converted, so the steady-state transaction never grows them. This is the
+    # explicit pre-transaction capacity path of Phase 2 sec. 7.
+    h = TF(conversion.sigma) / TF(conversion.overlap)
+    n_est = 0
+    N = size(panel_wake.nodes[1], 2) - 1   # full-buffer outgoing row index
+    for i_surf in eachindex(panel_wake.nodes)
+        nodes = panel_wake.nodes[i_surf]
+        n_cols = size(nodes, 3) - 1
+        for j in 1:n_cols
+            v1 = _wake_node(nodes, N, j)
+            v2 = _wake_node(nodes, N + 1, j)
+            v3 = _wake_node(nodes, N + 1, j + 1)
+            v4 = _wake_node(nodes, N, j + 1)
+            # A freshly constructed wake has all-zero nodes, in which case this
+            # estimate is simply the floor of one subcell per panel; the buffers
+            # grow once on the first real conversion and are reused thereafter.
+            n_xi, n_eta = _subdivision_counts(v1, v2, v3, v4, h)
+            n_est += n_xi * n_eta
+        end
+        n_est += 2 * max(1, ceil(Int, TF(conversion.overlap)))  # root/tip closure
+    end
+
+    for buf in (ws.positions, ws.strengths, ws.sigmas, ws.circulations, ws.classes)
+        sizehint!(buf, n_est)
+    end
+    return ws
+end
+
+function _make_conversion_diagnostics(conversion::SurfaceVorticityConversion,
+                                      ::Type{TF}) where {TF}
+    return SurfaceVorticityDiagnostics{TF}()
+end
 
 """
 Run SFS pre-calculations for particle field before evaluating the velocity field.
@@ -1632,8 +2149,13 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     # refresh any frame-tracking relaxation filter to the current frame pose
     refresh_relaxation_filter!(w.pfield.relaxation.filter, frames)
 
-    # convect particles
-    FLOWVPM._euler(w.pfield, dt; relax)
+    # convect particles (`pfield.integration` is the single source of truth:
+    # stock forward Euler unless the wake was built with `expint=true`)
+    if w.pfield.integration === FLOWVPM.euler_exp
+        FLOWVPM._euler_exp(w.pfield, dt; relax)
+    else
+        FLOWVPM._euler(w.pfield, dt; relax)
+    end
 
     if diagnose_particle_gamma
         println("particle gamma step=$(step) phase=after_euler relax=$(relax) " *
@@ -1690,17 +2212,23 @@ FastMultipole.numtype(pf::FLOWVPM.ParticleField) = eltype(pf)
 # --- Save and convert last row to particles ---
 
 """
-    _convert_to_particles!(wake::PanelParticleWake)
+    _convert_to_particles!(wake::PanelParticleWake, system=nothing)
 
 Convert the outgoing panel-wake row into particles using the wake's configured
 [`AbstractPanelParticleConversion`](@ref) strategy. Called by `shed_wake!`
 before the panel rows are shifted, so the outgoing row is the current final
 active row.
-"""
-_convert_to_particles!(wake::PanelParticleWake) =
-    _convert_to_particles!(wake, wake.conversion)
 
-function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConversion)
+`system` is the shedding body. The legacy strategy ignores it;
+[`SurfaceVorticityConversion`](@ref) needs it only when the wake holds a single
+panel row, where the upstream half of the streamwise stencil is the row
+`shed_wake!` is about to create (see the transaction below).
+"""
+_convert_to_particles!(wake::PanelParticleWake, system=nothing) =
+    _convert_to_particles!(wake, wake.conversion, system)
+
+function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConversion,
+                                system)
 
     nwakes = wake.panel_wake.nwakes[]
     
@@ -1708,6 +2236,8 @@ function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConvers
         nodes = wake.panel_wake.nodes[i_surf]
         strength = wake.panel_wake.strength[i_surf]
         n_cols = size(nodes, 3) - 1
+        _validate_station_method(wake.method_trailing, i_surf, n_cols + 1)
+        _validate_station_method(wake.method_unsteady, i_surf, n_cols + 1)
 
         # check if this surface wraps on itself
         r1_le = SVector{3}(nodes[1, nwakes, 1], nodes[2, nwakes, 1], nodes[3, nwakes, 1])
@@ -1721,12 +2251,14 @@ function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConvers
             Γ = strength[1,nwakes,icol]
             r1_le = SVector{3}(nodes[1, nwakes, icol], nodes[2, nwakes, icol], nodes[3, nwakes, icol])
             r1_te = SVector{3}(nodes[1, nwakes+1, icol], nodes[2, nwakes+1, icol], nodes[3, nwakes+1, icol])
-            _shed_particles!(wake.pfield, r1_le, r1_te, Γ-Γ_last, wake.method_trailing)
+            _shed_particles!(wake.pfield, r1_le, r1_te, Γ-Γ_last,
+                _station_method(wake.method_trailing, i_surf, icol, icol))
 
             # unsteady particle
             r2_te = SVector{3}(nodes[1, nwakes+1, icol+1], nodes[2, nwakes+1, icol+1], nodes[3, nwakes+1, icol+1])
             Γ_tm1 = strength[1,nwakes+1,icol]
-            _shed_particles!(wake.pfield, r1_te, r2_te, Γ-Γ_tm1, wake.method_unsteady)
+            _shed_particles!(wake.pfield, r1_te, r2_te, Γ-Γ_tm1,
+                _station_method(wake.method_unsteady, i_surf, icol, icol+1))
 
             Γ_last = Γ
         end
@@ -1736,9 +2268,438 @@ function _convert_to_particles!(wake::PanelParticleWake, ::LegacyEdgeJumpConvers
             Γ = strength[1,nwakes,n_cols]
             r1_le = SVector{3}(nodes[1, nwakes, n_cols+1], nodes[2, nwakes, n_cols+1], nodes[3, nwakes, n_cols+1])
             r1_te = SVector{3}(nodes[1, nwakes+1, n_cols+1], nodes[2, nwakes+1, n_cols+1], nodes[3, nwakes+1, n_cols+1])
-            _shed_particles!(wake.pfield, r1_le, r1_te, -Γ, wake.method_trailing)
+            _shed_particles!(wake.pfield, r1_le, r1_te, -Γ,
+                _station_method(wake.method_trailing, i_surf, n_cols+1, n_cols+1))
         end
     end
+end
+
+#--- Surface-vorticity conversion transaction (BRAINSTORM 016 Phase 3) ---#
+
+"Vertex `(irow, icol)` of a wake node array as a static vector."
+@inline _wake_node(nodes, irow, icol) = SVector{3}(
+    nodes[1, irow, icol], nodes[2, irow, icol], nodes[3, irow, icol])
+
+"Centroid of the wake panel occupying node rows `irow, irow+1` and node
+columns `icol, icol+1`."
+@inline _wake_panel_centroid(nodes, irow, icol) = 0.25 * (
+    _wake_node(nodes, irow, icol) + _wake_node(nodes, irow + 1, icol) +
+    _wake_node(nodes, irow + 1, icol + 1) + _wake_node(nodes, irow, icol + 1))
+
+"""
+Stage the particles of one line segment into the conversion workspace, using
+exactly the `SigmaOverlap(sigma, overlap)` sampling rule (and the exact-zero
+elision of `_shed_particles!`), but writing to the preflight buffers instead of
+the live particle field.
+
+Returns `(n_staged, n_elided, staged_vector_strength)`.
+"""
+function _stage_line_particles!(ws::SurfaceVorticityWorkspace{TF}, r1, r2, Γ,
+                                sigma, overlap, class) where {TF}
+    dist = LA.norm(r2 - r1)
+    dist < eps(TF) && return 0, 0, zero(SVector{3,TF})
+    p_per_step = max(1, ceil(Int, overlap * dist / sigma))
+    # Exact-zero strength is elided, matching the `_shed_particles!` guard that
+    # exists because a zero |Γ| divides corrected-Pedrizzetti relaxation.
+    Γ == 0 && return 0, p_per_step, zero(SVector{3,TF})
+
+    distance_vector = (r2 - r1) / p_per_step
+    Xp = r1 + distance_vector * TF(0.5)
+    Γp = Γ * distance_vector
+    for _ in 1:p_per_step
+        _stage_particle!(ws, Xp, Γp, sigma, Γ, class)
+        Xp += distance_vector
+    end
+    return p_per_step, 0, p_per_step * Γp
+end
+
+function _nearfield_summary(values::Vector{TF}) where {TF}
+    n = length(values)
+    if n == 0
+        nan = TF(NaN)
+        return SurfaceVorticityNearFieldSummary{TF}(0, nan, nan, nan, nan, nan, nan)
+    end
+    ordered = sort(values)
+    avg = sum(ordered) / n
+    rms = sqrt(sum(abs2, ordered) / n)
+    mid = isodd(n) ? ordered[(n + 1) ÷ 2] :
+          (ordered[n ÷ 2] + ordered[n ÷ 2 + 1]) / 2
+    p95 = ordered[clamp(ceil(Int, TF(0.95) * n), 1, n)]
+    return SurfaceVorticityNearFieldSummary{TF}(
+        n, first(ordered), last(ordered), avg, rms, mid, p95)
+end
+
+"""
+Evaluate the retained panel-wake sources, including the final filament, at the
+staged nonzero candidates. This uses a fresh probe system and `DirectBackend`,
+so existing particles and particle-particle interactions cannot enter the
+diagnostic. The caller invokes it during preflight, before any insertion.
+"""
+function _surface_vorticity_nearfield(pw::PanelWake,
+        ws::SurfaceVorticityWorkspace{TF}) where {TF}
+    n = _n_pending(ws)
+    for i in 1:n
+        all(isfinite, ws.positions[i]) && all(isfinite, ws.strengths[i]) ||
+            throw(WakeGeometryError(
+                "non-finite staged conversion candidate $(i) in near-field preflight"))
+    end
+    probes = FastMultipole.ProbeSystem(n, TF)
+    zero_v = zero(SVector{3,TF})
+    zero_h = zero(SMatrix{3,3,TF,9})
+    for i in 1:n
+        probes.position[i] = ws.positions[i]
+        probes.scalar_potential[i] = zero(TF)
+        probes.gradient[i] = zero_v
+        probes.hessian[i] = zero_h
+    end
+    n > 0 && influence!((probes,), get_sources(pw), DirectBackend();
+        scalar_potential=false, gradient=false, hessian=(true,))
+
+    interior = TF[]
+    roottip = TF[]
+    perimeter = TF[]
+    sizehint!(interior, count(==(InteriorSurfaceParticle), ws.classes))
+    sizehint!(roottip, count(==(RootTipSurfaceParticle), ws.classes))
+    sizehint!(perimeter, count(==(PerimeterLineParticle), ws.classes))
+    for i in 1:n
+        value = LA.norm(probes.hessian[i])
+        isfinite(value) || throw(WakeGeometryError(
+            "non-finite panel-induced velocity gradient at staged conversion candidate $(i)"))
+        if ws.classes[i] == InteriorSurfaceParticle
+            push!(interior, value)
+        elseif ws.classes[i] == RootTipSurfaceParticle
+            push!(roottip, value)
+        else
+            push!(perimeter, value)
+        end
+    end
+    return SurfaceVorticityNearFieldDiagnostics{TF}(
+        _nearfield_summary(interior), _nearfield_summary(roottip),
+        _nearfield_summary(perimeter))
+end
+
+"""
+    _convert_to_particles!(wake, conversion::SurfaceVorticityConversion, system)
+
+Smooth surface-vorticity conversion of the outgoing wake row (BRAINSTORM 016).
+
+The outgoing ghost row is the current final active row `N`; conversion runs
+before `shed_wake!` shifts the rows, so the ghost and its upstream neighbour are
+both readable in place (Phase 2 sec. 13.1 Option B). For each ghost panel the
+tangential gradient of the stored strength is reconstructed from a two-leg
+centroid stencil -- streamwise to the upstream row, spanwise to the neighbouring
+columns -- and the surface vorticity
+``\\boldsymbol\\kappa = -\\boldsymbol n\\times\\nabla_s\\hat\\mu`` is deposited as
+area-weighted particles ``\\boldsymbol\\Gamma_p=\\boldsymbol\\kappa\\,\\Delta A_p``
+on a bilinear subdivision at target spacing ``h=\\sigma/\\mathrm{overlap}``.
+
+Internal panel-to-panel edges are *not* reproduced as filaments; only the true
+root and tip streamwise closures of an open chain survive, sampled with the same
+orientation and signed strength as the legacy path so the two strategies differ
+only in how the *area* is represented. A wrapping chain has no closure at all.
+
+The whole call is a preflight/commit transaction: nothing in the particle field
+or the panel rows is mutated until every panel has been reconstructed, every
+candidate materialized, and the exact particle count checked against the
+remaining `ParticleField` capacity.
+"""
+function _convert_to_particles!(wake::PanelParticleWake{<:Any,NK,TF},
+        conversion::SurfaceVorticityConversion, system) where {NK,TF}
+
+    NK == 1 || throw(ArgumentError(
+        "SurfaceVorticityConversion supports scalar-strength wake kernels only " *
+        "(got a kernel of strength dimension $(NK))"))
+
+    pw = wake.panel_wake
+    ws = wake.conversion_workspace
+    diag = wake.conversion_diagnostics
+    N = pw.nwakes[]
+
+    capacity = size(pw.nodes[1], 2) - 1
+    N == capacity || throw(WakeConversionStateError(
+        "conversion is defined only on a full row buffer: nwakes[] = $N but " *
+        "capacity is $capacity"))
+
+    sigma = TF(conversion.sigma)
+    overlap = TF(conversion.overlap)
+    rank_rtol = TF(conversion.rank_rtol)
+    geometry_rtol = TF(conversion.geometry_rtol)
+    h = sigma / overlap
+
+    # Streamwise attribution. `alpha` is the fraction of the outgoing row's
+    # *upstream* face this conversion deposits; the complement stays on the
+    # panel side, carried by the retained final filament, until the next
+    # conversion deposits it as its own downstream face.
+    alpha = TF(_ATTRIBUTION_ALPHA[conversion.attribution])
+    handoff_before = pw.particle_handoff_active[]
+    # Before the first handoff the aft-most face is the sheet's physical
+    # trailing boundary -- the starting vortex -- not an interface with
+    # particles, so there is no earlier conversion to have taken the `alpha`
+    # share and it must be deposited whole. Omitting this deletes the starting
+    # vortex outright (a one-time circulation loss).
+    beta = handoff_before ? 1 - alpha : one(TF)
+    startup_edge_deposited = !handoff_before
+
+    _reset_workspace!(ws)
+    panel_records = SurfaceVorticityPanelRecord{TF}[]
+
+    total_area = zero(TF)
+    area_strength = zero(SVector{3,TF})
+    line_strength = zero(SVector{3,TF})
+    expected_handoff = zero(SVector{3,TF})
+    expected_total = zero(SVector{3,TF})
+    root_scalar = zero(TF)
+    tip_scalar = zero(TF)
+    root_owned = false
+    tip_owned = false
+    n_elided = 0
+    # L1 accumulation of every signed contribution to the ledger. Using this as
+    # the relative-residual denominator keeps the measure meaningful when the
+    # ledger itself sums to zero (a wrapping chain, or a constant strength
+    # field), where the norm of the total would be pure round-off.
+    ledger_scale = zero(TF)
+
+    #--- Steps 1-4: reconstruct, quadrature, materialize, diagnose. No mutation.
+
+    for i_surf in eachindex(pw.nodes)
+        nodes = pw.nodes[i_surf]
+        strength = pw.strength[i_surf]
+        n_cols = size(nodes, 3) - 1
+
+        # Wrap detection uses the legacy test verbatim, so the two strategies
+        # classify topology identically (needed by the Stage 4b A/B).
+        r1_le = _wake_node(nodes, N, 1)
+        rend_le = _wake_node(nodes, N, n_cols + 1)
+        wraps = norm(r1_le - rend_le) < 5 * eps()
+
+        # Root/tip closure: the legacy filaments, verbatim. In divergence form
+        # these are exactly the two streamwise faces that have no neighbour to
+        # share with, so the stored cell value is the right strength and no
+        # correction is needed.
+        root_gamma = wraps ? zero(TF) : TF(strength[1, N, 1])
+        tip_gamma = wraps ? zero(TF) : -TF(strength[1, N, n_cols])
+
+        for j in 1:n_cols
+            # Ghost panel in package contiguous order: xi runs streamwise
+            # (upstream -> downstream), eta runs spanwise (increasing column).
+            v1 = _wake_node(nodes, N, j)
+            v2 = _wake_node(nodes, N + 1, j)
+            v3 = _wake_node(nodes, N + 1, j + 1)
+            v4 = _wake_node(nodes, N, j + 1)
+            muhat_G = TF(strength[1, N, j])
+
+            ref = _validate_wake_panel(v1, v2, v3, v4, geometry_rtol)
+            n_centroid, _ = _bilinear_normal(v1, v2, v3, v4, TF(0.5), TF(0.5),
+                                             geometry_rtol, ref)
+            centroid_G = 0.25 * (v1 + v2 + v3 + v4)
+
+            # Upstream strength. Only the *strength* is needed -- never the
+            # upstream panel's geometry -- which is what lets `nwakerows == 1`
+            # work without inventing anything: there the upstream row is the one
+            # `shed_wake!` is about to create, whose nodes do not exist until the
+            # next `update_TE!`, but whose strength is the body's shed value.
+            if N >= 2
+                muhat_A = TF(strength[1, N - 1, j])
+            else
+                system === nothing && throw(WakeConversionStateError(
+                    "a single-row wake needs the shedding body to supply the " *
+                    "upstream strength; call _convert_to_particles!(wake, system)"))
+                strengthi, strengthj = _get_wakestrength_mu(system, j, i_surf)
+                # Same expression (and sign) shed_wake! writes into row 1.
+                muhat_A = TF(strengthi - strengthj)
+            end
+
+            # Spanwise neighbours. A wrapping chain has no boundary column; an
+            # open chain's outer faces are physical and stay as line particles,
+            # contributing nothing to the area.
+            if wraps
+                jm = j == 1 ? n_cols : j - 1
+                jp = j == n_cols ? 1 : j + 1
+            else
+                jm = j - 1
+                jp = j + 1
+            end
+            has_left = wraps || j > 1
+            has_right = wraps || j < n_cols
+
+            #--- Divergence form: the panel carries the filament content of the
+            #    faces assigned to it, smeared over its own area.
+            #
+            #    upstream face  -> whole (Phase 1 eq. 8); the upstream panel
+            #                      survives this transaction, so its share
+            #                      cannot be deposited inside it
+            #    downstream face-> nothing; already cancelled by the retained
+            #                      final filament once the handoff is active
+            #    spanwise faces -> half each, because both neighbours convert in
+            #                      the same transaction (the split moves *where*
+            #                      the vorticity sits, never how much)
+            handoff = (muhat_A - muhat_G) * (v4 - v1)
+            # Downstream face, in the legacy unsteady filament's orientation and
+            # sign: v2 -> v3 carrying strength[1,N,j] - strength[1,N+1,j].
+            downstream = (muhat_G - TF(strength[1, N + 1, j])) * (v3 - v2)
+            face_left = has_left ?
+                TF(0.5) * (muhat_G - TF(strength[1, N, jm])) * (v2 - v1) :
+                zero(SVector{3,TF})
+            face_right = has_right ?
+                TF(0.5) * (TF(strength[1, N, jp]) - muhat_G) * (v3 - v4) :
+                zero(SVector{3,TF})
+            V = alpha * handoff + beta * downstream + face_left + face_right
+
+            expected_handoff += handoff
+            expected_total += V
+            ledger_scale += LA.norm(alpha * handoff) + LA.norm(beta * downstream) +
+                            LA.norm(face_left) + LA.norm(face_right)
+
+            # Diagnostic only: what the Stage 2 centroid-stencil reconstruction
+            # would have produced. No geometry is invented for it -- at N == 1
+            # the streamwise leg is simply reported unobservable.
+            d1 = N >= 2 ? _wake_panel_centroid(nodes, N - 1, j) - centroid_G :
+                 zero(SVector{3,TF})
+            dmu1 = N >= 2 ? muhat_A - muhat_G : zero(TF)
+            if n_cols == 1
+                d2 = zero(SVector{3,TF})
+                dmu2 = zero(TF)
+            else
+                # Centered in the interior and on a wrapping chain; one-sided at
+                # a true root/tip, where `jm`/`jp` above run off the sheet.
+                dm = clamp(jm, 1, n_cols)
+                dp = clamp(jp, 1, n_cols)
+                d2 = _wake_panel_centroid(nodes, N, dp) - _wake_panel_centroid(nodes, N, dm)
+                dmu2 = TF(strength[1, N, dp]) - TF(strength[1, N, dm])
+            end
+            res = (LA.norm(d1) > 0 || LA.norm(d2) > 0) ?
+                _reconstruct_surface_gradient(n_centroid, d1, dmu1, d2, dmu2,
+                                              rank_rtol, geometry_rtol, ref) :
+                _null_surface_gradient(TF)
+            kappa_recon = _surface_vorticity(n_centroid, res.gradient)
+
+            n_xi, n_eta = _subdivision_counts(v1, v2, v3, v4, h)
+            class = (!wraps && (j == 1 || j == n_cols)) ?
+                RootTipSurfaceParticle : InteriorSurfaceParticle
+
+            # Pass 1: subcell areas. kappa needs the summed panel area, and
+            # using that sum (not an independent quadrature) is what makes the
+            # deposited total exactly V.
+            empty!(ws.areas)
+            panel_area = zero(TF)
+            min_jac = TF(Inf)
+            for a in 1:n_xi, b in 1:n_eta
+                xi0 = TF(a - 1) / n_xi; xi1 = TF(a) / n_xi
+                eta0 = TF(b - 1) / n_eta; eta1 = TF(b) / n_eta
+                _, jac = _bilinear_normal(v1, v2, v3, v4, (xi0 + xi1) / 2,
+                                          (eta0 + eta1) / 2, geometry_rtol, ref)
+                min_jac = min(min_jac, jac)
+                dA = _subcell_area(v1, v2, v3, v4, xi0, xi1, eta0, eta1,
+                                   geometry_rtol, ref)
+                push!(ws.areas, dA)
+                panel_area += dA
+            end
+
+            kappa = panel_area > 0 ? V / panel_area : zero(SVector{3,TF})
+
+            # Pass 2: deposit. kappa is uniform over the panel, so no projection
+            # onto the local normal -- projecting would break the sum.
+            panel_strength = zero(SVector{3,TF})
+            n_requested = 0
+            n_panel_elided = 0
+            k = 0
+            for a in 1:n_xi, b in 1:n_eta
+                k += 1
+                dA = ws.areas[k]
+                xi = (TF(a) - TF(0.5)) / n_xi
+                eta = (TF(b) - TF(0.5)) / n_eta
+                Xp = _bilinear_position(v1, v2, v3, v4, xi, eta)
+                Gamma_p = kappa * dA
+
+                n_requested += 1
+                if iszero(Gamma_p)
+                    n_panel_elided += 1
+                    continue
+                end
+                panel_strength += Gamma_p
+                _stage_particle!(ws, Xp, Gamma_p, sigma,
+                                 LA.norm(Gamma_p) / sqrt(dA), class)
+            end
+
+            total_area += panel_area
+            area_strength += panel_strength
+            n_elided += n_panel_elided
+
+            push!(panel_records, SurfaceVorticityPanelRecord{TF}(
+                i_surf, j, res.rank, res.singular_values, res.rank_threshold,
+                res.condition, res.observable_directions, res.observable,
+                n_xi, n_eta, panel_area, panel_strength,
+                kappa, kappa_recon, LA.norm(kappa - kappa_recon), handoff,
+                downstream, class,
+                n_requested, n_panel_elided, res.geometry_scale, min_jac))
+        end
+
+        # True root/tip closure: the legacy root and tip streamwise filaments,
+        # unchanged in position, orientation, signed strength, and sampling.
+        # Interior spanwise jumps, the wrap seam, and the downstream handoff
+        # edge are all absent.
+        if !wraps
+            root_owned = true
+            tip_owned = true
+            r1 = _wake_node(nodes, N, 1)
+            r2 = _wake_node(nodes, N + 1, 1)
+            _, ne, gs = _stage_line_particles!(ws, r1, r2, root_gamma, sigma,
+                                               overlap, PerimeterLineParticle)
+            n_elided += ne
+            line_strength += gs
+            expected_total += root_gamma * (r2 - r1)
+            ledger_scale += LA.norm(root_gamma * (r2 - r1))
+            root_scalar += root_gamma
+
+            r1 = _wake_node(nodes, N, n_cols + 1)
+            r2 = _wake_node(nodes, N + 1, n_cols + 1)
+            _, ne, gs = _stage_line_particles!(ws, r1, r2, tip_gamma, sigma,
+                                               overlap, PerimeterLineParticle)
+            n_elided += ne
+            line_strength += gs
+            expected_total += tip_gamma * (r2 - r1)
+            ledger_scale += LA.norm(tip_gamma * (r2 - r1))
+            tip_scalar += tip_gamma
+        end
+    end
+
+    #--- Step 5: exact capacity check. Still no mutation.
+
+    requested = _n_pending(ws)
+    available = wake.pfield.maxparticles - wake.pfield.np
+    requested <= available || throw(PanelParticleCapacityError(requested, available))
+    nearfield = conversion.diagnose_nearfield ?
+        _surface_vorticity_nearfield(pw, ws) : nothing
+
+    #--- Step 6: commit. Capacity is guaranteed above, so no insertion can fail
+    #    partway and leave a half-appended row observable.
+
+    for k in 1:requested
+        FLOWVPM.add_particle(wake.pfield, ws.positions[k], ws.strengths[k],
+                             ws.sigmas[k]; circulation=ws.circulations[k])
+    end
+
+    pw.particle_handoff_active[] = true
+    pw.particle_handoff_weight[] = Float64(alpha)
+    wake.conversion_count[] += 1
+
+    deposited_total = area_strength + line_strength
+    residual = deposited_total - expected_total
+    denom = ledger_scale
+    n_interior = count(==(InteriorSurfaceParticle), ws.classes)
+    n_roottip = count(==(RootTipSurfaceParticle), ws.classes)
+    n_perimeter = count(==(PerimeterLineParticle), ws.classes)
+
+    _accumulate!(diag, SurfaceVorticityConversionRecord{TF}(
+        wake.conversion_count[], pw.live_step_id[], panel_records,
+        n_interior, n_roottip, n_perimeter, total_area, area_strength,
+        root_scalar, tip_scalar, root_owned, tip_owned,
+        handoff_before, true, conversion.attribution, startup_edge_deposited,
+        expected_handoff, expected_total, deposited_total,
+        LA.norm(residual), denom > 0 ? LA.norm(residual) / denom : zero(TF),
+        n_elided, requested, available, nearfield))
+
+    return nothing
 end
 
 
@@ -1761,9 +2722,42 @@ function fmm_to_filament_index(filaments::FilamentWrapper{<:PanelWake}, n)
     end
 end
 
+"""
+Strength of the retained filament on the downstream edge of the final active
+panel row.
+
+Legacy bookkeeping (`unsteady_filament=true`) reaches one row *past* the final
+active row, so the filament carries the not-yet-converted unsteady jump.
+
+Once a surface-vorticity handoff has committed (BRAINSTORM 016), the filament
+must instead leave on the panel side exactly the fraction of the interface that
+the conversion did *not* deposit. With `alpha = particle_handoff_weight[]` the
+required strength is
+
+```
+-(alpha * strength[i_row] + (1 - alpha) * strength[i_row+1])
+```
+
+which reproduces both legacy forms exactly at its endpoints: `alpha = 1` is the
+fully cancelled edge (`unsteady_filament=false` sign of Phase 1 eq. 8) and
+`alpha = 0` is the legacy unsteady filament.
+"""
 function _final_filament_strength(wake::PanelWake, i_surf, i_row, j)
+    strength = wake.strength[i_surf]
+    if wake.particle_handoff_active[]
+        alpha = wake.particle_handoff_weight[]
+        # alpha == 0 (:downstream attribution) never reads strength[1, i_row, j].
+        # Short-circuiting it is bit-identical for i_row >= 1 (0.0 * finite +
+        # 1.0 * b == b) and is the only reachable handoff case at i_row == 0,
+        # the convert-at-shed steady state (BRAINSTORM 024), where row `i_row`
+        # does not exist and the filament on the TE+Das line must cancel the
+        # full just-shed row-1 strength.
+        alpha == 0 && return -strength[1, i_row + 1, j]
+        return -(alpha * strength[1, i_row, j] +
+                 (1 - alpha) * strength[1, i_row + 1, j])
+    end
     strength_row = wake.unsteady_filament ? i_row + 1 : i_row
-    return -wake.strength[i_surf][1, strength_row, j]
+    return -strength[1, strength_row, j]
 end
 
 function FastMultipole.source_system_to_buffer!(buffer, i_buffer, filaments::FilamentWrapper{<:PanelWake}, i_body)
@@ -1784,7 +2778,10 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, filaments::Fil
 
     # update buffer
     buffer[1:3, i_buffer] .= 0.5 * (v1 + v2)
-    buffer[4, i_buffer] = 0.5 * norm(v2 - v1) + wake.core_size
+    # regularization reach, not just the core itself: at clearance = core_size
+    # the Vatistas kernel still differs from the singular kernel by ~30%
+    buffer[4, i_buffer] = 0.5 * norm(v2 - v1) +
+        radius_inflation(VortexRing, wake.core_size, fmm_radius_tolerance(wake))
     buffer[5, i_buffer] = strength
     buffer[6:8,i_buffer] .= v1
     buffer[9:11,i_buffer] .= v2

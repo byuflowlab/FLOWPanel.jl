@@ -203,19 +203,28 @@ function _load_panel_wake_vtk!(wake::PanelWake, path::String, wake_name::String,
             wake.velocity[i_surf][:, 1:dim1, :] .= vel_flat
         end
 
-        # strength (cell data) — shape (dim_strength, dim1-1, dim2-1)
-        cell_data = ReadVTK.get_cell_data(vtk)
-        if "strength" in keys(cell_data)
-            str_arr = ReadVTK.get_data(cell_data["strength"])
-            dim_strength = size(wake.strength[i_surf], 1)
-            str_flat = reshape(str_arr, dim_strength, dim1-1, dim2-1)
-            wake.strength[i_surf][:, 1:dim1-1, :] .= str_flat
+        # strength (cell data) — shape (dim_strength, dim1-1, dim2-1). A
+        # convert-at-shed wake (BRAINSTORM 024) writes a single-node-row grid
+        # with no cells, hence no CellData section at all: skip the lookup
+        # (the row-1 strength is restored from metadata terminal_strength).
+        if dim1 > 1
+            cell_data = ReadVTK.get_cell_data(vtk)
+            if "strength" in keys(cell_data)
+                str_arr = ReadVTK.get_data(cell_data["strength"])
+                dim_strength = size(wake.strength[i_surf], 1)
+                str_flat = reshape(str_arr, dim_strength, dim1-1, dim2-1)
+                wake.strength[i_surf][:, 1:dim1-1, :] .= str_flat
+            end
         end
     end
 
     wake.nwakes[] = max(nwakes_loaded, 0)
     n_rows_max = size(wake.nodes[1], 2)
-    wake.overflowed[] = (wake.nwakes[] >= n_rows_max - 1)
+    # Convert-at-shed: overflowed[] means "at least one shed has happened",
+    # which is true for any saved step >= 1 (the continuation metadata restore
+    # remains authoritative where present).
+    wake.overflowed[] = wake.convert_at_shed ? (idx >= 1) :
+        (wake.nwakes[] >= n_rows_max - 1)
     return wake
 end
 
@@ -448,6 +457,12 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         end
     end
 
+    # Restore non-VTK row/handoff/conversion state before replaying this saved
+    # step's skipped end-of-step shedding. Smooth conversion is never allowed
+    # to infer this state from particle count or buffer fullness.
+    metadata = _read_metadata_toml(rpath, rname)
+    _restore_wake_continuation!(wakes_tuple, metadata, restart_step)
+
     # (frame state was restored/reconstructed in section 2.5 above)
 
     # 4. Refresh derived geometry that wasn't persisted.
@@ -461,7 +476,6 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # BEFORE the end-of-step replay below, so the replayed shed_wake! deposits
     # γ = Cμ − c. Route B live-block metadata is restored here and its
     # physical-step identifier advanced after the replayed shed.
-    metadata = _read_metadata_toml(rpath, rname)
     _kutta_warmstart_restore!(systems_tuple, wakes_tuple, metadata,
         restart_step, wake_attachment, kutta_closure)
 

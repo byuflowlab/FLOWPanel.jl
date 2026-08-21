@@ -1,0 +1,8 @@
+Name, Theo_Area, Wet_Area, Theo_Vol, Wet_Vol
+PropGeom,0.001133,0.001133,0.000000,0.000000
+PropGeom,0.001133,0.001133,0.000000,0.000000
+Totals,0.002266,0.002266,0.000001,0.000001
+
+Tag_Name, Tag_Theo_Area, Tag_Wet_Area
+PropGeom_S_Surf0,0.001133,0.001133
+PropGeom_S_Surf1,0.001133,0.001133

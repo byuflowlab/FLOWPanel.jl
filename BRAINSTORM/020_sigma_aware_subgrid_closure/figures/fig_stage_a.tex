@@ -1,0 +1,54 @@
+% BRAINSTORM 020 Phase 2 Leg 2 Stage A: offline re-integration of recorded
+% collapse traces under the exact (exponential) local map vs forward Euler.
+% Data: fig_stage_a/trace_argmin_sigma.csv (viscous corpse, argmin-sigma)
+%       fig_stage_a/trace_ufront_n1_minsr.csv (inviscid death window)
+% Compile: pdflatex fig_stage_a.tex
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\usepgfplotslibrary{groupplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[
+    group style={group size=2 by 1, horizontal sep=1.6cm},
+    width=7.6cm, height=7cm, grid=major, grid style={gray!25},
+    legend style={font=\footnotesize},
+]
+% ---- left: viscous corpse argmin-sigma trace --------------------------------
+\nextgroupplot[
+    xlabel={step}, ylabel={$\min\sigma$ [m]},
+    ymode=log,
+    title={\footnotesize viscous corpse (\texttt{p018\_L2\_visc}, 1032--1041)},
+    legend style={at={(0.02,0.02)}, anchor=south west},
+]
+\addplot[black, thick, mark=o, mark size=1.6pt]
+    table [col sep=comma, x=step, y=min_sigma_recorded]
+    {fig_stage_a/trace_argmin_sigma.csv};
+\addlegendentry{recorded (Euler run)}
+\addplot[red!80!black, thick, densely dashed, mark=x, mark size=2pt]
+    table [col sep=comma, x=step, y=sigma_reint_exp]
+    {fig_stage_a/trace_argmin_sigma.csv};
+\addlegendentry{re-integrated, exact map}
+% viscous per-step floor sqrt(2 nu dt) = 9.41e-5 m
+\addplot[blue!50, thin, dotted, domain=1032:1041] {9.41e-5};
+\addlegendentry{$\sqrt{2\nu\Delta t}$ floor}
+
+% ---- right: inviscid ufront_n1 min_sr through its death window --------------
+\nextgroupplot[
+    xlabel={step}, ylabel={$\min\sigma/\sigma_{\mathrm{shed}}$},
+    ymin=-0.06, ymax=0.12, restrict y to domain=-1:1,
+    title={\footnotesize inviscid \texttt{p018\_ufront\_n1} death window},
+    legend style={at={(0.02,0.02)}, anchor=south west},
+]
+\addplot[black, thick, mark=o, mark size=1.3pt]
+    table [col sep=comma, x=step, y=min_sr_recorded]
+    {fig_stage_a/trace_ufront_n1_minsr.csv};
+\addlegendentry{recorded (flips negative)}
+\addplot[red!80!black, thick, densely dashed, mark=x, mark size=1.6pt]
+    table [col sep=comma, x=step, y=minsr_reint_exp]
+    {fig_stage_a/trace_ufront_n1_minsr.csv};
+\addlegendentry{exact map ($\sigma>0$ always)}
+\addplot[gray, thin, domain=462:501] {0};
+\end{groupplot}
+\end{tikzpicture}
+\end{document}

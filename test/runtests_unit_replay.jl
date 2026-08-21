@@ -9,6 +9,19 @@ if !isdefined(@__MODULE__, :make_octa_source_body)
     include("test_helpers.jl")
 end
 
+mutable struct WakeContinuationRecorder
+    values::Dict{Int,Tuple{Int,Bool,Float64,Int,Float64}}
+end
+function (m::WakeContinuationRecorder)(systems, wakes, frames, uinf, i_step, dt)
+    wake = wakes[1]
+    pw = wake.panel_wake
+    filament = pw.nwakes[] == 0 ? NaN :
+        pnl._final_filament_strength(pw, 1, pw.nwakes[], 1)
+    m.values[i_step] = (pw.nwakes[], pw.particle_handoff_active[],
+        pw.particle_handoff_weight[], wake.conversion_count[], filament)
+    return nothing
+end
+
 function make_replay_surface_vorticity_body()
     nodes = Float64[
         0 1 2 0 1 2 0 1 2;
@@ -505,6 +518,119 @@ end
         end
     end
 
+    @testset "strict conversion metadata and continuation round trip" begin
+        body = make_dirichlet_diamond_body(; nspan=3)
+        frames = pnl.ReferenceFrame(body)
+
+        legacy = pnl.PanelParticleWake(body; nwakerows=2, max_particles=128,
+            method_trailing=pnl.NoShed(), method_unsteady=pnl.SigmaOverlap(0.2, 3.0))
+        legacy_meta = pnl._wake_manifest_dict(legacy, 1)
+        @test legacy_meta["conversion"] == Dict{String,Any}(
+            "version" => 1, "type" => "LegacyEdgeJumpConversion")
+        @test legacy_meta["method_trailing"]["type"] == "NoShed"
+        @test legacy_meta["method_unsteady"]["type"] == "SigmaOverlap"
+
+        conversion = pnl.SurfaceVorticityConversion(0.17; overlap=1.8,
+            rank_rtol=2e-9, geometry_rtol=3e-11, attribution=:split,
+            diagnose_nearfield=true)
+        smooth = pnl.PanelParticleWake(body; nwakerows=2, max_particles=4096,
+            conversion)
+        smooth_meta = pnl._wake_manifest_dict(smooth, 1)
+        cm = smooth_meta["conversion"]
+        @test (cm["version"], cm["type"], cm["sigma"], cm["overlap"],
+               cm["rank_rtol"], cm["geometry_rtol"], cm["attribution"],
+               cm["diagnose_nearfield"]) ==
+              (1, "SurfaceVorticityConversion", 0.17, 1.8, 2e-9, 3e-11,
+               "split", true)
+        @test !haskey(smooth_meta, "method_trailing")
+        @test !haskey(smooth_meta, "method_unsteady")
+        decoded = pnl._deserialize_conversion(cm)
+        @test decoded.sigma == conversion.sigma
+        @test decoded.overlap == conversion.overlap
+        @test decoded.rank_rtol == conversion.rank_rtol
+        @test decoded.geometry_rtol == conversion.geometry_rtol
+        @test decoded.attribution == conversion.attribution
+        @test decoded.diagnose_nearfield == conversion.diagnose_nearfield
+
+        # Static conversion identity is reconstructed before any continuation
+        # state is restored. A smooth manifest cannot opt out of the unsteady
+        # final filament required by its startup ledger.
+        invalid_smooth_meta = deepcopy(smooth_meta)
+        invalid_smooth_meta["unsteady_filament"] = false
+        invalid_smooth_manifest = Dict{String,Any}(
+            "wake" => [invalid_smooth_meta])
+        @test_throws ArgumentError pnl._construct_wakes_from_manifest(
+            (body,), invalid_smooth_manifest)
+
+        # Only total omission selects the historical legacy default. Present
+        # but malformed/unknown schemas are hard errors.
+        @test pnl._deserialize_conversion(Dict("version"=>1,
+            "type"=>"LegacyEdgeJumpConversion")) isa pnl.LegacyEdgeJumpConversion
+        for malformed in (
+                Dict("type"=>"LegacyEdgeJumpConversion"),
+                Dict("version"=>2, "type"=>"LegacyEdgeJumpConversion"),
+                Dict("version"=>1, "type"=>"MysteryConversion"),
+                Dict("version"=>1, "type"=>"SurfaceVorticityConversion"),
+                merge(copy(cm), Dict("sigma"=>0.0)),
+                merge(copy(cm), Dict("attribution"=>"ambiguous")))
+            @test_throws ArgumentError pnl._deserialize_conversion(malformed)
+        end
+        historical_manifest = Dict{String,Any}("wake" => [
+            merge(Dict{String,Any}("i"=>1, "type"=>"PanelParticleWake",
+                "nwakerows"=>2, "max_particles"=>128),
+                Dict("method_trailing"=>Dict("type"=>"NoShed"),
+                     "method_unsteady"=>Dict("type"=>"NoShed")))])
+        historical = pnl._construct_wakes_from_manifest((body,), historical_manifest)[1]
+        @test historical.conversion isa pnl.LegacyEdgeJumpConversion
+        @test historical.method_trailing isa pnl.NoShed
+        @test historical.method_unsteady isa pnl.NoShed
+
+        # Two saved phases with identical VTK layout but different handoff
+        # state prove that replay restores the final filament from metadata,
+        # rather than inferring it from row count or particle count.
+        path = mktempdir()
+        pw = smooth.panel_wake
+        pw.nwakes[] = 1
+        for c in axes(pw.nodes[1],3)
+            pw.nodes[1][:,1,c] .= (0.0, c-1.0, 0.0)
+            pw.nodes[1][:,2,c] .= (1.0, c-1.0, 0.0)
+        end
+        pw.strength[1][1,1,:] .= 0.8
+        pw.strength[1][1,2,:] .= 0.2
+        pnl.write_vtk(joinpath(path,"run_body1"), body, 0, 0.0; overwrite=true)
+        pnl.write_vtk(joinpath(path,"run_wake1"), smooth, 0, 0.0; overwrite=true)
+        pnl._write_metadata_toml(path, "run", (body,), (smooth,), frames,
+            [0.0,0.1], (pnl.Backslash(body),), pnl.DirectBackend(),
+            pnl.DirectBackend(), pnl.DirectBackend(), ())
+        pnl._append_metadata_step_toml(path,"run",frames,0,0.0;
+            wakes=(smooth,))
+
+        pw.particle_handoff_active[] = true
+        pw.particle_handoff_weight[] = 0.5
+        smooth.conversion_count[] = 1
+        pnl.write_vtk(joinpath(path,"run_body1"), body, 1, 0.1)
+        pnl.write_vtk(joinpath(path,"run_wake1"), smooth, 1, 0.1)
+        pnl._append_metadata_step_toml(path,"run",frames,1,0.1;
+            wakes=(smooth,))
+        recorder = WakeContinuationRecorder(Dict())
+        result = pnl.replay(path,"run"; steps=[0,1], monitors=(recorder,),
+            recompute=())
+        @test recorder.values[0] == (1,false,1.0,0,-0.2)
+        @test recorder.values[1] == (1,true,0.5,1,-0.5)
+        @test result.wakes[1].conversion isa pnl.SurfaceVorticityConversion
+        @test result.wakes[1].conversion.diagnose_nearfield
+
+        data = TOML.parsefile(joinpath(path,"run.metadata.toml"))
+        rec = data["step"][2]["wake_continuation"][1]
+        delete!(rec,"handoff_active")
+        loaded = pnl._construct_wakes_from_manifest((body,), data)
+        pnl._load_panel_particle_wake_vtk!(loaded[1], path, "run_wake1", 1)
+        @test_throws pnl.WakeContinuationStateError pnl._restore_wake_continuation!(loaded, data, 1)
+        rec["handoff_active"] = true
+        rec["active_row_count"] = 2
+        @test_throws pnl.WakeContinuationStateError pnl._restore_wake_continuation!(loaded, data, 1)
+    end
+
     @testset "finite PanelWake metadata round trip" begin
         body = make_plate_vortex_body()
         frames = pnl.ReferenceFrame(body)
@@ -593,5 +719,63 @@ end
             (pnl.Backslash(body),), pnl.DirectBackend(), pnl.DirectBackend(), pnl.DirectBackend(), ())
 
         @test_throws ArgumentError pnl.replay(path, "run"; steps=0, recompute=())
+    end
+
+# conversion round-trip testset)
+
+    @testset "convert-at-shed nwakerows=0 round trip (BRAINSTORM 024)" begin
+        body = make_dirichlet_diamond_body(; nspan=3)
+        body.strength[:, 2] .= range(0.4, 1.6; length=size(body.strength, 1))
+        frames = pnl.ReferenceFrame(body)
+        wake = pnl.PanelParticleWake(body; nwakerows=0, max_particles=4096,
+            conversion=pnl.SurfaceVorticityConversion(0.15;
+                attribution=:downstream))
+
+        # manifest records the logical nwakerows=0 and reconstructs the mode
+        meta = pnl._wake_manifest_dict(wake, 1)
+        @test meta["nwakerows"] == 0
+        rebuilt = pnl._construct_wakes_from_manifest((body,),
+            Dict{String,Any}("wake" => [meta]))[1]
+        @test rebuilt.panel_wake.convert_at_shed
+        @test size(rebuilt.panel_wake.nodes[1], 2) == 2
+        @test rebuilt.conversion.attribution == :downstream
+
+        # drive two real sheds so the saved state carries particles, an empty
+        # row buffer, and live handoff/filament bookkeeping
+        pw = wake.panel_wake
+        pnl.update_TE!(pw, body)
+        pw.nodes[1][:, 1, :] .+= [0.05, 0.0, 0.0]
+        pnl.shed_wake!(wake, body)
+        body.strength[:, 2] .*= 1.05
+        pw.nodes[1][:, 1, :] .+= [0.05, 0.0, 0.0]
+        pnl.shed_wake!(wake, body)
+        @test pw.nwakes[] == 0 && pw.overflowed[]
+        @test wake.pfield.np > 0
+
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "run_body1"), body, 1, 0.1; overwrite=true)
+        pnl.write_vtk(joinpath(path, "run_wake1"), wake, 1, 0.1; overwrite=true)
+        pnl._write_metadata_toml(path, "run", (body,), (wake,), frames,
+            [0.0, 0.1, 0.2], (pnl.Backslash(body),), pnl.DirectBackend(),
+            pnl.DirectBackend(), pnl.DirectBackend(), ())
+        pnl._append_metadata_step_toml(path, "run", frames, 1, 0.1;
+            wakes=(wake,))
+
+        result = pnl.replay(path, "run"; steps=1, recompute=())
+        rw = result.wakes[1]
+        @test rw isa pnl.PanelParticleWake
+        @test rw.panel_wake.convert_at_shed
+        @test rw.panel_wake.nwakes[] == 0
+        @test rw.panel_wake.overflowed[]
+        @test rw.panel_wake.particle_handoff_active[]
+        @test rw.panel_wake.particle_handoff_weight[] == 0.0
+        @test rw.conversion_count[] == wake.conversion_count[] == 2
+        # row-1 (terminal) strength is the filament carrier: restored exactly
+        @test rw.panel_wake.strength[1][:, 1, :] ==
+              wake.panel_wake.strength[1][:, 1, :]
+        @test rw.panel_wake.nodes[1][:, 1, :] == wake.panel_wake.nodes[1][:, 1, :]
+        @test rw.pfield.np == wake.pfield.np
+        @test view(rw.pfield.particles, 1:3, 1:rw.pfield.np) ==
+              view(wake.pfield.particles, 1:3, 1:wake.pfield.np)
     end
 end

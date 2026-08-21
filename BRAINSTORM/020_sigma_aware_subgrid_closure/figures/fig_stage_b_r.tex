@@ -1,0 +1,51 @@
+% BRAINSTORM 020 Phase 2R: corrected frozen-gradient geometric screen.
+% Data: fig_stage_b_r/{euler,corrected}_health.csv
+% Compile: pdflatex fig_stage_b_r.tex
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\usepgfplotslibrary{groupplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[
+  group style={group size=2 by 1, horizontal sep=1.8cm},
+  width=7.8cm, height=7cm, grid=major, grid style={gray!25},
+  xmin=180, xmax=244,
+  legend style={font=\footnotesize, at={(0.02,0.98)}, anchor=north west},
+]
+\nextgroupplot[
+  xlabel={step}, ylabel={$M=\max_p\Delta t Z$},
+  ymode=log, ymin=0.05, ymax=1e3,
+  title={\footnotesize corrected map crosses the Euler death point},
+]
+\addplot[orange!90!black, thick]
+  table[col sep=comma,x=step,y=max_dtZ]{fig_stage_b_r/euler_health.csv};
+\addlegendentry{Euler control}
+\addplot[blue, thick]
+  table[col sep=comma,x=step,y=max_dtZ]{fig_stage_b_r/corrected_health.csv};
+\addlegendentry{corrected geometric}
+\addplot[black!55, thin, domain=180:244, forget plot]{0.2};
+\draw[black!60, dotted, thick] (axis cs:237,0.05)--(axis cs:237,1e3);
+\draw[red!70!black, dotted, thick] (axis cs:243,0.05)--(axis cs:243,1e3);
+
+\nextgroupplot[
+  xlabel={step}, ylabel={$\max_p|\mathbf u|$ [m/s]},
+  ymode=log, ymin=10, ymax=3e4,
+  title={\footnotesize field runaway remains; terminal guard at step 243},
+]
+\addplot[orange!90!black, thick]
+  table[col sep=comma,x=step,y=max_u]{fig_stage_b_r/euler_health.csv};
+\addlegendentry{Euler control}
+\addplot[blue, thick]
+  table[col sep=comma,x=step,y=max_u]{fig_stage_b_r/corrected_health.csv};
+\addlegendentry{corrected geometric}
+\addplot[red!55, thin, domain=180:244, forget plot]{1000};
+\draw[black!60, dotted, thick] (axis cs:237,10)--(axis cs:237,3e4);
+\node[black!60,font=\scriptsize,anchor=west,rotate=90]
+  at (axis cs:236.5,14) {Euler ignition};
+\draw[red!70!black, dotted, thick] (axis cs:243,10)--(axis cs:243,3e4);
+\node[red!70!black,font=\scriptsize,anchor=west,rotate=90]
+  at (axis cs:242.5,14) {corrected failure};
+\end{groupplot}
+\end{tikzpicture}
+\end{document}

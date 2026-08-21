@@ -112,6 +112,14 @@ the true open-surface root and tip streamwise closures, with
 `SigmaOverlap(sigma, overlap)`. It does not use `method_trailing` or
 `method_unsteady`.
 
+**Amended 2026-08-03 after Phase 3 review.** Smooth conversion also requires
+`unsteady_filament=true` and `include_final_filament=true`. The former makes
+the pre-handoff final filament carry the physical startup edge assumed by the
+first-conversion ledger; the latter keeps the cancelling/complement filament
+in `get_sources` after handoff. Supplying `false` for either option with
+`SurfaceVorticityConversion` is a constructor-time `ArgumentError`. Both
+options remain unchanged for `LegacyEdgeJumpConversion`.
+
 ### 2.3 Supported domain
 
 The Phase 3 implementation must support:
@@ -613,6 +621,74 @@ The implementation gate requires at least:
 
 No simulations or Phase 4 aerodynamic validation are authorized by this
 verification map.
+
+## 14. Amendment (2026-08-01) — deposition is divergence form
+
+Approved by Ryan. See Phase 1 §9b for the theory and the numerical verification.
+
+**§5.2's rank-aware centroid reconstruction is no longer the deposition rule.**
+It is retained, and still evaluated on every panel, purely as a diagnostic.
+Deposition is
+
+```
+kappa_j = V_j / A_j,   Gamma_p = kappa_j * dA_p
+V_j = H_j                                     # upstream face, whole
+    + 0.5 * (muhat_j   - muhat_{j-1}) * (v2 - v1)   # left  spanwise face
+    + 0.5 * (muhat_{j+1} - muhat_j)   * (v3 - v4)   # right spanwise face
+```
+
+with `A_j` the *sum of the subcell areas* (not an independent quadrature), which
+is what makes `sum(kappa_j * dA_p) == V_j` exactly. `kappa_j` is **not** projected
+onto the local normal — projection would break that sum. Outer faces of an open
+chain contribute nothing to the area; they remain line particles at the legacy
+strengths `+muhat_1` / `-muhat_ncols`, sampled with `SigmaOverlap(sigma, overlap)`
+exactly as before.
+
+**Amended 2026-08-01 (see Phase 1 §9b.4).** The upstream/downstream split is a
+selectable parameter `attribution` on `SurfaceVorticityConversion`, with
+`alpha = 1` (`:upstream`, default), `0` (`:downstream`), or `1/2` (`:split`):
+
+```
+V_j = alpha*H_j + beta_eff*D_j + 0.5*(spanwise face jumps)
+D_j      = (muhat_G - muhat_D) * (v3 - v2)      # muhat_D = strength[1,N+1,j]
+beta_eff = handoff_active_before ? 1 - alpha : 1
+```
+
+`beta_eff = 1` before the first handoff because the aft face is then the sheet's
+physical trailing boundary (the starting vortex), with no earlier conversion to
+have taken the `alpha` share; omitting it deletes that circulation. `muhat_D`
+needs no new storage — `strength` already carries `nwakerows+1` rows and legacy
+reads the same value as `Gamma_tm1`. `PanelWake` gains
+`particle_handoff_weight` (`alpha`), and `_final_filament_strength` becomes
+`-(alpha*strength[i_row] + (1-alpha)*strength[i_row+1])` when the handoff is
+active, which reproduces both pre-existing forms at its endpoints.
+
+Consequences for the rest of this document:
+
+- **§2.3, §5.1, §5.2** — the smooth strategy needs only the upstream *strength*,
+  never the upstream panel's geometry. The `nwakerows == 1` staging discussion is
+  moot: nothing is staged, and `system` is threaded in solely to read
+  `_get_wakestrength_mu`. This also means the §13.1 Option A/Option B choice is
+  now immaterial to correctness — Option B stands, and its fallback trigger was
+  never reached.
+- **§6** — unchanged in intent; the "internal spanwise jumps are not also
+  deposited as line particles" rule is now enforced structurally, since each face
+  is either smeared or kept, exactly once.
+- **§8.1** — the per-panel record replaces `streamwise_strength` and
+  `handoff_residual` (identically zero by construction now) with
+  `kappa_conservative`, `kappa_reconstruction`, and `kappa_difference`.
+- **§8.2** — the per-conversion record adds `expected_total` (the exact filament
+  content to transfer) and `deposited_total`; `residual_abs`/`residual_rel` now
+  measure `deposited_total - expected_total`, which is round-off on any geometry.
+  It also records `attribution` and `startup_edge_deposited`, and §8.1 adds
+  `downstream_face` alongside `handoff`.
+- **§3.3** — "before the first full conversion the physical startup edge remains
+  active" is now enforced: that edge is deposited whole by the first transaction.
+- **Verification** — note that a residual computed against the transaction's own
+  `expected_total` is self-referential and cannot detect an omitted face. The
+  binding check is external: every panel ring's perimeter vector sums to zero, so
+  the wake's field-relevant content reduces to the retained filament, and the
+  particles' gain must equal that quantity's loss across a `shed_wake!` call.
 
 ## 12. Acceptance gate and progress log
 

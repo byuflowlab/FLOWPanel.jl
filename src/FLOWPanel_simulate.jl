@@ -20,6 +20,192 @@ end
 
 _accumulate_Das!(::AbstractBody, eta; min_displacement=0.0) = nothing
 
+# Prescribed per-station |Das| (BRAINSTORM/018 chord-proportional offset):
+# station_lengths[k][j] is the offset magnitude for the j-th station of the k-th
+# shedding edge set; direction is the local kinematic TE tangent (velocity_te
+# must already be populated by kinematic_velocity!). Accumulates like
+# `_accumulate_Das!` so a freestream contribution laid down earlier survives.
+function _set_Das_station_lengths!(sys::AbstractLiftingBody, station_lengths;
+        min_displacement=0.0)
+    length(station_lengths) == length(sys.Das) || error(
+        "station_lengths has $(length(station_lengths)) shedding entries, " *
+        "body has $(length(sys.Das))")
+    for k in eachindex(sys.Das)
+        Das = sys.Das[k]
+        Vte = sys.velocity_te[k]
+        lens = station_lengths[k]
+        length(lens) == size(Das, 2) || error(
+            "station_lengths[$(k)] has $(length(lens)) stations, " *
+            "shedding $(k) has $(size(Das, 2))")
+        for j in axes(Das, 2)
+            speed = sqrt(Vte[1, j]^2 + Vte[2, j]^2 + Vte[3, j]^2)
+            # zero TE velocity gives no direction: leave the station untouched,
+            # matching `_accumulate_Das!`'s handling of stationary nodes
+            speed > zero(speed) || continue
+            scale = max(abs(lens[j]), min_displacement) / speed
+            Das[1, j] += Vte[1, j] * scale
+            Das[2, j] += Vte[2, j] * scale
+            Das[3, j] += Vte[3, j] * scale
+        end
+    end
+    return nothing
+end
+_set_Das_station_lengths!(::AbstractBody, station_lengths; min_displacement=0.0) = nothing
+
+# F1b (BRAINSTORM/018 Phase 16, Route B): endpoint-on-arc variant of the
+# station-lengths path. The offset endpoint is placed ON the local frozen-wake
+# path instead of along the straight TE tangent: the material that left the TE
+# a lag τ ago sits at the TE's backward swept-arc position
+# (`_rigid_back_displacement`, summed over the frame tree exactly like
+# `accumulate_Das_arc!`) PLUS the induced-drift convection u_j·τ, where u_j is
+# a prescribed per-station drift velocity (global frame; typically the
+# steady-state downwash measured from a settled wake). τ_j is found by
+# ARC-LENGTH INTEGRATION: sub-step backward along the path, advancing the lag
+# by δτ = δs/|dp/dτ| with the closed-form instantaneous backward velocity,
+# until the accumulated path length reaches the prescribed |Das|_j. This is
+# self-limiting near stagnation points (the endpoint stops accumulating length
+# and lands short — reported, never extrapolated), needs no speed floor, and
+# handles in-plane drift components exactly. The stored Das column is the
+# CHORD to the endpoint (shorter than the arc length — intended; the
+# admissibility bands are in arc length). Reduces to the pure
+# `_rigid_back_displacement` arc as u → 0. Callers not passing drifts get the
+# legacy tangent path — zero behavior change.
+const _DAS_ARC_NSUB = 16                 # sub-steps per station (init-time only)
+const _DAS_ARC_STAGNATION_RTOL = 1e-3    # stagnation detector (relative)
+
+# Instantaneous backward-path velocity of one frame's contribution at lag τ:
+# d/dτ of `_rigid_back_displacement(te, origin, v, ω, τ)`.
+function _rigid_back_velocity(te, origin, v, ω, τ)
+    d = te - origin
+    ωmag = sqrt(ω[1]^2 + ω[2]^2 + ω[3]^2)
+    θ = ωmag * τ
+    if abs(θ) > eps(typeof(θ))^(1/3)
+        axis = ω / ωmag
+        drot = Rodrigues(axis, -θ) * d
+        return -cross(ω, drot) - v
+    else
+        return -cross(ω, d) - v
+    end
+end
+
+function _set_Das_station_arc_te!(body::AbstractLiftingBody, motions,
+        station_lengths, station_drifts, min_displacement)
+    for ishedding in eachindex(body.Das)
+        Das = body.Das[ishedding]
+        shedding = body.shedding[ishedding]
+        lens = station_lengths[ishedding]
+        drift = station_drifts[ishedding]
+        length(lens) == size(Das, 2) || error(
+            "station_lengths[$(ishedding)] has $(length(lens)) stations, " *
+            "shedding $(ishedding) has $(size(Das, 2))")
+        size(drift) == size(Das) || error(
+            "station_drifts[$(ishedding)] is $(size(drift)), Das is $(size(Das))")
+        for j in axes(Das, 2)
+            # TE node for column j: nib for 1..nshed, nia for the last column
+            # (mirrors _kinematic_velocity_te!)
+            if j <= size(shedding, 2)
+                node_idx = body.cells[shedding[3, j], shedding[1, j]]
+            else
+                node_idx = body.cells[shedding[2, end], shedding[1, end]]
+            end
+            te = FastMultipole.SVector{3}(body.nodes[1, node_idx],
+                body.nodes[2, node_idx], body.nodes[3, node_idx])
+            u = FastMultipole.SVector{3}(drift[1, j], drift[2, j], drift[3, j])
+            L = max(abs(lens[j]), min_displacement)
+            L > zero(L) || continue
+            δs = L / _DAS_ARC_NSUB
+            τ = zero(L)
+            # reference speed for the stagnation detector: the total backward
+            # speed at zero lag (kinematic + drift)
+            V0 = u
+            for m in motions
+                V0 += _rigid_back_velocity(te, m.origin, m.v, m.ω, τ)
+            end
+            speed0 = sqrt(V0[1]^2 + V0[2]^2 + V0[3]^2)
+            # stationary node with no drift: no direction, leave untouched
+            # (matches the legacy paths' handling)
+            speed0 > zero(speed0) || continue
+            stalled = false
+            for _ in 1:_DAS_ARC_NSUB
+                V = u
+                for m in motions
+                    V += _rigid_back_velocity(te, m.origin, m.v, m.ω, τ)
+                end
+                speed = sqrt(V[1]^2 + V[2]^2 + V[3]^2)
+                if speed < _DAS_ARC_STAGNATION_RTOL * speed0
+                    stalled = true
+                    break
+                end
+                τ += δs / speed
+            end
+            stalled && @warn "endpoint-on-arc Das: backward path stagnated " *
+                "before reaching the prescribed length at shedding " *
+                "$(ishedding), station $(j); endpoint lands short" maxlog = 8
+            Δ = u * τ
+            for m in motions
+                Δ += _rigid_back_displacement(te, m.origin, m.v, m.ω, τ)
+            end
+            Das[1, j] += Δ[1]
+            Das[2, j] += Δ[2]
+            Das[3, j] += Δ[3]
+        end
+    end
+    return nothing
+end
+_set_Das_station_arc_te!(::AbstractBody, motions, lens, drifts, mindisp) = nothing
+
+# Collect each system's affecting frame motions (global-frame v, ω, origin)
+# by walking the frame tree exactly like `accumulate_Das_arc!`.
+function _collect_frame_motions!(motions, frames::AbstractVector{ReferenceFrame{TF}},
+        i_frame::Int, dx_parent_to_global, R_parent_to_global) where TF
+    frame = frames[i_frame]
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global
+    v_global = R_parent_to_global * frame.v
+    ω_global = R_parent_to_global * frame.ω_axis * frame.ω
+    for isurf in frame.dependent_index
+        push!(motions[isurf], (v=v_global, ω=ω_global, origin=origin_global))
+    end
+    dx_parent_to_global = origin_global
+    R_parent_to_global = R_parent_to_global * frame.R
+    for i in frame.child_index
+        _collect_frame_motions!(motions, frames, i, dx_parent_to_global,
+            R_parent_to_global)
+    end
+    return nothing
+end
+
+function _set_Das_station_arc!(systems_tuple::Tuple,
+        frames::AbstractVector{ReferenceFrame{TF}}, station_lengths,
+        station_drifts; min_displacement=0.0) where TF
+    length(station_lengths) == length(systems_tuple) || error(
+        "station_lengths has $(length(station_lengths)) entries, " *
+        "systems tuple has $(length(systems_tuple))")
+    length(station_drifts) == length(systems_tuple) || error(
+        "station_drifts has $(length(station_drifts)) entries, " *
+        "systems tuple has $(length(systems_tuple))")
+    motions = [NamedTuple{(:v, :ω, :origin),
+        NTuple{3, FastMultipole.SVector{3,TF}}}[] for _ in systems_tuple]
+    _collect_frame_motions!(motions, frames, 1,
+        zero(FastMultipole.SVector{3,TF}),
+        FastMultipole.SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+    for (isys, sys) in enumerate(systems_tuple)
+        _set_Das_station_arc_te!(sys, motions[isys], station_lengths[isys],
+            station_drifts[isys], min_displacement)
+    end
+    return nothing
+end
+
+function _set_Das_station_lengths!(systems_tuple::Tuple, station_lengths;
+        min_displacement=0.0)
+    length(station_lengths) == length(systems_tuple) || error(
+        "station_lengths has $(length(station_lengths)) entries, " *
+        "systems tuple has $(length(systems_tuple))")
+    for (sys, lens) in zip(systems_tuple, station_lengths)
+        _set_Das_station_lengths!(sys, lens; min_displacement)
+    end
+    return nothing
+end
+
 # --- arc-following kinematic Das ---
 #
 # `_accumulate_Das!` lays the offset along the trailing-edge velocity, i.e. along
@@ -363,8 +549,14 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
-        set_Das_kinematic_arc::Bool=true)
-    if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic)
+        set_Das_kinematic_arc::Bool=true,
+        set_Das_station_lengths=nothing,
+        set_Das_station_drifts=nothing)
+    if isnan(set_Das_eta_freestream) && isnan(set_Das_eta_kinematic) &&
+            isnothing(set_Das_station_lengths)
+        isnothing(set_Das_station_drifts) || error(
+            "set_Das_station_drifts requires set_Das_station_lengths " *
+            "(the endpoint-on-arc path needs the per-station lengths)")
         return systems
     end
 
@@ -380,6 +572,9 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
     end
 
     if !isnan(set_Das_eta_kinematic)
+        isnothing(set_Das_station_lengths) || error(
+            "set_Das_eta_kinematic and set_Das_station_lengths are mutually " *
+            "exclusive: both set the kinematic first-row offset")
         for sys in systems_tuple
             extra_reset!(sys)
         end
@@ -387,6 +582,29 @@ function initialize_Das!(systems, frames, Uinf::Function, t0, dt0;
         _accumulate_Das_kinematic!(systems_tuple, frames, dt0 * set_Das_eta_kinematic;
             min_displacement=set_Das_min_kinematic_displacement,
             arc=set_Das_kinematic_arc)
+    end
+
+    if !isnothing(set_Das_station_lengths)
+        # Prescribed per-station |Das| (e.g. a fraction of the local chord,
+        # BRAINSTORM/018): direction is the local kinematic TE tangent, exactly
+        # as the eta path, but the magnitude at station j is the given length
+        # instead of eta*dt*|V_te,j|. dt-independent by construction, so it is
+        # inherently safe inside dt-refinement studies.
+        # With `set_Das_station_drifts` (F1b, Phase 16 Route B) the endpoint is
+        # instead placed ON the frozen-wake path (backward swept arc + induced
+        # drift) at the prescribed arc length — see _set_Das_station_arc!.
+        for sys in systems_tuple
+            extra_reset!(sys)
+        end
+        kinematic_velocity!(systems_tuple, frames)
+        if isnothing(set_Das_station_drifts)
+            _set_Das_station_lengths!(systems_tuple, set_Das_station_lengths;
+                min_displacement=set_Das_min_kinematic_displacement)
+        else
+            _set_Das_station_arc!(systems_tuple, frames,
+                set_Das_station_lengths, set_Das_station_drifts;
+                min_displacement=set_Das_min_kinematic_displacement)
+        end
     end
 
     # reset velocity fields modified during Das computation
@@ -942,10 +1160,22 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
     # begin simulation
     i_step = start_step
+    _t_wall_prev = NaN
     for t in @view t_range[start_step+1:end]
         if verbose
-            println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)")
-            # flush(stdout)
+            # Wall-clock stamp and flush: stdout is block-buffered when
+            # redirected to a Slurm log, so an unflushed per-step line leaves a
+            # long run looking hung and gives no timing at all. The only timing
+            # otherwise available is a single `@time` around the whole call,
+            # which is why early-vs-late per-step cost has never been measured
+            # (BRAINSTORM/018 S0a). WakeHealthMonitor records `wall_s` in CSV;
+            # this is the same information for runs without that monitor.
+            _t_wall_now = time()
+            _dt_wall = isnan(_t_wall_prev) ? NaN : _t_wall_now - _t_wall_prev
+            _t_wall_prev = _t_wall_now
+            println("\tstep $(i_step)/$(length(t_range)-1) at time $(t)" *
+                    (isnan(_dt_wall) ? "" : "  [$(round(_dt_wall, sigdigits=3)) s]"))
+            flush(stdout)
         end
 
         #------- controls -------#
@@ -1091,6 +1321,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             end
 
             _append_metadata_step_toml(path, name, frames, i_step, t; uinf,
+                wakes=wakes_tuple,
                 kutta=isnothing(kutta_runtime) ? nothing :
                     _kutta_step_dict(kutta_runtime))
         end
@@ -1223,12 +1454,51 @@ end
 
 function shed_wake!(wake::PanelParticleWake, system::AbstractBody)
     pw = wake.panel_wake
+
+    if pw.convert_at_shed
+        # Convert-at-shed, nwakerows = 0 (BRAINSTORM 024): shed the row and
+        # convert it to particles in the same call, so no free sheet survives
+        # into the next solve and particles appear at the TE+Das line.
+        pw.live_rows[] == 0 || error(
+            "convert-at-shed (nwakerows = 0) does not support a reserved " *
+            "live row block (Kutta Route B / TEAnchoredAttachment)")
+        # 1. Strength history: the fresh row's downstream (unsteady) face jump
+        #    and the retained-filament bookkeeping read row 2 as the previous
+        #    shed's strength, but shed_wake!'s own strength shift is empty at
+        #    nwakes[] == 0, so carry it explicitly before shedding.
+        for i_surf in eachindex(pw.strength)
+            s = pw.strength[i_surf]
+            s[:, 2, :] .= s[:, 1, :]
+        end
+        # 2. Shift nodes (row 2 <- this step's convected row-1 line) and write
+        #    the fresh row-1 strengths from the just-solved mu jump.
+        shed_wake!(pw, system)
+        # 3. Pin the fresh row's upstream edge to the current TE+Das line: the
+        #    transient row spans the Das line -> last step's convected line.
+        #    (For nwakerows >= 1 this pinning happens at the next solve's
+        #    update_TE!; here the row is consumed before that.)
+        update_TE!(pw, system)
+        # 4. The single-row buffer "overflows" at every shed by construction;
+        #    downstream filament/VTK guards key on this flag.
+        pw.overflowed[] = true
+        # 5. Convert the just-shed row (nwakes[] == capacity == 1). The smooth
+        #    strategy's upstream (rigid-row) face jump is identically zero
+        #    here — the rigid Das row carries the same just-solved mu — so
+        #    :downstream attribution deposits the whole unsteady face and the
+        #    retained filament on the Das line cancels the full row strength.
+        _convert_to_particles!(wake, system)
+        # 6. No free sheet survives into the next solve.
+        pw.nwakes[] = 0
+        return
+    end
+
     n_rows = size(pw.nodes[1], 2)
     buffer_full = pw.nwakes[] >= n_rows - 1
 
     if buffer_full
-        # new particles
-        _convert_to_particles!(wake)
+        # new particles (the smooth strategy needs the body to complete its
+        # streamwise stencil on a single-row wake; the legacy one ignores it)
+        _convert_to_particles!(wake, system)
     end
 
     # Shift panel rows (existing PanelWake method)

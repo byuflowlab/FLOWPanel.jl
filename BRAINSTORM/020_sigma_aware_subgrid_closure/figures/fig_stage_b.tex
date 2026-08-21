@@ -1,0 +1,51 @@
+% BRAINSTORM 020 Phase 2 Leg 2 Stage B: exponential-integrator screen at
+% sigma/R = 0.02 viscous (scr_p020_exp_s020v, job 13065481) — the stock-Euler
+% twin (scr_p019_s020v) OOM-ignited at step 237.
+% Data: fig_stage_b/expint_health.csv
+% Compile: pdflatex fig_stage_b.tex
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\usepgfplotslibrary{groupplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[
+    group style={group size=2 by 1, horizontal sep=1.8cm},
+    width=7.8cm, height=7cm, grid=major, grid style={gray!25},
+    legend style={font=\footnotesize},
+    xmin=36, xmax=324,
+]
+% ---- left: M trajectory -----------------------------------------------------
+\nextgroupplot[
+    xlabel={step}, ylabel={$M = \max_p \Delta t\,Z$ (direct)},
+    ymode=log, ymin=0.02, ymax=2,
+    title={\footnotesize margin: no flip, no negative $\sigma$, ever},
+    legend style={at={(0.02,0.98)}, anchor=north west},
+]
+\addplot[blue, thick]
+    table [col sep=comma, x=step, y=max_dtZ] {fig_stage_b/expint_health.csv};
+\addlegendentry{expint run}
+\addplot[black!60, thin, domain=36:324, forget plot] {0.2};
+\node[black!60, font=\footnotesize, anchor=west] at (axis cs:45,0.24)
+    {$\varepsilon = 0.2$};
+\draw[orange!90!black, thick, dotted] (axis cs:237,0.02) -- (axis cs:237,2);
+\node[orange!90!black, font=\footnotesize, anchor=west, rotate=90]
+    at (axis cs:233,0.025) {Euler twin OOM @237};
+
+% ---- right: wake destruction by trim-out ------------------------------------
+\nextgroupplot[
+    xlabel={step}, ylabel={$n_{\mathrm{particles}}$},
+    ymode=log, ymin=8e3, ymax=4e5,
+    title={\footnotesize the fidelity collapse: wake self-destructs by trim-out},
+    legend style={at={(0.02,0.02)}, anchor=south west},
+]
+\addplot[blue, thick]
+    table [col sep=comma, x=step, y=n_particles] {fig_stage_b/expint_health.csv};
+\addlegendentry{$n_{\mathrm{particles}}$}
+\draw[orange!90!black, thick, dotted] (axis cs:237,8e3) -- (axis cs:237,4e5);
+\draw[red!70, thick, dotted] (axis cs:294,8e3) -- (axis cs:294,4e5);
+\node[red!70!black, font=\footnotesize, anchor=west, rotate=90]
+    at (axis cs:290,1e4) {$u > 1000$ m/s @294};
+\end{groupplot}
+\end{tikzpicture}
+\end{document}

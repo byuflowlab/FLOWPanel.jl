@@ -444,7 +444,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
     if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -513,7 +518,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
     if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -591,7 +601,12 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
     if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # println("NOT HERE")
@@ -941,6 +956,39 @@ end
 
     return δ
 end
+
+"""
+    radius_inflation(kernel, kerneloffset, tol)
+
+Distance beyond which the offset-regularized kernel matches the singular kernel
+within relative tolerance `tol`. Added to the geometric panel radius written
+into the FastMultipole source buffer (`source_system_to_buffer!`), so the
+multipole-acceptance criterion only admits expansions — which represent the
+*unregularized* kernel — where they agree with the regularized direct kernel to
+`tol`. Without this term the direct/FMM operator mismatch saturates with
+expansion order (021 Phase 1 finding, 2026-08-13).
+
+- Source/doublet kernels: [`regularize`](@ref) is compactly supported — the
+  regularized kernel is exactly singular beyond `kerneloffset` — so the
+  inflation is `kerneloffset`, independent of `tol`.
+- `VortexRing` (Vatistas n=2, `1/h² → 1/√(h⁴+rc⁴)`): relative far-field error
+  ≈ ½(rc/h)⁴, so `tol` is met at `h ≥ rc·(2/tol)^(1/4)`. The gradient kernel
+  (`_bound_vortex_gradient`) carries the same `√(A² + rc⁴B²)` structure with an
+  O(1) constant ≤ ~2 on the leading error, absorbed by the multipole-acceptance
+  margin (clearance ≥ Δ(1/MAC − 1) beyond the summed radii; thin for MAC > 0.5).
+
+`tol = Inf` disables the inflation (pre-2026-08-13 behavior, for A/B runs).
+"""
+@inline radius_inflation(::Type{ConstantSource}, kerneloffset, tol) =
+    isinf(tol) ? zero(kerneloffset) : kerneloffset
+@inline radius_inflation(::Type{ConstantDoublet}, kerneloffset, tol) =
+    isinf(tol) ? zero(kerneloffset) : kerneloffset
+@inline radius_inflation(::Type{Union{ConstantSource, ConstantDoublet}}, kerneloffset, tol) =
+    isinf(tol) ? zero(kerneloffset) : kerneloffset
+@inline radius_inflation(::Type{VortexRing}, kerneloffset, tol) =
+    isinf(tol) ? zero(kerneloffset) : kerneloffset * (2 / tol)^0.25
+@inline radius_inflation(::Type{Union{ConstantSource, VortexRing}}, kerneloffset, tol) =
+    radius_inflation(VortexRing, kerneloffset, tol)
 
 #------- semi-infinite panels -------#
 

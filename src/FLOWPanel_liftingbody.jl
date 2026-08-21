@@ -1008,6 +1008,10 @@ function FastMultipole.value_to_strength!(source_buffer, ::RigidWakeBody{<:Any,1
     source_buffer[5, i_body] = value
 end
 
+function FastMultipole.strength_to_value(strength, ::RigidWakeBody{<:Any,1,<:Any})
+    return strength[1]
+end
+
 function FastMultipole.value_to_strength!(source_buffer, ::RigidWakeBody{<:Union{ConstantSource, ConstantDoublet, VortexRing},2,<:Any}, i_body, value)
     source_buffer[5, i_body] = zero(value)
     source_buffer[6, i_body] = value

@@ -58,7 +58,7 @@ output-log, and error-log directives. Use `set -euo pipefail` so a failed
 workflow stage stops the job. Slurm opens log paths before the script runs, so
 any requested log directory must already exist when the user submits the job.
 
-If a run should use Julia or Python, include the appropriate module with `module load julia python` etc. Note that Julia 1.11 is used on the HPC, in constrast with 1.12 which is currently used on this Mac.
+If a run should use Julia or Python, include the appropriate module with `module load julia python` etc. Note that Julia 1.12 is used on the HPC by default, but 1.11 can be requested during the `module load julia` command by specifying the julia version.
 
 Set the single `THREADS=<N>` variable explicitly to the same CPU count requested
 by `#SBATCH --ntasks=<N>`, and export it consistently through
@@ -93,20 +93,17 @@ default. The I/O cost is usually small relative to the value of retaining
 ParaView-ready state. Do not set `SAVE_VTK=false` unless the user asks for a
 no-output run.
 
-To avoid filling the disk across repeated iterations, write each new run over
-the previous run's directory instead of creating a directory per attempt. Use
-one of these patterns:
-
-- Reuse the example's default `save_path`, typically `data/<run_name>/`, and
-  let `simulate!` overwrite per-step files in place. Before launching, remove
-  the previous run directory so stale steps past the current run length do not
-  linger.
-- When side-by-side comparison is needed, use one persistent sibling directory
-  per scenario, such as `data/<run_name>_nocouple/`, and overwrite it on each
-  rerun. Do not suffix directories with timestamps or attempt numbers.
+To avoid filling the disk across repeated iterations, care must be taken to
+delete the paraview files (*.vtu, *.vts, etc.) from prior runs. Unless a simulation
+is identified as obselete, keep the concise .csv logs. Don't let FLOWPanel take
+up more than 200G at any time. This may require deleting paraview files while a
+simulation is still live. Don't ever delete paraview files for the newest 36 timesteps (raised from 10 by Ryan, 2026-08-20)
+unless a simulation is obselete.
 
 When the user explicitly wants to preserve a previous run for comparison, ask
 before overwriting and offer to move the old directory aside.
+
+For BYU agent policy, read `/apps/instructions_for_ai_agents/BYU_ORC_AGENTS.md` from the login node.
 
 See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
 [script generator](https://rc.byu.edu/documentation/slurm/script-generator) if you are having trouble.

@@ -126,6 +126,17 @@ Base.@kwdef struct SSWConfig
     sigma_over_c::Float64 = NaN
     pps_overlap::Float64 = 1.3
     pps_n::Int = 2
+    # Panel-to-particle conversion strategy (BRAINSTORM 016). :legacy is the
+    # exact edge-jump default (byte-identical to the pre-016 path); :smooth
+    # opts into the surface-vorticity conversion, which owns its own line
+    # sampling, so `shed_method`/`pps_*` must stay at their defaults there.
+    # `conversion_sigma_over_c = NaN` resolves to the legacy unsteady-row
+    # sigma, `pps_overlap * dt_star / pps_n`, so only the strategy differs.
+    conversion::Symbol = :legacy
+    conversion_sigma_over_c::Float64 = NaN
+    conversion_overlap::Float64 = 1.3
+    conversion_attribution::Symbol = :upstream
+    conversion_diagnose::Bool = false
     wake_core_over_c::Float64 = 1e-3
     kerneloffset_over_c::Float64 = 1e-6
     kernelcutoff_over_c::Float64 = 1e-12
@@ -157,6 +168,31 @@ function _ssw_shedding_method(config::SSWConfig)
     return config.shed_method == :sigma_pps ?
         pnl.SigmaPPS(sigma, config.pps_n) :
         pnl.SigmaOverlap(sigma, config.pps_overlap)
+end
+
+_ssw_conversion_sigma_over_c(config::SSWConfig) =
+    isfinite(config.conversion_sigma_over_c) ? config.conversion_sigma_over_c :
+    config.pps_overlap * config.dt_star / config.pps_n
+
+"Resolve the BRAINSTORM-016 conversion strategy. Returns `nothing` for
+`:legacy` (the `PanelParticleWake` default is then used and the constructor
+call stays byte-identical to the pre-016 path)."
+function _ssw_conversion(config::SSWConfig)
+    config.conversion == :legacy && return nothing
+    config.conversion == :smooth || throw(ArgumentError(
+        "conversion must be :legacy or :smooth; got $(config.conversion)"))
+    # The smooth strategy owns its line sampling and rejects explicit legacy
+    # line policies; a non-default shed_method would silently mean nothing and
+    # alias the case tag, so require the defaults.
+    (config.shed_method == :overlap_pps && config.pps_overlap == 1.3 &&
+        config.pps_n == 2) || throw(ArgumentError(
+        "conversion=:smooth owns its line sampling; leave shed_method, " *
+        "pps_overlap, and pps_n at their defaults"))
+    return pnl.SurfaceVorticityConversion(
+        _ssw_conversion_sigma_over_c(config) * config.c;
+        overlap=config.conversion_overlap,
+        attribution=config.conversion_attribution,
+        diagnose_nearfield=config.conversion_diagnose)
 end
 
 mutable struct SSWRelaxationRecorder
@@ -492,20 +528,28 @@ function prepare_suddenly_started_wing(config::SSWConfig; relaxation=nothing,
     wake = if config.wake_model == :particle
         config.panel_rows >= 1 || throw(ArgumentError(
             "panel_rows must be >= 1 in particle mode"))
-        shedding_method = _ssw_shedding_method(config)
         # include_final_filament stays at its default (true): the final-edge
         # filament carries the interface circulation where the sheet hands off
         # to particles (unsteady_filament=true pairing, matching the
-        # pitching_wing.jl particle branch).
+        # pitching_wing.jl particle branch). The smooth strategy REQUIRES both
+        # defaults and forbids method_trailing/method_unsteady.
         particle_kwargs = isnothing(relaxation) ? (;) : (; relaxation)
+        conversion = _ssw_conversion(config)
+        if conversion === nothing
+            shedding_method = _ssw_shedding_method(config)
+            particle_kwargs = (; particle_kwargs...,
+                method_trailing=shedding_method,
+                method_unsteady=shedding_method)
+        else
+            particle_kwargs = (; particle_kwargs..., conversion)
+        end
         pnl.PanelParticleWake(wing;
             nwakerows=config.panel_rows,
             max_particles=config.max_particles,
             core_size=config.wake_core_over_c * config.c,
             shed_with_induced_velocity=true,
             freestream_convection=config.freestream_convection,
-            method_trailing=shedding_method,
-            method_unsteady=shedding_method, particle_kwargs...,
+            particle_kwargs...,
             particle_maintenance)
     elseif config.wake_model == :panel
         pnl.PanelWake(wing;
@@ -622,6 +666,14 @@ function _ssw_case_tag(config::SSWConfig)
             tag *= "_sov_sig$(_ssw_num_tag(config.sigma_over_c))"
         end
         tag *= "_ov$(_ssw_num_tag(config.pps_overlap))_pn$(config.pps_n)"
+        # BRAINSTORM 016 conversion strategy: appended only for non-legacy, so
+        # every previously-run particle tag is unchanged and still resumes.
+        if config.conversion != :legacy
+            tag *= "_svc_sig$(_ssw_num_tag(_ssw_conversion_sigma_over_c(config)))" *
+                "_cov$(_ssw_num_tag(config.conversion_overlap))"
+            config.conversion_attribution == :upstream ||
+                (tag *= "_att$(config.conversion_attribution)")
+        end
     end
     config.wake_core_over_c == 1e-3 ||
         (tag *= "_core$(_ssw_num_tag(config.wake_core_over_c))")
@@ -713,6 +765,18 @@ function _write_ssw_tail_artifacts(result)
     open(diagnostics_path, "w") do io
         println(io, "wake_rows,n_particles,wake_extent_over_c,relaxation_mean_relative_change,relaxation_max_relative_change,relaxation_samples")
         println(io, "$(result.wake_rows),$(result.n_particles),$(result.wake_extent_over_c),$(relaxation.mean_relative_change),$(relaxation.max_relative_change),$(relaxation.samples)")
+    end
+    # Sibling file (not new columns in case_diagnostics.csv) so pre-016 cached
+    # cases still load unchanged; written only for the smooth strategy.
+    if :conversion_stats in keys(result)
+        s = result.conversion_stats
+        open(joinpath(result.path, "conversion_diagnostics.csv"), "w") do io
+            println(io, "conversions,particles,expected_x,expected_y," *
+                "expected_z,deposited_x,deposited_y,deposited_z,residual_norm")
+            @printf(io, "%d,%d,%.16e,%.16e,%.16e,%.16e,%.16e,%.16e,%.16e\n",
+                s.conversions, s.particles, s.expected..., s.deposited...,
+                s.residual_norm)
+        end
     end
     return (; gamma_path, loading_path, settledness_path, diagnostics_path)
 end
@@ -868,6 +932,15 @@ function run_suddenly_started_wing(config::SSWConfig=SSWConfig(); relaxation=not
     if !isnothing(relaxation_recorder)
         result = merge(result, (; relaxation_stats=
             ssw_relaxation_stats(relaxation_recorder)))
+    end
+    if sim.wake isa pnl.PanelParticleWake &&
+            sim.wake.conversion_diagnostics !== nothing
+        d = sim.wake.conversion_diagnostics
+        result = merge(result, (; conversion_stats=(;
+            conversions=sim.wake.conversion_count[],
+            particles=d.total_particles,
+            expected=d.total_expected, deposited=d.total_deposited,
+            residual_norm=LA.norm(d.total_residual))))
     end
     csv_path = _write_ssw_case_csv(result)
     artifacts = _write_ssw_tail_artifacts(result)

@@ -242,6 +242,42 @@ end
     )
 end
 
+@testset "simulate! smooth surface-vorticity conversion smoke (BRAINSTORM 016)" begin
+    # Phase 4 §2: the smooth strategy must survive the real time-marching
+    # loop, not just static fixtures -- conversions fire when the panel buffer
+    # overflows, and the external ledger totals must close.
+    Uinf = t -> [1.0, 0.0, 0.0]
+    maneuver = (frames, systems, wakes, t) -> nothing
+    t_range = [0.0:0.05:0.3;]      # 6 steps: overflows the 2-row buffer
+
+    body = make_plate_vortex_body()
+    body.strength[1, 1] = 1.0
+    body.strength[2, 1] = 2.0      # spanwise variation -> nonzero area deposit
+    # Freestream-only convection keeps the sheet geometry regular: the noop
+    # solver leaves O(1) body strengths whose induced velocity would fold the
+    # coarse synthetic wake, which is not what this smoke test is probing.
+    wake = pnl.PanelParticleWake(body; nwakerows=2, max_particles=10_000,
+        freestream_convection=true,
+        conversion=pnl.SurfaceVorticityConversion(0.05))
+    frames = pnl.ReferenceFrame(body)
+    pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
+        body_solvers=SimNoopSolver(),
+        backend=pnl.DirectBackend(),
+        path=nothing,
+        grad_mu_options=(; basis=:tri),
+    )
+
+    @test wake.conversion_count[] >= 1
+    diag = wake.conversion_diagnostics
+    @test length(diag.records) == wake.conversion_count[]
+    @test wake.pfield.np > 0
+    @test all(isfinite, wake.pfield.particles[1:3, 1:wake.pfield.np])
+    @test all(isfinite,
+        wake.pfield.particles[FLOWVPM.GAMMA_INDEX, 1:wake.pfield.np])
+    @test norm(diag.total_residual) < 1e-10
+    @test diag.total_deposited ≈ diag.total_expected atol=1e-10
+end
+
 @testset "steady! body-only solve and validation" begin
     uinf = [1.0, 0.0, 0.0]
 
@@ -680,4 +716,532 @@ end
         grad_mu_options=(; basis=:tri),
     )
     @test all(body.Das[1] .== 0.123)
+end
+
+@testset "prescribed per-station Das lengths (chord-proportional, BRAINSTORM 018)" begin
+    SV3 = FastMultipole.SVector{3, Float64}
+    Uinf_zero = t -> SV3(0.0, 0.0, 0.0)
+    axis = SV3(0.0, 0.0, 1.0)
+    Ω_body = 3.0
+    dt = 0.2
+    eta = 1.0
+
+    _rot_frames(body) = pnl.ReferenceFrame(body;
+        origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+        ω_axis=axis, ω=Ω_body,
+        R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle", child_index=Int[], dependent_index=[1])
+
+    # Reference: the tangent eta path, to borrow its per-station directions.
+    body_eta = make_plate_vortex_body()
+    body_eta.Das[1] .= 0.0
+    pnl.initialize_Das!((body_eta,), _rot_frames(body_eta), Uinf_zero, 0.0, dt;
+        set_Das_eta_kinematic=eta, set_Das_kinematic_arc=false)
+
+    nstations = size(body_eta.Das[1], 2)
+    lens = collect(range(0.05, 0.30; length=nstations))
+
+    body = make_plate_vortex_body()
+    body.Das[1] .= 0.0
+    pnl.initialize_Das!((body,), _rot_frames(body), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),))
+
+    # stations with zero TE kinematic velocity (on the rotation axis) carry no
+    # direction and are skipped by both paths; assert on the moving ones
+    moving = [j for j in 1:nstations if norm(body_eta.Das[1][:, j]) > 0]
+    @test !isempty(moving)
+    for j in moving
+        dj = SV3(body.Das[1][1, j], body.Das[1][2, j], body.Das[1][3, j])
+        de = SV3(body_eta.Das[1][1, j], body_eta.Das[1][2, j], body_eta.Das[1][3, j])
+        # magnitude is exactly the prescribed length
+        @test norm(dj) ≈ lens[j] rtol=1e-12
+        # direction matches the tangent eta path exactly
+        @test dj / norm(dj) ≈ de / norm(de) atol=1e-12
+    end
+
+    # min_displacement floor applies to prescribed lengths too
+    body_floor = make_plate_vortex_body()
+    body_floor.Das[1] .= 0.0
+    floor_len = 0.2
+    pnl.initialize_Das!((body_floor,), _rot_frames(body_floor), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_min_kinematic_displacement=floor_len)
+    for j in moving
+        dj = body_floor.Das[1][:, j]
+        @test norm(dj) ≈ max(lens[j], floor_len) rtol=1e-12
+    end
+
+    # mutual exclusion with the eta path
+    body_err = make_plate_vortex_body()
+    @test_throws ErrorException pnl.initialize_Das!((body_err,), _rot_frames(body_err),
+        Uinf_zero, 0.0, dt;
+        set_Das_eta_kinematic=eta, set_Das_station_lengths=((lens,),))
+
+    # station-count mismatch is loud
+    body_err2 = make_plate_vortex_body()
+    @test_throws ErrorException pnl.initialize_Das!((body_err2,), _rot_frames(body_err2),
+        Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens[1:end-1],),))
+
+    # frozen semantics: prescribed Das only rotates afterwards (magnitude kept)
+    Rz = FastMultipole.SMatrix{3,3,Float64,9}(cos(0.3), sin(0.3), 0.0,
+        -sin(0.3), cos(0.3), 0.0, 0.0, 0.0, 1.0)
+    pnl.rotate_Das!(body, Rz)
+    for j in moving
+        @test norm(body.Das[1][:, j]) ≈ lens[j] rtol=1e-12
+    end
+end
+@testset "uniform-d_front Das law identity (BRAINSTORM 018 phase_13 s4b)" begin
+    SV3 = FastMultipole.SVector{3, Float64}
+    Uinf_zero = t -> SV3(0.0, 0.0, 0.0)
+    axis = SV3(0.0, 0.0, 1.0)
+    Ω_body = 3.0
+    dt = 0.2
+
+    _rot_frames(body) = pnl.ReferenceFrame(body;
+        origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+        ω_axis=axis, ω=Ω_body,
+        R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle", child_index=Int[], dependent_index=[1])
+
+    # eta=1 reference: |Das_eta_j| = 1*dt*|Vte_j| = one step of TE travel,
+    # exactly the travel term of the s4b construction.
+    body_eta = make_plate_vortex_body()
+    body_eta.Das[1] .= 0.0
+    pnl.initialize_Das!((body_eta,), _rot_frames(body_eta), Uinf_zero, 0.0, dt;
+        set_Das_eta_kinematic=1.0, set_Das_kinematic_arc=false)
+    nstations = size(body_eta.Das[1], 2)
+    travel = [norm(body_eta.Das[1][:, j]) for j in 1:nstations]
+    moving = [j for j in 1:nstations if travel[j] > 0]
+    @test !isempty(moving)
+
+    # d_front = |Das| + (N-1)*travel must equal D*sigma at every moving station
+    N = 3
+    sigma = maximum(travel)          # keeps every lens strictly positive
+    D = 3.4
+    lens = D * sigma .- (N - 1) .* travel
+    @test minimum(lens[moving]) > 0
+    body = make_plate_vortex_body()
+    body.Das[1] .= 0.0
+    pnl.initialize_Das!((body,), _rot_frames(body), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),))
+    for j in moving
+        d_front = norm(body.Das[1][:, j]) + (N - 1) * travel[j]
+        @test d_front ≈ D * sigma rtol=1e-12
+    end
+
+    # N=1 degenerate case: no travel term, |Das| = D*sigma span-uniform
+    body1 = make_plate_vortex_body()
+    body1.Das[1] .= 0.0
+    pnl.initialize_Das!((body1,), _rot_frames(body1), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((fill(D * sigma, nstations),),))
+    for j in moving
+        @test norm(body1.Das[1][:, j]) ≈ D * sigma rtol=1e-12
+    end
+
+    # Chord–sigma co-scaling law (018 Phase 16): |Das|_j = lambda*sigma_j with
+    # sigma_j prescribed per station — Das/sigma must come out span-uniform at
+    # exactly lambda on the moving stations.
+    lambda = 3.4
+    sigmas = collect(range(0.02, 0.08; length=nstations))
+    body_cs = make_plate_vortex_body()
+    body_cs.Das[1] .= 0.0
+    pnl.initialize_Das!((body_cs,), _rot_frames(body_cs), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lambda .* sigmas,),))
+    for j in moving
+        @test norm(body_cs.Das[1][:, j]) / sigmas[j] ≈ lambda rtol=1e-12
+    end
+end
+
+@testset "endpoint-on-arc Das (018 Phase 16 F1b Route B)" begin
+    SV3 = FastMultipole.SVector{3, Float64}
+    Uinf_zero = t -> SV3(0.0, 0.0, 0.0)
+    axis = SV3(0.0, 0.0, 1.0)
+    Ω_body = 3.0
+    dt = 0.2
+
+    _rot_frames(body) = pnl.ReferenceFrame(body;
+        origin=SV3(0.0, 0.0, 0.0), v=SV3(0.0, 0.0, 0.0),
+        ω_axis=axis, ω=Ω_body,
+        R=FastMultipole.SMatrix{3,3,Float64,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle", child_index=Int[], dependent_index=[1])
+
+    _te_positions(body) = begin
+        shed = body.shedding[1]
+        n = size(shed, 2) + 1
+        tes = Vector{SV3}(undef, n)
+        for j in 1:size(shed, 2)
+            idx = body.cells[shed[3, j], shed[1, j]]
+            tes[j] = SV3(body.nodes[1, idx], body.nodes[2, idx], body.nodes[3, idx])
+        end
+        idx = body.cells[shed[2, end], shed[1, end]]
+        tes[end] = SV3(body.nodes[1, idx], body.nodes[2, idx], body.nodes[3, idx])
+        tes
+    end
+
+    body_probe = make_plate_vortex_body()
+    nstations = size(body_probe.Das[1], 2)
+    tes = _te_positions(body_probe)
+    radii = [sqrt(te[1]^2 + te[2]^2) for te in tes]
+    moving = [j for j in 1:nstations if radii[j] > 0]
+    @test !isempty(moving)
+    lens = collect(range(0.05, 0.30; length=nstations))
+    zero_drift = zeros(3, nstations)
+
+    # (1) kinematic-only reduction (u = 0): endpoint lies ON the swept circle
+    # (radius preserved to machine precision — with u = 0 the path speed is
+    # constant so the arc-length integration is exact), chord = 2r·sin(L/2r),
+    # and the result differs from the tangent path at finite theta.
+    body = make_plate_vortex_body()
+    body.Das[1] .= 0.0
+    pnl.initialize_Das!((body,), _rot_frames(body), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((zero_drift,),))
+    body_tan = make_plate_vortex_body()
+    body_tan.Das[1] .= 0.0
+    pnl.initialize_Das!((body_tan,), _rot_frames(body_tan), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),))
+    for j in moving
+        r = radii[j]
+        endpoint = tes[j] + SV3(body.Das[1][1, j], body.Das[1][2, j], body.Das[1][3, j])
+        @test sqrt(endpoint[1]^2 + endpoint[2]^2) ≈ r rtol=1e-10
+        @test endpoint[3] ≈ tes[j][3] atol=1e-12
+        chord = norm(body.Das[1][:, j])
+        @test chord ≈ 2r * sin(lens[j] / (2r)) rtol=1e-10
+        # tangent endpoint sits OFF the circle at r*sqrt(1+theta^2)
+        theta = lens[j] / r
+        end_tan = tes[j] + SV3(body_tan.Das[1][1, j], body_tan.Das[1][2, j],
+            body_tan.Das[1][3, j])
+        @test sqrt(end_tan[1]^2 + end_tan[2]^2) ≈ r * sqrt(1 + theta^2) rtol=1e-10
+    end
+
+    # (2) axial drift: exact helix — u ⟂ the rotation plane keeps path speed
+    # constant, so tau = L/sqrt((Ωr)² + w²) exactly; z advances by w·tau and
+    # the in-plane radius is preserved.
+    w = 0.8
+    drift_ax = vcat(zeros(2, nstations), fill(w, 1, nstations))
+    body_hx = make_plate_vortex_body()
+    body_hx.Das[1] .= 0.0
+    pnl.initialize_Das!((body_hx,), _rot_frames(body_hx), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((drift_ax,),))
+    for j in moving
+        r = radii[j]
+        τ = lens[j] / sqrt((Ω_body * r)^2 + w^2)
+        endpoint = tes[j] + SV3(body_hx.Das[1][1, j], body_hx.Das[1][2, j],
+            body_hx.Das[1][3, j])
+        @test sqrt(endpoint[1]^2 + endpoint[2]^2) ≈ r rtol=1e-10
+        @test endpoint[3] - tes[j][3] ≈ w * τ rtol=1e-10
+    end
+
+    # (3) chord never exceeds the prescribed arc length (generic drift)
+    drift_gen = 0.3 .* randn(3, nstations)
+    body_gen = make_plate_vortex_body()
+    body_gen.Das[1] .= 0.0
+    pnl.initialize_Das!((body_gen,), _rot_frames(body_gen), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((drift_gen,),))
+    for j in moving
+        # chord ≤ traversed path length; the explicit arc-length stepper has
+        # O(δs) first-order error when the speed varies along the path, so
+        # allow a few percent
+        @test norm(body_gen.Das[1][:, j]) <= lens[j] * 1.05
+        @test all(isfinite, body_gen.Das[1][:, j])
+    end
+
+    # (4) min_displacement floor applies to the ARC length
+    body_floor = make_plate_vortex_body()
+    body_floor.Das[1] .= 0.0
+    floor_len = 0.2
+    pnl.initialize_Das!((body_floor,), _rot_frames(body_floor), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((zero_drift,),),
+        set_Das_min_kinematic_displacement=floor_len)
+    for j in moving
+        r = radii[j]
+        L = max(lens[j], floor_len)
+        @test norm(body_floor.Das[1][:, j]) ≈ 2r * sin(L / (2r)) rtol=1e-10
+    end
+
+    # (5) drift exactly cancelling the kinematic TE velocity at zero lag:
+    # speed0 = 0 => station skipped (left untouched), matching legacy handling
+    j0 = moving[end]
+    drift_cancel = copy(zero_drift)
+    vkin = cross(SV3(0.0, 0.0, Ω_body), tes[j0])   # blade-point velocity ω×r
+    drift_cancel[:, j0] .= vkin                    # u = -Vte = +ω×r
+    body_stag = make_plate_vortex_body()
+    body_stag.Das[1] .= 0.0
+    pnl.initialize_Das!((body_stag,), _rot_frames(body_stag), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((drift_cancel,),))
+    @test norm(body_stag.Das[1][:, j0]) == 0.0
+    for j in moving
+        j == j0 && continue
+        @test norm(body_stag.Das[1][:, j]) > 0
+    end
+
+    # (6) loud errors: drifts without lengths; drift shape mismatch
+    body_err = make_plate_vortex_body()
+    @test_throws ErrorException pnl.initialize_Das!((body_err,),
+        _rot_frames(body_err), Uinf_zero, 0.0, dt;
+        set_Das_station_drifts=((zero_drift,),))
+    body_err2 = make_plate_vortex_body()
+    @test_throws ErrorException pnl.initialize_Das!((body_err2,),
+        _rot_frames(body_err2), Uinf_zero, 0.0, dt;
+        set_Das_station_lengths=((lens,),),
+        set_Das_station_drifts=((zero_drift[:, 1:end-1],),))
+
+    # (7) frozen semantics: rotates afterwards with magnitude kept
+    Rz = FastMultipole.SMatrix{3,3,Float64,9}(cos(0.3), sin(0.3), 0.0,
+        -sin(0.3), cos(0.3), 0.0, 0.0, 0.0, 1.0)
+    mags = [norm(body.Das[1][:, j]) for j in moving]
+    pnl.rotate_Das!(body, Rz)
+    for (i, j) in enumerate(moving)
+        @test norm(body.Das[1][:, j]) ≈ mags[i] rtol=1e-12
+    end
+end
+
+@testset "WakeHealthMonitor max_dtZ column (dtz kwarg)" begin
+    using StaticArrays: SVector
+
+    # Tiny benign particle field: default rVPM formulation f=0, g=1/5, so
+    # Z = (1/5) * Gamma'*(J-projection)*Gamma / |Gamma|^2. With Gamma along x
+    # and only J[1] = a nonzero, Z = a/5 under both transposed and classic
+    # schemes, so max_dtZ = dt*a/5 analytically.
+    function make_dtz_pfield()
+        pf = FLOWVPM.ParticleField(10, Float64;
+            fmm=FLOWVPM.FMM(autotune_reg_error=false))
+        FLOWVPM.add_particle(pf, SVector(0.0, 0.0, 0.0),
+            SVector(1.0, 0.0, 0.0), 0.05)
+        FLOWVPM.add_particle(pf, SVector(1.0, 0.0, 0.0),
+            SVector(0.0, 0.5, 0.0), 0.04)
+        FLOWVPM.add_particle(pf, SVector(2.0, 0.0, 0.0),
+            SVector(0.0, 0.0, 0.0), 0.03)   # zero-Gamma: Z must be 0
+        FLOWVPM.get_J(pf, 1)[1] = 5.0        # strongest contraction
+        FLOWVPM.get_J(pf, 2) .= 0.0
+        FLOWVPM.get_J(pf, 2)[5] = -2.0       # expansive for particle 2
+        FLOWVPM.get_U(pf, 1) .= (1.0, 2.0, 2.0)
+        return pf
+    end
+
+    dt = 1e-3
+    legacy_header = "step,time,n_particles,max_u,min_sigma,min_sigma_ratio," *
+                    "max_gamma_over_sigma2,wall_s"
+
+    pf = make_dtz_pfield()
+    stats = pnl._wake_health_stats(pf, NaN, dt)
+    @test length(stats) == 6
+    @test stats[1] == 3.0
+    @test stats[2] ≈ 3.0                      # max|u|
+    @test stats[6] ≈ dt * 5.0 / 5 rtol=1e-12  # analytic dt*Z of particle 1
+    @test isfinite(stats[6]) && abs(stats[6]) < 1
+
+    # (a) dtz=false: CSV bit-identical structure to the legacy monitor
+    mktempdir() do dir
+        m = pnl.WakeHealthMonitor()           # default dtz=false
+        @test m.dtz == false
+        push!(m.stats, stats)
+        m.wall_s = 0.5
+        pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, dt)
+        lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
+        @test lines[1] == legacy_header
+        @test count(==(','), lines[2]) == 7   # 8 columns, unchanged
+    end
+
+    # (b) dtz=true: column present, finite, benign magnitude
+    mktempdir() do dir
+        m = pnl.WakeHealthMonitor(dtz=true)
+        push!(m.stats, stats)
+        m.wall_s = 0.5
+        pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, dt)
+        lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
+        @test lines[1] == legacy_header * ",max_dtZ"
+        cols = split(lines[2], ',')
+        @test length(cols) == 9
+        val = parse(Float64, cols[end])
+        @test isfinite(val) && abs(val) < 1
+        @test val ≈ stats[6]
+    end
+
+    # (c) cross-check against FLOWVPM's own sigma update: the Euler step
+    # applies sigma -= dt*sigma*Z with the same J, so the largest fractional
+    # contraction -Delta sigma/sigma must equal the reported max_dtZ.
+    pf2 = make_dtz_pfield()
+    stats2 = pnl._wake_health_stats(pf2, NaN, dt)
+    sig_pre = [FLOWVPM.get_sigma(pf2, i)[1] for i in 1:pf2.np]
+    FLOWVPM._euler(pf2, dt)
+    contraction = maximum((sig_pre[i] - FLOWVPM.get_sigma(pf2, i)[1]) / sig_pre[i]
+                          for i in 1:pf2.np)
+    @test contraction ≈ stats2[6] rtol=1e-10
+end
+
+@testset "WakeHealthMonitor min_sr attribution columns (attribution kwarg)" begin
+    using StaticArrays: SVector
+
+    pf = FLOWVPM.ParticleField(10, Float64;
+        fmm=FLOWVPM.FMM(autotune_reg_error=false))
+    FLOWVPM.add_particle(pf, SVector(0.0, 0.0, 0.0), SVector(1.0, 0.0, 0.0), 0.05)
+    FLOWVPM.add_particle(pf, SVector(1.0, 0.0, 0.0), SVector(0.0, 1.0, 0.0), 0.04)
+    FLOWVPM.add_particle(pf, SVector(2.0, 0.5, -0.5), SVector(0.0, 0.0, 1.0), 0.03)
+
+    m = pnl.WakeHealthMonitor(attribution=true, sigma_ref=0.1)
+    @test m.attribution == true
+
+    # type-7 p1 of sorted [0.03, 0.04, 0.05]: h = 1.02 -> 0.03 + 0.02*0.01 =
+    # 0.0302; ratio = 0.0302/0.1. Argmin is particle 3's position.
+    attr = pnl._wake_health_attribution!(m.sigma_buf, pf, 0.1)
+    @test attr[1] ≈ 0.302 rtol=1e-12
+    @test attr[2] == 2.0 && attr[3] == 0.5 && attr[4] == -0.5
+
+    # No sigma reference -> ratio NaN, position still reported
+    attr_nan = pnl._wake_health_attribution!(m.sigma_buf, pf, NaN)
+    @test isnan(attr_nan[1]) && attr_nan[2] == 2.0
+
+    # attribution=true: four columns appended after the legacy set (dtz off)
+    legacy_header = "step,time,n_particles,max_u,min_sigma,min_sigma_ratio," *
+                    "max_gamma_over_sigma2,wall_s"
+    mktempdir() do dir
+        push!(m.stats, pnl._wake_health_stats(pf, 0.1, 1e-3))
+        push!(m.attr, attr)
+        m.wall_s = 0.5
+        pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, 1e-3)
+        lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
+        @test lines[1] == legacy_header *
+                          ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z"
+        cols = split(lines[2], ',')
+        @test length(cols) == 12
+        @test parse(Float64, cols[9]) ≈ 0.302 rtol=1e-12
+        @test parse(Float64, cols[10]) == 2.0
+    end
+    # (default attribution=false bit-identity is asserted by the dtz testset
+    # above: legacy header, 8 columns.)
+end
+
+@testset "WakeInventoryMonitor banded inventory (BRAINSTORM 018 phase 15)" begin
+    using StaticArrays: SVector
+
+    R = 2.0
+    pf = FLOWVPM.ParticleField(10, Float64;
+        fmm=FLOWVPM.FMM(autotune_reg_error=false))
+    # band 1 (z/R 0-0.5) inboard: xi = 0.25, r = 0
+    FLOWVPM.add_particle(pf, SVector(0.5, 0.0, 0.0), SVector(1.0, 0.0, 0.0), 0.05)
+    # internal boundary xi = 0.5 exactly -> assigned to the LOWER band (band 1), r = 0
+    FLOWVPM.add_particle(pf, SVector(1.0, 0.0, 0.0), SVector(0.5, 0.0, 0.0), 0.07)
+    # band 1 outboard: xi = 0.25, r = 1.2 >= r_split
+    FLOWVPM.add_particle(pf, SVector(0.5, 2.4, 0.0), SVector(-1.0, 0.0, 0.0), 0.04)
+    # band 4 (z/R 1-2): xi = 1.5; antiparallel pair -> sum|G| = 4, vector sum = 0
+    FLOWVPM.add_particle(pf, SVector(3.0, 0.0, 0.0), SVector(0.0, 2.0, 0.0), 0.03)
+    FLOWVPM.add_particle(pf, SVector(3.0, 0.5, 0.0), SVector(0.0, -2.0, 0.0), 0.06)
+    # outside: xi = 4 > outer edge 3.5
+    FLOWVPM.add_particle(pf, SVector(8.0, 0.0, 0.0), SVector(0.0, 0.0, 1.0), 0.02)
+    # static particle in band 1: must be SKIPPED
+    FLOWVPM.add_particle(pf, SVector(0.5, 0.0, 0.1), SVector(9.0, 0.0, 0.0), 0.01;
+                         static=true)
+
+    m = pnl.WakeInventoryMonitor(R)
+    # cells: rin, rout, z0p5_1, z1_2, z2_3, z3_3p5, outside
+    @test length(m.cell_names) == 7
+    @test m.cell_names[1] == "z0p0_0p5_rin"
+    @test m.cell_names[2] == "z0p0_0p5_rout"
+    @test m.cell_names[end] == "outside"
+
+    vals = fill(NaN, 9*7)
+    bufs = [Float64[] for _ in 1:7]
+    pnl._wake_inventory_stats!(vals, bufs, pf, m)
+    n_of(c) = vals[(c - 1)*9 + 1]
+
+    @test n_of(1) == 2                    # rin: xi=0.25 + boundary xi=0.5; static skipped
+    @test n_of(2) == 1                    # rout
+    @test n_of(3) == 0 && n_of(5) == 0 && n_of(6) == 0
+    @test n_of(4) == 2
+    @test n_of(7) == 1                    # outside
+    @test sum(n_of(c) for c in 1:7) == 6  # partition of the non-static field
+
+    # cancellation-aware vs magnitude inventory (band 4)
+    b4 = (4 - 1)*9
+    @test vals[b4 + 2] ≈ 4.0              # sum|Gamma|
+    @test abs(vals[b4 + 4]) < 1e-14       # vector Gamma_y cancels
+    # sigma stats over [0.03, 0.06]: mean = p50 = 0.045; type-7 p5/p95
+    @test vals[b4 + 6] ≈ 0.045 && vals[b4 + 8] ≈ 0.045
+    @test vals[b4 + 7] ≈ 0.0315 rtol=1e-12
+    @test vals[b4 + 9] ≈ 0.0585 rtol=1e-12
+    # empty cell -> NaN sigma stats, zero sums
+    @test isnan(vals[(3 - 1)*9 + 6]) && vals[(3 - 1)*9 + 2] == 0.0
+
+    # CSV: 2 + 9*7 columns, counts written as integers
+    mktempdir() do dir
+        push!(m.stats, vals)
+        pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, 1e-3)
+        lines = readlines(joinpath(dir, "t_monitor01_wake_inventory_system1.csv"))
+        hdr = split(lines[1], ',')
+        @test length(hdr) == 2 + 9*7
+        @test hdr[3] == "z0p0_0p5_rin_n"
+        @test hdr[end] == "outside_sigma_p95"
+        cols = split(lines[2], ',')
+        @test length(cols) == 2 + 9*7
+        @test cols[3] == "2"              # Int-formatted count
+    end
+end
+
+@testset "PanelParticleWake expint kwarg (BRAINSTORM 020 Stage B)" begin
+    # Off (default): stock forward Euler — the step! branch selects _euler and
+    # the recorded integration is unchanged from prior behavior.
+    body = make_plate_vortex_body()
+    wake_off = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1)
+    @test wake_off.pfield.integration === FLOWVPM.euler
+    @test wake_off.pfield_optargs.integration === FLOWVPM.euler
+
+    # On: integration is the exponential integrator and is echoed into the
+    # reproduction metadata (pfield.integration is the single source of truth
+    # for the step! branch).
+    body2 = make_plate_vortex_body()
+    wake_on = pnl.PanelParticleWake(body2; nwakerows=2, particle_kerneloffset=0.1,
+        expint=true)
+    @test wake_on.pfield.integration === FLOWVPM.euler_exp
+    @test wake_on.pfield_optargs.integration === FLOWVPM.euler_exp
+end
+
+@testset "simulate! convert-at-shed N=0 smoke (BRAINSTORM 024)" begin
+    # nwakerows=0 must survive the real time-marching loop with both
+    # conversion strategies: every step sheds AND converts (no free sheet
+    # enters any solve), particles stay finite, and the smooth ledger closes.
+    Uinf = t -> [1.0, 0.0, 0.0]
+    maneuver = (frames, systems, wakes, t) -> nothing
+    t_range = [0.0:0.05:0.3;]
+
+    for conversion_kwargs in (
+            (;),                                       # LegacyEdgeJumpConversion
+            (; conversion=pnl.SurfaceVorticityConversion(0.05;
+                attribution=:downstream)),
+        )
+        body = make_plate_vortex_body()
+        body.strength[1, 1] = 1.0
+        body.strength[2, 1] = 2.0
+        wake = pnl.PanelParticleWake(body; nwakerows=0, max_particles=10_000,
+            freestream_convection=true, conversion_kwargs...)
+        frames = pnl.ReferenceFrame(body)
+        pnl.simulate!(body, wake, frames, maneuver, Uinf, t_range;
+            body_solvers=SimNoopSolver(),
+            backend=pnl.DirectBackend(),
+            path=nothing,
+            grad_mu_options=(; basis=:tri),
+        )
+
+        pw = wake.panel_wake
+        @test pw.convert_at_shed
+        @test pw.nwakes[] == 0            # no free sheet survives any step
+        @test pw.overflowed[]
+        np = wake.pfield.np
+        @test np > 0
+        @test all(isfinite, wake.pfield.particles[1:3, 1:np])
+        @test all(isfinite, wake.pfield.particles[FLOWVPM.GAMMA_INDEX, 1:np])
+        @test all(>(0), wake.pfield.particles[FLOWVPM.SIGMA_INDEX, 1:np])
+        if wake.conversion isa pnl.SurfaceVorticityConversion
+            # one conversion per shed, from the very first step
+            @test wake.conversion_count[] == length(t_range) - 1
+            diag = wake.conversion_diagnostics
+            @test norm(diag.total_residual) < 1e-10
+            @test diag.total_deposited ≈ diag.total_expected atol=1e-10
+        end
+    end
 end

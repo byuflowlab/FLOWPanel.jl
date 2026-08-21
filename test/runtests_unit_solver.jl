@@ -1,7 +1,8 @@
 using Test
 import FLOWPanel as pnl
-using LinearAlgebra: diag, dot, rank
+using LinearAlgebra: diag, dot, rank, ldiv!
 import Meshes
+import SparseArrays
 using StaticArrays: SVector
 import GeoIO
 
@@ -50,6 +51,31 @@ end
         @test any(abs.(body.strength[:, 1]) .> 0)
         max_residual = nonlifting_flow_tangency_max_residual(body)
         @test max_residual < 1e-12
+    end
+
+    @testset "Backslash Glu write-back on update_G (regression)" begin
+        # Regression for the stale-Glu aliasing bug: lu!(G) aliases solver.G as
+        # Glu.factors, so a local re-factorization under update_G=true used to
+        # leave solver.Glu with fresh factors but stale pivots — corrupting any
+        # later direct consumer (Kutta Route A, Green-family formulations).
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        solver = pnl.Backslash(body)
+        pnl.solve!(body, solver)
+        strengths0 = copy(body.strength[:, 1])
+
+        # geometry unchanged: an update_G re-solve must reproduce the solution
+        # and leave solver.Glu a consistent (factors, ipiv) pair
+        pnl._solve!(body, solver; update_G=true)
+        @test isapprox(body.strength[:, 1], strengths0; atol=1e-12)
+
+        G_ref = zeros(body.ncells, body.ncells)
+        pnl._G!(G_ref, body, body; kerneloffset=body.kerneloffset_panel)
+        @test reconstruct_lu_operator(solver.Glu) ≈ G_ref atol=1e-10
+
+        rhs = [sin(1.1 * i) for i in 1:body.ncells]
+        @test isapprox(solver.Glu \ rhs, G_ref \ rhs; atol=1e-10)
     end
 
     @testset "Backslash Neumann RigidWakeBody (single ConstantDoublet)" begin
@@ -321,12 +347,558 @@ end
         assert_boundary_residuals((body_pc,); potential_atol=1e-6)
     end
 
+    @testset "KrylovSolver fgmres matches gmres" begin
+        body_g = make_octa_source_body()
+        body_f = make_octa_source_body()
+        for body in (body_g, body_f)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+        end
+
+        solver_g = pnl.KrylovSolver(body_g; method=:gmres, backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        solver_f = pnl.KrylovSolver(body_f; method=:fgmres, backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        pnl.solve!(body_g, solver_g)
+        pnl.solve!(body_f, solver_f)
+
+        @test isapprox(vec(body_f.strength[:, 1]), vec(body_g.strength[:, 1]); atol=1e-8)
+        assert_boundary_residuals((body_f,); tangency_atol=1e-7)
+    end
+
+    @testset "KrylovSolver persistent workspace" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        solver = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+
+        ws = solver.workspace
+        pnl.solve!(body, solver)
+        strengths1 = copy(body.strength[:, 1])
+        pnl.solve!(body, solver)
+
+        @test solver.workspace === ws            # no per-solve reallocation
+        @test isapprox(body.strength[:, 1], strengths1; atol=1e-12)
+        @test solver.niter > 0
+        @test solver.solved
+    end
+
+    @testset "FGSPreconditioner linearity and side effects" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+
+        P = pnl.FGSPreconditioner(body; sweeps=1, inner_iterations=2, leaf_size=10000)
+        P_uncached = pnl.FGSPreconditioner(body; sweeps=1, inner_iterations=2,
+            leaf_size=10000, cache_leaf_lu=false)
+
+        @test P.solver.cache_leaf_lu
+        @test P.solver.fgs.cache_leaf_lu
+        @test P.solver.fgs.leaf_lu_cache !== nothing
+        @test !P_uncached.solver.cache_leaf_lu
+        @test !P_uncached.solver.fgs.cache_leaf_lu
+        @test P_uncached.solver.fgs.leaf_lu_cache === nothing
+        @test pnl._preconditioner_metadata_dict(P)["cache_leaf_lu"] == true
+        @test pnl._preconditioner_metadata_dict(P_uncached)["cache_leaf_lu"] == false
+
+        strength0 = copy(body.strength)
+        velocity0 = copy(body.velocity)
+        potential0 = copy(body.potential)
+
+        n = body.ncells
+        x1 = [sin(0.9 * i) for i in 1:n]
+        x2 = [cos(1.7 * i) - 0.3 for i in 1:n]
+        α, β = 0.7, -1.9
+
+        y1, y2, y12 = zeros(n), zeros(n), zeros(n)
+        y1_uncached = zeros(n)
+        ldiv!(y1, P, x1)
+        ldiv!(y1_uncached, P_uncached, x1)
+        ldiv!(y2, P, x2)
+        ldiv!(y12, P, α .* x1 .+ β .* x2)
+
+        @test isapprox(y12, α .* y1 .+ β .* y2; atol=1e-10)
+        @test isapprox(y1, y1_uncached; atol=1e-12)
+
+        # side-effect-free apply
+        @test body.strength == strength0
+        @test body.velocity == velocity0
+        @test body.potential == potential0
+
+        # single-leaf FGS apply is an exact G⁻¹: check against the dense operator
+        G = zeros(n, n)
+        pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel)
+        @test isapprox(G * y1, x1; atol=1e-8)
+    end
+
+    @testset "KrylovSolver fgmres + FGSPreconditioner (config 1f)" begin
+        body_ref = make_octa_source_body()
+        body_pc = make_octa_source_body()
+        body_no_pc = make_octa_source_body()
+        for body in (body_ref, body_pc, body_no_pc)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+        end
+
+        ref = pnl.Backslash(body_ref)
+        pnl.solve!(body_ref, ref)
+
+        solver_no_pc = pnl.KrylovSolver(body_no_pc; method=:gmres, backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=100)
+        pnl.solve!(body_no_pc, solver_no_pc)
+
+        P = pnl.FGSPreconditioner(body_pc; sweeps=1, inner_iterations=2, leaf_size=10000)
+        solver_pc = pnl.KrylovSolver(body_pc; method=:fgmres, preconditioner=P, backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=100)
+        pnl.solve!(body_pc, solver_pc)
+
+        @test isapprox(vec(body_pc.strength[:, 1]), vec(body_ref.strength[:, 1]); atol=1e-6)
+        @test solver_pc.solved
+        @test solver_pc.niter <= solver_no_pc.niter
+        assert_boundary_residuals((body_pc,); tangency_atol=1e-6)
+    end
+
+    @testset "FMM-direct-list ILU(0) construction and apply" begin
+        for body in (make_octa_source_body(), make_dirichlet_diamond_body(),
+                     make_plate_vortex_body())
+            n = body.ncells
+            body.strength .= reshape(sin.(1:length(body.strength)), size(body.strength))
+            body.velocity .= reshape(cos.(1:length(body.velocity)), size(body.velocity))
+            body.potential .= range(-0.2, 0.3; length=n)
+            state0 = (strength=copy(body.strength), velocity=copy(body.velocity),
+                      potential=copy(body.potential), normals=copy(body.normals),
+                      controlpoints=copy(body.controlpoints))
+
+            # One leaf makes the directed Barba pattern dense. ILU(0) then
+            # drops no fill and must agree with a direct solve.
+            P = pnl.ILUPreconditioner(body; leaf_size=10_000, keep_matrix=true)
+            @test P.interaction_list_method == :Barba
+            @test P.stats["nnz"] == n^2
+            @test P.stats["factor_nnz"] == n^2
+            @test P.stats["max_row_nnz"] == n
+            @test all(i -> P.matrix[i, i] != 0, 1:n)
+            @test sort(P.permutation) == collect(1:n)
+            @test P.inverse_permutation[P.permutation] == collect(1:n)
+
+            G = zeros(n, n)
+            pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel)
+            @test P.matrix ≈ G[P.permutation, P.permutation] atol=1e-12
+
+            x1 = [sin(0.9i) for i in 1:n]
+            x2 = [cos(1.7i) - 0.3 for i in 1:n]
+            y1, y2, y12 = zeros(n), zeros(n), zeros(n)
+            ldiv!(y1, P, x1)
+            ldiv!(y2, P, x2)
+            ldiv!(y12, P, 0.7 .* x1 .- 1.9 .* x2)
+            @test y12 ≈ 0.7 .* y1 .- 1.9 .* y2 atol=1e-10
+            @test y1 ≈ G \ x1 atol=1e-10
+
+            # Constructor and apply are side-effect-free.
+            @test body.strength == state0.strength
+            @test body.velocity == state0.velocity
+            @test body.potential == state0.potential
+            @test body.normals == state0.normals
+            @test body.controlpoints == state0.controlpoints
+        end
+    end
+
+    @testset "ILU(0) sparse pattern, guard, scaling, and Krylov routing" begin
+        # Nontrivial tree ordering: stored entries are exactly the corresponding
+        # dense _G! entries, with no off-pattern storage.
+        body = make_sphere_source_body(ntheta=4, nphi=8)
+        P = pnl.ILUPreconditioner(body; leaf_size=4,
+            multipole_acceptance=1.0, keep_matrix=true)
+        target_tree, source_tree, direct_list, _, requested =
+            pnl._ilu_direct_pattern(body, 4, 1.0, 512 * body.ncells)
+        expanded = Set{Tuple{Int,Int}}()
+        for pair in direct_list
+            tr = target_tree.branches[pair[1]].bodies_index[1]
+            sr = source_tree.branches[pair[2]].bodies_index[1]
+            for it in tr, js in sr
+                push!(expanded, (target_tree.sort_index_list[1][it],
+                                 source_tree.sort_index_list[1][js]))
+            end
+        end
+        for i in 1:body.ncells
+            push!(expanded, (i, i))
+        end
+        @test length(expanded) == requested
+        I, J, V = SparseArrays.findnz(P.matrix)
+        @test length(Set(zip(I, J))) == length(V)
+        stored_original = Set((P.permutation[I[k]], P.permutation[J[k]])
+                              for k in eachindex(V))
+        @test stored_original == expanded
+        @test all(i -> P.matrix[i, i] != 0, 1:body.ncells)
+        @test P.stats["nnz"] < body.ncells^2
+
+        # The linear guard fires before triplet allocation/kernel evaluation
+        # and restores constructor-visible body state.
+        guard_body = make_sphere_source_body(ntheta=4, nphi=8)
+        state0 = copy(guard_body.strength)
+        err = try
+            pnl.ILUPreconditioner(guard_body; leaf_size=10_000,
+                max_pattern_entries=guard_body.ncells)
+            nothing
+        catch ex
+            ex
+        end
+        @test err isa ArgumentError
+        @test occursin("before sparse allocation and kernel evaluation", sprint(showerror, err))
+        @test guard_body.strength == state0
+
+        # Equilibrated DS applies D to the right-hand side and still represents
+        # an approximation to S^{-1}; with a dense pattern it is exact.
+        eq_body = make_octa_source_body()
+        Peq = pnl.ILUPreconditioner(eq_body; leaf_size=10_000,
+            equilibrate=true, diagonal_shift=1e-8, keep_matrix=true)
+        rhs = [sin(i) for i in 1:eq_body.ncells]
+        sol = similar(rhs)
+        ldiv!(sol, Peq, rhs)
+        shifted = copy(Peq.matrix)
+        @test shifted * sol[Peq.permutation] ≈ rhs[Peq.permutation] atol=1e-9
+
+        # Metadata retains every construction knob and accounting field.
+        md = pnl._preconditioner_metadata_dict(P)
+        for key in ("leaf_size", "multipole_acceptance", "interaction_list_method",
+                    "equilibrate", "diagonal_shift", "max_pattern_entries",
+                    "nnz", "nnz_per_panel", "max_row_nnz", "factor_nnz")
+            @test haskey(md, key)
+        end
+
+        body_ref = make_octa_source_body()
+        body_pc = make_octa_source_body()
+        for b in (body_ref, body_pc)
+            b.velocity .= 0
+            b.velocity[1, :] .= 1.0
+            b.velocity[3, :] .= 0.2
+        end
+        ref = pnl.Backslash(body_ref)
+        pnl.solve!(body_ref, ref)
+        solver = pnl.KrylovSolver(body_pc; method=:gmres,
+            preconditioner=pnl.ILUPreconditioner(body_pc; leaf_size=10_000),
+            backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        pnl.solve!(body_pc, solver)
+        @test solver.solved
+        @test body_pc.strength[:, 1] ≈ body_ref.strength[:, 1] atol=1e-8
+    end
+
+    @testset "ILU(0) construction ladder remains linear" begin
+        samples = Tuple{Int,Int}[]
+        for (ntheta, nphi) in ((8, 16), (12, 22), (16, 32))
+            body = make_sphere_source_body(; ntheta, nphi)
+            P = pnl.ILUPreconditioner(body; leaf_size=10,
+                multipole_acceptance=1.0)
+            push!(samples, (P.stats["nnz"], P.stats["retained_bytes"]))
+        end
+        for i in 2:length(samples)
+            @test samples[i][1] <= 2.5 * samples[i-1][1]
+            @test samples[i][2] <= 2.5 * samples[i-1][2]
+        end
+    end
+
+    @testset "ILU(0) direct list agrees with fmm!" begin
+        # Keep this last: fmm! exercises the complete evaluator whereas ILU
+        # construction intentionally uses only its tree/list portion.
+        body = make_octa_source_body()
+        target_tree, source_tree, direct_list, _, _ =
+            pnl._ilu_direct_pattern(body, 4, 1.0, 512 * body.ncells)
+        _, _, fmm_target_tree, fmm_source_tree, _, fmm_direct_list, _, _ =
+            pnl.FastMultipole.fmm!(deepcopy(body);
+                scalar_potential=false, gradient=true, hessian=false,
+                leaf_size=4, multipole_acceptance=1.0,
+                interaction_list_method=pnl.FastMultipole.Barba(),
+                nearfield=true, farfield=true, self_induced=true)
+        @test Set(Tuple.(direct_list)) == Set(Tuple.(fmm_direct_list))
+        @test target_tree.sort_index_list == fmm_target_tree.sort_index_list
+        @test source_tree.sort_index_list == fmm_source_tree.sort_index_list
+    end
+
+    @testset "KrylovSolver history capture" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        solver = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50, record_history=true)
+        pnl.solve!(body, solver)
+
+        h = solver.history
+        @test length(h) > 0
+        @test length(h) >= solver.niter
+        @test issorted(h.t_ns)
+        @test h.metric == :krylov_precnorm
+        @test all(h.t_ns .>= h.t0_ns)
+
+        # history resets on the next solve rather than accumulating
+        len1 = length(h)
+        pnl.solve!(body, solver)
+        @test length(solver.history) <= len1 + 1
+    end
+
+    @testset "KrylovSolver warmstart (Neumann)" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        solver = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+
+        @test !solver.warmstart          # off by default
+        pnl.solve!(body, solver)
+        niter_cold = solver.niter
+        strengths_cold = copy(body.strength[:, 1])
+        @test solver.have_x_prev
+
+        solver.warmstart = true
+        pnl.solve!(body, solver)         # identical RHS, seeded with the exact solution
+        @test solver.niter <= niter_cold
+        @test isapprox(body.strength[:, 1], strengths_cold; atol=1e-8)
+
+        # changed RHS: warmstarted solve still converges to the right answer
+        body.velocity .= 0
+        body.velocity[2, :] .= 1.0
+        body_ref = make_octa_source_body()
+        body_ref.velocity .= 0
+        body_ref.velocity[2, :] .= 1.0
+        ref = pnl.Backslash(body_ref)
+        pnl.solve!(body_ref, ref)
+
+        pnl.solve!(body, solver)
+        @test isapprox(body.strength[:, 1], body_ref.strength[:, 1]; atol=1e-7)
+    end
+
+    @testset "KrylovSolver warmstart (Dirichlet)" begin
+        make_dirichlet_body() = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[
+                0 1 1 0;
+                0 0 1 1;
+                0 0 0 0;
+            ],
+            Int[
+                1 1;
+                2 3;
+                3 4;
+            ];
+            check_mesh=false,
+            watertight=false,
+        )
+        body = make_dirichlet_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        body.velocity[3, :] .= 0.2
+
+        solver = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50)
+        pnl.solve!(body, solver)
+        niter_cold = solver.niter
+        mu_cold = copy(body.strength[:, 2])
+
+        solver.warmstart = true
+        pnl.solve!(body, solver)
+        @test solver.niter <= niter_cold
+        @test isapprox(body.strength[:, 2], mu_cold; atol=1e-8)
+        assert_boundary_residuals((body,); potential_atol=1e-7)
+    end
+
+    @testset "KrylovSolver cache_tree (021 Phase 2b)" begin
+        # FMM-plan reuse across a solve's operator applies must be bitwise
+        # equivalent to the per-apply tree-rebuild path, and per-solve scoping
+        # must survive kerneloffset changes between solves.
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=20)
+        kw = (; backend, method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
+
+        function fresh_sphere()
+            body = make_sphere_source_body()
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            return body
+        end
+
+        # --- bitwise equivalence, cached vs uncached -----------------------
+        body_ref = fresh_sphere()
+        solver_ref = pnl.KrylovSolver(body_ref; kw...)
+        pnl.solve!(body_ref, solver_ref)
+
+        body_c = fresh_sphere()
+        solver_c = pnl.KrylovSolver(body_c; kw..., cache_tree=true)
+        pnl.solve!(body_c, solver_c)
+
+        @test solver_c.niter == solver_ref.niter
+        @test solver_c.niter > 1              # premise: the plan was reused
+        @test body_c.strength == body_ref.strength   # bitwise
+        @test solver_c.kop.plan_slot[] === nothing   # dropped at solve end
+
+        # --- allocation reduction ------------------------------------------
+        alloc_ref = @allocated pnl.solve!(body_ref, solver_ref)
+        alloc_c = @allocated pnl.solve!(body_c, solver_c)
+        @test alloc_ref > 10_000_000          # premise: rebuild path allocates
+        @test alloc_c < 0.6 * alloc_ref
+
+        # --- per-solve invalidation under geometry change ------------------
+        # the plan is rebuilt every solve by construction; verify that a
+        # geometry change between solves is honored bitwise (a stale-plan bug
+        # would reproduce the OLD geometry's solution instead). The offset
+        # knob is inert on this fixture (measured: kerneloffset changes leave
+        # the solve bit-identical), so geometry is the discriminating input.
+        function perturb!(body)
+            body.nodes[:, 1] .+= 0.05
+            pnl.calc_normals!(body)
+            pnl.calc_controlpoints!(body)
+            return body
+        end
+        perturb!(body_c)
+        pnl.solve!(body_c, solver_c)
+        body_f = perturb!(fresh_sphere())
+        solver_f = pnl.KrylovSolver(body_f; kw...)
+        pnl.solve!(body_f, solver_f)
+        @test body_c.strength == body_f.strength     # bitwise
+        # premise: the perturbation actually changed the solution
+        @test body_c.strength != body_ref.strength
+
+        # --- guards + metadata ---------------------------------------------
+        @test_throws ArgumentError pnl.KrylovSolver(fresh_sphere();
+            backend=pnl.DirectBackend(), cache_tree=true)
+        md = pnl._solver_metadata_dict(solver_c)
+        @test md["cache_tree"] === true
+        @test pnl._solver_metadata_dict(solver_ref)["cache_tree"] === false
+    end
+
+    @testset "KrylovSolver cache_nearfield (021 Phase 2b)" begin
+        # Dense near-field cache: the cached operator apply must reproduce the
+        # kernel apply to rtol 1e-12 (NOT bitwise — BLAS sums in a different
+        # order), on a body WITH shedding panels so the attached-wake term
+        # `_induced_wake` is exercised (this is the plan's V0 linearity check:
+        # the cache is built by single-panel unit-strength probes, so any
+        # strength-like input outside buffer rows 5:4+strength_dims, or any
+        # nonlinearity, breaks the comparison).
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=16)
+
+        # --- V0: Dirichlet apply_G exactness incl. attached wake -----------
+        body = make_dirichlet_diamond_body(nspan=40)
+        @test body.nsheddings > 0             # premise: shedding panels present
+        @test any(!iszero, vcat(vec.(body.Das)...))  # premise: wake direction set
+        n = body.ncells
+        x = sin.(0.7 .* (1:n)) .+ 0.1
+        scratch = zeros(n)
+
+        y_ref = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch))
+        slot = Ref{Any}(nothing)
+        y_cached = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch;
+            plan_slot=slot, cache_nearfield=true))
+
+        # premise guards: a plan with a real near field was built and carries
+        # the cache (bitwise inequality proves the BLAS path actually ran)
+        plan = slot[][1]
+        @test length(plan.direct_list) > 0
+        @test plan.nearfield_cache[] isa FastMultipole.NearfieldInfluenceCache
+        @test any(!iszero, y_ref)
+        @test y_cached != y_ref
+        @test isapprox(y_cached, y_ref; rtol=1e-12)
+
+        # strength-change reuse through the SAME plan/cache
+        x2 = cos.(0.3 .* (1:n)) .- 0.05
+        y_cached2 = copy(pnl._apply_dirichlet_G!(body, x2, backend, scratch;
+            plan_slot=slot, cache_nearfield=true))
+        @test slot[][1] === plan              # premise: plan (and cache) reused
+        y_ref2 = copy(pnl._apply_dirichlet_G!(body, x2, backend, scratch))
+        @test !isapprox(y_ref2, y_ref; rtol=1e-6)  # premise: answer changed
+        @test isapprox(y_cached2, y_ref2; rtol=1e-12)
+
+        # --- Neumann solve equality ----------------------------------------
+        kw = (; backend, method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
+        function fresh_sphere()
+            body = make_sphere_source_body()
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            return body
+        end
+
+        body_ref = fresh_sphere()
+        solver_ref = pnl.KrylovSolver(body_ref; kw...)
+        pnl.solve!(body_ref, solver_ref)
+
+        body_c = fresh_sphere()
+        solver_c = pnl.KrylovSolver(body_c; kw..., cache_nearfield=true)
+        @test solver_c.cache_tree === true    # implied by cache_nearfield
+        pnl.solve!(body_c, solver_c)
+
+        @test solver_c.solved
+        @test solver_c.niter > 1              # premise: the cache was reused
+        @test body_c.strength != body_ref.strength   # premise: BLAS path ran
+        @test isapprox(body_c.strength, body_ref.strength; rtol=1e-10)
+        @test solver_c.kop.plan_slot[] === nothing   # dropped at solve end
+        # tangency at FMM truncation level (p=8 ≈ 1e-8 field error; the solve
+        # itself converged to rtol 1e-10 — measured uncached residual is the
+        # same 3e-8, so this is backend truncation, not a cache artifact)
+        assert_boundary_residuals((body_c,); tangency_atol=1e-6)
+
+        # --- guards + metadata ---------------------------------------------
+        @test_throws ArgumentError pnl.KrylovSolver(fresh_sphere();
+            backend=pnl.DirectBackend(), cache_nearfield=true)
+        md = pnl._solver_metadata_dict(solver_c)
+        @test md["cache_nearfield"] === true
+        @test md["cache_tree"] === true
+        @test pnl._solver_metadata_dict(solver_ref)["cache_nearfield"] === false
+    end
+
+    @testset "FGSSolver sweep_order plumbing (021 Phase 2b)" begin
+        body = make_sphere_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+
+        # default stays lexicographic; :colored constructs, solves, and reports
+        solver_lex = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false)
+        @test solver_lex.sweep_order === :lexicographic
+        @test pnl._solver_metadata_dict(solver_lex)["sweep_order"] == "lexicographic"
+
+        solver_col = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false, sweep_order=:colored)
+        @test solver_col.sweep_order === :colored
+        @test length(solver_col.fgs.leaves_by_color) > 1   # premise: coloring built
+        pnl.solve!(body, solver_col)
+        @test any(abs.(body.strength[:, 1]) .> 0)
+        @test pnl._solver_metadata_dict(solver_col)["sweep_order"] == "colored"
+
+        P = pnl.FGSPreconditioner(body; sweeps=2, inner_iterations=2,
+            expansion_order=6, multipole_acceptance=0.4, leaf_size=50,
+            sweep_order=:colored)
+        @test pnl._preconditioner_metadata_dict(P)["sweep_order"] == "colored"
+    end
+
+    @testset "KrylovCoupled warmstart" begin
+        body1 = make_octa_source_body()
+        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        for body in (body1, body2)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+        end
+        bodies = (body1, body2)
+        solver = pnl.KrylovCoupled(bodies; backend=pnl.DirectBackend(), atol=1e-10, rtol=1e-10, itmax=50, warmstart=true)
+
+        ws = solver.workspace
+        pnl.solve!(bodies, solver)
+        niter_cold = solver.niter
+        strengths1 = copy(body1.strength[:, 1])
+
+        pnl.solve!(bodies, solver)
+        @test solver.workspace === ws
+        @test solver.niter <= niter_cold
+        @test isapprox(body1.strength[:, 1], strengths1; atol=1e-8)
+        assert_boundary_residuals(bodies; tangency_atol=1e-7)
+    end
+
     @testset "FGSSolver construction" begin
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
         solver1 = pnl.FGSSolver(body1)
+        solver_uncached = pnl.FGSSolver(body2; cache_leaf_lu=false)
         @test solver1.max_iterations == 100
         @test solver1.tolerance == 1e-6
+        @test solver1.cache_leaf_lu
+        @test solver1.fgs.cache_leaf_lu
+        @test solver1.fgs.leaf_lu_cache !== nothing
+        @test !solver_uncached.cache_leaf_lu
+        @test !solver_uncached.fgs.cache_leaf_lu
+        @test solver_uncached.fgs.leaf_lu_cache === nothing
+        @test pnl._solver_metadata_dict(solver1)["cache_leaf_lu"] == true
+        @test pnl._solver_metadata_dict(solver_uncached)["cache_leaf_lu"] == false
         @test size(solver1.Uext) == (3, body1.ncells)
         @test size(solver1.phi_ext) == (body1.ncells,)
         @test_throws MethodError pnl.FGSSolver((body1, body2))
@@ -370,6 +942,28 @@ end
         neumann.strength[:, 1] .= 3.0
         pnl.set_strengths!(neumann)
         @test all(iszero, neumann.strength[:, 1])
+    end
+
+    @testset "FGSSolver Neumann RigidWakeBody (VortexRing, 1 column)" begin
+        # Regression for the missing FastMultipole.strength_to_value overload:
+        # FGSSolver (and FGSPreconditioner) crashed on the uncapped Neumann
+        # rotor body type RigidWakeBody{VortexRing,1,_,false} (021 Phase 0).
+        body_ref = make_plate_vortex_body()
+        body_fgs = make_plate_vortex_body()
+        for body in (body_ref, body_fgs)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+            body.strength .= 0
+        end
+
+        solver_ref = pnl.Backslash(body_ref)
+        pnl.solve!(body_ref, solver_ref)
+
+        solver_fgs = pnl.FGSSolver(body_fgs; leaf_size=10000, tolerance=1e-12, max_iterations=5)
+        pnl.solve!(body_fgs, solver_fgs)
+
+        @test isapprox(body_fgs.strength[:, 1], body_ref.strength[:, 1]; atol=1e-10)
     end
 
     @testset "Multi-body solve" begin
@@ -431,6 +1025,47 @@ end
         @test any(abs.(body1.strength[:, 1]) .> 0)
         @test any(abs.(body2.strength[:, 1]) .> 0)
         assert_boundary_residuals(bodies; backend, tangency_atol=1e-8)
+    end
+
+    @testset "Coupled Dirichlet rhs idempotence (regression)" begin
+        # calc_bc_dirichlet used to ACCUMULATE (`RHS .-= potential`) into the
+        # coupled solvers' persistent rhs, which is never zeroed between
+        # solves: every solve after the first doubled the Dirichlet rows
+        # (x -> 2 x_ref). Found via 021 Phase 1 (2026-08-14).
+        make_dbc_body() = begin
+            body = pnl.NonLiftingBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+                copy(NODES_OCT), copy(CELLS_OCT); DBC=true)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+            pnl.calc_normals!(body)
+            body
+        end
+
+        ref_body = make_dbc_body()
+        pnl.solve!(ref_body, pnl.Backslash(ref_body))
+        x_ref = copy(ref_body.strength[:, 2])
+        @test any(abs.(x_ref) .> 0)
+
+        body = make_dbc_body()
+        solver = pnl.BackslashCoupled((body,))
+        pnl.solve!((body,), solver)
+        x1 = copy(body.strength[:, 2])
+        @test isapprox(x1, x_ref; atol=1e-10)
+        body.strength[:, 2] .= 0
+        pnl.solve!((body,), solver)
+        @test isapprox(copy(body.strength[:, 2]), x1; atol=1e-12)
+
+        # KrylovCoupled routes its rhs through the same calc_bc_dirichlet path
+        kbody = make_dbc_body()
+        ksolver = pnl.KrylovCoupled((kbody,); backend=pnl.DirectBackend(),
+                                    atol=1e-12, rtol=1e-12, itmax=50)
+        pnl.solve!((kbody,), ksolver)
+        k1 = copy(kbody.strength[:, 2])
+        @test isapprox(k1, x_ref; atol=1e-8)
+        kbody.strength[:, 2] .= 0
+        pnl.solve!((kbody,), ksolver)
+        @test isapprox(copy(kbody.strength[:, 2]), k1; atol=1e-8)
     end
 
     @testset "backslashcoupled" begin

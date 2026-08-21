@@ -1,0 +1,2 @@
+tag,last_step,n_health_rows,max_particles,terminal_particles_monitor,terminal_particles_vtp,negative_sigma_rows,min_sigma_ratio,min_p1_sigma_ratio,max_u,max_gamma_over_sigma2,max_dtZ,first_max_u_gt_1000_step,first_sustained_max_dtZ_gt_0p2_step,terminal_vtp_step,terminal_min_sigma_ratio,terminal_p1_sigma_ratio,terminal_median_sigma_ratio
+scr_p020r_geom_s020v,243,244,235922,235922,235922,0,0.01371652644216186,0.6656151293790874,19554.34476900859,4604705402.365786,221.77295802370023,243,,243,0.013716802568230525,0.6656097003950605,1.0372234943181797

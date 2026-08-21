@@ -13,6 +13,24 @@ anywhere in the rotor-hover study, and because **every mechanism proposed to
 explain that sensitivity has been refuted** (see below). The empirical behaviour
 is well characterised; the principle for choosing η is not.
 
+## Current status (as of 2026-07-31)
+
+**Partly answered, still open.** η is the *wrong* parameter — the effect collapses onto the
+physical length `Das` = η·dt·U, and dt-converged lift grows only logarithmically in `Das`
+(+0.205%/doubling). So the draft rule is: pick `Das` as a physical length on the log plateau
+(≈0.25–1.5 local chords) and carry ±~1% model-form uncertainty. **But that does not explain
+the rotor**, whose floor-free sensitivity is **+37%** — ~77× the log law — so a
+rotor-specific amplifier still exists. The wake-representation-inconsistency candidate was
+eliminated; the surviving lead is the **sheet/particle split at rotor σ/chord**, spun off to
+item **017** and now carried by item **018**'s clearance track.
+
+Entry points for the latest state, in order:
+- `## Ruling 2026-07-30 (Ryan): N=36 rows is NOT adopted…` — the standing ruling on `nwakerows`.
+- `## 2026-07-30 — Sheet/particle question spun off to item 017`.
+- `## 2026-07-31 — In-flight jobs harvested (by BRAINSTORM/018 Phase 0)` — final job disposition.
+
+No jobs remain in flight for this item.
+
 ## Why it matters
 
 On the DJI9443 production mesh at 5400 RPM (BRAINSTORM/006, 2026-07-28), the

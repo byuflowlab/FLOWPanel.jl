@@ -336,6 +336,11 @@ the wing study complete.
 
 ## Status
 
+**TECHNICALLY COMPLETE 2026-07-30.** Phases 0–C executed; see `### Technical outcome`
+near the end of this file for the results and the transferable prescription. Phase D
+(rotor transfer) remains deferred. The staging text below is retained as the record of
+the plan as approved.
+
 **Staged 2026-07-30.** No phase executed yet. Phase 0 (harness hardening) is the first
 action; Phases A/B are local and cheap; Phase D is deferred until the wing map holds.
 

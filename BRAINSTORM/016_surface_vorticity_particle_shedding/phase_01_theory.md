@@ -654,6 +654,155 @@ Phase 4 must include:
    particle count, stability, and $C_L/C_T$, with panel-row, timestep,
    $\sigma$, and overlap refinement.
 
+## 9b. Amendment (2026-08-01) — divergence-form discretization
+
+Approved by Ryan on 2026-08-01, after Phase 3 Stage 3 implementation exposed
+that the continuous statements of §5 admit two inequivalent discretizations.
+
+**Alternative A (cancelled edge) still stands.** What changes is how
+$\boldsymbol\kappa$ is *discretized* for deposition.
+
+### 9b.1 The two discretizations
+
+Equations (7)–(13) are continuum identities and are unaffected. But eqs. (9)–(11)
+silently assume the *uniform-grid* limit: (10) requires the centroid separation
+$\Delta s$ to equal the ghost panel's own streamwise extent $h_G$, which holds
+only when neighbouring rows have equal extent. Wake rows stretch as they convect,
+so in general $\Delta s\neq h_G$ and the two candidate rules diverge:
+
+- **Reconstruction:** $\partial_s\hat\mu=(\hat\mu_A-\hat\mu_G)/\Delta s$,
+  from the centroid stencil of Phase 2 §5.2.
+- **Divergence form:** $\partial_s\hat\mu=(\hat\mu_A-\hat\mu_G)/h_G$, i.e.
+  the face jump smeared over the panel's own area.
+
+Equivalently: the divergence form deposits, on each panel, exactly the filament
+content of the faces assigned to it,
+
+$$
+\boldsymbol\kappa_j=\frac{\boldsymbol V_j}{A_j},\qquad
+\boldsymbol V_j=\boldsymbol H_j
++\tfrac12\!\!\sum_{\text{spanwise faces of }j}\!\!
+(\Delta\hat\mu)\,(\text{edge vector}),
+$$
+
+with the upstream face taken whole (panel $A$ survives the transaction, so its
+share cannot be deposited inside it), the downstream face taken not at all
+(already cancelled by the retained filament under Alternative A), and each
+spanwise face split evenly between the two panels that convert together — a
+split that moves *where* the vorticity sits, never how much.
+
+### 9b.2 Why divergence form is selected
+
+The conversion is then, exactly, "redistribute the stored ring assembly's
+filaments: smear the internal partitions into area vorticity, keep the physical
+boundaries as lines." Consequences:
+
+1. **Circulation is conserved exactly on any mesh** — stretched, warped,
+   non-affine — not only on uniform affine fixtures. Eq. (11) becomes an
+   identity rather than a limit.
+2. **No neighbour geometry is ever required**, only $\hat\mu_A$. This removes
+   the `nwakerows == 1` difficulty entirely: there the upstream row's nodes do
+   not exist at conversion time (`shed_wake!` writes only its strength;
+   `update_TE!` writes its nodes on the *next* step), but its strength is the
+   body's shed value. `nwakerows == 1` is the production rotor configuration.
+3. **§5.3 is vindicated as written.** "Only the two non-wrapping outer edges
+   survive the telescoping sum" identifies them with the *stored cell values*
+   $+\hat\mu_1$ and $-\hat\mu_{n_{\rm cols}}$ — which is correct in this
+   scheme, and is the legacy root/tip filament reused verbatim. Under the
+   reconstruction rule those same lines would instead have to carry the field
+   extrapolated to the sheet edge, or the row ledger fails by one cell width.
+
+### 9b.3 The trade, stated honestly
+
+This is not a free win, and the cost should not be hidden.
+
+Verified numerically (smooth analytic field, smoothly graded planar mesh,
+compared against exact $-\boldsymbol n\times\nabla_s\hat\mu$):
+
+| $M{=}K$ | $h$ | err divergence | err reconstruction | difference | conserv. err div. | conserv. err recon. |
+| --- | --- | --- | --- | --- | --- | --- |
+| 20 | 4.8e-2 | 2.3e-2 | 1.1e-2 | 3.4e-2 | 1.3e-16 | 3.5e-2 |
+| 80 | 1.2e-2 | 5.0e-3 | 3.2e-3 | 8.2e-3 | 8.0e-18 | 8.2e-3 |
+| 320 | 3.1e-3 | 1.2e-3 | 8.3e-4 | 2.0e-3 | 1.3e-16 | 2.0e-3 |
+
+Both converge to the same value at first order, and their difference vanishes at
+first order; on a *uniform* mesh they are identical to $2\times10^{-15}$. The
+difference scales as $(r-1)/2$ with $r$ the row-to-row extent ratio (1 % stretch
+→ 0.5 %, 5 % → 2.4 %, 10 % → 4.5 %).
+
+At a *fixed* resolution the reconstruction is the more accurate pointwise
+estimator — its $\boldsymbol\kappa$ error falls as $r$ grows while the
+divergence form's rises. What the divergence form buys is a conservation error
+that is **exactly zero at every resolution**, where the reconstruction leaks
+circulation at $O(r-1)$ on *every* conversion. A per-step circulation leak biases
+thrust systematically and cumulatively; a local $\boldsymbol\kappa$ error does
+not accumulate. That, and not a blanket claim of superiority, is the reason for
+the selection.
+
+The reconstruction of Phase 2 §5.2 is retained and still evaluated on every
+panel, as a diagnostic: the recorded
+$\lVert\boldsymbol\kappa_{\rm cons}-\boldsymbol\kappa_{\rm recon}\rVert$
+is a direct measure of grid non-uniformity, and is pinned to converge under
+refinement.
+
+### 9b.4 Startup edge and streamwise attribution (2026-08-01, second pass)
+
+Ryan's review of the divergence form raised two consequences that the first pass
+of §9b missed.
+
+**The aft face is a physical boundary until the first handoff.** §9b.1 assigns
+the outgoing panel's downstream face *nothing*, on the grounds that the retained
+filament already cancels it. That is true only once `particle_handoff_active` is
+set. On the **first** conversion the filament is still in its legacy form, so the
+aft face carries an uncancelled net $\hat\mu_G-\hat\mu_D$ — the starting vortex —
+and discarding the row without depositing it destroys that circulation outright.
+Before the first handoff the aft face is the sheet's true trailing boundary, not
+an interface with particles, and is deposited **whole**, exactly like the root
+and tip closures of §5.3.
+
+**The upstream/downstream split is a free parameter.** Let $\alpha$ be the
+fraction of the upstream face a conversion deposits and $\beta=1-\alpha$ the
+downstream fraction. Every inter-row face is then deposited exactly once, in two
+instalments by the two conversions that flank it — the older row takes $\alpha$
+as its upstream face, the younger takes $\beta$ as its downstream face one step
+later. All values of $\alpha$ conserve circulation exactly. The un-deposited
+remainder must stay on the panel side, which fixes the retained filament to
+
+$$
+\Gamma_{\rm filament}
+=-\bigl(\alpha\,\hat\mu_{\rm last}+(1-\alpha)\,\hat\mu_{\rm converted}\bigr),
+$$
+
+an expression that reproduces both pre-existing forms at its endpoints:
+$\alpha=1$ is the cancelled edge of Alternative A, $\alpha=0$ is the legacy
+unsteady filament.
+
+$\alpha=\tfrac12$ makes the streamwise difference *centered*, so the leading
+grid-stretching error cancels. Measured against an exact analytic gradient on a
+smoothly graded mesh:
+
+| $M$ | $h$ | $\alpha=1$ | $\alpha=0$ | $\alpha=\tfrac12$ |
+| --- | --- | --- | --- | --- |
+| 20 | 4.8e-2 | 3.1e-2 | 3.0e-2 | 7.9e-4 |
+| 80 | 1.2e-2 | 7.3e-3 (1.04) | 7.2e-3 (1.02) | 5.4e-5 (1.96) |
+| 320 | 3.1e-3 | 1.8e-3 (1.01) | 1.8e-3 (1.00) | 3.4e-6 (1.99) |
+
+**Second order versus first**, and 40x more accurate at coarse resolution.
+
+This is **not** the Alternative B rejected in §5.6. That rejection was for
+retaining the *full* filament while also depositing the *complete* area field, a
+genuine double count. A weighted split is consistent; §5 simply never considered
+it.
+
+The cost is fidelity at the handoff. $\alpha=1$ leaves *nothing* at the
+panel/particle partition, which is §5.5's entire argument: the partition is
+artificial and should carry no line. $\alpha=\tfrac12$ leaves a half-jump
+filament there — it halves the mesh-scale line artifact rather than removing it,
+and does so exactly where freshly deposited particles sit, which is §5.7's
+near-field concern. $\alpha=1$ therefore remains the selected default, with
+$\alpha=\tfrac12$ and $\alpha=0$ available and the choice deferred to measured
+near-field evidence in Phase 3 Stage 4b.
+
 ## 10. Decision and progress log
 
 Phase 1 is technically complete and recommends Alternative A, the
@@ -678,6 +827,24 @@ remains blocked pending explicit user approval.
   sign-chain code anchors in §2; the zero-Γ guard is an uncommitted
   working-tree change and must be committed before Phase 3 lands; duplicate
   equation label (3)/(3a). User approved the review; Phase 2 is authorized.
+
+- **2026-08-01 — Divergence-form amendment (§9b), approved by Ryan.**
+  Alternative A stands; its discretization becomes divergence form. Eqs. (9)–(11)
+  are recognized as the uniform-grid limit of the ledger, the root/tip closure is
+  confirmed as the stored cell value (legacy filament reused verbatim), and the
+  `nwakerows == 1` stencil difficulty dissolves because no neighbour geometry is
+  needed. Convergence of the two rules to the same limit was verified
+  numerically before adoption; the accuracy-vs-conservation trade is recorded in
+  §9b.3 rather than glossed.
+
+- **2026-08-01 — §9b.4 added (startup edge + attribution), approved by Ryan.**
+  The aft face is a physical boundary until the first handoff and must be
+  deposited whole (omitting it deleted the starting vortex). The
+  upstream/downstream split is a free parameter `alpha`; all values conserve
+  exactly, `alpha=1/2` is second-order where `alpha=1` and `alpha=0` are first,
+  and the retained filament is fixed by `alpha`. Default stays `alpha=1`
+  (Alternative A, nothing at the artificial partition); Stage 4b decides on
+  near-field evidence.
 
 - **2026-07-29 — Handoff ledger completed; Phase 1 technically complete.**
   Distinguished physical $\mu$ from stored $\hat\mu=-\mu$, audited the live

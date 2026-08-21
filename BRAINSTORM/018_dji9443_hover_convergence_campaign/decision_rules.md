@@ -21,8 +21,10 @@ observable; quote them with their CI, never a 2–5-rev window.
 
 $\bar\Gamma(r/R)$ = per-section cycle-mean of `circulation_te` — the
 **trailing-edge μ jump** (upper−lower wake strength), the physically
-meaningful bound-circulation estimator — with `circulation_slice` as
-cross-check, from the BoundCirculationMonitor CSV, averaged over the same
+meaningful bound-circulation estimator — ~~with `circulation_slice` as
+cross-check~~ (**superseded 2026-08-03**: the slice estimator telescopes to a
+theorem-zero and is not a usable cross-check; see
+`phase_02_das_length.md` finding 3) — from the BoundCirculationMonitor CSV, averaged over the same
 window as M1, blades averaged (axisymmetry confirmed in 006). Comparison
 metric between two runs: $\varepsilon_\Gamma$ = max and RMS of
 $|\Delta\bar\Gamma|/\max_r|\bar\Gamma|$ over $0.3 \le r/R \le 0.95$; when the

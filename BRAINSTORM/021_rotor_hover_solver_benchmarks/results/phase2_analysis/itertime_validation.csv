@@ -1,0 +1,5 @@
+rung,config,n_iters,mean_iter_s,max_drift_pct,flat_within_10pct
+R1,krylov_gmres,59,1.466,5.0,true
+R1,krylov_jacobi,19,1.476,4.9,true
+R1,krylov_ilu,7,1.466,1.9,true
+R1,fgs,7,0.07183,1.2,true

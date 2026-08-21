@@ -7,6 +7,16 @@ V1 was attempted 2026-07-29, blocked at the wing formulation-sanity gate,
 reviewed 2026-07-30, and its gate rebuilt as a scripted experiment (see the
 Phase 4 document).
 
+**Current status (2026-07-30):** V1 is still BLOCKED at the wing gate, but the gap is now
+attributed: the Dirichlet arm's sensitivity to the first-wake-row offset η is substantially
+an artifact of the default `VelocityThroughSources` wake→body transfer, not physics —
+switching to `GreenReconstruction` removes 93% of the Dirichlet-vs-Neumann differential and
+all of its η-dependence. The residual settled-CL floor is **force reconstruction**, measured
+over a 3-rung mesh ladder. Open residue: the **circulation half is not converged** (Green's
+KJ gap still falling, 5.58→4.42% at 4440 cells, ~3.7× its own steady anchor), so the sub-5%
+gate numbers are reported only — the gate record is untouched. Detail:
+`015_pressure_continuity_kutta_condition/phase_04_testing_verification_validation.md`.
+
 **Item-level approvals:** Technical [ ]; clear-context [ ]; user [ ]
 
 ## Objective and scope

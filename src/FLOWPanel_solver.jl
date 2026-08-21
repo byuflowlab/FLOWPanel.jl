@@ -86,8 +86,10 @@ function calc_bc_noflowthrough(Us::AbstractMatrix{T1},
 end
 
 function calc_bc_dirichlet(RHS::AbstractVector, self::AbstractBody{<:Union{Union{ConstantSource, ConstantDoublet}, Union{ConstantSource, VortexRing}}, <:Any, <:Any, true}, backend=DirectBackend(); optargs...)
-    # Set source strength for dirichlet bodies
-    RHS .-= self.potential
+    # assignment, not accumulation: the coupled solvers reuse a persistent rhs
+    # across solves, and `.-=` doubled the Dirichlet rows on every solve after
+    # the first (021 Phase 1 finding, 2026-08-14)
+    RHS .= .-self.potential
     return RHS
 end
 
@@ -210,9 +212,9 @@ The formulation (Neumann or Dirichlet) is chosen automatically from the body's
 `DBC` type parameter: control points are placed exterior for Neumann,
 interior for Dirichlet.
 """
-struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
+mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
-    Glu::TGLU
+    Glu::TGLU              # aliases G's memory (lu!); refreshed in place on update_G=true
     rhs::Vector{TF}
     Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
     phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
@@ -288,23 +290,118 @@ get_strength_name(::AbstractBody{VortexRing, 1, <:Any}) = "gamma"
 ################################################################################
 
 """
-    KrylovSolver(body; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend())
+    KrylovOperator(body, backend)
+
+Matrix-free application of the body's self-influence operator (`apply_G!`'s
+code path) as the 5-argument mul! callable LinearOperators.jl expects.
+"""
+struct KrylovOperator{TB<:AbstractBody,B<:AbstractBackend,TF}
+    body::TB
+    backend::B
+    normals::Matrix{TF}            # snapshot refreshed at the start of each solve
+    strengths_scratch::Vector{TF}
+    cache_tree::Bool               # reuse the FMM plan across applies within a solve
+    cache_nearfield::Bool          # dense near-field cache on the plan (implies cache_tree)
+    plan_slot::Base.RefValue{Any}  # (FmmPlan, key) or nothing; cleared around each solve
+end
+
+function KrylovOperator(body::AbstractBody, backend::AbstractBackend;
+                        cache_tree::Bool=false, cache_nearfield::Bool=false)
+    TF = numtype(body)
+    return KrylovOperator{typeof(body),typeof(backend),TF}(
+        body, backend, copy(body.normals), zeros(TF, body.ncells),
+        cache_tree, cache_nearfield, Ref{Any}(nothing))
+end
+
+function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
+    @assert length(B) == op.body.ncells "Length of strengths vector does not match number of panels in body."
+    Gx = _apply_neumann_G!(op.body, B, op.backend, op.normals, op.strengths_scratch;
+                           plan_slot=op.cache_tree ? op.plan_slot : nothing,
+                           cache_nearfield=op.cache_nearfield)
+    C .*= β
+    C .+= α .* Gx
+end
+
+function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B, α, β)
+    @assert length(B) == op.body.ncells "Length of strengths vector does not match number of panels in body."
+    Gx = _apply_dirichlet_G!(op.body, B, op.backend, op.strengths_scratch;
+                             plan_slot=op.cache_tree ? op.plan_slot : nothing,
+                             cache_nearfield=op.cache_nearfield)
+    C .*= β
+    C .+= α .* Gx
+end
+
+# Krylov methods whose workspace takes a `memory` argument
+const _KRYLOV_MEMORY_METHODS = (:gmres, :fgmres, :fom, :dqgmres, :diom)
+
+"""
+    KrylovSolver(body; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6,
+                 backend=FastMultipoleBackend(), memory=20,
+                 preconditioner=nothing, preconditioner_cell_size=0.0,
+                 warmstart=false, record_history=false)
 
 Matrix-free iterative solver that evaluates self-influence through the selected
-backend.
+backend. The linear operator, right-hand-side vector, and Krylov workspace are
+built once at construction and reused across solves.
+
+Options:
+- `method`: any Krylov.jl method symbol (`:gmres`, `:fgmres`, ...). Use
+  `:fgmres` with an [`FGSPreconditioner`](@ref) (flexible right
+  preconditioning).
+- `memory`: restart/memory parameter for methods that take one.
+- `preconditioner`: `nothing`, a `FastMultipole.JacobiPreconditioner`, or an
+  [`FGSPreconditioner`](@ref). Both are applied as *right* preconditioners
+  (`N=`, 021 ruling 11a) so the monitored/stopping residual is the true one.
+  May be swapped between solves.
+- `preconditioner_cell_size > 0` builds a block-Jacobi preconditioner
+  (back-compatible shorthand, ignored when `preconditioner` is given).
+- `warmstart`: seed each solve with the previous solution (`x0`); off by
+  default. See BRAINSTORM 021 Phase 0 W3.
+- `record_history`: capture per-iteration residuals + wall-clock timestamps
+  into `solver.history` (021 ruling 4).
+- `cache_tree`: build the FMM trees/interaction lists once per SOLVE and
+  reuse them across the solve's operator applies (021 Phase 2b); off by
+  default. Scope is strictly per-solve: the plan is built on the first apply
+  and dropped when the solve returns, so geometry and the active
+  `kerneloffset` (which feeds the FMM buffer radii via `radius_inflation`)
+  are frozen for the plan's whole lifetime by construction. Only meaningful
+  with a `FastMultipoleBackend`.
+- `cache_nearfield`: additionally freeze the plan's near field as dense
+  influence blocks (`FastMultipole.NearfieldInfluenceCache`) built lazily on
+  the solve's first operator apply alongside the plan, so every subsequent
+  apply evaluates the near field as packed BLAS matvecs instead of analytic
+  kernel calls (021 Phase 2b). Implies (and requires) `cache_tree=true`; the
+  cache shares the plan's lifetime and validity contract. Solution shifts at
+  the rtol level are expected (BLAS summation order differs from the
+  kernel's).
+
+After each solve, `solver.niter` and `solver.solved` report Krylov's stats.
 """
-struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP} <: AbstractMatrixFreeSolver
+mutable struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP,TK,TA,TW} <: AbstractMatrixFreeSolver
     body::TB
     backend::B
     Uext::Array{TF, 2}    # storage for external velocity (saved/restored around solve)
-    normals::Array{TF, 2} # Normals
     source_strengths::Array{TF, 1} # Fixed source strengths for Dirichlet solves
     unabbreviated_strengths::Array{TF, 1} # Storage for solution strengths
+    kop::TK                # KrylovOperator (owns the normals snapshot + scratch)
+    A::TA                  # LinearOperators wrapper around kop (built once)
+    rhs::Vector{TF}        # preallocated right-hand side
+    workspace::TW          # Krylov workspace (built once, reused)
     method::Symbol         # Krylov method to use
-    itmax::Int           # Maximum number of iterations
+    itmax::Int             # Maximum number of iterations
     atol::Float64          # absolute tolerance
     rtol::Float64          # relative tolerance
-    preconditioner::TP     # nothing or JacobiPreconditioner
+    memory::Int            # restart/memory parameter (methods that take one)
+    preconditioner::TP     # nothing, JacobiPreconditioner, or FGSPreconditioner
+    warmstart::Bool        # seed solves with x_prev (off by default)
+    x_prev::Vector{TF}     # previous solution (warmstart seed)
+    have_x_prev::Bool      # whether x_prev holds a valid solution
+    record_history::Bool   # capture per-iteration convergence history
+    history::ConvergenceHistory
+    niter::Int             # iterations of the last solve
+    solved::Bool           # convergence flag of the last solve
+    cache_tree::Bool       # per-solve FMM plan reuse (see docstring)
+    cache_nearfield::Bool  # dense near-field cache on the per-solve plan (see docstring)
 end
 
 function KrylovSolver(body::AbstractBody;
@@ -313,23 +410,48 @@ function KrylovSolver(body::AbstractBody;
         atol::Real=1e-6,            # Convergence tolerance
         rtol::Real=1e-6,            # Relative convergence tolerance
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
+        memory::Int=20,             # restart/memory parameter
+        preconditioner=nothing,     # preconditioner object (see docstring)
         preconditioner_cell_size::Real=0.0,  # cell size for block Jacobi preconditioner; ≤0 disables
+        warmstart::Bool=false,      # seed solves with the previous solution
+        record_history::Bool=false, # capture per-iteration convergence history
+        cache_tree::Bool=false,     # per-solve FMM plan reuse (021 Phase 2b)
+        cache_nearfield::Bool=false, # dense near-field cache on the plan (021 Phase 2b)
     )
     TF = numtype(body)
+    cache_tree |= cache_nearfield   # the cache lives on the plan, so it implies cache_tree
+    cache_tree && !(backend isa FastMultipoleBackend) && throw(ArgumentError(
+        "cache_tree=true (or cache_nearfield=true) requires a FastMultipoleBackend (got $(typeof(backend)))"))
     Uext = zeros(TF, 3, body.ncells)
     source_strengths = zeros(TF, body.ncells)
     unabbreviated_strengths = zeros(TF, body.ncells)
     calc_normals!(body)
     calc_controlpoints!(body)
 
-    # build block Jacobi preconditioner if requested
-    if preconditioner_cell_size > 0
+    # build block Jacobi preconditioner if requested and no object was given
+    if preconditioner === nothing && preconditioner_cell_size > 0
         preconditioner = FastMultipole.JacobiPreconditioner((body,); cell_size=preconditioner_cell_size)
-    else
-        preconditioner = nothing
     end
 
-    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, copy(body.normals), source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner)
+    # matrix-free operator + persistent workspace
+    kop = KrylovOperator(body, backend; cache_tree, cache_nearfield)
+    n = body.ncells
+    prod! = (y, x, α, β) -> kop(y, x, α, β)
+    A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
+    rhs = zeros(TF, n)
+    workspace = method in _KRYLOV_MEMORY_METHODS ?
+        Krylov.krylov_workspace(Val(method), A, rhs; memory) :
+        Krylov.krylov_workspace(Val(method), A, rhs)
+
+    x_prev = zeros(TF, n)
+    history = ConvergenceHistory(:krylov_precnorm)
+
+    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner),
+                        typeof(kop), typeof(A), typeof(workspace)}(
+        body, backend, Uext, source_strengths, unabbreviated_strengths,
+        kop, A, rhs, workspace, method, itmax, Float64(atol), Float64(rtol),
+        Int(memory), preconditioner, warmstart, x_prev, false,
+        record_history, history, 0, false, cache_tree, cache_nearfield)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -365,78 +487,86 @@ end
 
 _set_fixed_source_strength_from_velocity!(::AbstractBody, ::AbstractMatrix, ::AbstractMatrix) = nothing
 
-function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
+# Launch the (persistent) Krylov workspace on solver.rhs: preconditioner
+# routing, optional warmstart, optional history capture. Assumes solver.rhs
+# holds the right-hand side; leaves the solution in solver.workspace.x and
+# updates solver.niter / solver.solved.
+function _krylov_launch!(solver::KrylovSolver)
+    ws = solver.workspace
+    A = solver.A
+    rhs = solver.rhs
 
-    @assert length(B) == solver.body.ncells "Length of strengths vector does not match number of panels in body."
-    solver.unabbreviated_strengths .= B
-    _set_strength(solver.body, solver.unabbreviated_strengths)
+    # cache_tree scope = exactly this launch: clear any stale plan so the
+    # first apply rebuilds under the CURRENT geometry + active kerneloffset
+    # (the buffer radii depend on it via radius_inflation)
+    solver.cache_tree && (solver.kop.plan_slot[] = nothing)
 
-    # `induced` (called via `influence!`) returns the §3 side-aware self limit
-    # at self pairs, so no extra jump add is needed.
-    solver.body.velocity .= 0
-    influence!(solver.body, solver.body, solver.backend; velocity=true)
+    # convergence-history capture (021 ruling 4): iteration + timestamp +
+    # Krylov's internal residual (preconditioned norm when a left
+    # preconditioner is active)
+    if solver.record_history
+        reset!(solver.history; metric=:krylov_precnorm)
+        callback = ws -> begin
+            # ws.stats.niter is only finalized after the solve; count locally
+            res = isempty(ws.stats.residuals) ? NaN : ws.stats.residuals[end]
+            record!(solver.history, length(solver.history) + 1, res)
+            false
+        end
+    else
+        callback = ws -> false
+    end
 
-    # dot product with normals
-    solver.body.velocity .*= solver.normals
-    solver.body.velocity[1,:] .+= view(solver.body.velocity, 2, :)
-    solver.body.velocity[1,:] .+= view(solver.body.velocity, 3, :)
+    common = (; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax,
+              history=solver.record_history, callback)
+    use_x0 = solver.warmstart && solver.have_x_prev
 
-    # scale and add
-    C .*= β
-    C .+= α .* view(solver.body.velocity, 1, :)
-end
+    P = solver.preconditioner
+    if P === nothing
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; common...) :
+                 Krylov.krylov_solve!(ws, A, rhs; common...)
+    elseif P isa FGSPreconditioner
+        # flexible right preconditioning: the residual Krylov monitors stays
+        # the true one, and FGMRES tolerates a per-iteration-varying apply
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; N=P, ldiv=true, common...) :
+                 Krylov.krylov_solve!(ws, A, rhs; N=P, ldiv=true, common...)
+    else
+        # right preconditioning for the Jacobi path too (021 ruling 11a): the
+        # monitored/stopping residual stays the TRUE residual — left routing
+        # stops on a preconditioned norm, which reported "converged" at a much
+        # worse true residual in the Phase 0 smoke
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; N=P, ldiv=true, common...) :
+                 Krylov.krylov_solve!(ws, A, rhs; N=P, ldiv=true, common...)
+    end
 
-function (solver::KrylovSolver{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B, α, β)
+    solver.niter = ws.stats.niter
+    solver.solved = ws.stats.solved
 
-    @assert length(B) == solver.body.ncells "Length of strengths vector does not match number of panels in body."
-    solver.body.strength[:, 1] .= 0
-    solver.unabbreviated_strengths .= B
-    _set_strength(solver.body, solver.unabbreviated_strengths)
+    # persist the solution as the next warmstart seed
+    solver.x_prev .= ws.x
+    solver.have_x_prev = true
 
-    solver.body.potential .= 0
-    influence!(solver.body, solver.body, solver.backend; scalar_potential=true, velocity=false)
+    # drop the plan at solve end: releases the Cache buffers (the dominant
+    # allocation) and guarantees the next solve cannot reuse a plan built
+    # under a different kerneloffset/geometry
+    solver.cache_tree && (solver.kop.plan_slot[] = nothing)
 
-    C .*= β
-    C .+= α .* solver.body.potential
+    return nothing
 end
 
 function _solve!(self::AbstractBody{<:Any,<:Any,<:Any,false}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
 
-    # save external velocity and update solver fields
+    # save external velocity and refresh the operator's normals snapshot
     solver.Uext .= self.velocity
-    solver.normals .= self.normals
-
-    # construct matrix-free linear operator
-    TF2 = TF
-    nrows = self.ncells
-    ncols = self.ncells
-    symmetric, hermitian = false, false
-    # LinearOperators expects a callable (function) whose methods can be inspected.
-    # Wrap the solver instance in a small closure so `methods` sees a function.
-    prod! = (y, x, α, β) -> solver(y, x, α, β)
-    A = LinearOperators.LinearOperator(
-            TF2,
-            nrows,
-            ncols,
-            symmetric, hermitian,
-            prod!
-        )
+    solver.kop.normals .= self.normals
 
     # construct right-hand side
-    RHS = zeros(TF2, nrows)
-    calc_bc_noflowthrough!(RHS, self.velocity, solver.normals)
+    calc_bc_noflowthrough!(solver.rhs, self.velocity, solver.kop.normals)
 
-    # allocate and launch krylov solver
-    workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
-    if solver.preconditioner !== nothing
-        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    else
-        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    end
-    @show workspace.stats
+    # launch krylov solver on the persistent workspace
+    _krylov_launch!(solver)
 
     # store solution
-    solver.unabbreviated_strengths .= workspace.x
+    solver.unabbreviated_strengths .= solver.workspace.x
     _set_strength(self, solver.unabbreviated_strengths)
 
     # restore external velocity
@@ -446,34 +576,16 @@ end
 
 function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:Any,B,TF}, Das=nothing; optargs...) where {B,TF}
 
-    solver.normals .= self.normals
+    solver.kop.normals .= self.normals
     solver.source_strengths .= view(self.strength, :, 1)
 
-    TF2 = TF
-    nrows = self.ncells
-    ncols = self.ncells
-    symmetric, hermitian = false, false
-    prod! = (y, x, α, β) -> solver(y, x, α, β)
-    A = LinearOperators.LinearOperator(
-            TF2,
-            nrows,
-            ncols,
-            symmetric, hermitian,
-            prod!
-        )
+    # construct right-hand side
+    solver.rhs .= -self.potential
 
-    RHS = zeros(TF2, nrows)
-    RHS .= -self.potential
+    # launch krylov solver on the persistent workspace
+    _krylov_launch!(solver)
 
-    workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
-    if solver.preconditioner !== nothing
-        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    else
-        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
-    end
-    @show workspace.stats
-
-    solver.unabbreviated_strengths .= workspace.x
+    solver.unabbreviated_strengths .= solver.workspace.x
     self.strength[:, 1] .= solver.source_strengths
     _set_strength(self, solver.unabbreviated_strengths)
 
@@ -481,20 +593,62 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
 end
 
 """
-    KrylovCoupled(bodies; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6, backend=FastMultipoleBackend())
+    KrylovCoupledOperator(bodies, backend, Ax)
 
-Matrix-free coupled solver for a tuple of bodies.
+Matrix-free application of the coupled multi-body influence operator as the
+5-argument mul! callable LinearOperators.jl expects.
 """
-mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number} <: AbstractMatrixFreeSolver
+struct KrylovCoupledOperator{TB<:Tuple,B<:AbstractBackend,TF}
+    bodies::TB
+    backend::B
+    Ax::Vector{TF}
+end
+
+function (op::KrylovCoupledOperator)(C, B, α, β)
+    _write_coupled_unknowns!(op.bodies, B)
+
+    for body in op.bodies
+        body.velocity .= zero(eltype(body.velocity))
+        body.potential .= zero(eltype(body.potential))
+    end
+
+    scalar_potential = [has_dirichlet_bc(body) for body in op.bodies]
+    velocity = [!has_dirichlet_bc(body) for body in op.bodies]
+    influence!(op.bodies, op.bodies, op.backend; scalar_potential, velocity)
+    _collect_coupled_operator!(op.Ax, op.bodies)
+
+    C .*= β
+    C .+= α .* op.Ax
+    return nothing
+end
+
+"""
+    KrylovCoupled(bodies; method=:gmres, itmax=20, atol=1e-6, rtol=1e-6,
+                  backend=FastMultipoleBackend(), memory=20, warmstart=false)
+
+Matrix-free coupled solver for a tuple of bodies. The linear operator and
+Krylov workspace are built once at construction and reused across solves;
+`solver.niter`/`solver.solved` report the last solve's stats, and
+`warmstart=true` seeds each solve with the previous coupled solution.
+"""
+mutable struct KrylovCoupled{TB<:Tuple,B<:AbstractBackend,TF<:Number,TK,TA,TW} <: AbstractMatrixFreeSolver
     bodies::TB
     backend::B
     rhs::Vector{TF}
-    x::Vector{TF}
+    x::Vector{TF}          # last coupled solution (warmstart seed)
     Ax::Vector{TF}
+    kop::TK                # KrylovCoupledOperator
+    A::TA                  # LinearOperators wrapper (built once)
+    workspace::TW          # Krylov workspace (built once, reused)
     method::Symbol
     itmax::Int
     atol::Float64
     rtol::Float64
+    memory::Int
+    warmstart::Bool        # seed solves with the previous solution
+    have_x_prev::Bool      # whether x holds a valid previous solution
+    niter::Int             # iterations of the last solve
+    solved::Bool           # convergence flag of the last solve
 end
 
 function KrylovCoupled(bodies::Tuple;
@@ -502,7 +656,9 @@ function KrylovCoupled(bodies::Tuple;
         itmax::Int=20,
         atol::Real=1e-6,
         rtol::Real=1e-6,
-        backend::AbstractBackend=FastMultipoleBackend())
+        backend::AbstractBackend=FastMultipoleBackend(),
+        memory::Int=20,
+        warmstart::Bool=false)
 
     TF = promote_type(map(numtype, bodies)...)
     ncs = sum(body -> body.ncells, bodies)
@@ -510,8 +666,17 @@ function KrylovCoupled(bodies::Tuple;
     x = zeros(TF, ncs)
     Ax = zeros(TF, ncs)
 
-    return KrylovCoupled{typeof(bodies),typeof(backend),TF}(
-        bodies, backend, rhs, x, Ax, method, Int(itmax), Float64(atol), Float64(rtol))
+    kop = KrylovCoupledOperator{typeof(bodies),typeof(backend),TF}(bodies, backend, Ax)
+    prod! = (y, xv, α, β) -> kop(y, xv, α, β)
+    A = LinearOperators.LinearOperator(TF, ncs, ncs, false, false, prod!)
+    workspace = method in _KRYLOV_MEMORY_METHODS ?
+        Krylov.krylov_workspace(Val(method), A, rhs; memory) :
+        Krylov.krylov_workspace(Val(method), A, rhs)
+
+    return KrylovCoupled{typeof(bodies),typeof(backend),TF,typeof(kop),typeof(A),typeof(workspace)}(
+        bodies, backend, rhs, x, Ax, kop, A, workspace,
+        method, Int(itmax), Float64(atol), Float64(rtol), Int(memory),
+        warmstart, false, 0, false)
 end
 
 function _coupled_offsets(bodies::Tuple)
@@ -546,24 +711,6 @@ function _collect_coupled_operator!(Ax::AbstractVector, bodies::Tuple)
     return Ax
 end
 
-function (solver::KrylovCoupled)(C, B, α, β)
-    _write_coupled_unknowns!(solver.bodies, B)
-
-    for body in solver.bodies
-        body.velocity .= zero(eltype(body.velocity))
-        body.potential .= zero(eltype(body.potential))
-    end
-
-    scalar_potential = [has_dirichlet_bc(body) for body in solver.bodies]
-    velocity = [!has_dirichlet_bc(body) for body in solver.bodies]
-    influence!(solver.bodies, solver.bodies, solver.backend; scalar_potential, velocity)
-    _collect_coupled_operator!(solver.Ax, solver.bodies)
-
-    C .*= β
-    C .+= α .* solver.Ax
-    return nothing
-end
-
 function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, optargs...)
     offsets = _coupled_offsets(bodies)
     velocity_old = [copy(body.velocity) for body in bodies]
@@ -588,13 +735,18 @@ function solve!(bodies::Tuple, solver::KrylovCoupled; backend=solver.backend, op
         end
         boundary_condition!(bodies, solver, backend; optargs...)
 
-        TF = eltype(solver.rhs)
-        n = length(solver.rhs)
-        prod! = (y, x, α, β) -> solver(y, x, α, β)
-        A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
-        workspace = Krylov.krylov_workspace(Val(solver.method), A, solver.rhs)
-        Krylov.krylov_solve!(workspace, A, solver.rhs; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        workspace = solver.workspace
+        if solver.warmstart && solver.have_x_prev
+            Krylov.krylov_solve!(workspace, solver.A, solver.rhs, solver.x;
+                atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        else
+            Krylov.krylov_solve!(workspace, solver.A, solver.rhs;
+                atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        end
+        solver.niter = workspace.stats.niter
+        solver.solved = workspace.stats.solved
         solver.x .= workspace.x
+        solver.have_x_prev = true
 
         for (i, body) in enumerate(bodies)
             r = offsets[i]+1:offsets[i+1]
@@ -628,6 +780,8 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     expansion_order::Int
     leaf_size::Int
     multipole_acceptance::Float64
+    cache_leaf_lu::Bool
+    sweep_order::Symbol
     max_iterations::Int
     inner_iterations::Int
     tolerance::Float64
@@ -652,6 +806,8 @@ function FGSSolver(body::AbstractBody;
         expansion_order=7,
         multipole_acceptance=0.4,
         leaf_size=10,
+        cache_leaf_lu::Bool=true,
+        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b; changes the GS iteration)
         shrink=false,
         recenter=false,
         verbose=false,
@@ -674,13 +830,13 @@ function FGSSolver(body::AbstractBody;
     TF = numtype(body)
     bodies = (body,)
     fgs = build_fgs ?
-        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
         nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order)
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order)
 end
 
 ################################################################################
@@ -691,18 +847,20 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
         optargs...
     ) where {TK, NK, TF}
 
-    Glu = solver.Glu
     if update_G
         solver.G .= zero(eltype(solver.G))
         _G!(solver.G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false, optargs...)
-        Glu = lu!(solver.G)
+        # write the refreshed factorization back so later direct consumers of
+        # solver.Glu (Kutta Route A, Green-family formulations) never see a
+        # stale-pivot factorization (Glu.factors aliases solver.G)
+        solver.Glu = lu!(solver.G)
     end
 
     rhs = solver.rhs
     rhs .= zero(eltype(rhs))
     calc_bc_noflowthrough!(rhs, body.velocity, body.normals)
 
-    ldiv!(view(body.strength, :, strength_index), Glu, rhs)
+    ldiv!(view(body.strength, :, strength_index), solver.Glu, rhs)
 
     return nothing
 end
@@ -713,14 +871,14 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
 
     solver.rhs .= -self.potential
 
-    Glu = solver.Glu
     if update_G
         solver.G .= 0.0
         _G!(solver.G, self, self; kerneloffset=self.kerneloffset_panel, update_geometry=false)
-        Glu = lu!(solver.G)
+        # write back (see Neumann _solve! comment)
+        solver.Glu = lu!(solver.G)
     end
 
-    ldiv!(view(self.strength, :, 2), Glu, solver.rhs)
+    ldiv!(view(self.strength, :, 2), solver.Glu, solver.rhs)
 
     return nothing
 end
@@ -796,7 +954,7 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         expansion_order=solver.expansion_order,
         multipole_acceptance=solver.multipole_acceptance,
         leaf_size=solver.leaf_size
-    ), optargs...)
+    ), callback=nothing, optargs...)
 
     dirichlet_bc = has_dirichlet_bc(body)
     strength_index = _fgs_solved_strength_index(body)
@@ -830,7 +988,8 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         hessian=false,
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
-        final_update=false
+        final_update=false,
+        callback
     )
 
     # restore properties
@@ -848,14 +1007,475 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
     save_solution!(body, solver)
 end
 
+"""
+    _solve_history!(body, solver::FGSSolver, history::ConvergenceHistory; optargs...)
+
+Run the production FGS `_solve!` while recording the per-outer-iteration
+residual (the exact value the loop's tolerance check uses; max-abs, labeled
+`:fgs_maxabs`) with wall-clock timestamps into `history` (021 ruling 4). The
+solve itself is bit-identical to `_solve!` without recording.
+"""
+function _solve_history!(body::AbstractBody, solver::FGSSolver,
+                         history::ConvergenceHistory; optargs...)
+    reset!(history; metric=:fgs_maxabs)
+    _solve!(body, solver;
+            callback=(iteration, residual) -> record!(history, iteration, residual),
+            optargs...)
+    return history
+end
+
+################################################################################
+# FGS PRECONDITIONER (021 roster config 1f)
+################################################################################
+
+"""
+    FGSPreconditioner(body; sweeps=1, inner_iterations=2, rlx=1.0,
+                      expansion_order=7, multipole_acceptance=0.4,
+                      leaf_size=10, cache_leaf_lu=true,
+                      shrink=false, recenter=false)
+
+Fast-Gauss–Seidel preconditioner for [`KrylovSolver`](@ref): approximately
+applies `G⁻¹` through a fixed number (`sweeps`) of FGS outer iterations, each
+one FMM far-field pass plus `inner_iterations` per-leaf dense sweeps. The
+FastGaussSeidel tree and leaf matrices are built once at construction and
+reused for every apply; geometry must not change afterwards.
+
+Pass it as `KrylovSolver(body; method=:fgmres, preconditioner=...)`. It is
+routed as a *flexible right* preconditioner (`N=`, `ldiv=true`), so plain
+GMRES's assumptions are never violated and the monitored residual stays the
+true one. Each apply starts from zero strengths, making the map linear in its
+input for a fixed sweep count.
+
+By default, each dense leaf block is LU-factorized once at construction and
+reused on every sweep. Pass `cache_leaf_lu=false` to retain the lower-memory
+per-sweep factorization path.
+"""
+struct FGSPreconditioner{TS<:FGSSolver,TB<:AbstractBody,TF}
+    solver::TS                 # fixed-sweep FGSSolver (max_iterations=sweeps, tolerance=0)
+    body::TB
+    strength_save::Matrix{TF}  # body-state save/restore buffers (side-effect-free apply)
+    velocity_save::Matrix{TF}
+    potential_save::Vector{TF}
+end
+
+function FGSPreconditioner(body::AbstractBody;
+        sweeps::Int=1,             # FGS outer iterations per apply (each includes one fmm! pass)
+        inner_iterations::Int=2,   # per-leaf Gauss-Seidel sweeps per outer iteration
+        rlx::Real=1.0,             # under-relaxation inside the sweeps
+        expansion_order=7,
+        multipole_acceptance=0.4,
+        leaf_size=10,
+        cache_leaf_lu::Bool=true,
+        sweep_order::Symbol=:lexicographic,
+        shrink=false,
+        recenter=false,
+    )
+
+    fgssolver = FGSSolver(body;
+        max_iterations=sweeps, inner_iterations, tolerance=0.0, rlx,
+        reverse_pass=false, verbose=false, expansion_order,
+        multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter)
+
+    TF = numtype(body)
+    return FGSPreconditioner{typeof(fgssolver),typeof(body),TF}(
+        fgssolver, body,
+        zeros(TF, size(body.strength)),
+        zeros(TF, 3, body.ncells),
+        zeros(TF, body.ncells))
+end
+
+"""
+    ldiv!(y, P::FGSPreconditioner, x)
+
+Approximate `y = G⁻¹ x` with `P.solver.max_iterations` FGS sweeps: the input
+is packed into the body's boundary-condition channel (Neumann: velocity such
+that `-u·n = x`; Dirichlet: `potential = -x` with sources zeroed), the
+fixed-sweep FGS solve is run from zero strengths, and the solved strength
+column is copied out. The body's `strength`/`velocity`/`potential` are saved
+and restored, so the apply is side-effect-free.
+"""
+function LA.ldiv!(y::AbstractVector, P::FGSPreconditioner, x::AbstractVector)
+    body = P.body
+    dirichlet = has_dirichlet_bc(body)
+    strength_index = _fgs_solved_strength_index(body)
+
+    P.strength_save .= body.strength
+    P.velocity_save .= body.velocity
+    P.potential_save .= body.potential
+
+    try
+        # zero start: makes the fixed-sweep map linear in x
+        body.strength .= zero(eltype(body.strength))
+
+        if dirichlet
+            # FGS right-hand side is -potential, so potential = -x gives rhs = x
+            body.potential .= .-x
+        else
+            # FGS right-hand side is -u·n, so u = -x n gives rhs = x (unit normals)
+            for d in 1:3
+                @views @. body.velocity[d, :] = -x * body.normals[d, :]
+            end
+        end
+
+        _solve!(body, P.solver)
+
+        y .= view(body.strength, :, strength_index)
+    finally
+        body.strength .= P.strength_save
+        body.velocity .= P.velocity_save
+        body.potential .= P.potential_save
+    end
+
+    return y
+end
+
+################################################################################
+# FMM-DIRECT-LIST ILU(0) PRECONDITIONER
+################################################################################
+
+"""
+    ILUPreconditioner(body; leaf_size=10, multipole_acceptance=0.4,
+        max_pattern_entries=512 * body.ncells, equilibrate=false,
+        diagonal_shift=0.0, keep_matrix=false)
+
+Build an ILU(0) right preconditioner from the directed panel pairs in a
+dedicated `FastMultipole.Barba()` direct-interaction list.  The sparse
+operator is assembled and factored in tree order; `ldiv!` transparently
+permutes vectors to and from the body's panel order.
+
+Construction is proportional to the direct-list pattern.  It never forms or
+scans an `N×N` object, and rejects a pattern larger than
+`max_pattern_entries` before allocating sparse triplets or evaluating panel
+kernels.  Geometry must remain fixed after construction.
+"""
+mutable struct ILUPreconditioner{TF,TFACT,TMAT,TSTATS}
+    fact::TFACT
+    permutation::Vector{Int}          # tree index -> original body index
+    inverse_permutation::Vector{Int}  # original body index -> tree index
+    rhs_tree::Vector{TF}
+    solution_tree::Vector{TF}
+    row_scale::Vector{TF}
+    matrix::TMAT                      # `nothing` unless keep_matrix=true
+    leaf_size::Int
+    multipole_acceptance::Float64
+    interaction_list_method::Symbol
+    equilibrate::Bool
+    diagonal_shift::TF
+    max_pattern_entries::Int
+    stats::TSTATS
+end
+
+"""
+Return tree/list data, the guarded number of expanded panel pairs, and the
+tree/list build times in seconds.  Restores the body's normals/control points
+on exit; callers that assemble afterwards must refresh geometry themselves.
+"""
+function _ilu_direct_pattern(body::AbstractBody, leaf_size::Int,
+                             multipole_acceptance::Real,
+                             max_pattern_entries::Int)
+    leaf_size > 0 || throw(ArgumentError("leaf_size must be positive"))
+    0 <= multipole_acceptance <= 1 || throw(ArgumentError(
+        "multipole_acceptance must lie in [0, 1] (1 accepts all eligible " *
+        "expansions; 0 accepts none)"))
+    max_pattern_entries >= body.ncells || throw(ArgumentError(
+        "max_pattern_entries=$max_pattern_entries is smaller than N=$(body.ncells); " *
+        "the required diagonal alone has N entries"))
+
+    normals_save = copy(body.normals)
+    controlpoints_save = copy(body.controlpoints)
+    local target_tree, source_tree, direct_list, diagonal_seen, requested
+    t_tree = 0.0
+    t_lists = 0.0
+    try
+        calc_normals!(body)
+        calc_controlpoints!(body)
+        method = FastMultipole.Barba()
+        TF = numtype(body)
+        derivatives = has_dirichlet_bc(body) ?
+            FastMultipole.DerivativesSwitch(true, false, false, (body,)) :
+            FastMultipole.DerivativesSwitch(false, true, false, (body,))
+        leaf_sizes = FastMultipole.StaticArrays.SVector{1,Int}(leaf_size)
+
+        t0 = time_ns()
+        target_tree = FastMultipole.Tree((body,), true, derivatives, TF;
+            leaf_size=leaf_sizes, shrink=true, interaction_list_method=method)
+        source_tree = FastMultipole.Tree((body,), false, derivatives, TF;
+            leaf_size=leaf_sizes, shrink=true, interaction_list_method=method)
+        t_tree = (time_ns() - t0) / 1e9
+
+        t0 = time_ns()
+        _, direct_list = FastMultipole.build_interaction_lists(
+            target_tree.branches, source_tree.branches, leaf_sizes,
+            multipole_acceptance, true, true, true, method)
+        t_lists = (time_ns() - t0) / 1e9
+
+    # A repeated branch pair would create repeated expanded panel pairs.  This
+    # check is proportional to the branch list, not to N².
+        length(Set(Tuple(pair) for pair in direct_list)) == length(direct_list) ||
+            error("FastMultipole Barba direct_list contains duplicate branch pairs")
+
+        target_sort = target_tree.sort_index_list[1]
+        source_sort = source_tree.sort_index_list[1]
+        diagonal_seen = falses(body.ncells)
+        requested = 0
+        for pair in direct_list
+            target_range = target_tree.branches[pair[1]].bodies_index[1]
+            source_range = source_tree.branches[pair[2]].bodies_index[1]
+            requested += length(target_range) * length(source_range)
+            requested <= max_pattern_entries || throw(ArgumentError(
+                "Barba direct-list pattern requests more than max_pattern_entries=" *
+                "$max_pattern_entries entries for N=$(body.ncells). Increase the explicit " *
+                "limit or adjust leaf_size/MAC; construction stopped before sparse " *
+                "allocation and kernel evaluation."))
+            for it in target_range, js in source_range
+                target_sort[it] == source_sort[js] &&
+                    (diagonal_seen[target_sort[it]] = true)
+            end
+        end
+        requested += count(!, diagonal_seen)
+        requested <= max_pattern_entries || throw(ArgumentError(
+            "Barba direct-list pattern plus required diagonal requests $requested entries, " *
+            "exceeding max_pattern_entries=$max_pattern_entries for N=$(body.ncells); " *
+            "construction stopped before sparse allocation and kernel evaluation."))
+    finally
+        body.normals .= normals_save
+        body.controlpoints .= controlpoints_save
+    end
+
+    return target_tree, source_tree, direct_list, diagonal_seen, requested,
+           t_tree, t_lists
+end
+
+"Assemble the direct-list operator in one common (source-tree) ordering."
+function _assemble_ilu_operator(body::AbstractBody{<:Any,NK,TF,DBC},
+        target_tree, source_tree, direct_list, diagonal_seen, requested;
+        kerneloffset=body.kerneloffset_panel) where {NK,TF,DBC}
+    n = body.ncells
+    permutation = copy(source_tree.sort_index_list[1])
+    inverse_permutation = invperm(permutation)
+    target_sort = target_tree.sort_index_list[1]
+    source_sort = source_tree.sort_index_list[1]
+
+    rows = Vector{Int}(undef, requested)
+    cols = Vector{Int}(undef, requested)
+    vals = Vector{TF}(undef, requested)
+
+    derivatives = DBC ? FastMultipole.DerivativesSwitch(true, false, false) :
+                        FastMultipole.DerivativesSwitch(false, true, false)
+    _, strength_index = _G_kernel_and_strength_index(body)
+    old_strength = copy(body.strength)
+    correction_was_active = _operator_mode_begin!(body)
+    body.strength .= zero(eltype(body.strength))
+    body.strength[:, strength_index] .= one(eltype(body.strength))
+
+    # Per-pair triplet offsets so the kernel evaluations can run threaded
+    # (mirroring `_G!`; `induced` is pure, so concurrent evaluations of the
+    # same source panel from different pairs are safe).
+    offsets = Vector{Int}(undef, length(direct_list))
+    k = 0
+    for (p, pair) in enumerate(direct_list)
+        offsets[p] = k
+        k += length(target_tree.branches[pair[1]].bodies_index[1]) *
+             length(source_tree.branches[pair[2]].bodies_index[1])
+    end
+    try
+        CPs = body.controlpoints
+        normals = body.normals
+        Threads.@threads for p in eachindex(direct_list)
+            pair = direct_list[p]
+            target_range = target_tree.branches[pair[1]].bodies_index[1]
+            source_range = source_tree.branches[pair[2]].bodies_index[1]
+            kp = offsets[p]
+            for js in source_range
+                j_original = source_sort[js]
+                j_tree = inverse_permutation[j_original]
+                for it in target_range
+                    i_original = target_sort[it]
+                    i_tree = inverse_permutation[i_original]
+                    target = FastMultipole.StaticArrays.SVector{3,TF}(
+                        CPs[1, i_original], CPs[2, i_original], CPs[3, i_original])
+                    phi, u, _ = induced(target, body, j_original, derivatives;
+                                        kerneloffset)
+                    value = DBC ? phi :
+                        u[1] * normals[1, i_original] +
+                        u[2] * normals[2, i_original] +
+                        u[3] * normals[3, i_original]
+                    isfinite(value) || error("nonfinite ILU operator entry at " *
+                        "body pair ($i_original, $j_original)")
+                    kp += 1
+                    rows[kp], cols[kp], vals[kp] = i_tree, j_tree, value
+                end
+            end
+        end
+
+        # Barba+self_induced normally supplies every diagonal.  Add any that
+        # is absent rather than assuming a particular FastMultipole version.
+        for original in eachindex(diagonal_seen)
+            diagonal_seen[original] && continue
+            tree_index = inverse_permutation[original]
+            target = FastMultipole.StaticArrays.SVector{3,TF}(
+                CPs[1, original], CPs[2, original], CPs[3, original])
+            phi, u, _ = induced(target, body, original, derivatives; kerneloffset)
+            value = DBC ? phi : dot(u, view(normals, :, original))
+            isfinite(value) || error("nonfinite ILU diagonal at body panel $original")
+            k += 1
+            rows[k], cols[k], vals[k] = tree_index, tree_index, value
+        end
+    finally
+        _operator_mode_end!(body, correction_was_active)
+        body.strength .= old_strength
+    end
+    k == requested || error("internal ILU pattern count mismatch: assembled $k of $requested")
+    S = SparseArrays.sparse(rows, cols, vals, n, n)
+    SparseArrays.nnz(S) == requested || error(
+        "expanded Barba direct-list contains duplicate panel pairs: requested " *
+        "$requested entries but sparse pattern has $(SparseArrays.nnz(S))")
+    return S, permutation, inverse_permutation
+end
+
+function _ilu_row_scale(S::SparseArrays.SparseMatrixCSC{TF,Int}) where TF
+    rowmax = zeros(TF, size(S, 1))
+    for col in axes(S, 2), p in SparseArrays.nzrange(S, col)
+        row = S.rowval[p]
+        rowmax[row] = max(rowmax[row], abs(S.nzval[p]))
+    end
+    all(isfinite, rowmax) || error("nonfinite row norm in ILU operator")
+    any(iszero, rowmax) && error(
+        "ILU operator has an empty/zero row; try a larger leaf_size or different MAC")
+    return inv.(rowmax)
+end
+
+function _check_ilu_pivots(fact, scale)
+    pivots = [fact.u_nzval[fact.u_colptr[j + 1] - 1] for j in 1:fact.n]
+    all(isfinite, pivots) || error(
+        "ILU(0) produced a nonfinite pivot; try equilibrate=true or diagonal_shift")
+    tolerance = 100 * eps(real(float(one(eltype(pivots))))) * max(one(scale), scale)
+    bad = findfirst(p -> abs(p) <= tolerance, pivots)
+    bad === nothing || error("ILU(0) has a missing/small pivot at tree row $bad " *
+        "(|pivot|=$(abs(pivots[bad])) ≤ $tolerance); try equilibrate=true or " *
+        "a nonzero diagonal_shift")
+    return nothing
+end
+
+function ILUPreconditioner(body::AbstractBody;
+        leaf_size::Int=10,
+        multipole_acceptance::Real=0.4,
+        max_pattern_entries::Integer=512 * body.ncells,
+        equilibrate::Bool=false,
+        diagonal_shift::Real=0.0,
+        keep_matrix::Bool=false)
+    total_start = time_ns()
+    n = body.ncells
+    TF = numtype(body)
+    max_entries = Int(max_pattern_entries)
+
+    # Constructor-side geometry refreshes are restored along with all operator
+    # workspaces, even if the pattern guard or factorization throws.
+    strength_save = copy(body.strength)
+    velocity_save = copy(body.velocity)
+    potential_save = copy(body.potential)
+    normals_save = copy(body.normals)
+    controlpoints_save = copy(body.controlpoints)
+
+    local S, permutation, inverse_permutation, fact, row_scale
+    t_assembly = 0.0
+    t_factorization = 0.0
+    try
+        # Argument validation, tree/list construction, duplicate-branch check,
+        # and the linear pattern-size guard all live in the shared helper.
+        target_tree, source_tree, direct_list, diagonal_seen, requested,
+            t_tree, t_lists = _ilu_direct_pattern(
+                body, leaf_size, multipole_acceptance, max_entries)
+
+        # The helper restores geometry on exit; refresh again so assembly
+        # evaluates kernels on the same geometry the trees were built from.
+        calc_normals!(body)
+        calc_controlpoints!(body)
+
+        t0 = time_ns()
+        S, permutation, inverse_permutation = _assemble_ilu_operator(
+            body, target_tree, source_tree, direct_list, diagonal_seen, requested)
+        diagonal_shift_tf = convert(TF, diagonal_shift)
+        if !iszero(diagonal_shift_tf)
+            for i in 1:n
+                S[i, i] += diagonal_shift_tf
+            end
+        end
+        t_assembly = (time_ns() - t0) / 1e9
+
+        row_scale = equilibrate ? _ilu_row_scale(S) : ones(TF, n)
+        Sfactor = equilibrate ? SparseArrays.spdiagm(0 => row_scale) * S : S
+        # ILUZero assumes every U column ends in a diagonal entry.
+        all(i -> Sfactor[i, i] != 0, 1:n) || error(
+            "ILU operator has a missing/zero diagonal; try equilibrate=true or " *
+            "a nonzero diagonal_shift")
+        t0 = time_ns()
+        fact = ILUZero.ilu0(Sfactor)
+        _check_ilu_pivots(fact, maximum(abs, Sfactor.nzval))
+        t_factorization = (time_ns() - t0) / 1e9
+
+        row_nnz = zeros(Int, n)
+        for row in S.rowval
+            row_nnz[row] += 1
+        end
+        stats = Dict{String,Any}(
+            "n" => n,
+            "nnz" => SparseArrays.nnz(S),
+            "nnz_per_panel" => SparseArrays.nnz(S) / n,
+            "nnz_fraction" => SparseArrays.nnz(S) / (float(n) * float(n)),
+            "max_row_nnz" => maximum(row_nnz),
+            "factor_nnz" => SparseArrays.nnz(fact),
+            "tree_time" => t_tree,
+            "interaction_list_time" => t_lists,
+            "assembly_time" => t_assembly,
+            "factorization_time" => t_factorization,
+            "total_time" => (time_ns() - total_start) / 1e9,
+            "retained_bytes" => 0,
+        )
+        kept = keep_matrix ? S : nothing
+        P = ILUPreconditioner{TF,typeof(fact),typeof(kept),typeof(stats)}(
+            fact, permutation, inverse_permutation, zeros(TF, n), zeros(TF, n),
+            row_scale, kept, leaf_size, Float64(multipole_acceptance), :Barba,
+            equilibrate, convert(TF, diagonal_shift), max_entries, stats)
+        stats["retained_bytes"] = Base.summarysize(P)
+        stats["total_time"] = (time_ns() - total_start) / 1e9
+        return P
+    finally
+        body.strength .= strength_save
+        body.velocity .= velocity_save
+        body.potential .= potential_save
+        body.normals .= normals_save
+        body.controlpoints .= controlpoints_save
+    end
+end
+
+"Apply the ILU factors with body↔tree permutation and optional row scaling."
+function LA.ldiv!(y::AbstractVector, P::ILUPreconditioner, x::AbstractVector)
+    n = length(P.permutation)
+    length(x) == n && length(y) == n || throw(DimensionMismatch(
+        "ILUPreconditioner expects vectors of length $n"))
+    @inbounds for tree_index in 1:n
+        P.rhs_tree[tree_index] =
+            P.row_scale[tree_index] * x[P.permutation[tree_index]]
+    end
+    LA.ldiv!(P.solution_tree, P.fact, P.rhs_tree)
+    @inbounds for tree_index in 1:n
+        y[P.permutation[tree_index]] = P.solution_tree[tree_index]
+    end
+    return y
+end
+
 function solve!(bodies::Tuple, solvers::Tuple;
     backend = fill(DirectBackend(), length(bodies)),
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
+    history::Union{Nothing,ConvergenceHistory} = nothing,
     optargs...)
 
     # println("Tuple of bodies")
+
+    history === nothing || reset!(history; metric=:blockgs_maxdelta)
 
     N = length(bodies)
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
@@ -888,6 +1508,8 @@ function solve!(bodies::Tuple, solvers::Tuple;
             max_delta = max(max_delta, maximum(prev_strengths[i]))
             prev_strengths[i] .= body.strength
         end
+
+        history === nothing || record!(history, iter, max_delta)
 
         if verbose
             println("  Outer iteration $iter: max strength change = $max_delta")
@@ -972,6 +1594,9 @@ mutable struct BackslashCoupled{TF} <: AbstractSolver
     rhs::Vector{TF}
     Uext::Matrix{TF}
     phi_ext::Vector{TF}
+    built::Bool          # whether G/Glu hold a real (non-dummy) factorization
+    t_build::Float64     # seconds spent assembling+factorizing G in the last build
+    t_solve::Float64     # seconds spent in ldiv! in the last solve
 end
 
 """
@@ -986,9 +1611,9 @@ function BackslashCoupled(bodies::Tuple{Vararg{<:AbstractBody{<:Any,<:Any,TF,<:A
     Uext    = zeros(TF, 3, ncs)
     phi_ext = zeros(TF, ncs)
 
-    Glu = lu!(G)  # dummy init; will be overwritten on first update_G=true
+    Glu = lu!(G)  # dummy init; replaced on the first solve (built=false) or update_G=true
 
-    BackslashCoupled{TF}(G, Glu, rhs, Uext, phi_ext)
+    BackslashCoupled{TF}(G, Glu, rhs, Uext, phi_ext, false, 0.0, 0.0)
 end
 
 # Backslash(bodies::Tuple) = BackslashCoupled(bodies)
@@ -1138,12 +1763,15 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
     ### get the boundary_condition for each body to write the RHS
     boundary_condition!(bodies, solver, backend)
 
-    if update_G
+    # The constructor's Glu is a dummy identity factorization: build on the
+    # first solve even without update_G (a first solve against the dummy would
+    # silently return the RHS as the solution).
+    if update_G || !solver.built
         # Zero G matrix
         fill!(solver.G, 0)
-        
-        # Build G matrix
-        t_build = @elapsed begin
+
+        # Build and factorize G matrix, caching the factorization in solver
+        solver.t_build = @elapsed begin
             for (bi, source) in enumerate(bodies)
                 c = offsets[bi]+1 : offsets[bi+1] # columns of sources
                 for (ti, target) in enumerate(bodies)
@@ -1153,15 +1781,14 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
                         update_geometry=false)
                 end
             end
+            solver.Glu = lu!(solver.G)
         end
-
-        # Factorize G matrix and cache it in solver
-        solver.Glu = lu!(solver.G)
+        solver.built = true
     end
 
     # solve with cached LU
     sol = similar(solver.rhs)
-    t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
+    solver.t_solve = @elapsed ldiv!(sol, solver.Glu, solver.rhs)
 
     # write solution back
     for (bi, b) in enumerate(bodies)
@@ -1172,7 +1799,7 @@ function solve!(bodies::Tuple, solver::BackslashCoupled; backend=DirectBackend()
         @views b.potential .= solver.phi_ext[r]
     end
 
-    # return t_build, t_solve
+    return nothing
 end
 
 

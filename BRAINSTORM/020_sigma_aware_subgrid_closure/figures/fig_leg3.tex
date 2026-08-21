@@ -1,0 +1,34 @@
+% BRAINSTORM 020 Phase 2 Leg 3: SFS viscous-null — SFS-on vs SFS-off twin
+% screens at sigma/R = 0.025 viscous (scr_p019_s025v vs scr_p020_s025v_nosfs).
+% Data: fig_leg3/minsr_overlay.csv
+% Compile: pdflatex fig_leg3.tex
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[
+    width=11cm, height=7.5cm,
+    xlabel={step}, ylabel={$\min\sigma/\sigma_{\mathrm{shed}}$},
+    xmin=36, xmax=292, ymin=0.02, ymax=1.2,
+    restrict y to domain=-8:2,
+    grid=major, grid style={gray!25},
+    legend style={at={(0.02,0.02)}, anchor=south west, font=\footnotesize},
+    title={SFS viscous-null: matched collapse with SFS on vs off ($\sigma/R=0.025$, viscous)},
+]
+\addplot[blue, thick]
+    table [col sep=comma, x=step, y=min_sr_sfs_on] {fig_leg3/minsr_overlay.csv};
+\addlegendentry{SFS on (\texttt{scr\_p019\_s025v})}
+\addplot[red!80!black, thick, densely dashed]
+    table [col sep=comma, x=step, y=min_sr_sfs_off] {fig_leg3/minsr_overlay.csv};
+\addlegendentry{SFS off (\texttt{scr\_p020\_s025v\_nosfs})}
+% ignition onsets (max_u > 1000 m/s)
+\draw[red!80!black, dotted, thick] (axis cs:269,0.02) -- (axis cs:269,1.2);
+\draw[blue, dotted, thick] (axis cs:286,0.02) -- (axis cs:286,1.2);
+\node[red!80!black, font=\footnotesize, anchor=east, rotate=90]
+    at (axis cs:266,0.85) {onset 269};
+\node[blue, font=\footnotesize, anchor=east, rotate=90]
+    at (axis cs:283,0.85) {onset 286};
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

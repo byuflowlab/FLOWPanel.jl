@@ -34,7 +34,9 @@ rungs run cold with the full staged startup.
 ## Decision
 
 |ΔCT̄| ≤ 0.5% and ε_Γ ≤ 1% between successive rungs (Γ̄ compared on the
-common r/R grid by interpolation; report both TE-jump and slice estimators).
+common r/R grid by interpolation; report the TE-jump estimator only — the
+slice estimator is a theorem-zero, **superseded 2026-08-03**, see
+`phase_02_das_length.md` finding 3).
 Span delta → error-budget term 14. Also report the Dirichlet tangency residual
 trend (rms U·n) across rungs if cheaply available from the monitors — it
 corroborates the 2d App. G aspect-ratio mechanism.

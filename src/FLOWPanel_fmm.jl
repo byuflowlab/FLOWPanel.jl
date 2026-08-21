@@ -59,7 +59,8 @@ has_semiinfinite_wake(self) = false
 
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
                      scalar_potential=false, velocity=false,
-                     velocity_gradient=false, precalc=false, postcalc=false, optargs...)
+                     velocity_gradient=false, precalc=false, postcalc=false,
+                     plan_slot=nothing, cache_nearfield::Bool=false, optargs...)
 
     # apply pre-calculations per system
     if precalc
@@ -77,15 +78,42 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
         end
     end
 
-    outputs = FastMultipole.fmm!(target_bodies, source_bodies;
-        expansion_order=backend.expansion_order,
-        multipole_acceptance=backend.multipole_acceptance,
-        leaf_size_source=backend.leaf_size,
-        scalar_potential, gradient=velocity,
-        hessian=velocity_gradient,
-        extra_farfield,
-        shrink=true,
-        optargs...)
+    # plan_slot (a Ref): reuse trees/lists/buffers across calls with frozen
+    # geometry — only source STRENGTHS may change between calls (the FmmPlan
+    # contract; the buffer radii fold in the ACTIVE kerneloffset, so any
+    # offset flip requires the owner to clear the slot). The slot stores
+    # (plan, key); a changed derivative request rebuilds rather than trusting
+    # a mismatched plan.
+    outputs = if plan_slot === nothing
+        FastMultipole.fmm!(target_bodies, source_bodies;
+            expansion_order=backend.expansion_order,
+            multipole_acceptance=backend.multipole_acceptance,
+            leaf_size_source=backend.leaf_size,
+            scalar_potential, gradient=velocity,
+            hessian=velocity_gradient,
+            extra_farfield,
+            shrink=true,
+            optargs...)
+    else
+        key = (scalar_potential, velocity, velocity_gradient, extra_farfield)
+        if plan_slot[] === nothing || plan_slot[][2] != key
+            plan = FastMultipole.FmmPlan(target_bodies, source_bodies;
+                expansion_order=backend.expansion_order,
+                multipole_acceptance=backend.multipole_acceptance,
+                leaf_size_source=backend.leaf_size,
+                scalar_potential, gradient=velocity,
+                hessian=velocity_gradient,
+                shrink=true)
+            # cache_nearfield: freeze the near field as dense blocks owned by
+            # the fresh plan (same lifetime/validity contract); fmm! picks the
+            # cache up from the plan automatically
+            cache_nearfield && FastMultipole.build_nearfield_cache!(plan,
+                target_bodies, source_bodies)
+            plan_slot[] = (plan, key)
+        end
+        FastMultipole.fmm!(target_bodies, source_bodies, plan_slot[][1];
+            extra_farfield, optargs...)
+    end
 
     if postcalc
         post_evaluate_influence!(target_bodies, source_bodies, backend, outputs)

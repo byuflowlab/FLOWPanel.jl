@@ -64,7 +64,32 @@ _frame_state_dict(frame::ReferenceFrame, i::Int) = Dict{String, Any}(
     "Rp2g" => collect(reshape(frame.Rp2g, 9)),
 )
 
-function _step_dict(frames, i_step::Int, t::Real; uinf=nothing)
+function _wake_continuation_step_dict(wake::PanelParticleWake, i::Int,
+        i_step::Int)
+    pw = wake.panel_wake
+    return Dict{String,Any}(
+        "i" => i,
+        "snapshot_phase" => "pre_end_of_step_shedding",
+        "active_row_count" => pw.nwakes[],
+        "overflowed" => pw.overflowed[],
+        "live_rows" => pw.live_rows[],
+        "live_step_id" => pw.live_step_id[],
+        "handoff_active" => pw.particle_handoff_active[],
+        "handoff_weight" => pw.particle_handoff_weight[],
+        "conversion_count" => wake.conversion_count[],
+        "step_identity" => i_step,
+        "conversion_fingerprint" => _conversion_fingerprint(wake.conversion),
+        # VTK intentionally contains active panel rows only. Split attribution
+        # also needs the non-source strength row immediately beyond them to
+        # reconstruct the weighted retained filament exactly.
+        "terminal_strength" => [
+            _matrix_to_rows(view(s, :, pw.nwakes[] + 1, :))
+            for s in pw.strength
+        ],
+    )
+end
+
+function _step_dict(frames, i_step::Int, t::Real; uinf=nothing, wakes=nothing)
     d = Dict{String, Any}(
         "i_step" => i_step,
         "t" => float(t),
@@ -72,6 +97,12 @@ function _step_dict(frames, i_step::Int, t::Real; uinf=nothing)
     )
     if uinf !== nothing
         d["uinf"] = [float(uinf[1]), float(uinf[2]), float(uinf[3])]
+    end
+    if wakes !== nothing
+        d["wake_continuation"] = [
+            _wake_continuation_step_dict(w, i, i_step)
+            for (i, w) in enumerate(wakes) if w isa PanelParticleWake
+        ]
     end
     return d
 end
@@ -119,6 +150,43 @@ function _backend_metadata_dict(backend)
     end
 end
 
+function _preconditioner_metadata_dict(preconditioner)
+    if preconditioner === nothing
+        return Dict{String, Any}("type" => "nothing")
+    elseif preconditioner isa FGSPreconditioner
+        fgssolver = preconditioner.solver
+        return Dict{String, Any}(
+            "type" => "FGSPreconditioner",
+            "sweeps" => fgssolver.max_iterations,
+            "inner_iterations" => fgssolver.inner_iterations,
+            "rlx" => fgssolver.rlx,
+            "expansion_order" => fgssolver.expansion_order,
+            "multipole_acceptance" => fgssolver.multipole_acceptance,
+            "leaf_size" => fgssolver.leaf_size,
+            "cache_leaf_lu" => fgssolver.cache_leaf_lu,
+            "sweep_order" => String(fgssolver.sweep_order),
+        )
+    elseif preconditioner isa FastMultipole.JacobiPreconditioner
+        return Dict{String, Any}("type" => "JacobiPreconditioner")
+    elseif preconditioner isa ILUPreconditioner
+        return Dict{String, Any}(
+            "type" => "ILUPreconditioner",
+            "leaf_size" => preconditioner.leaf_size,
+            "multipole_acceptance" => preconditioner.multipole_acceptance,
+            "interaction_list_method" => String(preconditioner.interaction_list_method),
+            "equilibrate" => preconditioner.equilibrate,
+            "diagonal_shift" => preconditioner.diagonal_shift,
+            "max_pattern_entries" => preconditioner.max_pattern_entries,
+            "nnz" => preconditioner.stats["nnz"],
+            "nnz_per_panel" => preconditioner.stats["nnz_per_panel"],
+            "max_row_nnz" => preconditioner.stats["max_row_nnz"],
+            "factor_nnz" => preconditioner.stats["factor_nnz"],
+        )
+    else
+        return _metadata_unsupported_dict(typeof(preconditioner))
+    end
+end
+
 function _solver_metadata_dict(solver)
     if solver isa Tuple
         return [_solver_metadata_dict(s) for s in solver]
@@ -131,6 +199,22 @@ function _solver_metadata_dict(solver)
             "itmax" => solver.itmax,
             "atol" => solver.atol,
             "rtol" => solver.rtol,
+            "memory" => solver.memory,
+            "warmstart" => solver.warmstart,
+            "cache_tree" => solver.cache_tree,
+            "cache_nearfield" => solver.cache_nearfield,
+            "preconditioner" => _preconditioner_metadata_dict(solver.preconditioner),
+            "backend" => _backend_metadata_dict(solver.backend),
+        )
+    elseif solver isa KrylovCoupled
+        return Dict{String, Any}(
+            "type" => "KrylovCoupled",
+            "method" => String(solver.method),
+            "itmax" => solver.itmax,
+            "atol" => solver.atol,
+            "rtol" => solver.rtol,
+            "memory" => solver.memory,
+            "warmstart" => solver.warmstart,
             "backend" => _backend_metadata_dict(solver.backend),
         )
     elseif solver isa FGSSolver
@@ -139,6 +223,8 @@ function _solver_metadata_dict(solver)
             "expansion_order" => solver.expansion_order,
             "leaf_size" => solver.leaf_size,
             "multipole_acceptance" => solver.multipole_acceptance,
+            "cache_leaf_lu" => solver.cache_leaf_lu,
+            "sweep_order" => String(solver.sweep_order),
             "max_iterations" => solver.max_iterations,
             "inner_iterations" => solver.inner_iterations,
             "tolerance" => solver.tolerance,
@@ -292,6 +378,9 @@ function _monitor_metadata(m)
             "radial_dimension" => m.radial_dimension,
             "R" => m.radius,
             "section_tol" => m.section_tol === nothing ? "nothing" : m.section_tol,
+            "nloop" => m.nloop,
+            "slice_stride" => m.slice_stride,
+            "backend" => _backend_metadata_dict(m.backend),
             "verbose" => m.verbose,
             "file" => m.file,
         )
@@ -371,9 +460,9 @@ function _write_metadata_toml(path, name, systems::Tuple, wakes::Tuple, frames,
 end
 
 function _append_metadata_step_toml(path, name, frames, i_step::Int, t::Real;
-        uinf=nothing, kutta=nothing)
+        uinf=nothing, kutta=nothing, wakes=nothing)
     file = _metadata_toml_path(path, name)
-    step = _step_dict(frames, i_step, t; uinf)
+    step = _step_dict(frames, i_step, t; uinf, wakes)
     isnothing(kutta) || (step["kutta"] = kutta)
     data = isfile(file) ? TOML.parsefile(file) : Dict{String, Any}()
     steps = get(data, "step", Any[])

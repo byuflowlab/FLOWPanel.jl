@@ -1,0 +1,6 @@
+rung,config,n_panels,solver_state_bytes,solve_alloc_bytes
+R1,krylov_gmres,8016,4654016,1262959360
+R1,krylov_jacobi,8016,66891531,407020768
+R1,krylov_ilu,8016,98396359,149901488
+R1,fgs,8016,208475152,7247536
+R1,fgmres_fgs,8016,216124424,28375392

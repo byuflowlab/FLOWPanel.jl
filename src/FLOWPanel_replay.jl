@@ -84,6 +84,12 @@ function _wake_shedding_manifest(method)
             "overlap" => method.overlap,
             "p_per_step" => method.p_per_step,
         )
+    elseif method isa StationSigmaOverlap
+        return Dict{String, Any}(
+            "type" => "StationSigmaOverlap",
+            "sigmas" => [collect(sig) for sig in method.sigmas],
+            "overlap" => method.overlap,
+        )
     else
         return _metadata_unsupported_dict(typeof(method))
     end
@@ -281,21 +287,81 @@ function _body_manifest_dict(body::AbstractBody, i::Int)
     return d
 end
 
+_conversion_manifest(::LegacyEdgeJumpConversion) = Dict{String,Any}(
+    "version" => 1, "type" => "LegacyEdgeJumpConversion")
+
+function _conversion_manifest(c::SurfaceVorticityConversion)
+    return Dict{String,Any}(
+        "version" => 1,
+        "type" => "SurfaceVorticityConversion",
+        "sigma" => c.sigma,
+        "overlap" => c.overlap,
+        "rank_rtol" => c.rank_rtol,
+        "geometry_rtol" => c.geometry_rtol,
+        "attribution" => String(c.attribution),
+        "diagnose_nearfield" => c.diagnose_nearfield,
+    )
+end
+
+_conversion_fingerprint(c::AbstractPanelParticleConversion) =
+    sprint(io -> TOML.print(io, Dict("conversion" => _conversion_manifest(c)); sorted=true))
+
+function _require_conversion_key(meta, key)
+    haskey(meta, key) || throw(ArgumentError(
+        "replay: SurfaceVorticityConversion metadata is missing required key \"$(key)\""))
+    return meta[key]
+end
+
+"""Strict decoder for the version-1 panel/particle conversion schema."""
+function _deserialize_conversion(meta)
+    meta isa AbstractDict || throw(ArgumentError(
+        "replay: conversion metadata must be a table"))
+    haskey(meta, "version") || throw(ArgumentError(
+        "replay: conversion metadata is missing required key \"version\""))
+    version = try Int(meta["version"]) catch; throw(ArgumentError(
+        "replay: conversion version must be integer 1")) end
+    version == 1 || throw(ArgumentError(
+        "replay: unsupported conversion metadata version $(version)"))
+    haskey(meta, "type") || throw(ArgumentError(
+        "replay: conversion metadata is missing required key \"type\""))
+    ctype = String(meta["type"])
+    if ctype == "LegacyEdgeJumpConversion"
+        return LegacyEdgeJumpConversion()
+    elseif ctype == "SurfaceVorticityConversion"
+        sigma = Float64(_require_conversion_key(meta, "sigma"))
+        overlap = Float64(_require_conversion_key(meta, "overlap"))
+        rank_rtol = Float64(_require_conversion_key(meta, "rank_rtol"))
+        geometry_rtol = Float64(_require_conversion_key(meta, "geometry_rtol"))
+        attribution = Symbol(String(_require_conversion_key(meta, "attribution")))
+        diagnose_nearfield = Bool(_require_conversion_key(meta, "diagnose_nearfield"))
+        return SurfaceVorticityConversion(sigma; overlap, rank_rtol,
+            geometry_rtol, attribution, diagnose_nearfield)
+    end
+    throw(ArgumentError("replay: unsupported conversion metadata type \"$(ctype)\""))
+end
+
 function _wake_manifest_dict(wake, i::Int)
     d = Dict{String, Any}("i" => i)
     if isnothing(wake)
         d["type"] = "nothing"
     elseif wake isa PanelParticleWake
         d["type"] = "PanelParticleWake"
-        d["nwakerows"] = size(wake.panel_wake.nodes[1], 2) - 1
+        # logical value: 0 for a convert-at-shed wake (BRAINSTORM 024), whose
+        # N=1 storage is an implementation detail the constructor recreates
+        d["nwakerows"] = _logical_nwakerows(wake.panel_wake)
         d["max_particles"] = size(wake.pfield.particles, 2)
         d["core_size"] = wake.panel_wake.core_size
         d["shed_with_induced_velocity"] = wake.panel_wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.panel_wake.unsteady_filament
         d["freestream_convection"] = wake.panel_wake.freestream_convection
         d["particle_kerneloffset"] = wake.particle_kerneloffset
-        d["method_trailing"] = _wake_shedding_manifest(wake.method_trailing)
-        d["method_unsteady"] = _wake_shedding_manifest(wake.method_unsteady)
+        d["conversion"] = _conversion_manifest(wake.conversion)
+        if wake.conversion isa LegacyEdgeJumpConversion
+            # Preserve the historical line-policy representation exactly. The
+            # smooth strategy has no such policies and must not fabricate them.
+            d["method_trailing"] = _wake_shedding_manifest(wake.method_trailing)
+            d["method_unsteady"] = _wake_shedding_manifest(wake.method_unsteady)
+        end
         d["particle_maintenance"] = _particle_maintenance_manifest(wake.particle_maintenance)
         # Resolved FLOWVPM particle-field construction options (viscous, SFS,
         # relaxation scheme, formulation, kernel). Serialized generically so new
@@ -303,7 +369,7 @@ function _wake_manifest_dict(wake, i::Int)
         d["pfield_optargs"] = _vpm_optargs_manifest(wake.pfield_optargs)
     elseif wake isa PanelWake
         d["type"] = "PanelWake"
-        d["nwakerows"] = size(wake.nodes[1], 2) - 1
+        d["nwakerows"] = _logical_nwakerows(wake)
         d["core_size"] = wake.core_size
         d["shed_with_induced_velocity"] = wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.unsteady_filament
@@ -416,6 +482,113 @@ function _load_replay_wake_step!(w::PanelParticleWake, path, wake_name, idx)
     return _load_panel_particle_wake_vtk!(w, path, wake_name, idx)
 end
 
+function _metadata_step_record(metadata, idx::Int)
+    metadata === nothing && return nothing
+    steps = get(metadata, "step", Any[])
+    k = findfirst(s -> Int(get(s, "i_step", typemin(Int))) == idx, steps)
+    return isnothing(k) ? nothing : steps[k]
+end
+
+function _continuation_record(step, i_wake::Int)
+    step === nothing && return nothing
+    records = get(step, "wake_continuation", Any[])
+    matches = filter(r -> Int(get(r, "i", -1)) == i_wake, records)
+    step_label = get(step, "i_step", "?")
+    length(matches) <= 1 || throw(WakeContinuationStateError(
+        "step $(step_label) has multiple continuation records for wake $(i_wake)"))
+    return isempty(matches) ? nothing : only(matches)
+end
+
+function _required_continuation(record, key, i_wake, idx)
+    haskey(record, key) || throw(WakeContinuationStateError(
+        "wake $(i_wake) step $(idx) continuation state is missing \"$(key)\""))
+    return record[key]
+end
+
+"""
+Restore non-VTK panel/particle continuation state after a wake VTK load. Old
+metadata that selects the legacy conversion retains the historical inferred
+defaults; smooth conversion never guesses an absent or ambiguous handoff.
+"""
+function _restore_wake_continuation!(wakes::Tuple, metadata, idx::Int)
+    step = _metadata_step_record(metadata, idx)
+    for (i, wake) in enumerate(wakes)
+        wake isa PanelParticleWake || continue
+        record = _continuation_record(step, i)
+        if record === nothing
+            wake.conversion isa SurfaceVorticityConversion &&
+                throw(WakeContinuationStateError(
+                    "smooth wake $(i) step $(idx) has no per-step continuation state"))
+            continue
+        end
+
+        phase = String(_required_continuation(record, "snapshot_phase", i, idx))
+        phase == "pre_end_of_step_shedding" || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) has unsupported snapshot phase \"$(phase)\""))
+        step_identity = Int(_required_continuation(record, "step_identity", i, idx))
+        step_identity == idx || throw(WakeContinuationStateError(
+            "wake $(i) continuation step identity $(step_identity) does not match loaded step $(idx)"))
+        fingerprint = String(_required_continuation(record,
+            "conversion_fingerprint", i, idx))
+        expected_fingerprint = _conversion_fingerprint(wake.conversion)
+        fingerprint == expected_fingerprint || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) conversion fingerprint does not match the reconstructed conversion"))
+
+        active = Int(_required_continuation(record, "active_row_count", i, idx))
+        active == wake.panel_wake.nwakes[] || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) VTK has $(wake.panel_wake.nwakes[]) active rows but metadata records $(active)"))
+        capacity = size(wake.panel_wake.nodes[1], 2) - 1
+        0 <= active <= capacity || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) active row count $(active) is outside 0:$(capacity)"))
+        live_rows = Int(_required_continuation(record, "live_rows", i, idx))
+        0 <= live_rows <= active || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) live row count $(live_rows) is incompatible with $(active) active rows"))
+        count = Int(_required_continuation(record, "conversion_count", i, idx))
+        count >= 0 || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) has negative conversion count $(count)"))
+        handoff = Bool(_required_continuation(record, "handoff_active", i, idx))
+        handoff == (count > 0) || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) handoff flag is inconsistent with conversion count $(count)"))
+        weight = Float64(_required_continuation(record, "handoff_weight", i, idx))
+        isfinite(weight) && 0 <= weight <= 1 || throw(WakeContinuationStateError(
+            "wake $(i) step $(idx) has invalid handoff weight $(weight)"))
+
+        terminal = get(record, "terminal_strength", nothing)
+        if terminal === nothing
+            wake.conversion isa SurfaceVorticityConversion &&
+                throw(WakeContinuationStateError(
+                    "smooth wake $(i) step $(idx) continuation state is missing \"terminal_strength\""))
+        else
+            length(terminal) == length(wake.panel_wake.strength) ||
+                throw(WakeContinuationStateError(
+                    "wake $(i) step $(idx) terminal-strength surface count does not match the wake"))
+            for (isurf, rows) in enumerate(terminal)
+                s = wake.panel_wake.strength[isurf]
+                restored = try
+                    _rows_to_matrix(rows, eltype(s), size(s, 1))
+                catch err
+                    throw(WakeContinuationStateError(
+                        "wake $(i) step $(idx) terminal strength $(isurf) is malformed: $(sprint(showerror, err))"))
+                end
+                size(restored) == (size(s,1), size(s,3)) ||
+                    throw(WakeContinuationStateError(
+                        "wake $(i) step $(idx) terminal strength $(isurf) has size $(size(restored)); expected $((size(s,1), size(s,3)))"))
+                s[:, active + 1, :] .= restored
+            end
+        end
+
+        pw = wake.panel_wake
+        pw.nwakes[] = active
+        pw.overflowed[] = Bool(_required_continuation(record, "overflowed", i, idx))
+        pw.live_rows[] = live_rows
+        pw.live_step_id[] = Int(_required_continuation(record, "live_step_id", i, idx))
+        pw.particle_handoff_active[] = handoff
+        pw.particle_handoff_weight[] = weight
+        wake.conversion_count[] = count
+    end
+    return wakes
+end
+
 function _read_body_metadata(path, run_name, idx, manifest)
     body_pvds = sort(filter(f -> occursin(Regex("^" * run_name * "_body\\d+\\.pvd\$"), f), readdir(path)))
     isempty(body_pvds) && throw(ArgumentError("Replay found no body PVD files matching $(run_name)_body*.pvd in $(path)."))
@@ -471,8 +644,12 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
         elseif wtype == "PanelParticleWake"
             systems[i] isa AbstractLiftingBody ||
                 throw(ArgumentError("Cannot reconstruct PanelParticleWake for non-lifting body $(i)."))
-            method_trailing = _deserialize_wake_shedding(get(wmeta, "method_trailing", Dict{String, Any}("type" => "OverlapPPS")))
-            method_unsteady = _deserialize_wake_shedding(get(wmeta, "method_unsteady", Dict{String, Any}("type" => "OverlapPPS")))
+            # A wholly absent conversion block is the historical legacy
+            # default. Once present, the version/type/parameters are strict and
+            # never use the warning/fallback shedding decoder.
+            conversion = haskey(wmeta, "conversion") ?
+                _deserialize_conversion(wmeta["conversion"]) :
+                LegacyEdgeJumpConversion()
             particle_maintenance = _deserialize_particle_maintenance(get(wmeta, "particle_maintenance", Dict{String, Any}("type" => "ParticleMaintenance")))
             # FLOWVPM particle-field optargs now live under "pfield_optargs"; fall
             # back to legacy top-level "viscous"/"SFS" keys for older metadata files.
@@ -481,20 +658,29 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
             sfs = _deserialize_sfs(get(pf_optargs, "SFS", Dict{String, Any}("type" => "FLOWVPM.SFS_default")))
             relaxation = _deserialize_relaxation(get(pf_optargs, "relaxation",
                 Dict{String, Any}("type" => "FLOWVPM.relax_correctedpedrizzetti", "nsteps_relax" => 1, "rlxf" => 0.3)))
-            push!(wakes, PanelParticleWake(systems[i];
+            common = (;
                 nwakerows=Int(get(wmeta, "nwakerows", 3)),
                 max_particles=Int(get(wmeta, "max_particles", 10000)),
                 core_size=Float64(get(wmeta, "core_size", 1e-3)),
                 shed_with_induced_velocity=Bool(get(wmeta, "shed_with_induced_velocity", true)),
                 unsteady_filament=Bool(get(wmeta, "unsteady_filament", true)),
                 freestream_convection=Bool(get(wmeta, "freestream_convection", false)),
-                method_trailing=method_trailing,
-                method_unsteady=method_unsteady,
                 particle_maintenance=particle_maintenance,
                 particle_kerneloffset=Float64(get(wmeta, "particle_kerneloffset", NaN)),
                 viscous=viscous,
                 SFS=sfs,
-                relaxation=relaxation))
+                relaxation=relaxation,
+                conversion=conversion)
+            if conversion isa LegacyEdgeJumpConversion
+                method_trailing = _deserialize_wake_shedding(get(wmeta,
+                    "method_trailing", Dict{String, Any}("type" => "OverlapPPS")))
+                method_unsteady = _deserialize_wake_shedding(get(wmeta,
+                    "method_unsteady", Dict{String, Any}("type" => "OverlapPPS")))
+                push!(wakes, PanelParticleWake(systems[i]; common...,
+                    method_trailing, method_unsteady))
+            else
+                push!(wakes, PanelParticleWake(systems[i]; common...))
+            end
         else
             throw(ArgumentError("Cannot reconstruct replay wake type $(wtype). Provide reconstruct callback."))
         end
@@ -512,6 +698,9 @@ function _deserialize_wake_shedding(meta)
         return SigmaOverlap(Float64(get(meta, "sigma", 1.0)), Float64(get(meta, "overlap", 1.0)))
     elseif wtype == "OverlapPPS"
         return OverlapPPS(Float64(get(meta, "overlap", 1.0)), Int(get(meta, "p_per_step", 1)))
+    elseif wtype == "StationSigmaOverlap"
+        sigmas = [Float64.(sig) for sig in get(meta, "sigmas", Any[])]
+        return StationSigmaOverlap(sigmas, Float64(get(meta, "overlap", 1.0)))
     elseif wtype == "nothing"
         return NoShed()
     else
@@ -983,6 +1172,7 @@ function replay(path::AbstractString, run_name::AbstractString;
                 throw(ArgumentError("Replay does not support wake type $(typeof(w))."))
             end
         end
+        _restore_wake_continuation!(wakes, metadata, first_step)
     end
 
     t_range = [timesteps[findfirst(==(idx), idxs)] for idx in selected]
@@ -1013,6 +1203,7 @@ function replay(path::AbstractString, run_name::AbstractString;
                 _load_replay_wake_step!(w, path, wake_name, idx)
             end
         end
+        _restore_wake_continuation!(wakes, metadata, idx)
         frames = _frames_from_metadata(path, run_name, idx, systems, metadata)
         uinf = _replay_step_uinf(metadata, idx, t_range[out_i], Uinf)
         dt = out_i < length(selected) ? t_range[out_i + 1] - t_range[out_i] :
