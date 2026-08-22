@@ -1,5 +1,4 @@
 import FLOWPanel as pnl
-import GeoIO
 using DelimitedFiles
 using LinearAlgebra
 using Printf
@@ -98,7 +97,7 @@ function require_indices(nodes)
 end
 
 function load_body(mesh_path)
-    msh = GeoIO.load(mesh_path).geometry
+    msh = pnl.read_gmsh(mesh_path)
     nodes, cells = pnl.meshes2nodes_cells(msh)
     body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(nodes), copy(cells); watertight=false)
     return nodes, cells, body

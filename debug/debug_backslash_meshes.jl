@@ -3,7 +3,6 @@ import FLOWPanel as pnl
 using LinearAlgebra
 import Meshes
 using StaticArrays: SVector
-import GeoIO
 
 include(joinpath(@__DIR__, "..", "test", "test_helpers.jl"))
 

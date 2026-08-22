@@ -15,7 +15,6 @@ processing unstructured grids:
 import Pkg
 
 Pkg.add(Meshes)
-Pkg.add(GeoIO)
 Pkg.add(Rotations)
 ```
 
@@ -99,4 +98,3 @@ newer version:
     [`cessna.msh`](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna.msh)
     [`cessna.stp`](https://edoalvar2.groups.et.byu.net/public/FLOWPanel/cessna.stp)
     (`right click → save as...`).
-

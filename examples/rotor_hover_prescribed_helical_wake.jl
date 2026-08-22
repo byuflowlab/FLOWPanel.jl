@@ -15,7 +15,6 @@
 
 import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
-import GeoIO
 using LinearAlgebra: cross, dot, norm
 using Printf: @sprintf
 
@@ -91,7 +90,7 @@ Vinf             = [i == axial_dimension ? axial_wake_sign * axial_advance_ratio
                     for i in 1:3]
 Uinf(t)          = Vinf
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 base_nodes, base_cells = pnl.meshes2nodes_cells(msh)
 base_nodes .*= R / maximum(base_nodes[radial_dimension, :])
 

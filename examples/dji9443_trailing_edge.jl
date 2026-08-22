@@ -1,5 +1,4 @@
 import FLOWPanel as pnl
-import GeoIO
 using LinearAlgebra: dot, norm
 
 """
@@ -16,7 +15,7 @@ is radial, and the trailing side has matching `y` and `z` signs.
 function find_dji9443_trailing_edge_indices(msh_file; watertight)
     isfile(msh_file) || error("DJI 9443 mesh file does not exist: $(msh_file)")
 
-    mesh = GeoIO.load(msh_file).geometry
+    mesh = pnl.read_gmsh(msh_file)
     nodes, cells = pnl.meshes2nodes_cells(mesh)
     return _find_dji9443_trailing_edge_indices(nodes, cells; watertight,
                                                 mesh_label=string(msh_file))

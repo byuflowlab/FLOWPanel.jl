@@ -3,7 +3,6 @@ include(joinpath(pnl.examples_path, "helper_functions.jl"))
 import FLOWPanel: norm, dot, cross
 
 import Meshes
-import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
 
@@ -86,7 +85,7 @@ function generate_body(
     magVinf = norm(Vinf)
 
     # Read Gmsh mesh
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
 
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
@@ -121,7 +120,7 @@ function generate_body(
     magVinf = norm(Vinf)
 
     # Read Gmsh mesh
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
 
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)

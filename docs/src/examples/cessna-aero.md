@@ -34,7 +34,6 @@ import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
 
 import Meshes
-import GeoIO
 import Rotations: RotX, RotY, RotZ
 
 
@@ -77,7 +76,7 @@ Xac             = [2.815, 0, 0.4142]        # (m) aerodynamic center for
                                             # calculation of moments
 
 # Define function used for reading Gmsh files
-meshreader(file) = GeoIO.load(file).geometry
+meshreader(file) = pnl.read_gmsh(file)
 
 # Format input for `generate_multibody(...)`
 meshfiles       = [ ("Airframe", meshfile, flip) ]

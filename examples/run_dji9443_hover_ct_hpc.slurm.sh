@@ -44,6 +44,32 @@ CASE="${1:-}"
 
 export JULIA_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" OPENBLAS_NUM_THREADS="$THREADS" \
        BLAS_NUM_THREADS="$THREADS" MKL_NUM_THREADS="$THREADS" MPLBACKEND=Agg
+
+# BRAINSTORM/025: filament regularization family. Ryan ADOPTION RULING
+# 2026-08-21 -- 018 production runs Gaussian from here on. Basis: the Phase 3
+# warm-start A/B on this very carrier (jobs 13247862 vatistas / 13247863
+# gaussian, steps 1035-1151) put the two families 0.023% apart in CT --
+# half the parent run's own rev-to-rev drift -- while Gaussian cut the step
+# from 160.2 to 140.2 s at production FMM knobs.
+# Arms submitted BEFORE 2026-08-21 ran vatistas; pin
+# FLOWPANEL_FILAMENT_REG=vatistas at submission to reproduce one of those.
+export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-gaussian}"
+# FMM knobs (per-pass triples p/MAC/leaf; the driver falls back to the shared
+# FMM_* names, and to body 8/0.4/20, wake 4/0.4/50, if nothing is set).
+# Ryan RULING 2026-08-21: 018 production runs the Gaussian-tuned point. Basis:
+# job 13290979 reran the Phase 3 warm-start continuation with these knobs and
+# landed CT within +0.0038% of the same-family production-knob arm (13247863)
+# -- an order below the family null itself -- at 71.7 s/step vs 140.2 (gaussian,
+# production knobs) and 160.2 (vatistas). Static certification: achieved field
+# error wake 1.8e-6 (target 1e-4) / body 1.2e-6 (target 1e-5) vs a DirectBackend
+# reference (job 13247200). Pass FMM_* at submission to override; arms submitted
+# before 2026-08-21 ran the production knobs.
+export FMM_BODY_EXPANSION_ORDER="${FMM_BODY_EXPANSION_ORDER:-17}"
+export FMM_BODY_ACCEPTANCE="${FMM_BODY_ACCEPTANCE:-0.7}"
+export FMM_BODY_LEAF_SIZE="${FMM_BODY_LEAF_SIZE:-109}"
+export FMM_WAKE_EXPANSION_ORDER="${FMM_WAKE_EXPANSION_ORDER:-16}"
+export FMM_WAKE_ACCEPTANCE="${FMM_WAKE_ACCEPTANCE:-0.6}"
+export FMM_WAKE_LEAF_SIZE="${FMM_WAKE_LEAF_SIZE:-38}"
 # Non-interactive submission shells don't put julia on PATH (Manifest pins 1.11.7);
 # fall back to the site spack julia-1.11.7 binary (the shared /apps/juliaup launcher is broken).
 command -v julia >/dev/null 2>&1 || \
@@ -713,6 +739,7 @@ echo "  relax_filter:${RELAX_FILTER_DOWNSTREAM_R:-off}R das_eta:${DAS_ETA_KINEMA
 echo "  das_min_R:${DAS_MIN_DISPLACEMENT_R:-0.01} das_refresh:${DAS_REFRESH:-false} nwakerows:${NWAKEROWS:-1} visc:${CORE_SPREADING_ACTIVE:-false} das_chord:${DAS_CHORD_FRACTION:-nan} das_uniform:${DAS_UNIFORM_DSIGMA:-nan}"
 echo "  sigma_chord:${SIGMA_CHORD_FRACTION:-nan} sigma_floor:${SIGMA_FLOOR_R:-0} das_lambda:${DAS_SIGMA_LAMBDA:-nan} das_beta:${DAS_CURVATURE_BETA:-nan} das_arc:${DAS_ARC_PLACED:-false} arc_src:${DAS_ARC_HELIX_SOURCE:-none} arc_table:$(basename "${DAS_ARC_TABLE:-none}")"
 echo "  conversion:${CONVERSION:-legacy} conv_sigma:${CONVERSION_SIGMA:-auto} conv_overlap:${CONVERSION_OVERLAP:-1.3} attribution:${ATTRIBUTION:-upstream}"
+echo "  filament_reg:${FLOWPANEL_FILAMENT_REG} fmm_body:${FMM_BODY_EXPANSION_ORDER:-${FMM_EXPANSION_ORDER:-8}}/${FMM_BODY_ACCEPTANCE:-${FMM_ACCEPTANCE:-0.4}}/${FMM_BODY_LEAF_SIZE:-${FMM_LEAF_SIZE:-20}} fmm_wake:${FMM_WAKE_EXPANSION_ORDER:-${FMM_EXPANSION_ORDER:-4}}/${FMM_WAKE_ACCEPTANCE:-${FMM_ACCEPTANCE:-0.4}}/${FMM_WAKE_LEAF_SIZE:-${FMM_LEAF_SIZE:-50}}"
 echo "  started $(date '+%F %T')"
 
 julia --project=. -t "$THREADS" examples/rotor_hover_pressure_comparison.jl

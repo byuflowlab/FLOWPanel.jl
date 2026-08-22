@@ -1,6 +1,9 @@
 # Rigid-motion tree/cache reuse (transform_plan!) — staged item
 
-**Status: EXECUTING 2026-08-20 (Ryan's go via launch prompt).** Extends the deferred
+**Status: COMPLETE 2026-08-20 (executed on Ryan's go; A/B collapse measured
+— staleness eliminated, flat 2.1e-3 to 80° vs 21% stale; residual wake-on
+FGS fixed-point discrepancy ~2e-3 flagged for Phase 3 (tolerance
+hypothesis refuted). See "Execution results" below + phase_02 Log.)** Extends the deferred
 near-field-cache commit 4 (`persistent_plan`); scoped during the
 2026-08-19 feedback dialogue (Ryan: "seems like it would be simple work to
 rotate/translate all the tree cell centers and still reuse it"). Design the
@@ -85,6 +88,78 @@ step in unsteady runs (costly: full matrix rebuild each step).
    (rigid frames already carry R, t per step) + `persistent_plan` opt-in
    (the original commit-4 contract, now with motion support).
 6. Re-examine `*_nfcache` knob economics with run-amortized builds.
+
+## Execution results (2026-08-20)
+
+1. **Staleness discriminator (sketch step 1): BUG CONFIRMED.** New driver
+   `benchmark/rigid_motion_fgs_staleness.jl` (R1, 8 steps, NT=36 ⇒ 10°/step,
+   pure-FGS trajectory; after every production FGS solve the SAME state is
+   re-solved by a fresh KrylovSolver gmres rtol 1e-9 — trees rebuilt per
+   apply — isolating solver error from wake feedback). Per-step relative L2
+   divergence of μ: 1.74e-7 at 0° (solver-tolerance class, as pre-registered),
+   then monotonic growth: 2.0e-3 @10°, 8.9e-3 @40°, 4.3e-2 @60°, **2.1e-1 @
+   80°** (~10⁶× growth). Data:
+   `rigid_motion_tree_reuse/fgs_staleness.csv` (arm `fgs_vs_fresh_krylov`).
+   **No pre-fix Phase-3 unsteady FGS row is trustworthy.**
+2. **FastMultipole machinery landed** (branch flowpanel-20260817):
+   - `transform_tree!` (eea944d): centers → R·c+t, box → |R|·box (tight AABB
+     of the rotated box; enclosure preserved, error bounds conservative);
+     proper-rotation guard. NOTE Ryan's concurrent commit 645cc96 swept the
+     src half of this in with his autotune work; eea944d carries the tests.
+     Box-consumer audit: post-build, only the adaptive-P/error-bound paths
+     read `box` (via `minimum_distance`) — |R|·box keeps them conservative;
+     the active MAC is radius-based; m2l operators are formed per call from
+     current centers, so index-pair lists stay valid.
+   - `transform_plan!` (087bf4a): + target-buffer position refresh (frozen at
+     plan build — planned fmm! only zeroes output rows); nearfield cache
+     persists EXACTLY for scalar outputs across accumulated motions (tested
+     rtol 1e-12, two-step composition); gradient/hessian/extra + cache ⇒
+     loud v1 refusal (per-block G→R·G not implemented).
+   - `transform_solver!` for FGS (d714544): same tree machinery + target
+     refresh + `transformed` flag; dense matrices untouched (scalar rows
+     exactly invariant); gradient solves on a transformed solver refuse.
+     FM-level A/B (cold fixed-iteration trajectory): transformed replay
+     <1e-9 after 63°+translation, stale >1e-3 (>1000×).
+   - Test-system findings: a fresh tree on rotated positions is NOT a valid
+     reference (axis-aligned subdivision degenerates, measured 160→0 m2l
+     pairs — equivariance vs the original run is the right 1e-12 test); the
+     vortex-filament test system's velocity carries an origin-dependent
+     Lamb-Helmholtz gauge term (t_z/2-class shifts under pure translation) —
+     replaced by a self-contained triangular source-panel system for
+     vertex-path coverage; latent `size(x,2)` bug fixed in both filament
+     generators.
+3. **FLOWPanel surface** (uncommitted, in the working tree):
+   `propagate_kinematics!` returns per-body rigid (R, t) deltas; `simulate!`
+   forwards them via `transform_body_solvers!` → `transform_solver_geometry!`
+   (KrylovSolver persistent_plan → transform_plan!; FGSSolver →
+   transform_solver!; others no-op — Backslash's dense operators are
+   rotation-invariant); `KrylovSolver(persistent_plan=true)` keeps the plan
+   (+ nearfield cache) across solves (deferred commit 4, now with motion
+   support; kerneloffset restored before every solve keeps it sound);
+   metadata `persistent_plan`; unit tests incl. Dirichlet
+   shedding-panel cache exactness under rigid motion (rtol 1e-12).
+4. **Knob-economics flag (sketch step 6, docs only):** with run-amortized
+   builds (persistent_plan), the per-solve-rebuild objection to big-leaf
+   `*_nfcache` knobs evaporates — build cost amortizes over the RUN. The
+   Phase-2b `*_nfcache` configs should be RE-EXAMINED on HPC once this lands
+   in the benchmark drivers. NOT rerun now (chains 13242659–66 in flight;
+   rsync freeze).
+
+5. **A/B collapse (production path, measured 2026-08-20 late):** fixed arm
+   flat 2.0–2.2e-3 from 10° through 80° (stale: 21% at 80°; ~100×) —
+   angle-dependence eliminated. The ~2e-3 plateau is a pre-existing
+   FGS-vs-Krylov discrepancy that appears with the first wake-carrying step
+   in BOTH arms (step 1: 2.014e-3 stale vs 2.007e-3 fixed).
+   Stopping-tolerance hypothesis TESTED AND REFUTED (tolerance ×0.01 arm:
+   steps 1–2 numerically unchanged, step 0 tightened to 2.9e-8): the FGS
+   converges to a fixed point ~2e-3 from the Krylov solution once free wake
+   particles exist — tolerance- and angle-independent, extra_farfield
+   consistent; open Phase-3 item to locate the wake-on system asymmetry.
+   Also landed: FM test 149bd9f4 "cells exactly follow the bodies" (direct
+   drift/containment invariant; documents that under recenter=false `box`
+   was never a strict enclosure about `center` even at build — 276/1500
+   bodies outside, worst 0.027 — the transform preserves that character).
+   Data: all arms in `rigid_motion_tree_reuse/fgs_staleness.csv`.
 
 ## Evidence pointers
 

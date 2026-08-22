@@ -9,7 +9,6 @@
 ## A single case can be selected with PHASE1_MODE=solve PHASE1_CASE=<tag>.
 
 import FLOWPanel as pnl
-import GeoIO
 using CSV
 using DataFrames
 using Dates
@@ -90,7 +89,7 @@ end
 function load_base(case)
     mesh_path = joinpath(pnl.examples_path, "data", case.mesh)
     isfile(mesh_path) || error("missing mesh: $(mesh_path)")
-    mesh = GeoIO.load(mesh_path).geometry
+    mesh = pnl.read_gmsh(mesh_path)
     nodes, cells = pnl.meshes2nodes_cells(mesh)
     source_radius = maximum(abs, nodes[RADIAL_DIMENSION, :])
     nodes .*= R / source_radius

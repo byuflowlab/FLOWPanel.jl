@@ -25,7 +25,6 @@ open(joinpath(output_path, output_name*"-cad.md"), "w") do fout
     import Pkg
 
     Pkg.add(Meshes)
-    Pkg.add(GeoIO)
     Pkg.add(Rotations)
     ```
     """)

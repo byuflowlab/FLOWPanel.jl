@@ -7,7 +7,6 @@ include(joinpath(pnl.examples_path, "helper_functions.jl"))
 include(joinpath(pnl.examples_path, "dji9443_trailing_edge.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 using LinearAlgebra: norm
 
 run_name = get(ENV, "RUN_NAME", "rotor_hover")
@@ -55,7 +54,7 @@ te_indices_1, te_indices_2 =
     find_dji9443_trailing_edge_indices(msh_file; watertight)
 
 # MSH file
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 
 # scale to proper radius

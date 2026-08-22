@@ -54,12 +54,40 @@
 > influence evaluation — the restored first wake row is stale until
 > update_TE! and silently NaNs every target (cost ~3 failed jobs).
 
-In-flight jobs:
+> **Update 4 (2026-08-21) — endgame numbers.** Tuned-knobs A/B confirmed
+> 94.9 s/step (Vatistas). Fixed-p ladder: p is cost-neutral; p=8 (wake) /
+> p=6 (body) already meet targets. rtol arms confirmed the radius-inflation
+> mechanism (body 45→24.7 s at Δr 0.0119 m). Then 025 (Gaussian filament
+> regularization, Ryan ruling) + its Val-barrier perf fix landed:
+> **Gaussian at its own tuned knobs runs the production step at 72.2 s vs
+> the 172–177 s baseline (~2.4x), thrust trace identical to 4 digits,
+> certified errors 1.8e-6/1.2e-6** (clean arms 13247381/82/83, tables in
+> `025_.../phase_02_implementation.md`). Remaining levers by share of the
+> 72.2 s step: wake/SFS 59% (024 census + SFS options), solve 18% (021
+> ILU-GMRES), body 20%.
 
-| job | case | action on landing |
-|---|---|---|
-| 13246437 | full-step A/B at tuned knobs (wake 16/0.6/24, body 15/0.8/236), 5 steps | steady mean vs 172/177 s baseline + CT continuity → confirms projected ~94 s step |
-| ~~13245638/763/764/765/815/869/13246037~~ | Phase B timing / sensitivity / nf-split / tree / tune | **ALL DONE** — `phase_B_hpc_profile.md` + `benchmark/results/` |
+> **Update 5 (2026-08-21) — the endgame numbers reproduce through the REAL
+> driver, and are now the 018 production defaults.** 025 Phase 3 ran three
+> warm-start continuations of `p018_cs_f1_l3p4` (step 1034 → 1151, 117 steps,
+> mature 181k wake) through the full RHPC pipeline — monitors, VTK, merging,
+> relaxation, I/O — not the 5-step bench harness. Mature `wall_s` means
+> (steps 1045–1151, n=107): **vatistas + production knobs 160.2 s, gaussian +
+> production knobs 140.2 s, gaussian + tuned knobs 71.7 s**, against the parent
+> run's own 178.1 s over steps 927–1034. The bench numbers hold: 71.7 vs 72.2 s
+> (0.7%) and 140.2 vs 141.8 s (1.1%); the bench's Vatistas control (183.4 s) sits
+> 13% above the 107-step driver measurement, inside the ±3–30% node variance this
+> item documented. Lever split, now measured rather than projected: **the family
+> alone is 1.14×, the knobs are the larger half, together 2.23×** (2.48× vs the
+> parent). CT moved +0.023% for the family and +0.0038% for the knobs — both
+> below the carrier's own rev-to-rev drift — so the cost came free. Ryan adopted
+> both into `examples/run_dji9443_hover_ct_hpc.slurm.sh`; jobs 13247862/13247863/
+> 13290979, tables in `025_.../phase_03_018_compatibility.md`.
+
+In-flight jobs: none.
+
+| job set | outcome |
+|---|---|
+| ~~13245638…13247383~~ | **ALL DONE** — `phase_B_hpc_profile.md`, `benchmark/results/`, 025 phase docs |
 
 ## Objective and scope
 

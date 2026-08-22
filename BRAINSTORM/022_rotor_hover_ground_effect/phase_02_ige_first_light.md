@@ -66,6 +66,15 @@ in the item's Current status; offer Ryan a notebook entry at this milestone.
   (any window reaching rev 18 includes the blow-up). A preliminary matched read
   over revs 7–17 is recorded in `ledger.md` (ratio 1.045) and is explicitly not
   an M1 harvest. The fine rung is still the live path to the Phase 2 headline.
+- 2026-08-21: **p022_ige_fine (13207681) COMPLETED all 1007 steps.** CT_IGE
+  fine = 0.07934 ± 0.00234 (final 10 in-hover revs, cycle-mean;
+  gs_nonconverged = 0, tangency RMS max 0.577, below-ground census max 4679,
+  plateaued ~4050 at the end). With CT_OGE fine = 0.07480 ± 0.00152 the
+  fine-rung headline is **IGE/OGE = 1.061 ± 0.038** — consistent with the
+  momentum-theory anchor (1.067) and experiment (1.078 ± 0.008). Both fine
+  runs fail the strict per-rev criterion; cycle-mean is the headline per
+  decision rules. Phase-2 exit now awaits the clean-context verify + Ryan's
+  read; the coarse rung contributes nothing harvestable (walled / blown up).
 - 2026-08-19 (ops): OGE coarse (13207680) will also miss its window — measured
   ~87 s/step means the 1007-step schedule needs 25–31 h against a 24 h wall, so
   it lands around rev 25 of 28. Recorded in `ops_reference.md`; Phase 5 sizes

@@ -19,7 +19,6 @@ import FLOWPanel as pnl
 # include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 using LinearAlgebra: norm, dot, cross
 import LinearAlgebra
 
@@ -297,7 +296,7 @@ radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong f
 
 Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [0.0, -cosd(AOA), sind(AOA)]
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[radial_dimension, :])
 

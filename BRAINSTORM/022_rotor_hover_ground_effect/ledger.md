@@ -10,7 +10,7 @@ GS converged (gs_nonconverged=0) + tangency bounded (n/a for OGE).
 | smoke_oge | 40_40 | off | local | 2026-08-18 | 2026-08-18 | n/a | n/a | PASS | Phase 0 |
 | p022_oge_fine | 45_185_ct4 | off | 13207679 | 2026-08-18 | 2026-08-20 (all 1007 steps) | final 10 revs, in hover | **0.07480 ± 0.00152** | all_finite, window_in_hover; strict per-rev criterion false (cycle-mean is headline per decision rules) | Phase 1 — CT_OGE fine anchor |
 | p022_oge_coarse | 56_57 | off | 13207680 | 2026-08-18 | — | — | — | banner VERIFIED 2026-08-18 | Phase 1, 24 h |
-| p022_ige_fine | 45_185_ct4 | h/R 1, 4R/0.15R disc, trunc 3R, none | 13207681 | 2026-08-18 | — (step 885/1007 @ 2026-08-20, ~7 h left) | — | — | **survived the coarse blow-up rev**: healthy at rev 24.6 ≫ 17.6 (tangency RMS 0.22, census plateau ~4600, sum|Γ| 0.27) ⇒ blow-up NOT mesh-independent | Phase 2, 72 h |
+| p022_ige_fine | 45_185_ct4 | h/R 1, 4R/0.15R disc, trunc 3R, none | 13207681 | 2026-08-18 | 2026-08-21 (all 1007 steps) | final 10 revs, in hover | **0.07934 ± 0.00234** | gs_nonconverged=0, tangency RMS max 0.577, below-ground max 4679 (plateau); survived rev 17.6 ⇒ blow-up NOT mesh-independent | Phase 2 — CT_IGE fine anchor |
 | p022_ige_coarse_damp | 56_57 | h/R 1, 4R/0.15R disc, trunc 3R, none + damp band 0.1R | 13246557 | 2026-08-20 | — | — | — | banner VERIFIED 2026-08-20 (policy none, damp 0.1R, depth 4R) | Phase 3 A/B "with" arm, 48 h |
 | p022_ige_coarse_trunc | 56_57 | h/R 1, 4R/0.15R disc, floor@ground (1.457R) + damp 0.1R | 13246558 | 2026-08-20 | — | — | — | banner VERIFIED 2026-08-20 (policy truncate, damp 0.1R, depth 1.457R) | Phase 3 production candidate, 48 h |
 | p022_ige_coarse | 56_57 | h/R 1, 4R/0.15R disc, trunc 3R, none | 13207682 | 2026-08-18 | 2026-08-19 (cancelled) | n/a — blew up at rev 17.6 | n/a | **FAIL (blow-up)** | Phase 2, 24 h; see below |
@@ -63,5 +63,11 @@ resolvability analysis in `phase_05_hr_sweep.md`.
 
 | rung | CT_OGE | CT_IGE | ratio IGE/OGE | anchor (momentum theory ≈1.07) |
 |---|---|---|---|---|
-| 45_185_ct4 | — | — | — | — |
-| 56_57 | — | — | — | — |
+| 45_185_ct4 | 0.07480 ± 0.00152 | 0.07934 ± 0.00234 | **1.061 ± 0.038** (cycle-std propagated) | consistent (1.067; experiment 1.078 ± 0.008) |
+| 56_57 | walled @ rev 25 (no M1 window) | blew up rev 17.6 | prelim 1.045 ± 0.083 (revs 7–17, NOT M1) | — |
+
+Fine-rung numbers are cycle-means over the final 10 in-hover revs from
+`*_case_metadata.toml` (harvested 2026-08-21). Both fine runs fail the strict
+per-rev criterion (`converged=false`) but the cycle-mean is the headline per
+`decision_rules.md`. Phase-2 exit still needs the clean-context verify pass +
+Ryan's read (and note the coarse rung contributes nothing harvestable).

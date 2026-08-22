@@ -34,7 +34,6 @@ import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
 
 import Meshes
-import GeoIO
 import Rotations: RotX, RotY, RotZ
 
 # import CUDA                               # Uncomment this to use GPU (if available)
@@ -84,12 +83,10 @@ clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that ar
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Read Gmsh mesh
-msh = GeoIO.load(meshfile)
-msh = msh.geometry
+msh = pnl.read_gmsh(meshfile)
 
 # Read Gmsh line of trailing edge
-TEmsh = GeoIO.load(trailingedgefile)
-TEmsh = TEmsh.geometry
+TEmsh = pnl.read_gmsh(trailingedgefile)
 
 # Transform the original mesh: Translate, rotate, and scale
 msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)

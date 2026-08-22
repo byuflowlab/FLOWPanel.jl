@@ -20,7 +20,6 @@
 
 import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
-import GeoIO
 using LinearAlgebra: norm
 import LinearAlgebra
 
@@ -101,7 +100,7 @@ DJI 9443 direct-potential panel-wake study
 kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 DBC = true
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[radial_dimension, :])
 

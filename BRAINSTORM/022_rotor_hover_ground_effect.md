@@ -24,6 +24,42 @@
 > 2026-08-19: Phase 5 (h/R sweep 0.5/1.5/2.0 vs Ryan-provided experiment +
 > CB theory, capped at 2.0) staged; gated on the Phase-2 h/R = 1 harvest.
 >
+> **RESET BRIEF (e) — 2026-08-21 (CONTEXT-RESET HANDOFF — start here).**
+> **Headline exists:** p022_ige_fine landed ⇒ CT_IGE fine = **0.07934 ±
+> 0.00234**; with CT_OGE fine = 0.07480 ± 0.00152 the fine-rung ratio is
+> **IGE/OGE = 1.061 ± 0.038** — consistent with momentum theory (1.067) and
+> experiment (1.078 ± 0.008). Ledger "Headline" table filled; both fine runs
+> healthy (gs_nonconverged=0). Phase-2 exit needs a clean-context verify of
+> the harvest + Ryan's read; **offer Ryan a notebook entry at this milestone**
+> (per phase_02 exit criteria — ask header + verbosity first).
+>
+> **In flight (Phase 3, ruling 6 arms, both ~step 510/1007 @ 10.7 h, healthy,
+> banners verified):** 13246557 `_damp` (damping only; below-ground census =
+> A/B observable; 332 below-ground at step 500 vs the undamped run's
+> thousands — do the MATCHED-STEP read vs 13207682's logged census, steps
+> ≤630, per phase_03 decision rules) and 13246558 `_trunc` (damping +
+> floor-at-ground; census 0 by construction; NOTE its ground tangency runs
+> hotter than _damp — RMS 0.41 vs 0.12 at step ~510 — watch, don't panic).
+> **Critical observation ~step 636 (rev 17.6):** does each arm survive where
+> 13207682 ignited? Interpretations pre-registered in
+> `phase_03_particle_policy.md` — read them BEFORE the runs land. Landing ≈
+> 2026-08-22 morning (48 h walls, ~30 h runtime).
+>
+> **Cross-item hazard (BRAINSTORM/025, 2026-08-20):** the codebase default
+> filament regularization changed to Gaussian; the 022 launcher now pins
+> `FLOWPANEL_FILAMENT_REG=vatistas` for FUTURE submissions. The in-flight
+> Phase-3 jobs were submitted 2026-08-20 — **verify which regularization they
+> actually ran** (banner/metadata, or cluster src state at launch; cluster
+> src is scp-managed and may predate 025) before comparing them against the
+> Phase-1/2 runs; a reg mismatch would confound the policy A/B.
+>
+> Next after Phase 3 verdict: pick production policy (ruling candidate for
+> Ryan), set `GROUND_DAMP_BAND_R` on the Phase-5 hr arms (currently pinned 0
+> with an update-me comment), then Phase 4 ladders / Phase 5 sweep. Ops:
+> coarse walls are 48 h now (25–31 h runtime); no IGE warm-start (re-run cold
+> only); `scripts/p022_harvest.py` for walled runs (NOT p018_analyze.py —
+> RPM-5400 pitfall); `/apps/slurm/latest/bin/*` for scripted squeue/sbatch.
+
 > **RESET BRIEF (d) — 2026-08-20.** Ryan swapped Phases 3↔4 and refined the
 > below-ground policy (ruling 6): linear vertical velocity cutoff within R/10
 > of the ground + truncation floored at the ground. Driver implements
@@ -75,10 +111,12 @@ In-flight jobs:
 
 | job | case | action on landing |
 |---|---|---|
-| 13207679 | p022_oge_fine (45_185_ct4, OGE, 72 h) | verify banner → harvest M1 → ledger |
-| 13207680 | p022_oge_coarse (56_57, OGE, 24 h) | verify banner → harvest M1 → early CT_OGE cross-check |
-| 13207681 | p022_ige_fine (45_185_ct4, IGE, 72 h) | verify banner + GS/tangency health → harvest M1 → headline ratio |
-| ~~13207682~~ | p022_ige_coarse (56_57, IGE, 24 h) | **CANCELLED 2026-08-19 — blew up at rev 17.6**; no M1 window. See `ledger.md` |
+| 13246557 | p022_ige_coarse_damp (56_57, damp 0.1R, policy none, 48 h) | verify FILAMENT_REG (025 hazard) → survival check @ rev 17.6 → matched-step census A/B vs 13207682 log → phase_03 decision rules |
+| 13246558 | p022_ige_coarse_trunc (56_57, damp 0.1R + floor@ground, 48 h) | same, minus census A/B (0 by construction); watch its hotter tangency (RMS 0.41 vs 0.12 @ step 510) |
+
+Landed (see `ledger.md`): 13207679 oge_fine **CT 0.07480±0.00152**; 13207681
+ige_fine **CT 0.07934±0.00234** ⇒ fine ratio 1.061±0.038; 13207680
+oge_coarse walled rev 25 (no M1); ~~13207682~~ ige_coarse blew up rev 17.6.
 
 ## Objective and scope
 

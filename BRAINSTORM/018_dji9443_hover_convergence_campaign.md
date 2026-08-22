@@ -12,6 +12,64 @@
 > §2026-08-06 entries. No in-session monitors survive a reset — poll
 > `squeue` directly.**
 >
+> **RESET BRIEF 2026-08-21 (m) — READ THIS FIRST; supersedes (l)
+> ((l)'s standing rules bind where not restated). Work from disk;
+> monitors die with the session — re-arm sacct polls. SSH GOTCHA: use
+> `ssh orc bash -s <<'EOF'` heredocs (or `bash -ls` for slurm cmds);
+> quoted `bash -lc "$var"` double-expands and eats variables (killed a
+> submission take-1 on 08-20; harmless). Session record: ledger
+> §2026-08-20 (many entries) + phase_16 §Log 2026-08-20 + STATUS REPORT
+> (2026-08-20) items 28–32 + BRAINSTORM/024 §Log.**
+>
+> **TWELVE 018 jobs in flight (ALL banners VERIFIED at start), walls:**
+>
+> | jobs | what | land | action on landing |
+> | --- | --- | --- | --- |
+> | 13243083/84/85 | F1b λ ladder `p018_csarc_l{2p4,3p4,4p8}` NT36 N=1, 48 h | ~Sat 08-22 morning | wake-health TAIL (absolutes; l2p4's screen gos2 ended 425 rising-decelerating — check its tail first), then F1b scoring per plan §Scoring: P1 doubling (M1 raw+quiet ≤0.5%, M2 ≤1%), Γ̄ overlay vs straight-sheet rungs, λ3.4 A/B vs BOTH `p018_cs_l3p4`(+_rs1, stitch 778) AND `p018_cs_f1_l3p4` (arc vs cap head-to-head — a RYAN decision follows); csarc_mid A/B vs csarc_l3p4 ("behavior doesn't change much" = pass, his words) |
+> | 13245449/50/51 | N=1 NT72 ladder `csarc_nt72_l{2p4,3p4,4p8}` rlxf 0.16334 pps 6, 72 h | ~Sun 08-23 | score as LABELED MODEL-DEF A/Bs vs NT36 rungs (exact-rate standing rule; matched windows; expect ~rev 28) |
+> | 13245452/53/54 | N=1 NT144 ladder `csarc_nt144_l*` rlxf 0.08539 pps 3, 72 h | ~Sun (rev ~13–15) | reach insufficient for settled windows ⇒ **chain decision is RYAN'S — never chain unprompted**; interim health + early-window reads only |
+> | 13246032 | `csarc_n0_l4p8` N=0 convert-at-shed A/B (vs 13243085), 48 h | ~Sat | one-knob-ish A/B; **disclosed deltas: {no free row} + {unsteady_filament false→true, forced}**; score M1/M2 vs 13243085 + wake health esp. Kutta/CT noise (fresh blobs sit ON the rigid row's end filament — 024 watch-item) |
+> | 13246048/49 | N=0 NT ladder `csarc_n0_nt{72,144}_l4p8`, 72 h | ~Sun | with 13246032 = 3-pt N=0 NT ladder: N=0 NT-flatness isolates pps/dt model-def from row extent; N1-vs-N0 per NT isolates the row. **When the NT ladders land: REMIND RYAN about the parked N=0 production-adoption question (his standing request)** |
+>
+> **2026-08-20 verdicts already scored (do NOT re-derive; ledger has
+> numbers):** F1 cap WORKS on its target (doubling CT −0.94% vs +9.68%
+> uncapped; inboard Γ̄ excess collapsed; residual = OUTBOARD lobe r/R
+> 0.78–0.87 ~−5.6% present in uncapped too; cap-only λ3.4 ΔCT −2.56%);
+> F1 scored on matched 15–28 (48 h wall cost rev 29; uncapped re-scored
+> same window; wall-killed runs have NO CT CSVs — p018_analyze.py
+> reconstructs from the force monitor). nt72 model-def arms survived
+> walls (old ignition = low-rlxf dose, not NT); nt72@0.16334 mirrors
+> carrier temperament ⇒ **exact-rate rule r(NT)=1−(1−0.3)^(36/NT) is
+> STANDING for all NT ladders (Ryan)**. nt144@0.3 (13185010) died rev
+> 13.07 to a node BUS ERROR (health calm — not physics); restart@step
+> 1881 staged, RYAN'S call. csarc_mid COMPLETED healthy (30 revs,
+> harvested).
+>
+> **BRAINSTORM/024 (N=0) is IMPLEMENTED + DEPLOYED:** Route II
+> (convert_at_shed marker), suites wake 707/simulate 177/replay
+> 142/warmstart 40 all green, N≥1 bit-identity proven; driver amendment
+> allows legacy conversion at N=0 (unsteady_filament=(N==0)); local
+> smoke clean 50+ steps; deploy quarantine-proven (diffs 024-only;
+> pre/post md5s + .deploy_backups/pre024_20260820/ in ledger). N=0 VTK
+> for Ryan: `~/p018_das_inspect/smoke_csarc_n0_l4p8/` (+ F1/F1b step
+> copies in the same dir). **BRAINSTORM/025 (small-Das+free-rows fully
+> unsteady) is STAGED ONLY — do not implement** (0.25c is NOT a
+> validated Kutta floor — clearance confound, see ledger amendment).
+> Ryan flagged root σ/blade-gap proximity under chord-σ (co-scaled
+> σ_root 0.083R sits ~4σ from the other blade); a blade-gap σ cap was
+> discussed, NOT approved — hold until ladders report.
+>
+> **Ops:** VTK retention now **newest 36 steps** (Ryan ruling, sweeper
+> KEEP_STEPS default updated both sides). Disk was 120G/200G at 12-job
+> launch — WATCH IT (sweeps free less now; sweep landed dirs promptly,
+> never the newest 36, protect list is Ryan's). Deployed md5s (all
+> local==cluster): wake 4849fd76, simulate 7870348b, replay d345597b,
+> warmstart b0b9e81e, driver b6bc8f30, launcher d9624186. Cluster
+> Manifest stays Julia-1.11.7-resolved (021's 1.12 re-resolve killed
+> the first F1 trio — can recur). Standing: knobs from banner, judge
+> from monitors CSVs, exit 0 ≠ health, sigma-ratio cols NaN under
+> station-σ (absolutes only), ≤4 local threads, notebook needs Ryan.**
+>
 > **RESET BRIEF 2026-08-18 (l, evening) — READ THIS FIRST; supersedes (k)
 > ((k)'s standing rules bind; the (k) pause-window note below is HISTORY —
 > pause+resume both executed cleanly, see pause_manifest_20260815.md).
@@ -1412,3 +1470,12 @@ for; details in ledger §2026-08-20 and phase_16 §Log 2026-08-20.
    harmlessly to a quoting bug and was resubmitted clean (ledger);
    Manifest untouched at 1.11.7; sacct monitor re-armed on the four
    live jobs; no notebook writes.
+
+## Cross-item task (2026-08-20, from BRAINSTORM 025 — staged, NOT started)
+
+When 025 (kernel-regularization update: selectable family, possible new
+default) reaches its Phase 3, 018 owns a compatibility task: verify the 018
+drivers/launcher against the new default via env-only pinning (RHPC stays
+frozen), run one warm-start A/B on the production carrier (CT + wall_s), and
+record the ledger entry. Details: `025_kernel_regularization_update.md`
+Phase 3. No 018 action until 025 Phases 0-2 complete and Ryan gates.

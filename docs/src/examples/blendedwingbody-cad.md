@@ -16,7 +16,6 @@ processing unstructured grids:
 import Pkg
 
 Pkg.add(Meshes)
-Pkg.add(GeoIO)
 Pkg.add(Rotations)
 ```
 
@@ -35,4 +34,3 @@ Pkg.add(Rotations)
     The resulting `.STEP` file is available here:
     [LINK](https://github.com/byuflowlab/FLOWPanel.jl/raw/master/examples/data/zeroebwb.STEP)
     (`right click → save as...`).
-

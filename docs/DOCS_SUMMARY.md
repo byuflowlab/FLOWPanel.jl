@@ -213,7 +213,7 @@ All example pages follow the same pattern:
 - Wake shedding geometry for lifting body analysis
 
 **Aerodynamic Analysis** (`examples/blendedwingbody-aero.md`, 272 lines)
-- Importing the Gmsh mesh via `GeoIO` / `Meshes.jl`
+- Importing the Gmsh mesh via `FLOWPanel.read_gmsh` / `Meshes.jl`
 - Full solve and post-processing: CL, CD, Cm, surface pressure
 - Validation results
 

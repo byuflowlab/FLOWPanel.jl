@@ -5,7 +5,6 @@ import FLOWPanel as pnl
 # include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 using LinearAlgebra: norm, dot, cross
 import LinearAlgebra
 
@@ -273,7 +272,7 @@ radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong f
 
 Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [0.0, -cosd(AOA), sind(AOA)]
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[radial_dimension, :])
 
@@ -645,8 +644,37 @@ else
      unsteady_filament = (nwakerows == 0))
 end
 
+# --- Task 052: optional CuArray-backed (device-resident) wake particle field.
+# VPM_ARRAYTYPE=cuarray constructs the wake ParticleField on the GPU (requires
+# FLOWPANEL_GPU_INFLUENCE=cuda so every influence pass touching the device
+# field runs through the CUDA rectangular/radix seam). The device radix FMM
+# forbids autotuning, so the armed path pins the row-048-validated FMM
+# settings (p=4, ncrit=50, theta=0.4, autotune off). Default (unset/"array")
+# leaves the construction bit-identical to before this knob existed.
+vpm_arraytype_name = lowercase(get(ENV, "VPM_ARRAYTYPE", "array"))
+wake_pfield_kwargs = if vpm_arraytype_name in ("cuarray", "cuda", "gpu")
+    gpu_influence_mode = lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0"))
+    gpu_influence_mode in ("cuda", "gpu") || error(
+        "VPM_ARRAYTYPE=cuarray requires FLOWPANEL_GPU_INFLUENCE=cuda (got " *
+        "$(repr(gpu_influence_mode))): every influence pass touching the " *
+        "device particle field must be handled by the CUDA seam")
+    pnl.FastMultipole.load_cuda_radix_lifecycle!() || error(
+        "VPM_ARRAYTYPE=cuarray but the CUDA radix lifecycle failed to " *
+        "load: " * pnl.FastMultipole.cuda_radix_status())
+    println("Wake particle field: device-resident CuArray " *
+        "($(pnl.FastMultipole.cuda_radix_status()))")
+    (arraytype = getglobal(pnl.FastMultipole, :CUDA).CuArray,
+     pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4, autotune_p=false,
+                         autotune_ncrit=false, autotune_reg_error=false))
+elseif vpm_arraytype_name in ("array", "matrix")
+    (;)
+else
+    error("Unknown VPM_ARRAYTYPE=$(repr(vpm_arraytype_name)); use array or cuarray")
+end
+
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows, max_particles=500_000, core_size=wake_core_size,
+    wake_pfield_kwargs...,
     particle_kerneloffset=kerneloffset_targets,
     viscous=viscous_scheme,
     SFS=sfs_choice,
@@ -1000,18 +1028,24 @@ solver_rotor = pnl.Backslash(rotor)
 # RHPC_BACKEND=direct is the BRAINSTORM/018 Phase-2 discriminator for the FMM
 # |Das|-panel-radius coupling (src/FLOWPanel_liftingbody.jl); fmm is production.
 rhpc_backend = get(ENV, "RHPC_BACKEND", "fmm")
+# BRAINSTORM/023 + 025: the body and wake passes tune independently (the body
+# pass is filament-radius-inflation bound, the wake pass Dynamic-SFS bound), so
+# each takes its own knob triple. The shared FMM_* names remain the fallback,
+# so any existing submission that sets only FMM_EXPANSION_ORDER /
+# FMM_ACCEPTANCE / FMM_LEAF_SIZE behaves exactly as before.
+rhpc_fmm_knob(specific, shared, default) = get(ENV, specific, get(ENV, shared, default))
 backend, backend_wake = if rhpc_backend == "direct"
     pnl.DirectBackend(), pnl.DirectBackend()
 elseif rhpc_backend == "fmm"
     pnl.FastMultipoleBackend(;
-        expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "8")),
-        multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
-        leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "20")),
+        expansion_order=parse(Int, rhpc_fmm_knob("FMM_BODY_EXPANSION_ORDER", "FMM_EXPANSION_ORDER", "8")),
+        multipole_acceptance=parse(Float64, rhpc_fmm_knob("FMM_BODY_ACCEPTANCE", "FMM_ACCEPTANCE", "0.4")),
+        leaf_size=parse(Int, rhpc_fmm_knob("FMM_BODY_LEAF_SIZE", "FMM_LEAF_SIZE", "20")),
     ),
     pnl.FastMultipoleBackend(;
-        expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "4")),
-        multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
-        leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "50")),
+        expansion_order=parse(Int, rhpc_fmm_knob("FMM_WAKE_EXPANSION_ORDER", "FMM_EXPANSION_ORDER", "4")),
+        multipole_acceptance=parse(Float64, rhpc_fmm_knob("FMM_WAKE_ACCEPTANCE", "FMM_ACCEPTANCE", "0.4")),
+        leaf_size=parse(Int, rhpc_fmm_knob("FMM_WAKE_LEAF_SIZE", "FMM_LEAF_SIZE", "50")),
     )
 else
     error("Unknown RHPC_BACKEND=$(repr(rhpc_backend)); use fmm or direct")
@@ -1458,6 +1492,13 @@ if save_path !== nothing
         println(io, "restart_step = $(restart_step)")
         println(io, "backend_body_order = $(backend.expansion_order)")
         println(io, "backend_wake_order = $(backend_wake.expansion_order)")
+        if rhpc_backend == "fmm"
+            println(io, "backend_body_acceptance = $(backend.multipole_acceptance)")
+            println(io, "backend_body_leaf_size = $(backend.leaf_size)")
+            println(io, "backend_wake_acceptance = $(backend_wake.multipole_acceptance)")
+            println(io, "backend_wake_leaf_size = $(backend_wake.leaf_size)")
+        end
+        println(io, "filament_regularization = \"$(pnl.FILAMENT_REGULARIZATION[])\"")
         println(io, "julia_threads = $(Threads.nthreads())")
         println(io, "wall_time_s = $(sim_wall_seconds)")
         println(io, "convergence_revs = $(length(block_ranges))")

@@ -3,7 +3,17 @@ import FLOWPanel as pnl
 using LinearAlgebra: norm
 
 if !isdefined(@__MODULE__, :SSWConfig)
-    include(joinpath(pnl.examples_path, "suddenly_started_wing.jl"))
+    old_no_plot = get(ENV, "SSW_NO_PLOT", nothing)
+    ENV["SSW_NO_PLOT"] = "true"
+    try
+        include(joinpath(pnl.examples_path, "suddenly_started_wing.jl"))
+    finally
+        if old_no_plot === nothing
+            delete!(ENV, "SSW_NO_PLOT")
+        else
+            ENV["SSW_NO_PLOT"] = old_no_plot
+        end
+    end
 end
 if !isdefined(@__MODULE__, :ssw_convert_rows)
     include(joinpath(pnl.examples_path, "ssw_representation_probe.jl"))

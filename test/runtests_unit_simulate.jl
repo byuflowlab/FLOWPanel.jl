@@ -23,6 +23,27 @@ pnl.solve!(::pnl.AbstractBody{<:Any, <:Any, <:Any, true}, solver::SimNoopSolver;
 pnl.solve!(::pnl.AbstractBody{<:Any, <:Any, <:Any, false}, solver::SimNoopSolver; backend=nothing, kwargs...) =
     _record_sim_noop_backend!(solver, backend)
 
+mutable struct SimGeometryOrderSolver <: pnl.AbstractSolver
+    transform_calls::Int
+    geometry_current::Bool
+end
+SimGeometryOrderSolver() = SimGeometryOrderSolver(0, true)
+pnl.solve!(::pnl.AbstractBody{<:Any, <:Any, <:Any, true},
+    ::SimGeometryOrderSolver; kwargs...) = nothing
+pnl.solve!(::pnl.AbstractBody{<:Any, <:Any, <:Any, false},
+    ::SimGeometryOrderSolver; kwargs...) = nothing
+function pnl.transform_solver_geometry!(solver::SimGeometryOrderSolver, body, R, t)
+    reference = deepcopy(body)
+    pnl.calc_normals!(reference)
+    pnl.calc_controlpoints!(reference)
+    solver.transform_calls += 1
+    solver.geometry_current &= isapprox(body.normals, reference.normals;
+        rtol=0, atol=1e-14)
+    solver.geometry_current &= isapprox(body.controlpoints, reference.controlpoints;
+        rtol=0, atol=1e-14)
+    return nothing
+end
+
 mutable struct SimCoupledNoopSolver <: pnl.AbstractSolver
     called::Bool
     backend_seen::Any
@@ -133,6 +154,25 @@ end
     )
     @test solver.called
     @test solver.backend_seen === solve_backend
+end
+
+@testset "simulate! refreshes geometry before persistent solvers" begin
+    body = make_plate_vortex_body()
+    axis = FastMultipole.SVector{3}(0.37, -0.61, 0.70)
+    axis /= norm(axis)
+    frames = pnl.ReferenceFrame(body;
+        origin=FastMultipole.SVector{3}(0.0, 0.0, 0.0),
+        v=FastMultipole.SVector{3}(0.1, -0.2, 0.05),
+        ω_axis=axis, ω=4.0, dependent_index=[1])
+    solver = SimGeometryOrderSolver()
+
+    pnl.simulate!(body, nothing, frames, (args...) -> nothing,
+        t -> FastMultipole.SVector{3}(0.0, 0.0, 0.0), [0.0, 0.05];
+        body_solvers=solver, backend=pnl.DirectBackend(), path=nothing,
+        grad_mu_options=(; basis=:tri))
+
+    @test solver.transform_calls == 1
+    @test solver.geometry_current
 end
 
 @testset "simulate! backend split and validation" begin

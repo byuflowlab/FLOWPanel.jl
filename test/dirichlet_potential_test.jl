@@ -15,7 +15,7 @@ end
     Vinf = [cosd(AOA), 0.0, sind(AOA)]
 
     meshfile = joinpath(pnl.examples_path, "data", "wing_ar4_naca0016_5.msh")
-    msh = GeoIO.load(meshfile).geometry |> Meshes.Scale(1.0)
+    msh = pnl.read_gmsh(meshfile) |> Meshes.Scale(1.0)
     nodes, cells = pnl.meshes2nodes_cells(msh)
 
     trailingedge = zeros(3, 10000)

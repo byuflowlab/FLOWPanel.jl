@@ -185,6 +185,73 @@ end
     end
 end
 
+@testset verbose=true "triaxial panel FmmPlan rigid equivariance" begin
+    body = make_sphere_source_body()
+    body.nodes[1, :] .*= 1.0
+    body.nodes[2, :] .*= 0.7
+    body.nodes[3, :] .*= 0.45
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    body.kerneloffset = body.kerneloffset_panel
+    for i in 1:body.ncells
+        body.strength[i, 1] = sin(0.017 * i) + 0.3 * cos(0.031 * i)
+    end
+
+    plan = FastMultipole.FmmPlan((body,), (body,);
+        expansion_order=8, multipole_acceptance=0.4, leaf_size_source=20,
+        scalar_potential=true, gradient=false, hessian=false, shrink=true)
+    @test body.ncells == 2304
+    @test !isempty(plan.m2l_list)
+    @test !isempty(plan.direct_list)
+
+    function direct_potential!(body)
+        body.potential .= 0
+        pnl.influence!((body,), (body,), pnl.DirectBackend();
+            scalar_potential=true, velocity=false)
+        return copy(body.potential)
+    end
+    function planned_potential!(body, plan)
+        body.potential .= 0
+        FastMultipole.fmm!((body,), (body,), plan)
+        return copy(body.potential)
+    end
+
+    phi_direct_0 = direct_potential!(body)
+    phi_fmm_0 = planned_potential!(body, plan)
+    refnorm_0 = LinearAlgebra.norm(phi_direct_0)
+    err_0 = LinearAlgebra.norm(phi_fmm_0 - phi_direct_0) / refnorm_0
+    @test all(isfinite, phi_direct_0)
+    @test all(isfinite, phi_fmm_0)
+    @test refnorm_0 > 0
+    @test err_0 < 1e-7
+
+    axis = [0.37, -0.61, 0.70]
+    axis ./= LinearAlgebra.norm(axis)
+    theta = 0.73
+    K = [0.0 -axis[3] axis[2];
+         axis[3] 0.0 -axis[1];
+         -axis[2] axis[1] 0.0]
+    R = cos(theta) .* Matrix{Float64}(LinearAlgebra.I, 3, 3) .+
+        (1 - cos(theta)) .* (axis * axis') .+ sin(theta) .* K
+    t = [0.31, -0.27, 0.19]
+    body.nodes .= R * body.nodes .+ t
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
+    FastMultipole.transform_plan!(plan, (body,), R, t)
+
+    phi_direct_1 = direct_potential!(body)
+    phi_fmm_1 = planned_potential!(body, plan)
+    refnorm_1 = LinearAlgebra.norm(phi_direct_1)
+    err_1 = LinearAlgebra.norm(phi_fmm_1 - phi_direct_1) / refnorm_1
+    @test all(isfinite, phi_direct_1)
+    @test all(isfinite, phi_fmm_1)
+    @test refnorm_1 > 0
+    @test err_1 <= 1.05 * err_0 + 1e-12
+    @test LinearAlgebra.norm(phi_direct_1 - phi_direct_0) / refnorm_0 <= 1e-12
+    @test LinearAlgebra.norm(phi_fmm_1 - phi_fmm_0) /
+          LinearAlgebra.norm(phi_fmm_0) <= 1e-12
+end
+
 @testset verbose=true "kerneloffset-aware FMM radius" begin
     @testset "radius_inflation formulas" begin
         tol = pnl.FMM_RADIUS_TOL[]
@@ -192,12 +259,32 @@ end
         @test pnl.radius_inflation(pnl.ConstantSource, 0.05, tol) == 0.05
         @test pnl.radius_inflation(pnl.ConstantDoublet, 0.05, tol) == 0.05
         @test pnl.radius_inflation(Union{pnl.ConstantSource, pnl.ConstantDoublet}, 0.05, tol) == 0.05
-        # Vatistas n=2: rel error ½(koff/h)^4 ≤ tol at h ≥ koff·(2/tol)^(1/4)
-        @test pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6) ≈ 0.05 * (2e6)^0.25
-        @test pnl.radius_inflation(Union{pnl.ConstantSource, pnl.VortexRing}, 0.05, 1e-6) ≈
-              0.05 * (2e6)^0.25
-        # Inf disables (pre-fix behavior)
-        @test pnl.radius_inflation(pnl.VortexRing, 0.05, Inf) == 0.0
+        # VortexRing inflation follows the active FilamentRegularization
+        # family (BRAINSTORM 025); assert each family's rule explicitly
+        old_family = pnl.FILAMENT_REGULARIZATION[]
+        try
+            # compact-support (default): exact beyond koff, tol-independent
+            pnl.set_filament_regularization!(pnl.CompactRegularization)
+            @test pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6) == 0.05
+            @test pnl.radius_inflation(Union{pnl.ConstantSource, pnl.VortexRing}, 0.05, 1e-6) == 0.05
+            # Gaussian: GRADIENT-AWARE radius (025 review finding 1) solving
+            # e^{-z}(1+2z) = tol with z = (Δr/koff)²/2; exceeds the
+            # velocity-only √(2 ln 1/tol) radius (≈5.90 koff at 1e-6)
+            pnl.set_filament_regularization!(pnl.GaussianRegularization)
+            Δr_g = pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6)
+            z_g = (Δr_g / 0.05)^2 / 2
+            @test isapprox(exp(-z_g) * (1 + 2z_g), 1e-6; rtol=1e-4)
+            @test Δr_g > 0.05 * sqrt(2 * log(1e6))
+            # Vatistas n=2 (legacy): rel error ½(koff/h)^4 ≤ tol at h ≥ koff·(2/tol)^(1/4)
+            pnl.set_filament_regularization!(pnl.VatistasRegularization)
+            @test pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6) ≈ 0.05 * (2e6)^0.25
+            @test pnl.radius_inflation(Union{pnl.ConstantSource, pnl.VortexRing}, 0.05, 1e-6) ≈
+                  0.05 * (2e6)^0.25
+            # Inf disables (pre-fix behavior)
+            @test pnl.radius_inflation(pnl.VortexRing, 0.05, Inf) == 0.0
+        finally
+            pnl.FILAMENT_REGULARIZATION[] = old_family
+        end
         @test pnl.radius_inflation(pnl.ConstantSource, 0.05, Inf) == 0.0
     end
 

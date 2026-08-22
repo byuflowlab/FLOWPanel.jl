@@ -7,7 +7,6 @@ import FLOWPanel as pnl
 import FLOWPanel: norm, dot, cross
 
 # import Meshes
-import GeoIO
 
 import PythonPlot as plt
 import PythonPlot: @L_str
@@ -167,7 +166,7 @@ function run(; AOA=5.0, magVinf=56.0, endplates=false, meshfile="",
     # ----------------- GENERATE BODY ----------------------------------------------
     # Read Gmsh mesh
     println("\tLoading mesh...")
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
     println("\tDone.\n")
 
     # Transform the original mesh: Translate, rotate, and scale

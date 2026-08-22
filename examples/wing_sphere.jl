@@ -16,7 +16,6 @@ import GeometricTools as gt
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm, I
 import Meshes
-import GeoIO
 
 run_name = "wing_sphere"
 save_path = joinpath("data", run_name)
@@ -39,7 +38,7 @@ b               = AR * chord                    # (m) span
 read_path       = joinpath(pnl.examples_path, "data")
 meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")
 
-msh = GeoIO.load(meshfile).geometry
+msh = pnl.read_gmsh(meshfile)
 msh = msh |> Meshes.Scale(1.0)
 grid = gt.GridTriangleSurface(msh)
 

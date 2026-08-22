@@ -11,7 +11,6 @@
 ## hypothesis is right the gap should collapse.
 
 import FLOWPanel as pnl
-import GeoIO
 using LinearAlgebra: norm, dot
 using Printf
 
@@ -21,7 +20,7 @@ const MESHFILE = joinpath(pnl.examples_path, "data", "naca0012_nc101_nw26.msh")
 
 function build_neumann_body(; meshfile=MESHFILE, AOA=5.88, magVinf=56.0,
                               cp_offset=1e-10, kernel_offset=1e-3)
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
     nodes, cells = pnl.meshes2nodes_cells(msh)
 
     # Remove one panel to make the closed surface non-watertight, so the

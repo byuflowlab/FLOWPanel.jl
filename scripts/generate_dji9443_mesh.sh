@@ -81,11 +81,14 @@ Options:
       --tip-cap MODE   Set tip cap independently: none, flat, or round
       --cap-tess N     Set shared root/tip cap refinement (default: 3)
       --hub-r-over-r X Enlarge the hub: move the blade-root section (XSec_0
-                       RadiusFrac, stock 0.01) out to X (e.g. 0.15). Interior
-                       sections that would fall inside the new hub are
-                       redistributed evenly between X and the first stock
-                       station outboard of X (section count and airfoils are
-                       preserved). Folded into the filename as _hubXpY.
+                       RadiusFrac, stock 0.01) out to X (e.g. 0.15). Sections
+                       inboard of X are cut, and the chord and twist
+                       distributions are TRUNCATED at X -- split there so the
+                       new root knot carries the original curve's value, then
+                       re-anchored -- so the blade outboard of X is the stock
+                       blade unchanged. Folded into the filename as _hubXpY.
+                       Verify the result with scripts/p018_mesh_profile.py:
+                       watertightness alone does not detect a bad root.
   -o, --output FILE    Output .msh path
   -f, --force          Replace an existing output file
   -h, --help           Show this help
@@ -413,24 +416,131 @@ void main()
             return;
         }
 
+        // The blade's chord and twist are PCurves over r/R (pcurve 0 = Chord,
+        // 1 = Twist), independent of the XSec RadiusFrac stations. Moving the
+        // root XSec outboard does NOT move them: SetPCurve/Update only CLAMPS
+        // the first knot's t to the new root while leaving its VALUE and every
+        // other knot where they were. Knots that then lie inboard of the root
+        // fold the loft back on itself and the spanwise skin overshoots wildly
+        // bridging the leftover step.
+        //
+        // That is exactly the bug this block used to have (fixed 2026-08-03):
+        // at hub_r=0.15 the root kept the r/R=0.01 section (chord 0.540,
+        // twist 13.19 deg instead of ~1.10 / ~19.96), ring 3 folded to
+        // r/R=0.1455 -- INBOARD of the root -- and chord ballooned to 7.25,
+        // i.e. 5.5x the largest chord anywhere on the blade. The mesh stayed
+        // watertight with the right element count, so the old gate passed it,
+        // and it produced CT = -0.474 at the first timestep (BRAINSTORM/018
+        // phase_05). Any change here must be re-checked with
+        // `scripts/p018_mesh_profile.py`, which compares chord(r) and twist(r)
+        // against the stock blade -- watertightness alone cannot see this.
+        //
+        // Correct order of operations:
+        //   1. split BOTH distributions at hub_r while their domain still
+        //      covers it, and keep only the knots at/outboard of hub_r. The
+        //      split point carries OpenVSP's own evaluation of the original
+        //      curve at hub_r, so the retained blade is the stock blade
+        //      restricted to r >= hub_r -- truncation, not re-shaping.
+        //   2. cut the XSecs inside the hub and move the root XSec out.
+        //   3. only THEN install the trimmed distributions, so the clamp in
+        //      step 1's note is a no-op (first knot already == root station).
+        // Splitting a CEDIT curve (twist) at hub_r makes that point a segment
+        // endpoint, so the retained count stays 3n+1 as CEDIT requires.
+        // PCurveDeletePt is a no-op on the leading point, hence the rebuild.
+        // ALL of the blade distributions must be truncated, not just chord and
+        // twist: a PropGeom carries chord, twist, rake, skew, sweep, thickness,
+        // CLi and the axial/tangential offsets, and every one of them is keyed
+        // on r/R starting at the stock root 0.01. Leaving any of them with
+        // knots inboard of hub_r reintroduces the same fold. Thickness (pc5)
+        // and the offset curves (pc7/pc8) matter as much as chord here --
+        // fixing only chord+twist still left a 2.35 chord balloon in the first
+        // spanwise segment, because those curves were still folded.
+        const int MAX_DIST = 10;
+        array<array<double>> keep_t(MAX_DIST), keep_v(MAX_DIST);
+        array<int> dist_type(MAX_DIST);
+        array<bool> dist_used(MAX_DIST);
+        for (int pc = 0; pc < MAX_DIST; ++pc)
+        {
+            dist_used[pc] = false;
+            array<double> probe = PCurveGetTVec(prop_id, pc);
+            if (probe.size() == 0) continue;   // curve not present on this geom
+            dist_type[pc] = PCurveGetType(prop_id, pc);
+            PCurveSplit(prop_id, pc, hub_r);
+            Update();
+            array<double> tv = PCurveGetTVec(prop_id, pc);
+            array<double> vv = PCurveGetValVec(prop_id, pc);
+            int i0 = -1;
+            for (uint i = 0; i < tv.size(); ++i)
+            {
+                if (tv[i] >= hub_r - 1.0e-9) { i0 = int(i); break; }
+            }
+            if (i0 < 0)
+            {
+                Print("ERROR: distribution " + pc + " has no knot at/outboard of hub_r.\\n");
+                return;
+            }
+            if (dist_type[pc] == 2 && (i0 % 3) != 0)
+            {
+                Print("ERROR: CEDIT split index " + i0 + " is not a segment endpoint.\\n");
+                return;
+            }
+            for (uint i = uint(i0); i < tv.size(); ++i)
+            {
+                keep_t[pc].insertLast(tv[i]);
+                keep_v[pc].insertLast(vv[i]);
+            }
+            dist_used[pc] = true;
+            Print("  dist " + pc + ": keep " + keep_t[pc].size() + " knots from r/R=" +
+                  keep_t[pc][0] + " value " + keep_v[pc][0] + "\\n");
+        }
+
         // Delete interior sections that fall inside the new hub (crowding
         // them instead produces loft spikes at the old root radius), then
         // move the stock root section out to the hub. Do NOT cut the root
         // section itself: cutting changes the per-segment spanwise
         // tessellation (element count) and the root parm re-clamps.
-        // Validated for hub_r up to ~0.2; the fat transitional root folds
-        // the loft (non-watertight) when dragged much beyond that, so
-        // verify watertightness downstream for larger values.
         for (int i = k - 1; i >= 1; --i)
         {
             CutXSec(prop_id, i);
         }
         Update();
-        // Parm ids are stale after CutXSec; re-fetch the root section.
+        // The root XSec still carries the r/R=0.01 SHANK airfoil, which is a
+        // very different shape from a blade section. Skinning from a shank to
+        // a proper airfoil over the short remaining gap makes the spanwise
+        // surface overshoot (chord 2.36 vs ~1.15 expected, even with the
+        // distributions already fixed). Copy the first surviving outboard
+        // section's airfoil onto the root so the shape is continuous; paste
+        // replaces the airfoil only and leaves RadiusFrac alone. Chord and
+        // twist still come from the re-anchored distributions, so this changes
+        // section SHAPE only -- an approximation, but the alternative is the
+        // shank shape at a station where the real blade has none, since the
+        // hub has removed the region the shank described.
+        CopyXSec(prop_id, 1);
+        PasteXSec(prop_id, 0);
+        Update();
+        // Parm ids are stale after CutXSec/PasteXSec; re-fetch the root.
         xsec_surf = GetXSecSurf(prop_id, 0);
         string root_xsec = GetXSec(xsec_surf, 0);
         string root_parm = GetXSecParm(root_xsec, "RadiusFrac");
         SetParmValUpdate(root_parm, hub_r);
+
+        // Root station is now hub_r, so the trimmed distributions install
+        // without being clamped.
+        for (int pc = 0; pc < MAX_DIST; ++pc)
+        {
+            if (!dist_used[pc]) continue;
+            SetPCurve(prop_id, pc, keep_t[pc], keep_v[pc], dist_type[pc]);
+            Update();
+            array<double> tv = PCurveGetTVec(prop_id, pc);
+            array<double> vv = PCurveGetValVec(prop_id, pc);
+            if (tv[0] > hub_r + 1.0e-6 || tv[0] < hub_r - 1.0e-6)
+            {
+                Print("ERROR: distribution " + pc + " root knot is " + tv[0] +
+                      ", expected " + hub_r + ".\\n");
+                return;
+            }
+            Print("  dist " + pc + " re-anchored: r/R=" + tv[0] + " value " + vv[0] + "\\n");
+        }
         Print("  cut " + (k - 1) + " interior section(s); root RadiusFrac now " +
               GetParmVal(root_parm) + "\\n");
         Print("Hub variant: XSec_0 RadiusFrac -> " + hub_r + "; next station " +

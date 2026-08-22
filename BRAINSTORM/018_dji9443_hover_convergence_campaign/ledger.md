@@ -2457,3 +2457,57 @@ fleet monitor now TWELVE 018 jobs. nt144 rungs (N=0 and N=1) reach
 **(cont) 13246048/49 banners VERIFIED RUNNING:** NT 72/144, rlxf
 0.16334/0.08539, λ4.8, das_arc:true steady TE table, `nwakerows=0
 (convert-at-shed)`, production mesh — both valid N=0 NT rungs.
+
+**2026-08-21 — CONTEXT-RESET PREP: RESET BRIEF (m) written** (item file
+top, supersedes (l)). Fresh-agent entry = brief (m): twelve-job table
+(all banners verified at start), 08-20 scored verdicts, 024
+implemented+deployed state, 025 staged-only hold, exact-rate + 36-step
+retention rulings, disk watch, ssh-heredoc gotcha. Memory + MEMORY.md
+updated to point at (m).
+
+**2026-08-21 — 025 PHASE 3 LANDED; PRODUCTION SOLVER SETTINGS CHANGED
+(two Ryan rulings, both implemented).** Three warm-start continuations of the
+frozen carrier `p018_cs_f1_l3p4` from step 1034, 117 steps each (steps
+1035–1151, ~3.25 revs) on the mature ~181k-particle wake — everything except
+the swept knob held identical. Scored from `monitor02_force`/`monitor04_wake_health`,
+NOT the driver's summary block (which zero-fills restored steps and therefore
+reports a meaningless `CYCLE-MEAN 0.0229 ±145%, CONVERGED=false` for any
+continuation).
+
+| arm | job | change | CT̄ (steps 1035–1151) | Δ | s/step (1045–1151) |
+|---|---|---|---:|---:|---:|
+| control | 13247862 | vatistas, production FMM knobs | 0.0703810 | — | 160.2 |
+| family | 13247863 | **gaussian**, production knobs | 0.0703975 | +0.023% | 140.2 |
+| family+knobs | 13290979 | gaussian, **tuned knobs** (wake 16/0.6/38, body 17/0.7/109) | 0.0704002 | +0.0038% vs 13247863 | **71.7** |
+
+Both deltas are nulls against the carrier's own noise: within-rev peak-to-peak
+is 4.2–6.0e-4 (0.6–0.85% of CT) and the parent's rev-to-rev drift over its last
+three revs is −3.3e-5, i.e. **twice the family delta and ten times the knob
+delta**. Worst single-step divergence of the tuned arm vs its production-knob
+sibling: 3.73e-5 (0.053% of CT) — the certified field errors (1.8e-6 wake /
+1.2e-6 body vs a DirectBackend reference, job 13247200) do not accumulate over
+117 steps. Wake health indistinguishable across all three (n_particles to 0.1%,
+identical min σ 7.94e-4, identical max Γ/σ² 289.8, no tripwire, all finite).
+
+**Implemented in `examples/run_dji9443_hover_ct_hpc.slurm.sh` (deployed,
+md5-verified):** `FLOWPANEL_FILAMENT_REG` default vatistas → **gaussian**, and
+`FMM_BODY_*` = 17/0.7/109, `FMM_WAKE_*` = 16/0.6/38 as 018 defaults. Only this
+launcher changed; the driver's own defaults (body 8/0.4/20, wake 4/0.4/50) and
+every other study sharing the driver are untouched. Supporting changes: the
+driver now takes per-pass FMM knob env vars (shared `FMM_*` still the fallback,
+so old submissions are unchanged) and records both triples plus the family in
+`case_metadata.toml`; `FLOWPanel.__init__` prints the pinned family.
+
+**Campaign consequences.** (a) A 30-rev production run projects from ~48 h
+(which timed out at rev 28.5) to **~11 h** — the NT ladder's turnaround
+roughly quarters and the NT=144 arms that could not mature inside 72 h now can.
+(b) The twelve arms in flight on 2026-08-21 and everything before them ran
+vatistas + production knobs; they remain comparable to future rungs under the
+two measured nulls above (+0.023% and +0.0038%, vs a 0.6–0.85% within-rev p-p),
+and no error-budget term is warranted for either. (c) To reproduce a pre-2026-08-21
+arm exactly, pin `FLOWPANEL_FILAMENT_REG=vatistas` and the old `FMM_*` triples
+at submission. **(d) CHAIN WARNING: a restart/continuation of an in-flight
+vatistas arm will silently pick up the new defaults unless pinned** — pin both
+when extending anything submitted before today.
+
+Detail, tables and method: `BRAINSTORM/025_kernel_regularization_update/phase_03_018_compatibility.md`.

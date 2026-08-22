@@ -7,7 +7,6 @@ using Printf
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 
 run_name = "rotor_hover_mudiag"
 save_path = joinpath("data", run_name)
@@ -71,7 +70,7 @@ te_indices_2 = [13, 286, 238]
 # end
 
 # MSH file
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 
 # scale to proper radius

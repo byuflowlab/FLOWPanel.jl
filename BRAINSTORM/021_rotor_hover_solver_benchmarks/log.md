@@ -4,6 +4,34 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
+### 2026-08-21 — Wake-on FGS plateau diagnosed and fixed (H3 lifecycle ordering)
+
+Dense-LU arbitration on the first particle-carrying R1 state identified FGS
+as the incorrect path (FGS solution error 2.073e-3 and true relative residual
+1.941e-2; fresh Krylov 5.337e-9 and 9.542e-10). The underlying H3 bug was a
+one-step control-point lag: `simulate!` transformed persistent solver target
+buffers before recalculating moved control points. Reordering geometry refresh
+before `transform_body_solvers!` removes the jump. Fixed 0°–80° divergence is
+flat at 1.740e-7–1.893e-7; dense wake-on agreement is 1.879e-7. Added the
+triaxial panel rigid-motion gate and simulation ordering regression. Details:
+`phase_02_single_step_benchmarks.md` 2026-08-21 entry.
+
+### 2026-08-20 — Rigid-motion tree/cache reuse executed; FGS unsteady staleness confirmed + fixed
+
+`rigid_motion_tree_reuse_item.md` executed (Ryan's go via launch prompt).
+The pre-registered FGS staleness discriminator CONFIRMED the bug: per-step μ
+divergence vs a fresh-Krylov reference grows ~10⁶× with rotation angle
+(1.7e-7 at 0° → 21% at 80°, R1, 8 steps) — pre-fix unsteady FGS results are
+untrustworthy. FastMultipole gained `transform_tree!`/`transform_plan!`/
+`transform_solver!` (commits eea944d/087bf4a/d714544; note Ryan's concurrent
+645cc96 swept in the transform_tree! src half) with exact scalar
+nearfield-cache persistence under rigid motion and loud v1 refusals for
+direction-carrying outputs; FLOWPanel (uncommitted) mirrors per-step rigid
+kinematics deltas into persistent solver state inside `simulate!` and adds
+`KrylovSolver(persistent_plan=true)` (deferred nearfield-cache commit 4).
+All suites green. Details + tables: `phase_02_single_step_benchmarks.md` Log
+2026-08-20 (tree-reuse entry) and the item file's "Execution results".
+
 ### 2026-08-20 — Phase-2b HPC chains launched
 
 R1–R4 per-rung afterok chains submitted (p2b-nearfield → p2-table-nf:

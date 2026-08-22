@@ -4,7 +4,6 @@ using LinearAlgebra: diag, dot, rank, ldiv!
 import Meshes
 import SparseArrays
 using StaticArrays: SVector
-import GeoIO
 
 if !isdefined(@__MODULE__, :make_octa_source_body)
     include("test_helpers.jl")
@@ -833,6 +832,158 @@ end
         @test md["cache_nearfield"] === true
         @test md["cache_tree"] === true
         @test pnl._solver_metadata_dict(solver_ref)["cache_nearfield"] === false
+    end
+
+    @testset "KrylovSolver persistent_plan + rigid motion (021 tree reuse)" begin
+        # Cross-solve plan (+ near-field cache) persistence under rigid
+        # motion: the Dirichlet scalar operator is exactly invariant, so a
+        # plan/cache built before the motion, transformed via
+        # transform_plan!/transform_solver_geometry!, must keep reproducing
+        # the operator to rtol 1e-12 — shedding panels included so the
+        # attached-wake term is exercised.
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=16)
+
+        # rigid motion: rotation by 30 deg about an off-axis direction, about
+        # an off-body origin, plus a translation
+        axis = [0.3, -1.0, 0.7] ./ norm([0.3, -1.0, 0.7])
+        Rrot = pnl.Rodrigues(axis, 30.0 * pi / 180)
+        origin = [0.1, 0.2, -0.05]
+        dx = [0.02, -0.03, 0.05]
+        t_affine = origin + dx - Rrot * origin
+        function move!(body)
+            pnl.rotate_translate!(body, origin, Rrot, dx)
+            pnl.rotate_Das!(body, Rrot)
+            pnl.calc_normals!(body)
+            pnl.calc_controlpoints!(body)
+            return body
+        end
+
+        # --- Dirichlet apply exactness through a transformed cache ---------
+        body = make_dirichlet_diamond_body(nspan=40)
+        @test body.nsheddings > 0             # premise: shedding panels present
+        n = body.ncells
+        x = sin.(0.7 .* (1:n)) .+ 0.1
+        scratch = zeros(n)
+
+        slot = Ref{Any}(nothing)
+        y0 = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch;
+            plan_slot=slot, cache_nearfield=true))
+        plan = slot[][1]
+        @test length(plan.direct_list) > 0    # premise: near field exercised
+        # (no m2l premise: kerneloffset radius inflation makes this fixture
+        # all-direct at any MAC — measured m2l=0 up to mac=2.0. The panel
+        # far-field-under-transform path is covered by FastMultipole's
+        # source-panel transform_tree! test.)
+        @test plan.nearfield_cache[] isa FastMultipole.NearfieldInfluenceCache
+        @test any(!iszero, y0)
+
+        move!(body)
+        FastMultipole.transform_plan!(plan, (body,), Rrot, t_affine)
+
+        # reused cache on the moved geometry
+        y1 = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch;
+            plan_slot=slot, cache_nearfield=true))
+        @test slot[][1] === plan              # premise: plan+cache reused
+
+        # scalar G is exactly invariant under rigid motion (same tree, same
+        # arithmetic path — differences only from rotated coordinates)
+        @test isapprox(y1, y0; rtol=1e-12)
+
+        # reused cache == cache REBUILT fresh on the moved geometry
+        plan.nearfield_cache[] = nothing
+        FastMultipole.build_nearfield_cache!(plan, (body,), (body,))
+        y1_rebuilt = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch;
+            plan_slot=slot, cache_nearfield=true))
+        @test isapprox(y1, y1_rebuilt; rtol=1e-12)
+
+        # cross-check against a fresh-tree uncached apply at backend
+        # truncation level (a fresh tree on moved geometry has different
+        # topology, so 1e-12 is not expected here)
+        y1_fresh = copy(pnl._apply_dirichlet_G!(body, x, backend, scratch))
+        @test isapprox(y1, y1_fresh; rtol=1e-6)
+
+        # --- persistent_plan solve-level plumbing --------------------------
+        function fresh_diamond()
+            b = make_dirichlet_diamond_body(nspan=40)
+            b.velocity .= 0
+            b.velocity[1, :] .= 1.0
+            return b
+        end
+        kw = (; backend, method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
+
+        body_p = fresh_diamond()
+        solver_p = pnl.KrylovSolver(body_p; kw..., cache_nearfield=true,
+            persistent_plan=true)
+        @test solver_p.cache_tree === true    # implied by persistent_plan
+        pnl.solve!(body_p, solver_p)
+        @test solver_p.kop.plan_slot[] !== nothing  # plan SURVIVED the solve
+        plan_p = solver_p.kop.plan_slot[][1]
+        mu0 = copy(body_p.strength)
+
+        # second solve on frozen geometry reuses the same plan object
+        pnl.solve!(body_p, solver_p)
+        @test solver_p.kop.plan_slot[][1] === plan_p
+        @test body_p.strength == mu0          # deterministic replay
+
+        # rigid motion mirrored by the hook: the co-rotated problem (BC
+        # velocity rotates with the body) must reproduce the same mu through
+        # the persistent transformed plan
+        move!(body_p)
+        body_p.velocity .= Rrot * body_p.velocity
+        pnl.transform_solver_geometry!(solver_p, body_p, Rrot, t_affine)
+        @test solver_p.kop.plan_slot[][1] === plan_p  # transformed, not dropped
+        pnl.solve!(body_p, solver_p)
+        @test solver_p.kop.plan_slot[][1] === plan_p
+        @test any(!iszero, body_p.strength[:, 2])
+        @test isapprox(body_p.strength, mu0; rtol=1e-9)
+
+        # --- FGS hook plumbing ---------------------------------------------
+        body_f = fresh_diamond()
+        solver_f = pnl.FGSSolver(body_f; expansion_order=4,
+            multipole_acceptance=0.5, leaf_size=50, max_iterations=2,
+            tolerance=1e-3, verbose=false)
+        @test solver_f.fgs.transformed[] === false
+        pnl.transform_solver_geometry!(solver_f, body_f, Rrot, t_affine)
+        @test solver_f.fgs.transformed[] === true
+
+        # transform_body_solvers! skips identity deltas and forwards real ones
+        body_g = fresh_diamond()
+        solver_g = pnl.FGSSolver(body_g; expansion_order=4,
+            multipole_acceptance=0.5, leaf_size=50, max_iterations=2,
+            tolerance=1e-3, verbose=false)
+        identity_delta = pnl._identity_transforms(1)
+        pnl.transform_body_solvers!((solver_g,), (body_g,), identity_delta)
+        @test solver_g.fgs.transformed[] === false
+        pnl.transform_body_solvers!((solver_g,), (body_g,),
+            [(FastMultipole.SMatrix{3,3,Float64,9}(Rrot),
+              FastMultipole.SVector{3,Float64}(t_affine))])
+        @test solver_g.fgs.transformed[] === true
+
+        # --- kinematics deltas match the applied motion --------------------
+        body_k = fresh_diamond()
+        nodes_before = copy(body_k.nodes)
+        frames = [pnl.ReferenceFrame(
+            FastMultipole.SVector{3}(0.1, -0.2, 0.3),
+            FastMultipole.SVector{3}(0.4, 0.1, -0.2),
+            FastMultipole.SVector{3}(axis...),
+            2.5,
+            FastMultipole.SMatrix{3,3,Float64,9}(1.0,0,0,0,1.0,0,0,0,1.0),
+            FastMultipole.SMatrix{3,3,Float64,9}(1.0,0,0,0,1.0,0,0,0,1.0),
+            "rotor", 0, Int[], [1])]
+        dt = 0.07
+        deltas = pnl.propagate_kinematics!((body_k,), frames, dt)
+        Rk, tk = deltas[1]
+        @test !(Rk ≈ FastMultipole.SMatrix{3,3,Float64,9}(1.0,0,0,0,1.0,0,0,0,1.0))
+        @test maximum(abs.(Rk * nodes_before .+ tk .- body_k.nodes)) < 1e-12
+
+        # --- guards + metadata ---------------------------------------------
+        @test_throws ArgumentError pnl.KrylovSolver(fresh_diamond();
+            backend=pnl.DirectBackend(), persistent_plan=true)
+        md = pnl._solver_metadata_dict(solver_p)
+        @test md["persistent_plan"] === true
+        @test pnl._solver_metadata_dict(pnl.KrylovSolver(fresh_diamond();
+            kw...))["persistent_plan"] === false
     end
 
     @testset "FGSSolver sweep_order plumbing (021 Phase 2b)" begin

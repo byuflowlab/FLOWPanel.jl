@@ -2,7 +2,6 @@ using Test
 using LinearAlgebra: norm, dot, I
 import FLOWPanel as pnl
 import FastMultipole
-import GeoIO
 import Meshes
 using StaticArrays: SVector
 
@@ -244,7 +243,7 @@ function generate_body(
     magVinf = norm(Vinf)
 
     # Read Gmsh mesh
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
 
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)

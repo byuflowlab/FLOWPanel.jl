@@ -170,7 +170,7 @@ end
         strength = SVector{1,Float64}(1.0)
         target = control_point
         core_sizes = (1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4, 3e-5, 1e-5)
-        errors = map(core_sizes) do core_size
+        ring_error(core_size) = begin
             _, velocity, _ = pnl._induced(target, vertices, control_point, strength,
                                           pnl.VortexRing, core_size, R,
                                           kernel_switch(false, true, false))
@@ -183,22 +183,27 @@ end
             norm(velocity - grad_phi) / max(norm(grad_phi), eps())
         end
 
-        @test errors[1] > 1e-3
-        @test errors[5] < 1e-9
-        @test errors[end] < 1e-12
-        @test all(errors[i+1] <= 0.02 * errors[i] for i in 1:6)
+        # the gradual algebraic convergence below is a property of the legacy
+        # Vatistas family (error ~ (rc/h)^4 at all h); pin it explicitly
+        # (BRAINSTORM 025 made the family selectable, default compact-support)
+        old_family = pnl.FILAMENT_REGULARIZATION[]
+        try
+            pnl.set_filament_regularization!(pnl.VatistasRegularization)
+            errors = map(ring_error, core_sizes)
 
-        core_size = 1e-5
-        _, velocity, _ = pnl._induced(target, vertices, control_point, strength,
-                                      pnl.VortexRing, core_size, R,
-                                      kernel_switch(false, true, false))
-        grad_phi = FD.gradient(
-            t -> pnl._induced(t, vertices, control_point, strength,
-                              pnl.VortexRing, core_size, R,
-                              kernel_switch(true, false, false))[1],
-            target,
-        )
-        @test isapprox(velocity, grad_phi; atol=1e-12, rtol=1e-12)
+            @test errors[1] > 1e-3
+            @test errors[5] < 1e-9
+            @test errors[end] < 1e-12
+            @test all(errors[i+1] <= 0.02 * errors[i] for i in 1:6)
+            @test errors[end] < 1e-12
+
+            # compact-support (default) is EXACT once the core lies inside the
+            # centroid-to-edge distance (~0.236 here) — no gradual limit needed
+            pnl.set_filament_regularization!(pnl.CompactRegularization)
+            @test all(ring_error(core_size) < 1e-12 for core_size in core_sizes)
+        finally
+            pnl.FILAMENT_REGULARIZATION[] = old_family
+        end
     end
 
     @testset "Self limit uses exterior velocity and interior potential" begin

@@ -8,7 +8,6 @@ import FLOWPanel as pnl
 include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 
 run_name = "rotor_hover_pressurelaplace"
 save_path = joinpath("data", run_name)
@@ -50,7 +49,7 @@ msh_file  = joinpath(read_path, "phantom_3_rebuild_r2.msh")
 te_indices_1 = [9, 175, 127]
 te_indices_2 = [13, 286, 238]
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[1, :])
 

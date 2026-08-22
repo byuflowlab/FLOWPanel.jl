@@ -194,7 +194,14 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
         # distinct offsets: the proportional γ = Cμ strip part runs through the
         # self-pair conditioning at kerneloffset_panel, so the affine −c part
         # must use the same offset or the two halves of one strip strength are
-        # regularized differently
+        # regularized differently.
+        # Pinned to the Vatistas family (BRAINSTORM 025): the discriminator
+        # needs a kernel whose value at control-point distances depends on the
+        # offset; under the compact-support default both offsets are exactly
+        # singular there and the fixture loses its teeth (the correctness
+        # assertion dv == add_panel is family-independent and stays).
+        old_family = pnl.FILAMENT_REGULARIZATION[]
+        pnl.set_filament_regularization!(pnl.VatistasRegularization)
         body = make_dirichlet_diamond_body()
         body.kerneloffset_panel = 5e-2
         body.kerneloffset_targets = 1e-8
@@ -228,6 +235,7 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
         @test maximum(abs, add_panel .- add_targets) > 1e-6
         @test isapprox(dv, add_panel; rtol=1e-12, atol=1e-13)
         @test !isapprox(dv, add_targets; rtol=1e-12, atol=1e-13)
+        pnl.FILAMENT_REGULARIZATION[] = old_family
     end
 
     # --- §9.4/§11.4: an already-converged base point is accepted ---

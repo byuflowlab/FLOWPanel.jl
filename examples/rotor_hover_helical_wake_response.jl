@@ -17,7 +17,6 @@
 
 import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
-import GeoIO
 using LinearAlgebra: norm
 using Printf: @sprintf
 
@@ -72,7 +71,7 @@ omega            = 2 * pi * RPM / 60
 dt               = 60 / RPM / 36
 tip_speed        = abs(omega) * R
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 base_nodes, base_cells = pnl.meshes2nodes_cells(msh)
 base_nodes .*= R / maximum(base_nodes[radial_dimension, :])
 

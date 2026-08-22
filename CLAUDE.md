@@ -13,6 +13,18 @@ FLOWPanel.jl is a 3D panel method solver for low-speed (inviscid, incompressible
 - Monitors, simulation output, pressure or force recovery, replay → `agent_policies/MONITORS.md` (dependency contracts, monitor inventory, PressureLaplace constraints)
 - Long simulations, HPC, or Slurm work → `agent_policies/HPC.md` (allocation, threading, assets, checkpoints, output retention, submission boundary)
 
+## Delegation (token policy)
+
+Route these tasks to the repo subagents in `.claude/agents/` instead of doing them inline — they run on cheaper models and keep raw output out of the main context:
+
+- HPC/Slurm job status, log tailing, cluster disk checks → `hpc-monitor` (read-only; never submits/cancels)
+- Data harvesting, CSV/log scraping, summary tables → `harvester`
+- Running tests for a described change → `test-runner`
+- Catching up on a BRAINSTORM item → `brainstorm-scout` (never read a full item file inline)
+- Multi-file code search / subsystem tracing → `code-scout` (the built-in Explore agent is fine for generic searches that don't need repo context)
+
+Keep inline: small tasks (≤~3 files), physics reasoning and conclusions, code edits, HPC job submission, notebook entries, and anything requiring Ryan's approval. Subagents return compact tables/briefs — relay those, don't re-derive them.
+
 ## Quick Commands
 
 ```bash

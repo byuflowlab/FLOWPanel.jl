@@ -20,7 +20,6 @@ include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole
 using FLOWPanel.FastMultipole.StaticArrays
 using VSPGeom
-import GeoIO
 using LinearAlgebra: norm
 
 # ----- match the example geometry/kinematics exactly -----
@@ -54,7 +53,7 @@ else
     te_indices_2 = [3323, 3284, 1711] .+ 1
 end
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[1, :])
 

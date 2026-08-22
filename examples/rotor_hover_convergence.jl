@@ -16,7 +16,6 @@
 
 import FLOWPanel as pnl
 using FLOWPanel.FastMultipole.StaticArrays
-import GeoIO
 using LinearAlgebra: norm
 
 run_name = get(ENV, "RUN_NAME", "rotor_hover_convergence")
@@ -74,7 +73,7 @@ Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [
 Vinf = magVinf * Vinf_direction
 Uinf(t) = Vinf
 
-msh = GeoIO.load(msh_file).geometry
+msh = pnl.read_gmsh(msh_file)
 nodes, cells = pnl.meshes2nodes_cells(msh)
 nodes .*= R / maximum(nodes[radial_dimension, :])
 

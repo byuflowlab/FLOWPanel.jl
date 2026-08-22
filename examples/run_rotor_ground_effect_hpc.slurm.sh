@@ -48,6 +48,11 @@ CASE="${1:-}"
 
 export JULIA_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" OPENBLAS_NUM_THREADS="$THREADS" \
        BLAS_NUM_THREADS="$THREADS" MKL_NUM_THREADS="$THREADS" MPLBACKEND=Agg
+
+# BRAINSTORM/025 (2026-08-20): the codebase default filament regularization
+# changed to Gaussian. Pin this campaign to the legacy Vatistas family so
+# results stay comparable; override at submission via --export if intended.
+export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-vatistas}"
 # Manifest pins julia 1.11.7 (018 ops: a 1.12 re-resolve killed a whole trio).
 command -v julia >/dev/null 2>&1 || \
   export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/bin:$PATH"

@@ -88,8 +88,8 @@
 - Currently documented in Geometry Engine pages — link there
 
 **Method 2: `.msh` file (Gmsh)**
-- Install Gmsh, export mesh as `.msh v2` or `.msh v4`
-- Import via `GeoIO.load("mesh.msh")` → `Meshes.jl` object
+- Install Gmsh, export an ASCII Gmsh 4.1 `.msh` file
+- Import via `FLOWPanel.read_gmsh("mesh.msh")` → `Meshes.jl` object
 - Convert to FLOWPanel body
 - Minimal code snippet
 
@@ -141,7 +141,7 @@
 
 ### Blended Wing Body — Unstructured Meshing (`examples/blendedwingbody-gmsh.md`)
 
-- [ ] Verify the Gmsh import workflow still works with current `GeoIO` / `Meshes.jl` versions
+- [x] Verify the Gmsh 4.1 import workflow with `FLOWPanel.read_gmsh` / `Meshes.jl`
 - [ ] Update any deprecated API calls
 
 ---
@@ -162,7 +162,7 @@ Priority order (most likely to be broken first):
 - [ ] `examples/centerbody.jl`
 - [ ] `examples/duct.jl`
 - [ ] `examples/duct_leastsquares.jl` — uses old solver API
-- [ ] `examples/blendedwingbody_aero.jl` — uses Meshes.jl / GeoIO
+- [ ] `examples/blendedwingbody_aero.jl` — uses Meshes.jl / `FLOWPanel.read_gmsh`
 - [ ] `examples/blendedwingbody_gpucpu.jl` — GPU path
 - [ ] `examples/cessna_aero.jl` — complex multi-body
 - [ ] `examples/ll_weber.jl`

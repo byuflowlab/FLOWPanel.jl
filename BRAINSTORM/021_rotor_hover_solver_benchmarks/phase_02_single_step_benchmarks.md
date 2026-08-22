@@ -536,3 +536,123 @@ buffer strength rows (exercised by the plan's mandatory shedding-panel
 exactness test). Composes with the landed `FmmPlan`/`cache_tree` lever;
 timestep-to-timestep reuse is stage 2 (needs the cross-solve
 `persistent_plan` extension).
+
+### 2026-08-20 — Rigid-motion tree/cache reuse EXECUTED (item go); FGS unsteady staleness CONFIRMED + FIXED
+
+Execution of `rigid_motion_tree_reuse_item.md` (Ryan's go via launch prompt;
+full results table in that file's "Execution results" section).
+
+**Staleness discriminator (pre-registered correctness check): BUG REAL.**
+New driver `benchmark/rigid_motion_fgs_staleness.jl` — R1 unsteady (RHPC
+setup-only include, campaign FGS knobs, NT=36 ⇒ 10°/step, 8 steps), pure-FGS
+trajectory; after every production FGS solve the SAME state is re-solved by
+a freshly constructed KrylovSolver (:gmres, rtol 1e-9, trees rebuilt per
+apply), isolating solver error from wake feedback. Relative L2 divergence of
+the solved μ column vs rotation angle (arm `fgs_vs_fresh_krylov` in
+`rigid_motion_tree_reuse/fgs_staleness.csv`):
+
+| angle | 0° | 10° | 20° | 30° | 40° | 50° | 60° | 70° | 80° |
+|---|---|---|---|---|---|---|---|---|---|
+| div(μ) | 1.7e-7 | 2.0e-3 | 4.1e-3 | 6.0e-3 | 8.9e-3 | 1.8e-2 | 4.3e-2 | 1.1e-1 | 2.1e-1 |
+
+Solver-tolerance-class agreement at 0° (as pre-registered), ~10⁶× monotonic
+growth to 21% at 80°. **All pre-fix unsteady FGS results are untrustworthy.**
+
+**Machinery landed (FastMultipole, flowpanel-20260817):** `transform_tree!`
+(eea944d; src half swept into Ryan's concurrent 645cc96 — flagged, history
+left alone), `transform_plan!` + exact scalar nearfield-cache persistence
+(087bf4a), `transform_solver!` for FGS + `transformed` gradient-refusal flag
+(d714544). Full FM suite green. FM-level A/B: transformed FGS replays the
+baseline cold fixed-iteration trajectory to <1e-9 after 63°+translation;
+stale solver corrupts strengths >1e-3 (>1000×).
+
+**FLOWPanel surface (uncommitted, per instructions):**
+`propagate_kinematics!` now returns per-body rigid (R, t) step deltas;
+`simulate!` mirrors them into persistent solver state via
+`transform_body_solvers!`/`transform_solver_geometry!` (FGSSolver → FGS tree
+transform — the staleness fix is automatic in production; KrylovSolver
+`persistent_plan=true` → plan+cache transform; others no-op — Backslash's
+dense operators are rotation-invariant). `KrylovSolver(persistent_plan=true)`
+= the deferred nearfield-cache commit 4: plan (+cache) survives across
+solves; sound because `_set_kerneloffsets!` restores the panel-offset state
+before every solve. Metadata key `persistent_plan`. Unit tests: Dirichlet
+shedding-panel cached apply invariant under rigid motion to rtol 1e-12
+(reused cache == rebuilt cache == pre-motion operator), persistent-plan solve
+replay, kinematics-delta correctness, FGS hook plumbing, guards + metadata.
+NOTE the diamond fixture is all-direct at any MAC (kerneloffset radius
+inflation) — panel far-field transform coverage lives in FM's source-panel
+test (self-contained `TransformPanels`; the vortex-filament system was
+rejected: origin-dependent Lamb-Helmholtz gauge term in its velocity).
+
+**Unsteady A/B collapse (production path): STALENESS ELIMINATED; residual
+wake-on FGS floor exposed.** Same discriminator rerun with the simulate!
+transform hook active (arm `fgs_transformed_vs_fresh_krylov` in
+`rigid_motion_tree_reuse/fgs_staleness.csv`; first two attempts killed by
+machine contention, third blocked until the FLOWVPM merge resolved):
+
+| angle | 0° | 10° | 20° | 30° | 40° | 50° | 60° | 70° | 80° |
+|---|---|---|---|---|---|---|---|---|---|
+| div(μ) stale | 1.7e-7 | 2.0e-3 | 4.1e-3 | 6.0e-3 | 8.9e-3 | 1.8e-2 | 4.3e-2 | 1.1e-1 | 2.1e-1 |
+| div(μ) fixed | 1.7e-7 | 2.0e-3 | 2.1e-3 | 2.1e-3 | 2.1e-3 | 2.1e-3 | 2.2e-3 | 2.2e-3 | 2.2e-3 |
+
+The angle-dependence (the staleness signature) is gone — flat to 80°
+(~100× better there). The remaining ~2e-3 plateau is NOT motion error: it
+appears with the FIRST wake-carrying step in BOTH arms (step 1: stale
+2.014e-3 vs fixed 2.007e-3, before staleness can matter at 10°).
+
+**Plateau root cause: stopping-tolerance hypothesis TESTED AND REFUTED**
+(FGS_TOL_SCALE=0.01 diagnostic arm, 2 steps): with the FGS absolute
+tolerance tightened 100×, step 0 tightened 1.74e-7 → 2.86e-8 but steps 1–2
+were numerically IDENTICAL to the normal-tolerance run (2.007e-3 /
+2.073e-3 to four digits). The FGS therefore CONVERGES — to a fixed point
+that differs from the fresh-Krylov solution by ~2e-3 once free wake
+particles exist. Established properties: tolerance-independent,
+angle-independent, absent at step 0 (agreement 2.9e-8 with nonzero
+μ‖·‖=6.5, so non-vacuous), activates with the first wake-carrying step.
+Checked and cleared: extra_farfield is passed consistently
+(FLOWPanel_solver.jl:906); FGS warm-start projection only sets the initial
+guess. OPEN Phase-3 item: the FGS and Krylov paths assemble slightly
+different systems under wake-on conditions — locate the asymmetry (wake
+term in operator vs RHS, sigma handling in FGS buffers, or formulation
+post-processing) before trusting per-step unsteady FGS accuracy claims.
+Diagnostic knobs added to the driver: FGS_TOL_SCALE, DIAG=1 (relaxes the
+≥6-step/≥30° premise guards for short runs).
+
+**Knob economics (docs-only flag):** run-amortized builds change the
+`*_nfcache` calculus — the per-solve-rebuild objection to big-leaf knobs
+evaporates. Re-examine the Phase-2b `*_nfcache` configs on HPC once the
+benchmark drivers opt in (NOT rerun now: chains 13242659–66 in flight,
+rsync freeze).
+
+### 2026-08-21 — Wake-on FGS plateau root cause and fix
+
+**Classification: H3, solver-lifecycle geometry ordering.** Dense LU on the
+first free-particle state (step 2, 84 particles) arbitrated the paths: FGS was
+2.073171e-3 from dense with a 1.940560e-2 true relative residual; fresh
+Krylov was 5.336711e-9 from dense with a 9.542073e-10 residual (dense residual
+6.456170e-15). The frozen component bisect found exact RHS ordering (relative
+error 0), cached-near agreement at 4.69e-14, and total FGS operator agreement
+with direct at 5.15e-9. Sigma was explicitly zero during every mu-operator
+probe.
+
+The discrepancy actually began at solve label 1 before free particles were
+inserted. Inspection then found the lifecycle error: after moving body nodes,
+`simulate!` called `transform_body_solvers!` before `calc_normals!` and
+`calc_controlpoints!`. `transform_solver!` therefore refreshed its persistent
+target buffers from the previous step's control points, producing a constant
+one-timestep angular lag. The fix recalculates geometry first and transforms
+persistent solver state afterwards.
+
+Fixed R1 discriminator (`fgs_geometry_order_fixed_8step`, 4T):
+
+| angle | 0° | 10° | 20° | 30° | 40° | 50° | 60° | 70° | 80° |
+|---|---|---|---|---|---|---|---|---|---|
+| div(μ) | 1.740e-7 | 1.837e-7 | 1.869e-7 | 1.885e-7 | 1.893e-7 | 1.890e-7 | 1.886e-7 | 1.885e-7 | 1.886e-7 |
+
+Endpoint growth is 1.1x, with no wake-on jump or angle growth. At wake-on step
+2, FGS is 1.878608e-7 from dense and its true relative residual is
+1.521211e-7; fresh Krylov is 5.336883e-9 from dense. Regression coverage:
+the 2,304-panel triaxial ellipsoid retained-plan direct/FMM rigid-equivariance
+gate (off-axis rotation + translation, nonempty M2L/direct lists) and a
+`simulate!` ordering test that requires current normals/control points when
+the persistent-solver transform hook runs.

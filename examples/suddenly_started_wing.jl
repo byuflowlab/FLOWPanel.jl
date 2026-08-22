@@ -69,9 +69,9 @@ const SSW_PLOTTING = !(lowercase(get(ENV, "SSW_NO_PLOT", "false")) in
     ("1", "true", "yes", "on"))
 SSW_PLOTTING && (@eval import PythonPlot as plt)
 
-# `add_flat_tip_caps` / `open_boundary_loops` (shared with the swept-wing path).
+# Dependency-free mesh-cap helpers shared with the swept-wing path.
 isdefined(@__MODULE__, :add_flat_tip_caps) ||
-    include(joinpath(@__DIR__, "helper_functions.jl"))
+    include(joinpath(@__DIR__, "mesh_cap_helpers.jl"))
 
 const DEFAULT_SSW_OUTPUT = joinpath("data", "suddenly_started_wing")
 const SSW_GRAD_MU_OPTIONS = (; basis=:tri)
