@@ -93,9 +93,9 @@ end
         body1 = make_plate_vortex_body()
         body2 = translated_rigid_target([1.7, -0.4, 0.6])
         for body in (body1, body2)
-            body.kerneloffset_panel = 1e-8
-            body.kerneloffset_targets = 0.15
-            body.kerneloffset = body.kerneloffset_targets
+            body.core_size_panel = 1e-8
+            body.core_size_targets = 0.15
+            body.core_size = body.core_size_targets
         end
 
         direct = pnl.DirectBackend()
@@ -103,11 +103,11 @@ end
         combined2 = deepcopy(body2)
         for body in (combined1, combined2)
             body.velocity .= 0
-            body.kerneloffset = body.kerneloffset_targets
+            body.core_size = body.core_size_targets
         end
         pnl.influence!((combined1, combined2), (combined1, combined2), direct;
             velocity=true,
-            direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+            direct_conditioning=pnl._self_panel_core_size_conditioning())
 
         explicit1 = deepcopy(body1)
         explicit2 = deepcopy(body2)
@@ -116,18 +116,18 @@ end
         source1 = deepcopy(body1)
         source2 = deepcopy(body2)
 
-        source1.kerneloffset = source1.kerneloffset_panel
+        source1.core_size = source1.core_size_panel
         pnl.influence!((explicit1,), (source1,), direct; velocity=true)
-        source2.kerneloffset = source2.kerneloffset_targets
+        source2.core_size = source2.core_size_targets
         pnl.influence!((explicit1,), (source2,), direct; velocity=true)
 
-        source1.kerneloffset = source1.kerneloffset_targets
+        source1.core_size = source1.core_size_targets
         pnl.influence!((explicit2,), (source1,), direct; velocity=true)
-        source2.kerneloffset = source2.kerneloffset_panel
+        source2.core_size = source2.core_size_panel
         pnl.influence!((explicit2,), (source2,), direct; velocity=true)
 
-        @test combined1.kerneloffset == combined1.kerneloffset_targets
-        @test combined2.kerneloffset == combined2.kerneloffset_targets
+        @test combined1.core_size == combined1.core_size_targets
+        @test combined2.core_size == combined2.core_size_targets
         @test combined1.velocity ≈ explicit1.velocity atol=1e-12 rtol=1e-12
         @test combined2.velocity ≈ explicit2.velocity atol=1e-12 rtol=1e-12
     end
@@ -192,7 +192,7 @@ end
     body.nodes[3, :] .*= 0.45
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
-    body.kerneloffset = body.kerneloffset_panel
+    body.core_size = body.core_size_panel
     for i in 1:body.ncells
         body.strength[i, 1] = sin(0.017 * i) + 0.3 * cos(0.031 * i)
     end
@@ -252,7 +252,7 @@ end
           LinearAlgebra.norm(phi_fmm_0) <= 1e-12
 end
 
-@testset verbose=true "kerneloffset-aware FMM radius" begin
+@testset verbose=true "core_size-aware FMM radius" begin
     @testset "radius_inflation formulas" begin
         tol = pnl.FMM_RADIUS_TOL[]
         # source/doublet regularization is compactly supported: exact beyond koff
@@ -291,19 +291,19 @@ end
     @testset "panel buffer radius includes inflation" begin
         for (body, TK) in ((make_octa_source_body(), pnl.ConstantSource),
                            (make_plate_vortex_body(), pnl.VortexRing))
-            body.kerneloffset_panel = 1e-3
-            body.kerneloffset_targets = 2e-3
+            body.core_size_panel = 1e-3
+            body.core_size_targets = 2e-3
             buffer = zeros(FastMultipole.data_per_body(body), 1)
 
             # geometric radius reference: inflation disabled
-            body.kerneloffset = 0.0
+            body.core_size = 0.0
             FastMultipole.source_system_to_buffer!(buffer, 1, body, 1)
             r_geom = buffer[4, 1]
 
-            # inflation follows the ACTIVE kerneloffset (the pass's offset,
-            # set by _set_kerneloffsets! right before each influence call)
-            for koff in (body.kerneloffset_panel, body.kerneloffset_targets)
-                body.kerneloffset = koff
+            # inflation follows the ACTIVE core_size (the pass's offset,
+            # set by _set_core_sizes! right before each influence call)
+            for koff in (body.core_size_panel, body.core_size_targets)
+                body.core_size = koff
                 FastMultipole.source_system_to_buffer!(buffer, 1, body, 1)
                 @test buffer[4, 1] ≈ r_geom +
                       pnl.radius_inflation(TK, koff, pnl.fmm_radius_tolerance(body))
@@ -313,7 +313,7 @@ end
             old_tol = pnl.FMM_RADIUS_TOL[]
             try
                 pnl.FMM_RADIUS_TOL[] = Inf
-                body.kerneloffset = body.kerneloffset_targets
+                body.core_size = body.core_size_targets
                 FastMultipole.source_system_to_buffer!(buffer, 1, body, 1)
                 @test buffer[4, 1] == r_geom
             finally
@@ -323,7 +323,7 @@ end
     end
 
     @testset "large-koff FMM matches regularized direct operator" begin
-        # Regression for the 021 Phase 1 floor: with a kerneloffset comparable
+        # Regression for the 021 Phase 1 floor: with a core_size comparable
         # to the panel size, geometric radii let the MAC admit expansions where
         # the singular and regularized kernels still disagree; the inflated
         # radius must push those pairs into the direct near field.
@@ -341,7 +341,7 @@ end
                 cells[:, c += 1] .= (p1, p3, p4)
             end
             body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, cells, pnl.noshedding;
-                DBC=false, check_mesh=false, watertight=false, kerneloffset=koff)
+                DBC=false, check_mesh=false, watertight=false, core_size=koff)
             pnl.calc_normals!(body)
             pnl.calc_controlpoints!(body)
             for i in 1:body.ncells   # varied strengths so ring cancellations don't hide errors

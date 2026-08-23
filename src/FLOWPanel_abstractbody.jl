@@ -33,9 +33,19 @@ Implementations of AbstractBody are expected to have the following fields
 * `potential::Vector{TF}`             : Total scalar potential at control points
 * `characteristiclength::Function`    : Function for computing the characteristic
                                         length of each panel
-* `kerneloffset::Real`                : Active kernel offset to avoid singularities
-* `kerneloffset_panel::Real`          : Kernel offset used for panel solves and panel-panel interactions
-* `kerneloffset_targets::Real`        : Kernel offset used for panel influence on external targets
+* `core_size::Real`                : Active regularization core radius (currently selected value)
+* `core_size_panel::Real`          : Core radius used for panel solves and panel-panel interactions
+* `core_size_targets::Real`        : Core radius used for panel influence on external targets
+
+`core_size` is a regularization *core radius*, not a positional offset of the
+control points: for `VortexRing` panels and TE-wake filaments it is the
+filament-core size handed to the family-regularized Biot-Savart kernels
+(Gaussian/Vatistas/compact, selected by `FLOWPanel.FILAMENT_REGULARIZATION[]`),
+and for `ConstantDoublet` it is the core radius in the edge-denominator guard
+`(d - r_c)^2`. On-surface evaluation uses the exact `_self_limit` math instead.
+These fields were named `kerneloffset`/`kerneloffset_panel`/`kerneloffset_targets`
+before 2026-08-22; the old names remain accepted as deprecated constructor
+keyword aliases.
 * `kernelcutoff::Real`                : Kernel cutoff to avoid singularities
 * `watertight::Bool`                  : Whether the body is watertight or not
 * `Cps::Vector{TF}`                   : Pressure coefficient at each cell
@@ -91,6 +101,40 @@ and the following functions
 ```
 """
 abstract type AbstractBody{E<:AbstractElement, N, TF, DBC} end
+
+"""
+    _core_size_alias(new_value, old_value, default, new_name, old_name)
+
+Resolve one regularization-core-radius keyword argument that was renamed from
+`kerneloffset*` to `core_size*` on 2026-08-22. The new name wins; the old name
+is still accepted (with a deprecation warning); supplying both is an error.
+"""
+function _core_size_alias(new_value, old_value, default, new_name::Symbol, old_name::Symbol)
+    if old_value !== nothing
+        new_value === nothing ||
+            error("`$(new_name)` and deprecated `$(old_name)` cannot both be given; use `$(new_name)`.")
+        Base.depwarn("`$(old_name)` is deprecated; use `$(new_name)` (it is a regularization core radius, not a positional offset).", old_name)
+        return old_value
+    end
+    return new_value === nothing ? default : new_value
+end
+
+"""
+    _resolve_core_sizes(core_size, core_size_panel, core_size_targets,
+                        kerneloffset, kerneloffset_panel, kerneloffset_targets)
+
+Resolve the body-constructor core-radius keyword triple, accepting the
+deprecated `kerneloffset*` spellings. Returns `(core_size, core_size_panel,
+core_size_targets)` with the historical defaults (`1e-8`, then falling back to
+`core_size`).
+"""
+function _resolve_core_sizes(core_size, core_size_panel, core_size_targets,
+                             kerneloffset, kerneloffset_panel, kerneloffset_targets)
+    cs = _core_size_alias(core_size, kerneloffset, 1e-8, :core_size, :kerneloffset)
+    csp = _core_size_alias(core_size_panel, kerneloffset_panel, cs, :core_size_panel, :kerneloffset_panel)
+    cst = _core_size_alias(core_size_targets, kerneloffset_targets, cs, :core_size_targets, :kerneloffset_targets)
+    return cs, csp, cst
+end
 
 function reset!(body::AbstractBody)
     body.velocity .= 0.0
@@ -1147,16 +1191,16 @@ function FastMultipole.source_system_to_buffer!(buffer, i_buffer, system::Abstra
 
     # extend the radius to where the singular kernel (which the multipole
     # expansions represent) matches the offset-regularized direct kernel within
-    # tolerance. Uses the ACTIVE kerneloffset: `_set_kerneloffsets!` selects the
+    # tolerance. Uses the ACTIVE core_size: `_set_core_sizes!` selects the
     # pass's offset immediately before every influence evaluation, and buffers
     # are filled per call, so the active offset is the one governing this
     # tree's expansion-evaluated pairs. (Self pairs conditioned back to
-    # `kerneloffset_panel` mid-call are direct-evaluated, so a larger active
+    # `core_size_panel` mid-call are direct-evaluated, so a larger active
     # target offset only over-covers them — conservative, never wrong.)
-    Δr = radius_inflation(E, system.kerneloffset, fmm_radius_tolerance(system))
+    Δr = radius_inflation(E, system.core_size, fmm_radius_tolerance(system))
     if Δr > 10 * r
         @warn "FMM radius inflation ($Δr) exceeds 10× the panel radius ($r): " *
-              "kerneloffset $(system.kerneloffset) is large relative to the " *
+              "core_size $(system.core_size) is large relative to the " *
               "panel size, so most interactions will be evaluated directly." maxlog=1
     end
     r += Δr
@@ -1257,7 +1301,16 @@ function FastMultipole.target_influence_to_buffer!(target_buffer, i_buffer, swit
     end
 end
 
-function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::AbstractBody, source_buffer, source_index) where {PS,GS,HS,NO,NM}
+# Function barrier (BRAINSTORM 025 regression fix): read the filament
+# regularization family ONCE per direct! call and cross into the loop with it
+# in the type domain — a per-edge FILAMENT_REGULARIZATION[] read measured
+# +34-49% on the production body influence pass (65.0 vs 43.5-48.5 s).
+function FastMultipole.direct!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch, source_system::AbstractBody, source_buffer, source_index)
+    _direct_body!(target_system, target_index, derivatives_switch, source_system,
+        source_buffer, source_index, Val(FILAMENT_REGULARIZATION[]))
+end
+
+function _direct_body!(target_system, target_index, derivatives_switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM}, source_system::AbstractBody, source_buffer, source_index, fam::Val) where {PS,GS,HS,NO,NM}
     TF = eltype(target_system)
     for i_target in target_index # loop over targets
         target = FastMultipole.StaticArrays.SVector{3,TF}(target_system[1, i_target],
@@ -1270,7 +1323,7 @@ function FastMultipole.direct!(target_system, target_index, derivatives_switch::
 
         for i_source in source_index # loop over sources
             # evaluate influence due to this source
-            phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            phi, U, H = induced(target, source_system, source_buffer, i_source, derivatives_switch, fam; core_size=source_system.core_size)
             phi_out += phi
             U_out += U
             if HS

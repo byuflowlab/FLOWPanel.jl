@@ -32,7 +32,7 @@ t_range = range(0.0, step=dt, length=n_steps)# [1:3]
 # Sensitivity parameters
 # ==========================================================
 cp_outer=true
-kerneloffset = R * 1e-3
+core_size = R * 1e-3
 kernelcutoff = R * 1e-13
 p_per_step   = 2
 overlap      = 2.0
@@ -68,7 +68,7 @@ shedding = pnl.noshedding
 kernel = watertight ? Union{pnl.ConstantSource, pnl.VortexRing} : pnl.VortexRing
 DBC = watertight
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-            kerneloffset,
+            core_size,
             kernelcutoff,
             semiinfinite_wake=false,
             watertight,
@@ -85,7 +85,7 @@ shedding2 = pnl.calc_shedding_from_seed(
     max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-                        kerneloffset,
+                        core_size,
                         kernelcutoff,
                         semiinfinite_wake=false,
                         watertight,

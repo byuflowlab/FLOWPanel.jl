@@ -46,6 +46,13 @@ struct BackRightUp end
 
 Advance all dependent bodies by one timestep `dt` according to the frame tree.
 Accepts either a single body or a tuple of bodies.
+
+Returns the per-system RIGID affine deltas applied this step, as a vector of
+`(R, t)` with `x_new = R*x_old + t` (identity entries for unmoved bodies),
+so callers can mirror the motion into persistent solver state
+([`transform_body_solvers!`](@ref)). Every `rotate_translate!` call is
+`x -> Rω*(x - o) + o + dx`, i.e. `(Rω, o + dx - Rω*o)`; multiple frame
+contributions to one body compose in application order.
 """
 function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:ReferenceFrame}, dt::Real)
 
@@ -55,11 +62,28 @@ function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:Ref
     # global rotation matrix from parent to global frame
     R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
 
+    # per-system rigid deltas applied this step
+    transforms = _identity_transforms(1)
+
     # begin recursion
-    propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
+    propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
+
+    return transforms
 end
 
-function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+_identity_transforms(n) = [(FastMultipole.SMatrix{3,3,Float64,9}(1.0,0,0,0,1.0,0,0,0,1.0),
+                            FastMultipole.SVector{3,Float64}(0.0, 0.0, 0.0)) for _ in 1:n]
+
+# compose this frame's rigid delta (x -> Rω*(x-o) + o + dx) onto what the
+# body has already received this step
+function _compose_transform!(transforms, i, Rω, origin, dx)
+    R_old, t_old = transforms[i]
+    t_step = origin + dx - Rω * origin
+    transforms[i] = (Rω * R_old, Rω * t_old + t_step)
+    return nothing
+end
+
+function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real, transforms=nothing)
     # get frame
     frame = frames[i_frame]
 
@@ -80,6 +104,8 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
         body = system
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
+        transforms === nothing ||
+            _compose_transform!(transforms, 1, Rω_global, origin_global, dx_global)
     end
 
     # Update the frame
@@ -95,7 +121,7 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
 
     # Recursively propagate to child frames
     for i in frame.child_index
-        propagate_kinematics!(system, i, frames, dx_parent_to_global, R_parent_to_global, dt)
+        propagate_kinematics!(system, i, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
     end
 end
 
@@ -109,11 +135,16 @@ function propagate_kinematics!(systems::Tuple, frames::Vector{<:ReferenceFrame},
     # global rotation matrix from parent to global frame
     R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
 
+    # per-system rigid deltas applied this step
+    transforms = _identity_transforms(length(systems))
+
     # begin recursion
-    propagate_kinematics!(systems, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
+    propagate_kinematics!(systems, 1, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
+
+    return transforms
 end
 
-function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real, transforms=nothing)
     # get frame
     frame = frames[i_frame]
 
@@ -134,6 +165,8 @@ function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:Re
         body = systems[i]
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
+        transforms === nothing ||
+            _compose_transform!(transforms, i, Rω_global, origin_global, dx_global)
     end
 
     # Update the frame
@@ -149,7 +182,7 @@ function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:Re
 
     # Recursively propagate to child frames
     for i in frame.child_index
-        propagate_kinematics!(systems, i, frames, dx_parent_to_global, R_parent_to_global, dt)
+        propagate_kinematics!(systems, i, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
     end
 end
 

@@ -85,9 +85,9 @@ v2x, v2y, v2z = 0.0, 1.0, 0.0
 d1, d2, d3 = 0.0, -1.0, 0.0
 derivatives_switch = pnl.FastMultipole.DerivativesSwitch(true, true, false)
 for i in 1:npoints
-    phi_semiinfinite[i] = pnl._phi_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str; kerneloffset=1e-8)
-    U_semiinfinite[:,i] .= pnl._U_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str; kerneloffset=1e-8)
-    p, v, g = pnl.induced_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str, derivatives_switch; kerneloffset=1e-8)
+    phi_semiinfinite[i] = pnl._phi_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str; core_size=1e-8)
+    U_semiinfinite[:,i] .= pnl._U_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str; core_size=1e-8)
+    p, v, g = pnl.induced_semiinfinite(view(points,:,i), pnl.ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, str, derivatives_switch; core_size=1e-8)
     phi_semiinfinite2[i] = p
     U_semiinfinite2[:,i] .= v
 end

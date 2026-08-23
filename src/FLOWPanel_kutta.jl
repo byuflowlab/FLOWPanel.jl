@@ -696,7 +696,7 @@ function _initialize_kutta(entry::Symbol, body::RigidWakeBody, solver::Backslash
     else
         # placeholder factorization; replaced at every Route B geometry update
         Gb .= zero(TF)
-        _G!(Gb, body, body; kerneloffset=body.kerneloffset_panel,
+        _G!(Gb, body, body; core_size=body.core_size_panel,
             update_geometry=false)
         Glu = lu!(Gb)
     end
@@ -856,7 +856,7 @@ function _kutta_trial!(rt::KuttaRuntime{TF}, c::AbstractVector;
     body.suppress_attached_wake[] = suppress_attached
     inner_ok = false
     try
-        _set_kerneloffsets!((body,), :kerneloffset_panel)
+        _set_core_sizes!((body,), :core_size_panel)
         set_strengths!(body)                 # σ = −u·n from frozen velocity; μ = 0
         body.potential .= zero(TF)
         influence!(body, body, backend_solve; scalar_potential=true,
@@ -940,11 +940,11 @@ end
 influence through any backend with the correction INACTIVE (the proportional
 γ = Cμ part flows through both the direct and FMM paths), then the exact
 direct affine add-on for the trial correction, plus the +½∇μ tangential
-half-jump. The add-on must use `kerneloffset_panel`: the self-pair
+half-jump. The add-on must use `core_size_panel`: the self-pair
 conditioning rule evaluates body-on-body sources — including the attached
 transition strips whose proportional part this add-on completes — at
-`kerneloffset_panel`, so both halves of one strip strength must share that
-regularization (wake probes are cross pairs and use `kerneloffset_targets`)."
+`core_size_panel`, so both halves of one strip strength must share that
+regularization (wake probes are cross pairs and use `core_size_targets`)."
 function _kutta_reconstruct_body_velocity!(rt::KuttaRuntime, c::AbstractVector;
         backend_system, grad_mu_options, suppress_attached::Bool=false)
     body = rt.body
@@ -952,18 +952,18 @@ function _kutta_reconstruct_body_velocity!(rt::KuttaRuntime, c::AbstractVector;
     body.suppress_attached_wake[] = suppress_attached
     was_active = _operator_mode_begin!(body)
     try
-        _set_kerneloffsets!((body,), :kerneloffset_targets)
+        _set_core_sizes!((body,), :core_size_targets)
         influence!((body,), (body,), backend_system; precalc=false,
             scalar_potential=false,
             velocity=true,
             velocity_gradient=(false,),
-            direct_conditioning=_self_panel_kerneloffset_conditioning())
+            direct_conditioning=_self_panel_core_size_conditioning())
     finally
         body.suppress_attached_wake[] = false
         _operator_mode_end!(body, was_active)
     end
     suppress_attached || _add_affine_attached_velocity!(body.velocity,
-        body.controlpoints, body, c; kerneloffset=body.kerneloffset_panel)
+        body.controlpoints, body, c; core_size=body.core_size_panel)
     if has_grad_mu(body)
         compute_mu_gradient!(body.velocity, body.controlpoints, body.normals,
             body.cells, body.neighbor,
@@ -984,11 +984,11 @@ end
 Velocity induced at `target` by panel `i_panel`'s attached transition strip at
 UNIT doublet strength: the exact finite-wake construction of the index-path
 `_induced_wake` (two triangles from the panel's TE nodes and `Das` columns via
-`shedding_full`), at an explicit `kerneloffset`. Returns a zero vector for a
+`shedding_full`), at an explicit `core_size`. Returns a zero vector for a
 panel with no shedding edge.
 """
 function _unit_attached_strip_velocity(target, body::RigidWakeBody{<:Any,<:Any,TF},
-        i_panel::Int, TK, switch, kerneloffset) where {TF}
+        i_panel::Int, TK, switch, core_size) where {TF}
     idx_1 = body.shedding_full[1, i_panel]
     idx_1 > 0 || return zero(SVector{3,TF})
 
@@ -1013,13 +1013,13 @@ function _unit_attached_strip_velocity(target, body::RigidWakeBody{<:Any,<:Any,T
     R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3],
         vw1[1], vw1[2], vw1[3])
     _, u, _ = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK,
-        kerneloffset, R, switch)
+        core_size, R, switch)
 
     control_point = (vw1 + v2 + vw2) * TF(0.333333333333333)
     R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3],
         vw2[1], vw2[2], vw2[3])
     _, du, _ = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK,
-        kerneloffset, R, switch)
+        core_size, R, switch)
 
     return u + du
 end
@@ -1046,7 +1046,7 @@ function _kutta_affine_strips(body::RigidWakeBody{<:Any,<:Any,TF},
 end
 
 """
-    _add_affine_attached_velocity!(velocity, targets, body, c; kerneloffset)
+    _add_affine_attached_velocity!(velocity, targets, body, c; core_size)
 
 Accumulate the affine attached-wake velocity of the correction `c` — the
 γ = Cμ − c shift carried by the M trailing-edge transition strips (one wake
@@ -1058,7 +1058,7 @@ backend, and this O(M×N_targets) add-on completes it exactly.
 """
 function _add_affine_attached_velocity!(velocity::AbstractMatrix,
         targets::AbstractMatrix, body::RigidWakeBody{<:Any,<:Any,TF},
-        c::AbstractVector; kerneloffset=body.kerneloffset_targets) where {TF}
+        c::AbstractVector; core_size=body.core_size_targets) where {TF}
     iszero(c) && return velocity
     strips = _kutta_affine_strips(body, c)
     isempty(strips) && return velocity
@@ -1069,7 +1069,7 @@ function _add_affine_attached_velocity!(velocity::AbstractMatrix,
         u = zero(SVector{3,TF})
         for (i_panel, w) in strips
             u += w*_unit_attached_strip_velocity(target, body, i_panel, TK,
-                switch, kerneloffset)
+                switch, core_size)
         end
         velocity[1, j] += u[1]
         velocity[2, j] += u[2]
@@ -1083,7 +1083,7 @@ accumulated into `wake.velocity` — the same targets the body→wake-probes
 influence pass feeds."
 function _add_affine_attached_velocity!(wake::PanelWake,
         body::RigidWakeBody{<:Any,<:Any,TF}, c::AbstractVector;
-        kerneloffset=body.kerneloffset_targets) where {TF}
+        core_size=body.core_size_targets) where {TF}
     iszero(c) && return wake
     nrows = wake.nwakes[] + 1
     for i_surf in eachindex(wake.nodes)
@@ -1092,7 +1092,7 @@ function _add_affine_attached_velocity!(wake::PanelWake,
         _add_affine_attached_velocity!(
             reshape(view(vel, :, 1:nrows, :), 3, :),
             reshape(view(nodes, :, 1:nrows, :), 3, :),
-            body, c; kerneloffset)
+            body, c; core_size)
     end
     return wake
 end
@@ -1504,7 +1504,7 @@ function _kutta_update_route_b_operators!(rt::KuttaRuntime{TF}) where {TF}
     body.suppress_attached_wake[] = !rt.live_active
     try
         rt.Gb .= zero(TF)
-        _G!(rt.Gb, body, body; kerneloffset=body.kerneloffset_panel,
+        _G!(rt.Gb, body, body; core_size=body.core_size_panel,
             update_geometry=false)
     finally
         body.suppress_attached_wake[] = false
@@ -1573,7 +1573,7 @@ function _kutta_step!(rt::KuttaRuntime{TF}, systems_tuple::Tuple,
         i_step::Int=0,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
-        body_gradient_kerneloffset::Float64=NaN,
+        body_gradient_core_size::Float64=NaN,
         body_on_wake::Bool=true,
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true) where {TF}
@@ -1608,7 +1608,7 @@ function _kutta_step!(rt::KuttaRuntime{TF}, systems_tuple::Tuple,
 
     commit_kwargs = (; i_step, targets, systems_tuple, backend_system,
         normalized_gm, needs_induced_vorticity, body_on_wake,
-        body_hessian_to_particles, body_gradient_kerneloffset)
+        body_hessian_to_particles, body_gradient_core_size)
     trial_kwargs = (; backend_solve, backend_system,
         grad_mu_options=normalized_gm)
 
@@ -1706,12 +1706,12 @@ function _kutta_commit!(rt::KuttaRuntime{TF}, record::KuttaTrialRecord;
         startup::Bool=false, i_step::Int=0, targets, systems_tuple,
         backend_system, normalized_gm, needs_induced_vorticity::Bool,
         body_on_wake::Bool, body_hessian_to_particles::Bool,
-        body_gradient_kerneloffset::Float64) where {TF}
+        body_gradient_core_size::Float64) where {TF}
     try
         _kutta_commit_inner!(rt, record; startup, targets, systems_tuple,
             backend_system, normalized_gm, needs_induced_vorticity,
             body_on_wake, body_hessian_to_particles,
-            body_gradient_kerneloffset)
+            body_gradient_core_size)
     catch err
         # §7.4: commit cannot complete — restore the complete pre-step
         # snapshot (which also rolls back the provider) and fail
@@ -1729,7 +1729,7 @@ function _kutta_commit_inner!(rt::KuttaRuntime{TF}, record::KuttaTrialRecord;
         startup::Bool, targets, systems_tuple, backend_system,
         normalized_gm, needs_induced_vorticity::Bool,
         body_on_wake::Bool, body_hessian_to_particles::Bool,
-        body_gradient_kerneloffset::Float64) where {TF}
+        body_gradient_core_size::Float64) where {TF}
 
     body = rt.body
     _kutta_restore_snapshot!(rt)
@@ -1765,23 +1765,23 @@ function _kutta_commit_inner!(rt::KuttaRuntime{TF}, record::KuttaTrialRecord;
     body.velocity .= rt.snapshot.velocity_frozen
     needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
         grad_mu_options=normalized_gm)
-    _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+    _set_core_sizes!(systems_tuple, :core_size_targets)
     body.suppress_attached_wake[] = startup
     was_active = _operator_mode_begin!(body)
     try
         _sa_body_influence!(targets, systems_tuple, backend_system;
             needs_induced_vorticity, body_on_wake, body_hessian_to_particles,
-            body_gradient_kerneloffset)
+            body_gradient_core_size)
     finally
         body.suppress_attached_wake[] = false
         _operator_mode_end!(body, was_active)
     end
     if !startup && any(!iszero, record.c)
         _add_affine_attached_velocity!(body.velocity, body.controlpoints,
-            body, record.c; kerneloffset=body.kerneloffset_panel)
+            body, record.c; core_size=body.core_size_panel)
         if !isnothing(rt.wake) && body_on_wake
             _add_affine_attached_velocity!(rt.wake, body, record.c;
-                kerneloffset=body.kerneloffset_targets)
+                core_size=body.core_size_targets)
         end
     end
     _sa_half_jump!(systems_tuple, normalized_gm)

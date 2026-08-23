@@ -2511,3 +2511,236 @@ vatistas arm will silently pick up the new defaults unless pinned** — pin both
 when extending anything submitted before today.
 
 Detail, tables and method: `BRAINSTORM/025_kernel_regularization_update/phase_03_018_compatibility.md`.
+
+---
+
+## VTK retention actions — 2026-08-22 — full-corpus sweep, 588 G → 88 G
+
+**Trigger.** Ryan asked for a manual cleanup cycle. No watchdog loop had been
+running, and `du -sm /home/rander39/projects/FLOWPanel.jl` read **602,429 MB
+(588 G)** — roughly **3× the 200 G cap** — with **8 jobs RUNNING**
+(`fp-018-csarc_{nt72,nt144}_{l2p4,l3p4,l4p8}`, `fp-018-csarc_n0_nt{72,144}_l4p8`;
+23–25 h of walltime remaining each). Nothing had been swept in a long while.
+
+**Retention policy corrected first.** `HPC_STORAGE_WATCHDOG.md` §1 rule 4 (and
+the §2 flag/behavior lines) still said **10** retained timesteps; the sweeper's
+`KEEP_STEPS` default had been raised to **36** by Ryan on 2026-08-20. The doc
+now says 36 and points at the script default as authoritative (`--keep` should
+not be passed). The historical §6 entries that reference 10-step retention were
+left as-is — they describe what was true in August's incidents.
+
+**Sweep.** `scripts/p018_vtk_sweeper.sh` dry run, then `--apply`, at the default
+`keep=36`, protect list unmodified (8 runs `PROTECTED`: `p018_L1_ov3`,
+`scr_ufdt_nt{36,72,144}`, `scr_p019_fid144`, `scr_p019_s038v`,
+`p018_ufront_{s035,n2}_visc`). Live runs were swept, as rule 3 allows.
+
+| metric | value |
+|---|---:|
+| before | 602,429 MB (588 G) |
+| `TOTAL_FREED_MB` | **514,083 MB (502 G)** |
+| after | **89,992 MB (88 G)** of the 200 G cap |
+| runs with deletions | 23 of 116 evaluated (181 dirs scanned) |
+| runs skipped `NO-RESTART-SET` | 57 |
+
+Essentially all of it came from two families — the thirteen `p018_csarc_*` arms
+(~28–34 G each; five CLOSED, seven LIVE) and six `p022_*` ground-effect runs
+(~9–26 G each). The remaining run directories contributed under 20 MB
+combined; most were already at their retained window from earlier sweeps.
+
+| family | runs | freed |
+|---|---:|---:|
+| `p018_csarc_*` | 13 | 401,638 MB |
+| `p022_{ige,oge}_*` | 6 | 112,414 MB |
+| everything else | 4 | 18 MB |
+| **sum** | **23** | **514,070 MB** (13 MB under `TOTAL_FREED_MB`; per-run MB are rounded) |
+
+**Restart integrity verified (this sweep touched seven live runs).** All eight
+jobs are still `RUNNING` after the apply, and every swept live run has advanced
+past its retained window — the sweeper's retained top step vs. the newest
+particle VTP a few minutes later:
+
+| run | retained top S at sweep | latest S after | particle files kept |
+|---|---:|---:|---:|
+| `p018_csarc_n0_nt144_l4p8` | 1324 | 1325 | 38 |
+| `p018_csarc_n0_nt72_l4p8` | 1080 | 1081 | 38 |
+| `p018_csarc_nt144_l2p4` | 1362 | 1364 | 38 |
+| `p018_csarc_nt144_l3p4` | 1380 | 1382 | 38 |
+| `p018_csarc_nt144_l4p8` | 1364 | 1365 | 37 |
+| `p018_csarc_nt72_l2p4` | 1123 | 1125 | 38 |
+| `p018_csarc_nt72_l3p4` | 1138 | 1139 | 37 |
+| `p018_csarc_nt72_l4p8` | 1165 | 1166 | 37 |
+
+(36 retained steps plus the 1–2 written since the sweep — exactly the expected
+count, so no `.vtm` stub / missing-piece situation like the 2026-08-04 incident.)
+
+**Job outcomes.** Nothing left the queue during this cycle; the same eight jobs
+were `RUNNING` before and after. No `sacct` post-mortems to report, and no new
+instances of the `merge_particles!` OOM family.
+
+**Lesson for next time.** 588 G means the watchdog loop (§3, auto-sweep at
+100 G) was not running for this campaign. A one-shot sweep recovered everything
+here only because the `csarc` arms happened to still be pre-cap; the growth rate
+with 8 writers makes a standing Monitor the safer default whenever a ladder is
+in flight.
+
+---
+
+## 2026-08-22 — F1b λ ladder (NT36, N=1) landed + N=0 convert-at-shed A/B
+
+Four of the twelve arms in flight since 2026-08-20/21 have **COMPLETED**
+(all 30 revs, `all_finite=true`, `converged=true`, ~45–47 h wall each,
+vatistas + production FMM knobs — i.e. pre-2026-08-21 settings, per the chain
+warning above). The remaining eight (N=1 NT72/NT144 ladders 13245449–54, N=0
+NT ladder 13246048/49) are still RUNNING at ~2 d of their 3 d wall and are
+expected to land 2026-08-23.
+
+Common config for all four: mesh `45_185_ct4` (36752 cells), RPM 5400, NT 36,
+`p_per_step` 12, `overlap` 2.75, `nwakerows` 1 (except the N=0 arm), `relax_rlxf`
+0.3, `sigma_chord_fraction` 0.313, arc-placed steady Das (`das_arc_placed=true`,
+table `p018_cs_l3p4_rs1_te_downwash_te.csv`), **F1 curvature cap OFF**
+(`das_curvature_beta = NaN`) — this is the uncapped F1b arc-law ladder.
+
+**M1 — cycle-mean CT.** Window = last 15 recorded revs (rev blocks 16–30,
+steps 541–1080); the driver's own 10-rev `CT_cycle_mean` is shown alongside and
+agrees to <0.02% in every case.
+
+| arm | job | λ | N | CT̄ (15 rev) | rev-to-rev σ_rel | max within-rev p-p | drift %/rev | driver CT̄ (10 rev) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `p018_csarc_l2p4` | 13243083 | 2.4 | 1 | 0.070663 | 1.7e-3 | 1.55% | −0.023 | 0.0706092 |
+| `p018_csarc_l3p4` | 13243084 | 3.4 | 1 | 0.071013 | 1.1e-3 | 1.88% | −0.004 | 0.0710044 |
+| `p018_csarc_l4p8` | 13243085 | 4.8 | 1 | 0.070666 | 1.0e-3 | 0.84% | −0.020 | 0.0706287 |
+| `p018_csarc_n0_l4p8` | 13246032 | 4.8 | **0** | 0.071584 | 8.8e-4 | 1.07% | +0.014 | 0.0716176 |
+
+**M2 — Γ̄(r/R) from the TE μ-jump** (`monitor03_bound_circulation`, same
+15-rev window, 80 sections, both blades). Span-averaged Γ̄:
+
+| arm | λ | N | span-mean Γ̄ | Δ vs `l3p4` |
+|---|---:|---:|---:|---:|
+| `p018_csarc_l2p4` | 2.4 | 1 | 0.230453 | −1.12% |
+| `p018_csarc_l3p4` | 3.4 | 1 | 0.233071 | — |
+| `p018_csarc_l4p8` | 4.8 | 1 | 0.232655 | −0.18% |
+| `p018_csarc_n0_l4p8` | 4.8 | 0 | 0.234967 | +0.81% |
+
+### Verdict 1 — λ is NOT a monotone axis at NT36; spread is ~0.5% and λ=3.4 is the outlier
+
+CT̄ over λ ∈ {2.4, 3.4, 4.8} is 0.070663 / 0.071013 / 0.070666 — the two ends
+agree to **0.004%** while the midpoint sits **+0.49%** above both. That is not a
+convergence trend in λ; it is a ~0.5% scatter band with the middle rung high.
+M2 tells the same story in the same rank order (l2p4 −1.12%, l4p8 −0.18% vs
+l3p4), so the two metrics are consistent and this is not a force-recovery
+artifact. The 0.49% CT gap does exceed the per-rev sampling noise (σ_rel ≈
+1e-3, SE of a 15-rev mean ≈ 0.03% before autocorrelation inflation), but it is
+*below* the arms' own within-rev peak-to-peak (0.84–1.88%), so it is a real
+mean-level difference riding on a limit cycle that is larger than the effect.
+
+Spanwise, the λ sensitivity is **concentrated at the root**: at r/R = 0.111 the
+arms spread −11.4% (λ2.4) / — / +6.3% (λ4.8) about λ3.4, while every section
+outboard of |r/R| ≈ 0.3 agrees within ~1.3%. This is the expected signature of
+chord–σ co-scaling — the root chord sets the smallest σ, so the arc-placement
+length λσ moves most there — and it is where the blade-gap σ cap question
+(still un-approved) would bite.
+
+**Caveat, and why this verdict is provisional:** these three rungs share NT=36.
+The NT72/NT144 ladders (13245449–54) land tomorrow and are the arms that
+decide whether the ~0.5% scatter is a genuine λ-dependence or a temporal-
+resolution artifact of NT36. Do not close the λ axis on this table alone.
+
+### Verdict 2 — N=0 convert-at-shed raises loading ~1% vs N=1 (clean A/B, both metrics agree)
+
+`p018_csarc_n0_l4p8` (13246032) vs `p018_csarc_l4p8` (13243085) differ in
+`nwakerows` alone (0 vs 1) — verified by diffing the two `case_metadata.toml`
+files, which are otherwise identical apart from run name and wall time.
+
+- **M1: CT̄ +1.30%** (0.071584 vs 0.070666)
+- **M2: span-mean Γ̄ +0.99%** (0.234967 vs 0.232655)
+
+Sign and magnitude agree between the independent metrics, and the effect is
+~2.5× the λ scatter above, so this is a model-level difference, not noise. The
+spanwise Δ is positive at *every* section (+0.6% to +2.1%), largest at the tip
+shoulder (r/R 0.785, +2.10%) and at r/R −0.762 (+1.77%) — i.e. N=0 recovers
+circulation that the single rigid wake row was suppressing, most strongly where
+the wake sheet is most curved. Wake health is comparable (n_particles within
+0.3%; tail max_u 18.3 vs 13.2 m/s — the N=0 arm's higher induced velocity is
+consistent with vorticity being deposited closer to the TE; the whole-run
+maxima, 53.4 vs 28.8, are spin-up transients, not the settled state).
+
+**Parked question, now due (Ryan):** BRAINSTORM/024's N=0 convert-at-shed is
+implemented and deployed; this is the first settled 30-rev A/B of it inside the
+018 carrier. The production-adoption decision was parked pending exactly this
+result. Recommend holding the decision until the N=0 NT ladder
+(13246048/13246049) lands 2026-08-23, so adoption is not made on a single NT36
+rung — the λ ladder above is a live demonstration that one NT is not enough.
+
+**Retention:** VTK for these four runs is still on the cluster and has NOT been
+swept; the four CSV/TOML/monitor sets are harvested to `data/<run>/` locally.
+
+### Scoring against RESET BRIEF (m) §"action on landing" for 13243083/84/85
+
+**(i) Wake-health TAIL absolutes** (last recorded step 1079; trend over last 5
+revs) — all four arms are healthy and plateaued, no L2 trajectory:
+
+| arm | n_particles | Δn over last 5 rev | tail max_u | tail min σ | tail max Γ/σ² (5-rev range) |
+|---|---:|---:|---:|---:|---:|
+| `csarc_l2p4` | 184 189 | +1.04% | 16.33 | 9.51e-4 | 228 (192–389) |
+| `csarc_l3p4` | 192 991 | +2.29% | 14.18 | 9.60e-4 | 212 (212–384) |
+| `csarc_l4p8` | 186 174 | +0.45% | 13.16 | 7.67e-4 | 407 (233–530) |
+| `csarc_n0_l4p8` | 185 937 | +2.06% | 18.31 | 8.78e-4 | 378 (229–383) |
+
+`min_sigma` is flat, not falling, in every arm — the stop rule
+(steadily-falling `min_sigma_ratio` ⇒ heading for the L2 failure) is not
+triggered. The brief's specific worry — l2p4's screen `gos2` ending at 425
+rising-and-decelerating — resolves benignly: its settled max Γ/σ² band is
+192–389, the *lowest* of the four, so the screen's rise did not continue into
+the production run. (`min_sigma_ratio`/`p1_sigma_ratio` are NaN in the tail
+rows for all arms — the known `nan_inf` false positive, not a divergence.)
+
+**(ii) P1 doubling gate (λ 2.4 → 4.8, the factor-of-two rungs).** This is the
+formal criterion in the brief (M1 raw+quiet ≤0.5%, M2 ≤1%):
+
+| metric | λ2.4 | λ4.8 | Δ | gate | verdict |
+|---|---:|---:|---:|---:|---|
+| M1 CT̄ (15 rev) | 0.070663 | 0.070666 | **+0.004%** | ≤0.5% | **PASS** |
+| M2 span-mean Γ̄ | 0.230453 | 0.232655 | **+0.96%** | ≤1% | **PASS (marginal)** |
+
+**So the λ axis PASSES its doubling gate on both metrics.** The non-monotonicity
+noted in Verdict 1 above is real but does not fail the gate: the doubling test
+compares the two ends, and they agree to 0.004% in CT. Read the two together as
+— the λ endpoints are converged in CT to well inside tolerance, while an
+intermediate rung scatters ~0.5%, and M2 sits right at its 1% limit driven
+almost entirely by the root sections (r/R ≈ 0.11, ±6–11%). The M2 margin is thin
+enough that the NT72/NT144 rungs landing 2026-08-23 should be checked before
+the axis is declared closed.
+
+**(iii) λ3.4 head-to-heads** (all scored from `monitor02_force`, CT = −CFx,
+whole-rev-aligned; the `csarc_l3p4` force-monitor score reproduces its
+`CT_per_rev` score to 6 digits, which validates the method for the carriers that
+lack a usable `CT_per_rev`):
+
+| carrier | wake/Das treatment | CT̄ | window | Δ vs `csarc_l3p4` |
+|---|---|---:|---|---:|
+| `p018_csarc_l3p4` | **arc-placed Das, uncapped** | 0.071013 | 15 rev → step 1079 | — |
+| `p018_cs_f1_l3p4` | F1 curvature cap β=0.6 | 0.070690 | 15 rev → step 1034 | −0.46% |
+| `p018_cs_l3p4_rs1` | straight-sheet Das | 0.072524 | 8 rev → step 1079 | +2.13% |
+| `p018_csarc_mid_l3p4` | arc-placed, **midpoint** table | 0.070552 | 15 rev → step 1079 | −0.65% |
+
+- **Arc vs cap (the head-to-head a Ryan decision follows): 0.46% apart** — i.e.
+  the same size as the λ ladder's own internal scatter and *below* both arms'
+  within-rev peak-to-peak. On CT alone these two Das treatments are not
+  distinguishable at this carrier's noise level; the earlier discriminator was
+  the **shape** of Γ̄ (F1's outboard lobe residual at r/R 0.78–0.87), not the
+  integral. **Recommend deciding arc-vs-cap on M2 shape, not on M1** — and not
+  before the NT ladders land.
+- **Straight-sheet is the outlier at +2.13%**, ~4× the arc/cap separation, so
+  the arc law does move CT materially off the straight-sheet baseline (the
+  point of Phase 16). Caveat: this number rests on an **8-rev** window (the
+  `_rs1` force monitor holds only 302 steps) and the run is a stitched restart,
+  so treat it as indicative. Its driver `CT_per_rev` reads 0.0404 — **do not use
+  it**; that is the known zero-fill-on-restart artifact, the same trap flagged
+  for the 025 continuations.
+- **Midpoint-table A/B: −0.65%**, versus Ryan's stated pass criterion
+  ("behavior doesn't change much"). Comparable to the λ scatter ⇒ **PASS**;
+  the TE-downwash table choice is not a leading error term.
+
+**Still owed on this arm** (not done here): Γ̄ overlay *plot* vs the
+straight-sheet rungs. The numbers are in `data/<run>/monitors/`; the overlay is
+a figure task, deferred.

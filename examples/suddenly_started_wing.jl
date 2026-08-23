@@ -138,7 +138,7 @@ Base.@kwdef struct SSWConfig
     conversion_attribution::Symbol = :upstream
     conversion_diagnose::Bool = false
     wake_core_over_c::Float64 = 1e-3
-    kerneloffset_over_c::Float64 = 1e-6
+    core_size_over_c::Float64 = 1e-6
     kernelcutoff_over_c::Float64 = 1e-12
     output_root::String = DEFAULT_SSW_OUTPUT
     save_vtk::Bool = true
@@ -468,7 +468,7 @@ function build_suddenly_started_wing(config::SSWConfig; semiinfinite_wake::Bool=
     ssw_caps(config) === :flat && !watertight &&
         error("flat tip caps did not close the surface; check add_flat_tip_caps")
     options = (;
-        kerneloffset=config.kerneloffset_over_c * config.c,
+        core_size=config.core_size_over_c * config.c,
         kernelcutoff=config.kernelcutoff_over_c * config.c,
         semiinfinite_wake,
         watertight,

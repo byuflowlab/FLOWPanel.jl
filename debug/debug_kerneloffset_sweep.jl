@@ -1,12 +1,12 @@
-## Kerneloffset sweep for capped Dirichlet wing.
-## For each kerneloffset, build/solve the body, evaluate raw induced velocity +
+## Core_size sweep for capped Dirichlet wing.
+## For each core_size, build/solve the body, evaluate raw induced velocity +
 ## Hessian, run PressureBernoulli + PressureLaplace, and report:
 ##   - median/p99 of |u·n| and |u·n|/|u| over the surface
 ##   - same statistics restricted to high-AR panels (top decile by aspect ratio)
 ##   - relative residual ||L*(P_B - P_B[ref]) - b_L|| / ||b_L||
 ##   - integrated Bernoulli and Laplace forces (Z component, body frame)
 ##
-## Hypothesis: if shrinking kerneloffset → 0 reduces |u·n| on sliver panels and
+## Hypothesis: if shrinking core_size → 0 reduces |u·n| on sliver panels and
 ## brings Bernoulli/Laplace forces into agreement, regularization mismatch
 ## between the BIE matrix (using same kernel) and the velocity evaluation
 ## (regularized) is the leading driver of the localized error.
@@ -70,7 +70,7 @@ function run_sweep(; meshfile=joinpath(pnl.examples_path, "data", "wing_ar4_naca
                     dt=1.0)
 
     println()
-    println("#===== KERNELOFFSET SWEEP =====#")
+    println("#===== CORE_SIZE SWEEP =====#")
     @printf("mesh: %s\n", basename(meshfile))
     @printf("AOA=%.3f deg, |Vinf|=%.2f m/s, rho=%.3f\n", AOA, magVinf, rho)
 

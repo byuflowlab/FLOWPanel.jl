@@ -111,7 +111,7 @@ when $\Gamma = \mu$, and where $\mathbf{r}_{ij} = \mathbf{p}_j-\mathbf{p}_i$, $\
 **OBSERVATIONS**
 * The velocity induced by a segment of the vortex ring shown above becomes singular when the denominator terms $r_i$, $r_j$, or $\Vert \mathbf{r}_i \times \mathbf{r}_j \Vert$  approach $0$. For this reason, FLOWPanel adds a small epsilon to each of these terms, while also defining a cutoff threshold for $\Vert \mathbf{r}_i \times \mathbf{r}_j \Vert$ under which the velocity induced becomes $0$ (thus, self-induced velocity is forced to be zero).
 
-> **NOTE:** The small offset added to the denominator terms $r_i$, $r_j$, and $\Vert \mathbf{r}_i \times \mathbf{r}_j \Vert$ corresponds to `body.kerneloffset`, while the cutoff threshold for self-induced velocity corresponds to `body.kernelcutoff`.
+> **NOTE:** The small offset added to the denominator terms $r_i$, $r_j$, and $\Vert \mathbf{r}_i \times \mathbf{r}_j \Vert$ corresponds to `body.core_size`, while the cutoff threshold for self-induced velocity corresponds to `body.kernelcutoff`.
 
 The potential and velocity field of a doublet panel of unitary strength ($\mu=1$) is shown below
 

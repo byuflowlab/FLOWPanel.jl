@@ -97,17 +97,17 @@ function load_base(case)
     if case.formulation == :dirichlet
         kernel = Union{pnl.ConstantSource, pnl.VortexRing}
         body = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=false, watertight=true, DBC=true)
     else
         kernel = pnl.VortexRing
         body = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=false, watertight=false, DBC=false)
     end
@@ -132,9 +132,9 @@ function build_case(case)
         kernel = Union{pnl.ConstantSource, pnl.VortexRing}
         body = pnl.RigidWakeBody{kernel}(
             copy(base.nodes), copy(base.cells), [copy(s) for s in shedding];
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=false, watertight=true,
             ensure_winding=true, DBC=true)
@@ -142,9 +142,9 @@ function build_case(case)
         kernel = pnl.VortexRing
         body = pnl.RigidWakeBody{kernel}(
             copy(base.nodes), copy(base.cells), [copy(s) for s in shedding];
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=false, watertight=false,
             ensure_winding=true, DBC=false)

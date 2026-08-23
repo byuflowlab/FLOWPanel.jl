@@ -470,7 +470,7 @@ function _assemble_B!(B, body::RigidWakeBody)
     was_active = _operator_mode_begin!(body)
     body.suppress_attached_wake[] = true
     try
-        _G!(B, body, body; kerneloffset=body.kerneloffset_panel,
+        _G!(B, body, body; core_size=body.core_size_panel,
             update_geometry=false)
     finally
         body.suppress_attached_wake[] = false
@@ -482,13 +482,13 @@ end
 "Assemble the N×M attached-wake potential columns W: `W[i, e]` is the potential
 at body centroid i of the attached transition panel of shedding edge e carrying
 unit strength. Uses the exact in-matrix attached-panel kernel (difference of
-`induced` with the attached wake on and off) under `kerneloffset_panel`."
+`induced` with the attached wake on and off) under `core_size_panel`."
 function _assemble_W!(W, body::RigidWakeBody, edges::SheddingEdgeMap)
     TF = eltype(W)
     old_strength = copy(body.strength)
-    old_offset = body.kerneloffset
+    old_offset = body.core_size
     was_active = _operator_mode_begin!(body)
-    body.kerneloffset = body.kerneloffset_panel
+    body.core_size = body.core_size_panel
     body.strength .= zero(TF)
     switch = FastMultipole.DerivativesSwitch(true, false, false)
     CPs = body.controlpoints
@@ -498,10 +498,10 @@ function _assemble_W!(W, body::RigidWakeBody, edges::SheddingEdgeMap)
             for i in 1:body.ncells
                 target = SVector{3,TF}(CPs[1,i], CPs[2,i], CPs[3,i])
                 phi_full, _, _ = induced(target, body, up, switch;
-                    kerneloffset=body.kerneloffset_panel)
+                    core_size=body.core_size_panel)
                 body.suppress_attached_wake[] = true
                 phi_body, _, _ = induced(target, body, up, switch;
-                    kerneloffset=body.kerneloffset_panel)
+                    core_size=body.core_size_panel)
                 body.suppress_attached_wake[] = false
                 W[i, e] = phi_full - phi_body
             end
@@ -509,7 +509,7 @@ function _assemble_W!(W, body::RigidWakeBody, edges::SheddingEdgeMap)
         end
     finally
         body.strength .= old_strength
-        body.kerneloffset = old_offset
+        body.core_size = old_offset
         body.suppress_attached_wake[] = false
         _operator_mode_end!(body, was_active)
     end
@@ -799,7 +799,9 @@ Formulation-dispatched replacement for the body solve inside
 function solve_formulation!(::VelocityThroughSources, state, systems,
         systems_tuple, wakes_tuple, body_solvers;
         backend_solve, backend_wake, i_step::Int=0)
+    t0 = time()   # task 052: env-gated solve timer (FLOWPANEL_GPU_TIMERS)
     solve!(systems, body_solvers; backend=backend_solve)
+    _gpu_timer_log("solve step=$(i_step)", time() - t0)
     return nothing
 end
 

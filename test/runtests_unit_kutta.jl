@@ -190,9 +190,9 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
     end
 
     # --- the trial/commit affine add-on follows the self-pair panel offset ---
-    @testset "reconstruction add-on uses kerneloffset_panel" begin
+    @testset "reconstruction add-on uses core_size_panel" begin
         # distinct offsets: the proportional γ = Cμ strip part runs through the
-        # self-pair conditioning at kerneloffset_panel, so the affine −c part
+        # self-pair conditioning at core_size_panel, so the affine −c part
         # must use the same offset or the two halves of one strip strength are
         # regularized differently.
         # Pinned to the Vatistas family (BRAINSTORM 025): the discriminator
@@ -203,8 +203,8 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
         old_family = pnl.FILAMENT_REGULARIZATION[]
         pnl.set_filament_regularization!(pnl.VatistasRegularization)
         body = make_dirichlet_diamond_body()
-        body.kerneloffset_panel = 5e-2
-        body.kerneloffset_targets = 1e-8
+        body.core_size_panel = 5e-2
+        body.core_size_targets = 1e-8
         solver = pnl.Backslash(body)
         rt = pnl._initialize_kutta(:steady, body, solver, nothing,
             pnl.RigidTransitionAttachment(), pressure_closure())
@@ -227,10 +227,10 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
         dv = v_c .- body.velocity
         add_panel = zeros(3, body.ncells)
         pnl._add_affine_attached_velocity!(add_panel, body.controlpoints,
-            body, c; kerneloffset=body.kerneloffset_panel)
+            body, c; core_size=body.core_size_panel)
         add_targets = zeros(3, body.ncells)
         pnl._add_affine_attached_velocity!(add_targets, body.controlpoints,
-            body, c; kerneloffset=body.kerneloffset_targets)
+            body, c; core_size=body.core_size_targets)
         # the two offsets genuinely disagree here — the test has teeth
         @test maximum(abs, add_panel .- add_targets) > 1e-6
         @test isapprox(dv, add_panel; rtol=1e-12, atol=1e-13)
@@ -630,10 +630,10 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
     # per-panel decomposition set_wake_correction! installs.
     @testset "affine add-on matches production strip influence" begin
         body = make_dirichlet_diamond_body()
-        pnl._set_kerneloffsets!((body,), :kerneloffset_targets)
+        pnl._set_core_sizes!((body,), :core_size_targets)
         influence_kwargs = (; precalc=false, scalar_potential=false,
             velocity=true, velocity_gradient=(false,),
-            direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+            direct_conditioning=pnl._self_panel_core_size_conditioning())
         c = [0.07]
 
         v_ref = zeros(3, body.ncells)
@@ -654,7 +654,7 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
 
         v_addon = zeros(3, body.ncells)
         pnl._add_affine_attached_velocity!(v_addon, body.controlpoints,
-            body, c; kerneloffset=body.kerneloffset_panel)
+            body, c; core_size=body.core_size_panel)
         @test isapprox(v_addon, v_ref; rtol=1e-11, atol=1e-13)
         @test _KLA.norm(v_addon) > 1e-4    # the term is genuinely nonzero
 
@@ -666,11 +666,11 @@ pressure_closure(provider=pnl.SteadyBernoulliProvider(1.2); kwargs...) =
         end
         pnl.reset!(wake)
         pnl._add_affine_attached_velocity!(wake, body, c;
-            kerneloffset=body.kerneloffset_targets)
+            core_size=body.core_size_targets)
         pts = reshape(view(wake.nodes[1], :, 1:3, :), 3, :)
         v_pts = zeros(3, size(pts, 2))
         pnl._add_affine_attached_velocity!(v_pts, pts, body, c;
-            kerneloffset=body.kerneloffset_targets)
+            core_size=body.core_size_targets)
         @test isapprox(reshape(view(wake.velocity[1], :, 1:3, :), 3, :), v_pts;
             rtol=1e-12, atol=1e-14)
     end

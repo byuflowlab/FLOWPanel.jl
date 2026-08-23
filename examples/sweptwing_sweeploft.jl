@@ -60,7 +60,7 @@ lambda_rad    = lambda*pi/180
 
 Sref          = b^2/ar
 c_ref         = b/ar
-kerneloffset  = 1e-10                       # matches the old convergence study
+core_size  = 1e-10                       # matches the old convergence study
 
 CLexp         = 0.238                       # Weber experiment
 CL_old_posy   = 0.2394                      # old +y-mirrored y-loft, 40x56
@@ -113,14 +113,14 @@ function cut_angle(yabs, semispan, L_t, lambda_rad)
 end
 
 """
-    sweeploft_wing(n_ch, n_span; L_t=c, kerneloffset=1e-10)
+    sweeploft_wing(n_ch, n_span; L_t=c, core_size=1e-10)
 
 Build the full-span sweep-lofted RigidWakeBody. `n_ch` chordwise panels per
 side, `n_span` (even) spanwise panels across the full span;
 ncells = 4*n_ch*n_span.
 """
 function sweeploft_wing(n_ch::Int, n_span::Int; L_t::Real=c,
-                        kerneloffset::Real=1e-10, airfoil=AIRFOIL,
+                        core_size::Real=1e-10, airfoil=AIRFOIL,
                         mirror_diagonals::Bool=true, swap_diagonals::Bool=false)
     iseven(n_span) || error("n_span must be even for a symmetric mesh; got $n_span")
 
@@ -186,7 +186,7 @@ function sweeploft_wing(n_ch::Int, n_span::Int; L_t::Real=c,
 
     body = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}(
         nodes, cells, [shedding];
-        watertight, ensure_winding=false, kerneloffset)
+        watertight, ensure_winding=false, core_size)
 
     wake_direction = reshape(Vinf ./ magVinf, :, 1)
     for i in eachindex(body.Das)

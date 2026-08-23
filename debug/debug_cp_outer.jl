@@ -42,11 +42,11 @@ target = SVector(centroid[1], centroid[2], centroid[3])
 
 body.cp_outer = false
 ds_phi = FastMultipole.DerivativesSwitch(true, false, false)
-phi_int, _, _ = pnl.induced(target, body, i, ds_phi; kerneloffset=body.kerneloffset)
+phi_int, _, _ = pnl.induced(target, body, i, ds_phi; core_size=body.core_size)
 println("\nself-pair, cp_outer=false → phi = ", phi_int, "   (expected interior limit +μ/2 = +0.5)")
 
 body.cp_outer = true
-phi_ext, _, _ = pnl.induced(target, body, i, ds_phi; kerneloffset=body.kerneloffset)
+phi_ext, _, _ = pnl.induced(target, body, i, ds_phi; core_size=body.core_size)
 println("self-pair, cp_outer=true  → phi = ", phi_ext, "   (expected exterior limit -μ/2 = -0.5)")
 
 # Also check what the raw _induced returns (bypassing _self_limit) at the centroid
@@ -56,12 +56,12 @@ n = body.normals[:, i]
 δ = 1e-6 * sqrt(0.5)  # small offset
 println("\nslightly OUTSIDE (centroid + δ*n): cp_outer=false")
 t_out = SVector(centroid[1]+δ*n[1], centroid[2]+δ*n[2], centroid[3]+δ*n[3])
-phi_o, _, _ = pnl.induced(t_out, body, i, ds_phi; kerneloffset=body.kerneloffset)
+phi_o, _, _ = pnl.induced(t_out, body, i, ds_phi; core_size=body.core_size)
 println("  phi = $phi_o   (true exterior, should be -0.5)")
 
 println("slightly INSIDE  (centroid - δ*n): cp_outer=false")
 t_in = SVector(centroid[1]-δ*n[1], centroid[2]-δ*n[2], centroid[3]-δ*n[3])
-phi_i, _, _ = pnl.induced(t_in, body, i, ds_phi; kerneloffset=body.kerneloffset)
+phi_i, _, _ = pnl.induced(t_in, body, i, ds_phi; core_size=body.core_size)
 println("  phi = $phi_i   (true interior, should be +0.5)")
 
 # restore

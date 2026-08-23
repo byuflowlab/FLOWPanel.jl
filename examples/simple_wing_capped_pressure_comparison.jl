@@ -163,7 +163,7 @@ function build_pressure_comparison_wing(; chord::Real=1.0,
         n_endcap::Integer=5, kernel_offset::Real=1e-6)
     bodytype = pnl.RigidWakeBody{
         Union{pnl.ConstantSource, pnl.ConstantDoublet}, 2, Float64, true}
-    options = (; kerneloffset=kernel_offset * chord, kernelcutoff=1e-12 * chord,
+    options = (; core_size=kernel_offset * chord, kernelcutoff=1e-12 * chord,
         semiinfinite_wake=true, watertight=true)
     resolved_span, _ = _resolve_pressure_comparison_span(chord, aspect_ratio, span)
     nodes, cells = pressure_comparison_wing_mesh(chord, resolved_span;
@@ -201,7 +201,7 @@ function solve_pressure_comparison_wing!(body, Vinf;
         body_solvers=solver, backend, monitors, path=nothing, verbose=false)
     normal_leakage = vec(sum(body.velocity .* body.normals; dims=1))
     Gcheck = zeros(Float64, body.ncells, body.ncells)
-    pnl._G!(Gcheck, body, body; kerneloffset=body.kerneloffset_panel,
+    pnl._G!(Gcheck, body, body; core_size=body.core_size_panel,
         update_geometry=false)
     linear_residual = Gcheck * view(body.strength, :, 2) - solver.rhs
     solver_residual = norm(linear_residual) / max(norm(solver.rhs), eps())

@@ -139,7 +139,7 @@ function run_pass1!(backend)
 end
 
 function run_pass3!(backend)
-    pnl._set_kerneloffsets!((body,), :kerneloffset_targets)
+    pnl._set_core_sizes!((body,), :core_size_targets)
     pnl._sa_body_influence!(targets, (body,), backend)
     return snapshot()
 end

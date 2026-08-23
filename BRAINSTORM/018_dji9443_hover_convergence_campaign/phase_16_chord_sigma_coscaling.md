@@ -463,3 +463,15 @@ Das axis closed or a fallback selected with its evidence.
   labeled model-def A/Bs (dt changes shedding-linked properties — Ryan).
   nt144 rungs reach only ~rev 13–15 per wall; settled windows there
   need chains (Ryan's call when they land).
+
+---
+
+**VTK retention note (2026-08-22).** All thirteen `p018_csarc_*` run directories
+were swept to their newest **36 restartable steps** (401,638 MB freed) as part
+of the full-corpus cleanup that took the checkout from 588 G to 88 G. The seven
+arms live at the time were swept while running and all verified still `RUNNING`
+with their latest step past the retained window. CSVs, `case_metadata.toml`, and
+`monitors/` were untouched — only ParaView/VTK history below the retained window
+is gone, so any pre-step-~1330 ParaView study of these arms is no longer
+possible. See the ledger entry
+`## VTK retention actions — 2026-08-22 — full-corpus sweep, 588 G → 88 G`.

@@ -80,9 +80,9 @@ mutable struct RigidWakeBody{E, N, TF, DBC} <: AbstractLiftingBody{E, N, TF, DBC
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
     velocity_te::Vector{Matrix{TF}}     # velocity_te[i] is the velocity induced at the trailing edge of the i-th shedding edge
-    kerneloffset::Float64                     # Active kernel offset to avoid singularities
-    kerneloffset_panel::Float64               # Kernel offset for panel solves/interactions
-    kerneloffset_targets::Float64             # Kernel offset for panel influence on targets
+    core_size::Float64                     # Active regularization core radius (see AbstractBody docs)
+    core_size_panel::Float64               # Core radius for panel solves/interactions
+    core_size_targets::Float64             # Core radius for panel influence on targets
     kernelcutoff::Float64                     # Kernel cutoff to avoid singularities
     characteristiclength::Function            # Characteristic length of each panel
     watertight::Bool                         # Whether the body is watertight or not
@@ -126,9 +126,13 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 controlpoints=zeros(TF, 3, ncells),
                                 normals=zeros(TF, 3, ncells),
                                 velocity_te=[zeros(TF, 3, size(s,2)+1) for s in _normalize_shedding(shedding)],
-                                kerneloffset=1e-8,
-                                kerneloffset_panel=kerneloffset,
-                                kerneloffset_targets=kerneloffset,
+                                core_size=nothing,
+                                core_size_panel=nothing,
+                                core_size_targets=nothing,
+                                # deprecated aliases for the pre-2026-08-22 names
+                                kerneloffset=nothing,
+                                kerneloffset_panel=nothing,
+                                kerneloffset_targets=nothing,
                                 kernelcutoff=1e-14,
                                 characteristiclength=characteristiclength_sqrtarea,
                                 check_mesh=true, watertight=true,
@@ -141,6 +145,9 @@ function RigidWakeBody{E, N, TF, DBC}(
                                 ensure_winding::Bool=true,
                                 flip_normals::Bool=false
                             ) where {E, N, TF, DBC}
+    core_size, core_size_panel, core_size_targets =
+        _resolve_core_sizes(core_size, core_size_panel, core_size_targets,
+                            kerneloffset, kerneloffset_panel, kerneloffset_targets)
     shedding = _normalize_shedding(shedding)
     if isempty(Das)
         Das = [zeros(TF, 3, size(s,2)+1) for s in shedding]
@@ -230,9 +237,9 @@ function RigidWakeBody{E, N, TF, DBC}(
                     controlpoints,
                     normals,
                     velocity_te,
-                    kerneloffset_panel,
-                    Float64(kerneloffset_panel),
-                    Float64(kerneloffset_targets),
+                    core_size_panel,
+                    Float64(core_size_panel),
+                    Float64(core_size_targets),
                     kernelcutoff,
                     characteristiclength,
                     watertight,
@@ -459,7 +466,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
                               view(G, :, pj);                    # Velocity of j-th panel on every CP
                               # Gslice;
                               dot_with=normals,                  # Normal of every CP
-                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              offset=self.core_size,          # Offset of kernel to avoid singularities
                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                               optargs...
                              )
@@ -498,7 +505,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
                               CPs,                               # Targets
                               view(G, :, pi);                    # Velocity of upper wake panel on every CP
                               dot_with=normals,                  # Normal of every CP
-                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              offset=self.core_size,          # Offset of kernel to avoid singularities
                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                               optargs...
                              )
@@ -517,7 +524,7 @@ function _G_Uvortexring!(self::RigidWakeBody,
                                    CPs,                               # Targets
                                    view(G, :, pj);                    # Velocity of lower wake panel on every CP
                                    dot_with=normals,                  # Normal of every CP
-                                   offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                                   offset=self.core_size,          # Offset of kernel to avoid singularities
                                    cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                                    optargs...
                                   )
@@ -642,7 +649,7 @@ function _G_U_RHS!(self::RigidWakeBody{Union{VortexRing, UniformVortexSheet}, 3}
                           # view(G, :, pj);                  # Agglomerate velocity of j-th panel on every CP
                           Gslice;
                           dot_with=normals,                  # Normal of every CP
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          offset=self.core_size,          # Offset of kernel to avoid singularities
                           cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                           optargs...
                          )
@@ -680,7 +687,7 @@ function _Uconstantvortexsheet!(self::RigidWakeBody, targets, out;
                             self.strength[i, stroi],           # Oblique strength
                             targets,                           # Targets
                             out;                               # Outputs
-                            offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                            offset=self.core_size,          # Offset of kernel to avoid singularities
                             cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                             optargs...
                          )
@@ -1112,7 +1119,7 @@ function FastMultipole.extra_farfield!(target_buffer, target_bodies_index, sourc
                 strength = get_strength_doublet(source_system, source_buffer, i_source)
 
                 # compute farfield influence
-                this_ϕ, this_u, this_∇u = induced_semiinfinite(t, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, switch; kerneloffset=source_system.kerneloffset)
+                this_ϕ, this_u, this_∇u = induced_semiinfinite(t, ConstantDoublet, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, switch; core_size=source_system.core_size)
                 if PS
                     ϕ += this_ϕ
                 end

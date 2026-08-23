@@ -67,7 +67,7 @@ end
     phi_source = copy(body.potential)
 
     G = zeros(body.ncells, body.ncells)
-    pnl._G!(G, body, body; kerneloffset=body.kerneloffset, update_geometry=false)
+    pnl._G!(G, body, body; core_size=body.core_size, update_geometry=false)
     green_matrix = -G
     wake_phi_green = green_matrix \ phi_source
 
@@ -84,7 +84,7 @@ end
     wake_velocity_interior = copy(body.velocity)
 
     G_interior = zeros(body.ncells, body.ncells)
-    pnl._G!(G_interior, body, body; kerneloffset=body.kerneloffset, update_geometry=false)
+    pnl._G!(G_interior, body, body; core_size=body.core_size, update_geometry=false)
 
     body.velocity .= wake_velocity_interior
     pnl.set_strengths!(body)

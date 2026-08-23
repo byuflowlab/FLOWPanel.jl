@@ -64,8 +64,8 @@ RPM     = parse(Float64, get(ENV, "RPM", "5400"))
 R       = 0.119
 shedding_r_over_R = 0.1
 
-kerneloffset_panel   = R * 1e-10
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET", "1e-3"))
+core_size_panel   = R * 1e-10
+core_size_targets = parse(Float64, get(ENV, "CORE_SIZE", get(ENV, "KERNELOFFSET", "1e-3")))
 kernelcutoff         = R * 1e-13
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
@@ -112,7 +112,7 @@ function make_shedding_bbox(nodes, seed_nodes)
 end
 
 const BASE_ROTOR = pnl.RigidWakeBody{kernel}(base_nodes, base_cells, pnl.noshedding;
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets,
+    core_size=core_size_panel, core_size_panel, core_size_targets,
     kernelcutoff, semiinfinite_wake=false, watertight=true, DBC)
 const SHEDDING1 = pnl.calc_shedding_from_seed(BASE_ROTOR.nodes, BASE_ROTOR.cells,
     te_indices_1[1], te_indices_1[2];
@@ -126,7 +126,7 @@ const SHEDDING2 = pnl.calc_shedding_from_seed(BASE_ROTOR.nodes, BASE_ROTOR.cells
 function build_rotor_and_frames()
     rotor = pnl.RigidWakeBody{kernel}(copy(BASE_ROTOR.nodes), copy(BASE_ROTOR.cells),
         [copy(SHEDDING1), copy(SHEDDING2)];
-        kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets,
+        core_size=core_size_panel, core_size_panel, core_size_targets,
         kernelcutoff, semiinfinite_wake=false, watertight=true,
         ensure_winding=true, DBC)
 
@@ -849,7 +849,7 @@ function probe_effective_velocities!(out, points, system, wake, frames, source_n
     end
 
     current_nodes = snapshot_wake_nodes(wake)
-    old_offset = system.kerneloffset
+    old_offset = system.core_size
     try
         restore_wake_nodes!(wake, source_nodes)
         wake_sources = pnl.get_sources(wake)
@@ -858,13 +858,13 @@ function probe_effective_velocities!(out, points, system, wake, frames, source_n
                 precalc=true, scalar_potential=false, gradient=true,
                 hessian=(false,))
         end
-        system.kerneloffset = system.kerneloffset_targets
+        system.core_size = system.core_size_targets
         pnl.influence!((probes,), (system,), backend;
             precalc=false, scalar_potential=false, gradient=true,
             hessian=(false,),
-            direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+            direct_conditioning=pnl._self_panel_core_size_conditioning())
     finally
-        system.kerneloffset = old_offset
+        system.core_size = old_offset
         restore_wake_nodes!(wake, current_nodes)
     end
 
@@ -1073,11 +1073,11 @@ function evaluate_wake_velocity_with_pinned_strengths!(system, wake)
             precalc=true, scalar_potential=false, velocity=true,
             velocity_gradient=false)
     end
-    pnl._set_kerneloffsets!((system,), :kerneloffset_targets)
+    pnl._set_core_sizes!((system,), :core_size_targets)
     pnl.influence!(wake_probes, (system,), backend;
         precalc=false, scalar_potential=false, velocity=true,
         velocity_gradient=false,
-        direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        direct_conditioning=pnl._self_panel_core_size_conditioning())
     return nothing
 end
 

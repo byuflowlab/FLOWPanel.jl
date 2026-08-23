@@ -27,7 +27,9 @@ function _apply_neumann_G!(body::AbstractBody{<:Any,<:Any,<:Any,false},
                            x::AbstractVector, backend::AbstractBackend,
                            normals::AbstractMatrix,
                            strengths_scratch::AbstractVector;
-                           plan_slot=nothing, cache_nearfield::Bool=false)
+                           plan_slot=nothing, cache_nearfield::Bool=false,
+                           nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
+                           nearfield_cache_max_build_time::Real=Inf)
 
     strengths_scratch .= x
     _set_strength(body, strengths_scratch)
@@ -40,7 +42,8 @@ function _apply_neumann_G!(body::AbstractBody{<:Any,<:Any,<:Any,false},
     if plan_slot === nothing
         influence!(body, body, backend; velocity=true)
     else
-        influence!(body, body, backend; velocity=true, plan_slot, cache_nearfield)
+        influence!(body, body, backend; velocity=true, plan_slot, cache_nearfield,
+                   nearfield_cache_max_bytes, nearfield_cache_max_build_time)
     end
 
     # dot product with normals, accumulated into row 1
@@ -58,7 +61,9 @@ end
 function _apply_dirichlet_G!(body::AbstractBody{<:Any,<:Any,<:Any,true},
                              x::AbstractVector, backend::AbstractBackend,
                              strengths_scratch::AbstractVector;
-                             plan_slot=nothing, cache_nearfield::Bool=false)
+                             plan_slot=nothing, cache_nearfield::Bool=false,
+                             nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
+                             nearfield_cache_max_build_time::Real=Inf)
 
     body.strength[:, 1] .= 0
     strengths_scratch .= x
@@ -69,7 +74,8 @@ function _apply_dirichlet_G!(body::AbstractBody{<:Any,<:Any,<:Any,true},
         influence!(body, body, backend; scalar_potential=true, velocity=false)
     else
         influence!(body, body, backend; scalar_potential=true, velocity=false,
-                   plan_slot, cache_nearfield)
+                   plan_slot, cache_nearfield,
+                   nearfield_cache_max_bytes, nearfield_cache_max_build_time)
     end
 
     return body.potential

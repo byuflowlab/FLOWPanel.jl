@@ -65,7 +65,7 @@ n_loading_bins  = 2*n_span
 println("Generating wing...")
 
 bodyoptargs = (;
-    kerneloffset=1e-6,
+    core_size=1e-6,
     kernelcutoff=1e-12,
     semiinfinite_wake=true,
     DBC=false,

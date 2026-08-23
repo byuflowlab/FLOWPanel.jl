@@ -70,7 +70,7 @@ end
         @test isapprox(body.strength[:, 1], strengths0; atol=1e-12)
 
         G_ref = zeros(body.ncells, body.ncells)
-        pnl._G!(G_ref, body, body; kerneloffset=body.kerneloffset_panel)
+        pnl._G!(G_ref, body, body; core_size=body.core_size_panel)
         @test reconstruct_lu_operator(solver.Glu) ≈ G_ref atol=1e-10
 
         rhs = [sin(1.1 * i) for i in 1:body.ncells]
@@ -253,7 +253,7 @@ end
         solver = pnl.Backslash(body)
 
         G_ref = zeros(Float64, body.ncells, body.ncells)
-        pnl._G!(G_ref, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false)
+        pnl._G!(G_ref, body, body; core_size=body.core_size_panel, update_geometry=false)
         G_lu = reconstruct_lu_operator(solver.Glu)
 
         @test diag(G_ref) ≈ fill(0.5, body.ncells)
@@ -281,7 +281,7 @@ end
         pnl.calc_controlpoints!(body)
 
         G_ref = zeros(Float64, body.ncells, body.ncells)
-        pnl._G!(G_ref, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false)
+        pnl._G!(G_ref, body, body; core_size=body.core_size_panel, update_geometry=false)
 
         gamma = [sin(0.7 * i) + 0.2 * cos(1.3 * i) for i in 1:body.ncells]
         body.strength .= 0
@@ -424,7 +424,7 @@ end
 
         # single-leaf FGS apply is an exact G⁻¹: check against the dense operator
         G = zeros(n, n)
-        pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel)
+        pnl._G!(G, body, body; core_size=body.core_size_panel)
         @test isapprox(G * y1, x1; atol=1e-8)
     end
 
@@ -477,7 +477,7 @@ end
             @test P.inverse_permutation[P.permutation] == collect(1:n)
 
             G = zeros(n, n)
-            pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel)
+            pnl._G!(G, body, body; core_size=body.core_size_panel)
             @test P.matrix ≈ G[P.permutation, P.permutation] atol=1e-12
 
             x1 = [sin(0.9i) for i in 1:n]
@@ -694,7 +694,7 @@ end
     @testset "KrylovSolver cache_tree (021 Phase 2b)" begin
         # FMM-plan reuse across a solve's operator applies must be bitwise
         # equivalent to the per-apply tree-rebuild path, and per-solve scoping
-        # must survive kerneloffset changes between solves.
+        # must survive core_size changes between solves.
         backend = pnl.FastMultipoleBackend(; expansion_order=8,
             multipole_acceptance=0.4, leaf_size=20)
         kw = (; backend, method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
@@ -730,7 +730,7 @@ end
         # the plan is rebuilt every solve by construction; verify that a
         # geometry change between solves is honored bitwise (a stale-plan bug
         # would reproduce the OLD geometry's solution instead). The offset
-        # knob is inert on this fixture (measured: kerneloffset changes leave
+        # knob is inert on this fixture (measured: core_size changes leave
         # the solve bit-identical), so geometry is the discriminating input.
         function perturb!(body)
             body.nodes[:, 1] .+= 0.05
@@ -871,7 +871,7 @@ end
             plan_slot=slot, cache_nearfield=true))
         plan = slot[][1]
         @test length(plan.direct_list) > 0    # premise: near field exercised
-        # (no m2l premise: kerneloffset radius inflation makes this fixture
+        # (no m2l premise: core_size radius inflation makes this fixture
         # all-direct at any MAC — measured m2l=0 up to mac=2.0. The panel
         # far-field-under-transform path is covered by FastMultipole's
         # source-panel transform_tree! test.)

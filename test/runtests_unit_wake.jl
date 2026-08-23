@@ -1545,11 +1545,11 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
     @testset "PanelParticleWake stores particle kernel offset" begin
         body = make_plate_vortex_body()
         default_wake = pnl.PanelParticleWake(body)
-        offset_wake = pnl.PanelParticleWake(body; particle_kerneloffset=0.25)
+        offset_wake = pnl.PanelParticleWake(body; particle_core_size=0.25)
 
-        @test isnan(default_wake.particle_kerneloffset)
-        @test offset_wake.particle_kerneloffset == 0.25
-        @test body.kerneloffset_targets == 0.25
+        @test isnan(default_wake.particle_core_size)
+        @test offset_wake.particle_core_size == 0.25
+        @test body.core_size_targets == 0.25
     end
 
     @testset "PanelParticleWake forwards SFS model" begin
@@ -1659,35 +1659,35 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
 
     @testset "Kernel offset override regularizes body-to-particle influence" begin
         body = make_plate_vortex_body()
-        body.kerneloffset = 1e-8
-        wake = pnl.PanelParticleWake(body; particle_kerneloffset=0.1)
+        body.core_size = 1e-8
+        wake = pnl.PanelParticleWake(body; particle_core_size=0.1)
         FLOWVPM.add_particle(wake.pfield, [0.5, 1e-4, 1e-4], [0.0, 0.0, 0.0], 0.01)
 
-        function particle_speed(kerneloffset)
+        function particle_speed(core_size)
             FLOWVPM._reset_particles(wake.pfield)
-            old = body.kerneloffset
-            body.kerneloffset = kerneloffset
+            old = body.core_size
+            body.core_size = core_size
             try
                 pnl.influence!((wake.pfield,), (body,), pnl.DirectBackend();
                     velocity=true, velocity_gradient=(false,))
                 return norm(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
             finally
-                body.kerneloffset = old
+                body.core_size = old
             end
         end
 
-        baseline = particle_speed(body.kerneloffset_panel)
-        regularized = particle_speed(body.kerneloffset_targets)
+        baseline = particle_speed(body.core_size_panel)
+        regularized = particle_speed(body.core_size_targets)
 
         @test regularized < baseline
     end
 
     @testset "Self panel conditioning leaves particle targets on target offset" begin
         body = make_plate_vortex_body()
-        body.kerneloffset_panel = 1e-8
-        body.kerneloffset_targets = 0.1
-        body.kerneloffset = body.kerneloffset_targets
-        wake = pnl.PanelParticleWake(body; particle_kerneloffset=body.kerneloffset_targets)
+        body.core_size_panel = 1e-8
+        body.core_size_targets = 0.1
+        body.core_size = body.core_size_targets
+        wake = pnl.PanelParticleWake(body; particle_core_size=body.core_size_targets)
         FLOWVPM.add_particle(wake.pfield, [0.5, 1e-4, 1e-4], [0.0, 0.0, 0.0], 0.01)
 
         FLOWVPM._reset_particles(wake.pfield)
@@ -1695,16 +1695,16 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
         pnl.influence!((body, wake.pfield), (body,), pnl.DirectBackend();
             velocity=true,
             velocity_gradient=(false, false),
-            direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+            direct_conditioning=pnl._self_panel_core_size_conditioning())
         conditioned_velocity = copy(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
 
         FLOWVPM._reset_particles(wake.pfield)
-        body.kerneloffset = body.kerneloffset_targets
+        body.core_size = body.core_size_targets
         pnl.influence!((wake.pfield,), (body,), pnl.DirectBackend();
             velocity=true, velocity_gradient=(false,))
         target_offset_velocity = copy(view(wake.pfield.particles, FLOWVPM.U_INDEX, 1))
 
-        @test body.kerneloffset == body.kerneloffset_targets
+        @test body.core_size == body.core_size_targets
         @test conditioned_velocity ≈ target_offset_velocity atol=1e-12 rtol=1e-12
     end
 

@@ -274,8 +274,8 @@ function _body_manifest_dict(body::AbstractBody, i::Int)
         "kind" => _body_kind_string(body),
         "strength_names" => collect(strength_names(body)),
         "dbc" => has_dirichlet_bc(body),
-        "kerneloffset_panel" => body.kerneloffset_panel,
-        "kerneloffset_targets" => body.kerneloffset_targets,
+        "core_size_panel" => body.core_size_panel,
+        "core_size_targets" => body.core_size_targets,
         "kernelcutoff" => body.kernelcutoff,
         "watertight" => body.watertight,
     )
@@ -354,7 +354,7 @@ function _wake_manifest_dict(wake, i::Int)
         d["shed_with_induced_velocity"] = wake.panel_wake.shed_with_induced_velocity
         d["unsteady_filament"] = wake.panel_wake.unsteady_filament
         d["freestream_convection"] = wake.panel_wake.freestream_convection
-        d["particle_kerneloffset"] = wake.particle_kerneloffset
+        d["particle_core_size"] = wake.particle_core_size
         d["conversion"] = _conversion_manifest(wake.conversion)
         if wake.conversion isa LegacyEdgeJumpConversion
             # Preserve the historical line-policy representation exactly. The
@@ -388,8 +388,11 @@ function _construct_body_from_metadata(nodes, cells, body_meta, cell_data)
     dbc = Bool(get(body_meta, "dbc", false))
     kwargs = (;
         DBC=dbc,
-        kerneloffset_panel=Float64(get(body_meta, "kerneloffset_panel", get(body_meta, "kerneloffset", 1e-8))),
-        kerneloffset_targets=Float64(get(body_meta, "kerneloffset_targets", get(body_meta, "kerneloffset", 1e-8))),
+        # NOTE: replay metadata written before 2026-08-22 spelled these keys
+        # "kerneloffset_panel"/"kerneloffset_targets"/"kerneloffset". The old
+        # keys stay accepted (new keys win) so existing restart datasets load.
+        core_size_panel=Float64(get(body_meta, "core_size_panel", get(body_meta, "kerneloffset_panel", get(body_meta, "core_size", get(body_meta, "kerneloffset", 1e-8))))),
+        core_size_targets=Float64(get(body_meta, "core_size_targets", get(body_meta, "kerneloffset_targets", get(body_meta, "core_size", get(body_meta, "kerneloffset", 1e-8))))),
         kernelcutoff=Float64(get(body_meta, "kernelcutoff", 1e-14)),
         watertight=Bool(get(body_meta, "watertight", false)),
         ensure_winding=false,
@@ -666,7 +669,8 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
                 unsteady_filament=Bool(get(wmeta, "unsteady_filament", true)),
                 freestream_convection=Bool(get(wmeta, "freestream_convection", false)),
                 particle_maintenance=particle_maintenance,
-                particle_kerneloffset=Float64(get(wmeta, "particle_kerneloffset", NaN)),
+                # old key "particle_kerneloffset" accepted for legacy restarts
+                particle_core_size=Float64(get(wmeta, "particle_core_size", get(wmeta, "particle_kerneloffset", NaN))),
                 viscous=viscous,
                 SFS=sfs,
                 relaxation=relaxation,
@@ -1027,7 +1031,7 @@ function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, f
                 velocity_gradient=Tuple(recompute_velocity_gradient for _ in systems),
                 extra_outputs=_induced_vorticity_extra_outputs(systems, recompute_induced_vorticity))
         end
-        _set_kerneloffsets!(systems, :kerneloffset_targets)
+        _set_core_sizes!(systems, :core_size_targets)
         scalar_sources = _filter_scalar_potential_sources(systems)
         if recompute_potential && length(scalar_sources) > 0
             influence!(systems, scalar_sources, backend_system; scalar_potential=true, velocity=false)
@@ -1050,7 +1054,7 @@ function _recompute_replay_fields!(systems::Tuple, wakes::Tuple, frames, uinf, f
                 velocity=recompute_velocity,
                 velocity_gradient=Tuple(recompute_velocity_gradient for _ in systems),
                 extra_outputs=_induced_vorticity_extra_outputs(systems, recompute_induced_vorticity),
-                direct_conditioning=_self_panel_kerneloffset_conditioning())
+                direct_conditioning=_self_panel_core_size_conditioning())
         end
         if recompute_velocity
             apply_freestream!(systems, uinf)

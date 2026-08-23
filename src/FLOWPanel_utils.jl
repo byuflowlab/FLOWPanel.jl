@@ -104,6 +104,191 @@ function meshes2nodes_cells(mesh::Meshes.SimpleMesh)
     return nodes, cells
 end
 
+"""
+    read_gmsh(path) -> Meshes.SimpleMesh
+
+Read an ASCII Gmsh 4.1 mesh containing first-order line and/or triangle
+elements. This intentionally small reader covers FLOWPanel's tracked surface
+and trailing-edge meshes without pulling GeoIO's geospatial dependency stack
+into the package environment.
+
+Node tags may be sparse or unordered. Gmsh point elements (type 15) are
+ignored. If both line and triangle blocks are present, triangles are returned;
+line connectivity is returned only for a line-only mesh. Other element types
+are rejected explicitly.
+"""
+mutable struct _GmshTokenCursor
+    data::String
+    cursor::Int
+    stop::Int
+    path::String
+end
+
+function _gmsh_section_cursor(data::String, path::AbstractString, name::String)
+    section_start = findnext("\$" * name, data, 1)
+    section_start === nothing && error("Missing or malformed \$$(name) section in $(path)")
+    section_end = findnext("\$End" * name, data, last(section_start) + 1)
+    section_end === nothing && error("Missing or malformed \$$(name) section in $(path)")
+    return _GmshTokenCursor(data, last(section_start) + 1,
+                            first(section_end) - 1, String(path))
+end
+
+@inline function _gmsh_skip_whitespace!(tokens::_GmshTokenCursor)
+    i = tokens.cursor
+    while i <= tokens.stop && codeunit(tokens.data, i) <= 0x20
+        i += 1
+    end
+    tokens.cursor = i
+    return i
+end
+
+@inline function _gmsh_next_token!(tokens::_GmshTokenCursor)
+    start = _gmsh_skip_whitespace!(tokens)
+    start <= tokens.stop || error("Unexpected end of Gmsh section in $(tokens.path)")
+    i = start
+    while i <= tokens.stop && codeunit(tokens.data, i) > 0x20
+        i += 1
+    end
+    tokens.cursor = i
+    return SubString(tokens.data, start, i - 1)
+end
+
+@inline function _gmsh_next_int!(tokens::_GmshTokenCursor)
+    i = _gmsh_skip_whitespace!(tokens)
+    i <= tokens.stop || error("Unexpected end of Gmsh section in $(tokens.path)")
+    negative = codeunit(tokens.data, i) == UInt8('-')
+    i += negative
+    value = 0
+    found_digit = false
+    while i <= tokens.stop
+        byte = codeunit(tokens.data, i)
+        UInt8('0') <= byte <= UInt8('9') || break
+        value = 10value + Int(byte - UInt8('0'))
+        found_digit = true
+        i += 1
+    end
+    found_digit || error("Malformed integer in Gmsh file $(tokens.path)")
+    tokens.cursor = i
+    return negative ? -value : value
+end
+
+@inline _gmsh_next_float!(tokens::_GmshTokenCursor) =
+    parse(Float64, _gmsh_next_token!(tokens))
+
+function read_gmsh(path::AbstractString)
+    data = read(path, String)
+
+    format_tokens = try
+        _gmsh_section_cursor(data, path, "MeshFormat")
+    catch err
+        err isa ErrorException && occursin("Missing or malformed", err.msg) &&
+            error("Not a Gmsh file: $(path)")
+        rethrow()
+    end
+    version = _gmsh_next_token!(format_tokens)
+    version == "4.1" ||
+        error("FLOWPanel.read_gmsh supports Gmsh 4.1; $(path) uses $(version)")
+    _gmsh_next_int!(format_tokens) == 0 ||
+        error("FLOWPanel.read_gmsh supports ASCII Gmsh files only: $(path)")
+    _gmsh_next_int!(format_tokens) # data size
+
+    node_tokens = _gmsh_section_cursor(data, path, "Nodes")
+    nblocks = _gmsh_next_int!(node_tokens)
+    nnodes = _gmsh_next_int!(node_tokens)
+    minimum_tag = _gmsh_next_int!(node_tokens)
+    maximum_tag = _gmsh_next_int!(node_tokens)
+    coordinates = Vector{NTuple{3,Float64}}(undef, nnodes)
+
+    # A dense lookup is substantially faster for the common Gmsh case while
+    # the dictionary fallback avoids allocating according to a huge sparse tag.
+    dense_tags = minimum_tag >= 0 && maximum_tag >= minimum_tag &&
+                 maximum_tag - minimum_tag <= 8nnodes
+    dense_tag_to_index = dense_tags ? zeros(Int, maximum_tag - minimum_tag + 1) : Int[]
+    sparse_tag_to_index = dense_tags ? Dict{Int,Int}() : sizehint!(Dict{Int,Int}(), nnodes)
+
+    next_index = 1
+    for _ in 1:nblocks
+        entity_dim = _gmsh_next_int!(node_tokens)
+        _gmsh_next_int!(node_tokens) # entity tag
+        parametric = _gmsh_next_int!(node_tokens)
+        block_nodes = _gmsh_next_int!(node_tokens)
+        tags = Vector{Int}(undef, block_nodes)
+        for i in eachindex(tags)
+            tags[i] = _gmsh_next_int!(node_tokens)
+        end
+        for tag in tags
+            x = _gmsh_next_float!(node_tokens)
+            y = _gmsh_next_float!(node_tokens)
+            z = _gmsh_next_float!(node_tokens)
+            coordinates[next_index] = (x, y, z)
+            for _ in 1:(parametric != 0 ? entity_dim : 0)
+                _gmsh_next_float!(node_tokens)
+            end
+            if dense_tags
+                dense_tag_to_index[tag - minimum_tag + 1] = next_index
+            else
+                sparse_tag_to_index[tag] = next_index
+            end
+            next_index += 1
+        end
+    end
+    next_index == nnodes + 1 || error("Gmsh node count mismatch in $(path)")
+
+    @inline function node_index(tag)
+        if dense_tags
+            lookup_index = tag - minimum_tag + 1
+            index = checkbounds(Bool, dense_tag_to_index, lookup_index) ?
+                    @inbounds(dense_tag_to_index[lookup_index]) : 0
+        else
+            index = get(sparse_tag_to_index, tag, 0)
+        end
+        index != 0 || error("Element references unknown node tag $(tag) in $(path)")
+        return index
+    end
+
+    element_tokens = _gmsh_section_cursor(data, path, "Elements")
+    element_blocks = _gmsh_next_int!(element_tokens)
+    _gmsh_next_int!(element_tokens) # total element count (includes point elements)
+    _gmsh_next_int!(element_tokens) # minimum element tag
+    _gmsh_next_int!(element_tokens) # maximum element tag
+    line_connectivity = Meshes.Connectivity{Meshes.Segment,2}[]
+    triangle_connectivity = Meshes.Connectivity{Meshes.Triangle,3}[]
+    for _ in 1:element_blocks
+        _gmsh_next_int!(element_tokens) # entity dimension
+        _gmsh_next_int!(element_tokens) # entity tag
+        element_type = _gmsh_next_int!(element_tokens)
+        block_elements = _gmsh_next_int!(element_tokens)
+        element_type in (1, 2, 15) ||
+            error("Unsupported Gmsh element type $(element_type) in $(path)")
+        if element_type == 1
+            sizehint!(line_connectivity, length(line_connectivity) + block_elements)
+            for _ in 1:block_elements
+                _gmsh_next_int!(element_tokens) # element tag
+                i = node_index(_gmsh_next_int!(element_tokens))
+                j = node_index(_gmsh_next_int!(element_tokens))
+                push!(line_connectivity, Meshes.connect((i, j)))
+            end
+        elseif element_type == 2
+            sizehint!(triangle_connectivity, length(triangle_connectivity) + block_elements)
+            for _ in 1:block_elements
+                _gmsh_next_int!(element_tokens) # element tag
+                i = node_index(_gmsh_next_int!(element_tokens))
+                j = node_index(_gmsh_next_int!(element_tokens))
+                k = node_index(_gmsh_next_int!(element_tokens))
+                push!(triangle_connectivity, Meshes.connect((i, j, k)))
+            end
+        else
+            for _ in 1:block_elements
+                _gmsh_next_int!(element_tokens) # element tag
+                _gmsh_next_int!(element_tokens) # node tag
+            end
+        end
+    end
+    connectivity = isempty(triangle_connectivity) ? line_connectivity : triangle_connectivity
+    isempty(connectivity) && error("No line or triangle elements found in $(path)")
+    return Meshes.SimpleMesh(coordinates, connectivity)
+end
+
 
 function distancetoline(line::Matrix; symmetry=nothing)
     X0 = view(line, :, 1)

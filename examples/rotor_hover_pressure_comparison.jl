@@ -74,8 +74,8 @@ n_steps = round(Int, nt * required_revs) + spinup_steps
 t_range = range(0.0, step=dt, length=n_steps)
 
 cp_outer=true
-kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-3")))
+core_size_panel = parse(Float64, get(ENV, "CORE_SIZE_PANEL", get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10))))
+core_size_targets = parse(Float64, get(ENV, "CORE_SIZE_TARGETS", get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "CORE_SIZE", get(ENV, "KERNELOFFSET", "1e-3")))))
 kernelcutoff = R * 1e-13
 p_per_step = parse(Int, get(ENV, "P_PER_STEP", "2"))
 overlap = parse(Float64, get(ENV, "OVERLAP", "3.0"))
@@ -190,7 +190,7 @@ nwakerows_extent = max(nwakerows, 1)
 # Shed the wake at the local induced velocity rather than the kinematic one.
 shed_with_induced_velocity = parse(Bool, get(ENV, "SHED_WITH_INDUCED_VELOCITY", "false"))
 p_correct_kuttacondition_flag = false
-wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", string(kerneloffset_targets)))
+wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", string(core_size_targets)))
 # wake_nu_default = 1.85508e-5 / rho # from FLOWUnsteady docs
 wake_nu_default = 1.69e-5 / rho # from NASA paper
 wake_nu = parse(Float64, get(ENV, "WAKE_NU", string(wake_nu_default)))
@@ -280,7 +280,7 @@ shedding = pnl.noshedding
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
@@ -398,7 +398,7 @@ for (i, shed) in enumerate((shedding1, shedding2))
 end
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 
@@ -433,10 +433,10 @@ wakerow_no_hessian_to_particles = !panel_wake_hessian_to_particles
 body_hessian_to_particles       = parse(Bool, get(ENV, "BODY_HESSIAN_TO_PARTICLES",        "false"))
 # Split regularization for the body->particle influence: evaluate the velocity
 # GRADIENT with this (larger) kernel offset while the velocity keeps
-# KERNELOFFSET_TARGETS. NaN disables (single-pass, shared offset). Only active
+# CORE_SIZE_TARGETS. NaN disables (single-pass, shared offset). Only active
 # when BODY_HESSIAN_TO_PARTICLES=true. Not strictly physical — smooths the
 # |∇U| bumpiness of piecewise-constant doublet panels felt by nearby particles.
-body_gradient_kerneloffset      = parse(Float64, get(ENV, "BODY_GRADIENT_KERNELOFFSET",    "NaN"))
+body_gradient_core_size      = parse(Float64, get(ENV, "BODY_GRADIENT_CORE_SIZE",    get(ENV, "BODY_GRADIENT_KERNELOFFSET", "NaN")))
 body_on_wake                    = parse(Bool, get(ENV, "BODY_ON_WAKE",                     "true"))
 panel_wake_on_particles         = parse(Bool, get(ENV, "PANEL_WAKE_VELOCITY_TO_PARTICLES",
     get(ENV, "PANEL_WAKE_ON_PARTICLES", "true")))
@@ -675,7 +675,7 @@ end
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows, max_particles=500_000, core_size=wake_core_size,
     wake_pfield_kwargs...,
-    particle_kerneloffset=kerneloffset_targets,
+    particle_core_size=core_size_targets,
     viscous=viscous_scheme,
     SFS=sfs_choice,
     relaxation=relaxation_scheme,
@@ -1197,7 +1197,7 @@ if !rhpc_setup_only
 # ENV configuration — the basis for knob-perturbation experiments. The body,
 # wake, and frames objects must be construction-compatible with the restart
 # run (same RHPC_MESH, NT, RPM); construction-time knobs (RELAX_RLXF,
-# KERNELOFFSET_*, ...) and simulate!-kwarg knobs (BODY_HESSIAN_TO_PARTICLES,
+# CORE_SIZE_*, ...) and simulate!-kwarg knobs (BODY_HESSIAN_TO_PARTICLES,
 # ...) both take effect in the continuation.
 restart_step = parse(Int, get(ENV, "RESTART_STEP", "-1"))
 restart_name = get(ENV, "RESTART_NAME", "rotor_hover_pressure_comparison")
@@ -1218,7 +1218,7 @@ if restart_step >= 0
     body_solvers, backend, backend_wake,
     wakerow_no_hessian_to_particles,
     body_hessian_to_particles,
-    body_gradient_kerneloffset,
+    body_gradient_core_size,
     body_on_wake,
     panel_wake_on_particles,
     particle_hessian_self,
@@ -1243,7 +1243,7 @@ else
     body_solvers, backend, backend_wake,
     wakerow_no_hessian_to_particles,
     body_hessian_to_particles,
-    body_gradient_kerneloffset,
+    body_gradient_core_size,
     body_on_wake,
     panel_wake_on_particles,
     particle_hessian_self,
@@ -1474,8 +1474,8 @@ if save_path !== nothing
         println(io, "core_spreading_active = $(core_spreading_active)")
         println(io, "core_spreading_sgm0 = $(core_spreading_sgm0)")
         println(io, "wake_expint = $(wake_expint)")
-        println(io, "kerneloffset_panel = $(kerneloffset_panel)")
-        println(io, "kerneloffset_targets = $(kerneloffset_targets)")
+        println(io, "core_size_panel = $(core_size_panel)")
+        println(io, "core_size_targets = $(core_size_targets)")
         println(io, "merge_particles = $(merge_particles)")
         println(io, "relax_rlxf = $(relax_rlxf)")
         println(io, "relax_filter_downstream_R = $(relax_filter_downstream_R)")

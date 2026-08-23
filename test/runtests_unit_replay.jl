@@ -295,9 +295,9 @@ end
 
     @testset "surface vorticity replay comparison monitors" begin
         body = make_replay_surface_vorticity_body()
-        body.kerneloffset_panel = 1e-9
-        body.kerneloffset_targets = 1e-2
-        body.kerneloffset = body.kerneloffset_panel
+        body.core_size_panel = 1e-9
+        body.core_size_targets = 1e-2
+        body.core_size = body.core_size_panel
         path = mktempdir()
         pnl.write_vtk(joinpath(path, "run_body1"), body, 0, 0.0; overwrite=true)
 

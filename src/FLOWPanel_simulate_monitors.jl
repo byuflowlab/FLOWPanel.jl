@@ -2443,7 +2443,7 @@ midpoints (midpoint quadrature); the total velocity is the freestream plus the
 induced velocity of all systems and wake sources, evaluated in a single
 `influence!` call on the monitor's `FastMultipole.ProbeSystem` — the same
 probe-velocity path `KuttaJoukowskiForce` uses. Probes are off-body, so every
-system evaluates with its `kerneloffset_targets` (restored afterwards).
+system evaluates with its `core_size_targets` (restored afterwards).
 """
 function _bound_circulation_kelvin_slices!(m::BoundCirculationMonitor{TF}, body,
                                            systems, wakes, uinf,
@@ -2508,10 +2508,10 @@ function _bound_circulation_kelvin_slices!(m::BoundCirculationMonitor{TF}, body,
     # 2. Induced velocity from every body and every wake source in one call.
     wake_sources = _collect_wake_sources(wakes)
     all_sources = (systems..., wake_sources...)
-    old_offsets = [sys.kerneloffset for sys in systems]
+    old_offsets = [sys.core_size for sys in systems]
     try
         for sys in systems
-            sys.kerneloffset = sys.kerneloffset_targets
+            sys.core_size = sys.core_size_targets
         end
         influence!((m.probes,), all_sources, m.backend;
                     precalc=false,
@@ -2520,7 +2520,7 @@ function _bound_circulation_kelvin_slices!(m::BoundCirculationMonitor{TF}, body,
                     hessian=(false,))
     finally
         for (sys, offset) in zip(systems, old_offsets)
-            sys.kerneloffset = offset
+            sys.core_size = offset
         end
     end
 
@@ -2806,10 +2806,10 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
     all_sources  = (systems..., wake_sources...)
 
     # 3. Compute induced velocity at probes.
-    old_offsets = [sys.kerneloffset for sys in systems]
+    old_offsets = [sys.core_size for sys in systems]
     try
         for (i, sys) in pairs(systems)
-            sys.kerneloffset = i == m.i_system ? sys.kerneloffset_panel : sys.kerneloffset_targets
+            sys.core_size = i == m.i_system ? sys.core_size_panel : sys.core_size_targets
         end
         influence!((m.probes,), all_sources, m.backend;
                     precalc=false,
@@ -2818,7 +2818,7 @@ function (m::KuttaJoukowskiForce{TF})(systems, wakes,
                     hessian=(false,))
     finally
         for (sys, offset) in zip(systems, old_offsets)
-            sys.kerneloffset = offset
+            sys.core_size = offset
         end
     end
 
@@ -3379,16 +3379,16 @@ function _run_monitor!(m::DragPolarMonitor{TF}, ctx::MonitorContext, systems, wa
 
         wake_sources = _collect_wake_sources(wakes)
         all_sources = (systems_tuple..., wake_sources...)
-        old_offsets = [sys.kerneloffset for sys in systems_tuple]
+        old_offsets = [sys.core_size for sys in systems_tuple]
         try
             for (i, sys) in pairs(systems_tuple)
-                sys.kerneloffset = i == m.i_system ? sys.kerneloffset_panel : sys.kerneloffset_targets
+                sys.core_size = i == m.i_system ? sys.core_size_panel : sys.core_size_targets
             end
             influence!((m.probes,), all_sources, m.backend;
                        precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
         finally
             for (sys, offset) in zip(systems_tuple, old_offsets)
-                sys.kerneloffset = offset
+                sys.core_size = offset
             end
         end
 
@@ -3650,6 +3650,7 @@ over non-static particles only (statics are skipped by the sigma update); it is
 contributes.
 """
 function _wake_health_stats(pfield, sigma_ref, dt)
+    pfield = _wake_monitor_host_pfield(pfield)   # task 052: host view of device fields
     np = pfield.np
     max_u2 = 0.0
     min_sigma = Inf
@@ -3794,6 +3795,7 @@ attribution tuple `(p1 sigma/sigma_ref, argmin x, argmin y, argmin z)` — see
 the `WakeHealthMonitor` docstring. `buf` is a reusable scratch vector.
 """
 function _wake_health_attribution!(buf::Vector{Float64}, pfield, sigma_ref)
+    pfield = _wake_monitor_host_pfield(pfield)   # task 052: host view of device fields
     np = pfield.np
     np == 0 && return (NaN, NaN, NaN, NaN)
     empty!(buf)
@@ -3910,6 +3912,7 @@ an empty cell are `NaN`.
 function _wake_inventory_stats!(vals::Vector{Float64},
                                 bufs::Vector{Vector{Float64}}, pfield,
                                 m::WakeInventoryMonitor)
+    pfield = _wake_monitor_host_pfield(pfield)   # task 052: host view of device fields
     nbands = length(m.edges) - 1
     ncells = nbands + 2
     fill!(vals, 0.0)

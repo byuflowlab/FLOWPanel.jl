@@ -153,10 +153,10 @@ all four ∇μ reconstructions, and collect the plan's A/B/B2 diagnostics.
 Returns `(row::NamedTuple, Ufields::NamedTuple)`.
 """
 function run_case(n_ch::Int, n_span::Int; swap_diagonals::Bool,
-                  kerneloffset::Real=1e-10, variant_name::String="")
+                  core_size::Real=1e-10, variant_name::String="")
     t0 = time()
     body = sweeploft_wing(n_ch, n_span; mirror_diagonals=true, swap_diagonals,
-                          kerneloffset)
+                          core_size)
     N = body.ncells
     npts = 2*n_ch
 
@@ -165,7 +165,7 @@ function run_case(n_ch::Int, n_span::Int; swap_diagonals::Bool,
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     G = zeros(N, N)
-    pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel,
+    pnl._G!(G, body, body; core_size=body.core_size_panel,
             update_geometry=false)
     anorm = LA.opnorm(G, 1)
     Gres = N <= RESID_COPY_MAX_PANELS ? copy(G) : nothing
@@ -270,7 +270,7 @@ function run_case(n_ch::Int, n_span::Int; swap_diagonals::Bool,
 
     h_min = c*(1 - cos(pi/n_ch))/2                    # TE sliver width
 
-    row = (; variant=variant_name, n_ch, n_span, panels=N, h_min, kerneloffset,
+    row = (; variant=variant_name, n_ch, n_span, panels=N, h_min, core_size,
         CL_solver, CD_solver,
         CL_tri=res_tri.CL, CL_quadgrad=res_quad.CL, CL_mudiff=res_mudiff.CL,
         CL_p1_area=res_p1a.CL, CL_p1_angle=res_p1g.CL, CL_KJ,
@@ -289,7 +289,7 @@ end
 # ----------------- DRIVER -------------------------------------------------------
 function print_row(r)
     @printf("%7s %4d ko=%-7.0e CLslv %+.6f CLtri %+.6f CLquad %+.6f CLp1a %+.6f CLp1g %+.6f CLkj %+.6f cond1 %.2e res %.1e t %.0fs\n",
-        r.variant, r.n_ch, r.kerneloffset, r.CL_solver, r.CL_tri, r.CL_quadgrad,
+        r.variant, r.n_ch, r.core_size, r.CL_solver, r.CL_tri, r.CL_quadgrad,
         r.CL_p1_area, r.CL_p1_angle, r.CL_KJ, r.cond1, r.resid_inf, r.elapsed)
     flush(stdout)
 end
@@ -371,21 +371,21 @@ function main_chorddiv()
     return rows, xrows
 end
 
-# ----------------- SECTION C: KERNELOFFSET PROBE (run only if A implicates PV)
-function kerneloffset_probe()
+# ----------------- SECTION C: CORE_SIZE PROBE (run only if A implicates PV)
+function core_size_probe()
     offsets = [parse(Float64, s) for s in
         split(ENV["FLOWPANEL_CHORDDIV_KERNELOFFSETS"], ",") if !isempty(strip(s))]
     ko_cases = [parse(Int, s) for s in
         split(get(ENV, "FLOWPANEL_CHORDDIV_KO_CASES", "80,112"), ",")]
     n_span = parse(Int, get(ENV, "FLOWPANEL_CHORDDIV_NSPAN", "48"))
     out_csv = joinpath("data", "sweptwing_sweeploft",
-                       "chord_divergence_kerneloffset.csv")
+                       "chord_divergence_core_size.csv")
 
-    println("\nKerneloffset probe (diagAC): n_ch = ", ko_cases,
-            ", kerneloffset = ", offsets)
+    println("\nCore_size probe (diagAC): n_ch = ", ko_cases,
+            ", core_size = ", offsets)
     rows = []
     for n_ch in ko_cases, ko in offsets
-        r, _ = run_case(n_ch, n_span; swap_diagonals=false, kerneloffset=ko,
+        r, _ = run_case(n_ch, n_span; swap_diagonals=false, core_size=ko,
                         variant_name="diagAC")
         h_min = c*(1 - cos(pi/n_ch))/2
         @printf("  n_ch %4d ko %.0e (ko/h_min %.1e): CLslv %+.6f CLtri %+.6f dU0te_max %.3e\n",
@@ -425,7 +425,7 @@ reconstruction and force integration repeat.
 function run_gradmu_case(n_ch::Int, n_span::Int; swap_diagonals::Bool,
                          variant_name::String="")
     body = sweeploft_wing(n_ch, n_span; mirror_diagonals=true, swap_diagonals,
-                          kerneloffset=1e-10)
+                          core_size=1e-10)
     N = body.ncells
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
@@ -538,6 +538,6 @@ if !isinteractive() && get(ENV, "FLOWPANEL_CHORDDIV_GRADMU", "false") == "true"
 elseif !isinteractive() && get(ENV, "FLOWPANEL_CHORDDIV_RUN", "true") == "true"
     rows, xrows = main_chorddiv()
     if !isempty(get(ENV, "FLOWPANEL_CHORDDIV_KERNELOFFSETS", ""))
-        ko_rows = kerneloffset_probe()
+        ko_rows = core_size_probe()
     end
 end

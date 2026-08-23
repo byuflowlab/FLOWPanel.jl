@@ -103,6 +103,41 @@ unless a simulation is obselete.
 When the user explicitly wants to preserve a previous run for comparison, ask
 before overwriting and offer to move the old directory aside.
 
+### Enforcing the 200 G cap
+
+The policy above is enforced mechanically by `scripts/p018_vtk_sweeper.sh`
+(campaign-generic despite the name; `PROTECT_FILE=` and `DATA_DIR=` are
+environment-overridable). **Do not hand-roll VTK deletions.** A step is only
+restartable if all four paths the warmstart loader reads exist, and `.vtm`
+indices must be kept together with their pieces — a sweep that left index stubs
+without pieces killed job 13036477 on 2026-08-04. The sweeper encodes that rule;
+ad-hoc `rm` does not.
+
+**Launch the `hpc-storage` subagent** rather than doing this inline whenever:
+
+- a job that writes VTK is submitted, or one is running unattended;
+- checkout usage crosses roughly 100 G — well below the cap, because with ~20
+  concurrent writers the checkout grows ~24 GB/h and sweeping late is a race;
+- a new sweep arm is about to start; or
+- the cluster reports any disk-space or quota error.
+
+Pass it the run names in flight if you know them. It performs one sweep cycle
+and returns a before/after report plus a ledger line for the active campaign's
+`ledger.md`; it has no write tools, so the main session appends that line.
+
+For continuous coverage during a campaign, the *main session* installs a
+`Monitor` that probes `du -sm /home/rander39/projects/FLOWPanel.jl` every ~10
+minutes and wakes on ≥100 G, then launches `hpc-storage` for the cycle. Harden
+the probe: require the specific line ending in `projects/FLOWPanel.jl` and treat
+its absence as a probe failure rather than a small number, `tr -cd '0-9'` before
+any arithmetic (the login banner emits ANSI codes on the first stdout line), and
+allow two consecutive failures before alarming.
+
+The VTK protect list
+(`BRAINSTORM/018_dji9443_hover_convergence_campaign/vtk_protect_list.txt`, with
+a matching cluster copy that is the one that takes effect) is Ryan's file:
+agents read it and never write it. If a run needs protecting, ask him.
+
 For BYU agent policy, read `/apps/instructions_for_ai_agents/BYU_ORC_AGENTS.md` from the login node.
 
 See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and

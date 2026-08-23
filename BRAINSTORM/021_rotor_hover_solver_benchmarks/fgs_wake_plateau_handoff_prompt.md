@@ -1,3 +1,12 @@
+> **SUPERSEDED 2026-08-21 — DO NOT EXECUTE.** The ~2e-3 wake-on plateau this
+> prompt stages a hunt for was root-caused and fixed the same day, under a
+> hypothesis this document does not rank: **H3, solver-lifecycle geometry
+> ordering** (`simulate!` transformed persistent solver state before refreshing
+> normals/control points, giving a one-step angular lag), not H1/H2/H4. The
+> post-fix discriminator is flat at 1.74e-7 to 1.89e-7 across 0deg-80deg.
+> See `phase_02_single_step_benchmarks.md` (2026-08-21 entry) and `log.md`.
+> Kept for provenance only.
+
 # Handoff prompt — diagnose + fix the wake-on FGS↔Krylov ~2e-3 fixed-point plateau
 
 **Status: STAGED 2026-08-21 — launching this prompt is Ryan's go.**

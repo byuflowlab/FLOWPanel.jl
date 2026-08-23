@@ -369,7 +369,7 @@ function build_refined_body(n_ch::Int, n_span::Int; swap_diagonals::Bool,
 
     body = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}(
         nodes, cells, [shedding];
-        watertight, ensure_winding=false, kerneloffset=1e-10)
+        watertight, ensure_winding=false, core_size=1e-10)
     wake_direction = reshape(Vinf ./ magVinf, :, 1)
     for i in eachindex(body.Das)
         body.Das[i] .= repeat(wake_direction, 1, size(body.Das[i], 2))

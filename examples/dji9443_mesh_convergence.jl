@@ -228,17 +228,17 @@ function load_base(case)
     if case.formulation == :dirichlet
         kernel = Union{pnl.ConstantSource, pnl.VortexRing}
         body = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=SEMIINF_WAKE, watertight=true, DBC=true)
     else
         kernel = pnl.VortexRing
         body = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=SEMIINF_WAKE, watertight=false, DBC=false)
     end
@@ -269,9 +269,9 @@ function build_case(case)
         kernel = Union{pnl.ConstantSource, pnl.VortexRing}
         body = pnl.RigidWakeBody{kernel}(
             copy(base.nodes), copy(base.cells), [copy(s) for s in shedding];
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=SEMIINF_WAKE, watertight=true,
             ensure_winding=true, DBC=true)
@@ -279,9 +279,9 @@ function build_case(case)
         kernel = pnl.VortexRing
         body = pnl.RigidWakeBody{kernel}(
             copy(base.nodes), copy(base.cells), [copy(s) for s in shedding];
-            kerneloffset=KERNEL_OFFSET_PANEL,
-            kerneloffset_panel=KERNEL_OFFSET_PANEL,
-            kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+            core_size=KERNEL_OFFSET_PANEL,
+            core_size_panel=KERNEL_OFFSET_PANEL,
+            core_size_targets=KERNEL_OFFSET_TARGETS,
             kernelcutoff=KERNEL_CUTOFF,
             semiinfinite_wake=SEMIINF_WAKE, watertight=false,
             ensure_winding=true, DBC=false)
@@ -1113,18 +1113,18 @@ end
 
 # Induced velocity at probe points from the solved body (Phase 2b machinery, adapted):
 # off-body evaluation through the ProbeSystem/influence! path with the body's
-# kerneloffset_targets, bypassing on-surface grad_mu.
+# core_size_targets, bypassing on-surface grad_mu.
 function tipdiag_induced_velocity(body, pts; backend=pnl.DirectBackend())
     n = length(pts)
     probes = pnl.FastMultipole.ProbeSystem(n, Float64)
     for k in 1:n
         probes.position[k] = pts[k]
     end
-    saved = body.kerneloffset
-    body.kerneloffset = body.kerneloffset_targets
+    saved = body.core_size
+    body.core_size = body.core_size_targets
     pnl.influence!((probes,), (body,), backend;
         precalc=false, scalar_potential=true, gradient=true, hessian=false)
-    body.kerneloffset = saved
+    body.core_size = saved
     return probes.scalar_potential, probes.gradient
 end
 
@@ -1281,7 +1281,7 @@ function run_tipdiag(case)
     println("Assembling G for $(case.tag): $(n) panels, koff_panel=$(KERNEL_OFFSET_PANEL), " *
             "kcutoff=$(KERNEL_CUTOFF), koff_targets=$(KERNEL_OFFSET_TARGETS)")
     assembly_elapsed = @elapsed pnl._G!(G, body, body;
-        kerneloffset=body.kerneloffset_panel, update_geometry=false)
+        core_size=body.core_size_panel, update_geometry=false)
     A = keep_A ? copy(G) : nothing
     anorm = opnorm(G, 1)
     Glu = lu!(G)
@@ -1619,7 +1619,7 @@ end
 #
 # The velocity assembly below mirrors `_steady_aerodynamics!` exactly (see
 # src/FLOWPanel_simulate.jl:340-538): reset -> freestream -> kinematic -> induced velocity
-# at `kerneloffset_targets` with self-pair conditioning back down to `kerneloffset_panel`
+# at `core_size_targets` with self-pair conditioning back down to `core_size_panel`
 # -> +1/2 grad_mu tangential half-jump. After that sequence `body.velocity` is the EXTERIOR
 # surface limit, so the residual is literally dot(velocity[:,i], normals[:,i]).
 # ---------------------------------------------------------------------------------------
@@ -1699,11 +1699,11 @@ function tangency_velocity!(body, frames;
     pnl.kinematic_velocity!((body,), frames)
     Uext = copy(body.velocity)
 
-    pnl._set_kerneloffsets!((body,), :kerneloffset_targets)
+    pnl._set_core_sizes!((body,), :core_size_targets)
     pnl.pre_evaluate_influence!(body)
     pnl.influence!((body,), (body,), backend; precalc=false,
         scalar_potential=false, velocity=true,
-        direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        direct_conditioning=pnl._self_panel_core_size_conditioning())
     Upv = copy(body.velocity)
 
     if halfjump
@@ -1739,10 +1739,10 @@ function tangency_partial_induced(body, keep_col, backend)
     end
     pnl.reset!(body)
     pnl.pre_evaluate_influence!(body)
-    pnl._set_kerneloffsets!((body,), :kerneloffset_targets)
+    pnl._set_core_sizes!((body,), :core_size_targets)
     pnl.influence!((body,), (body,), backend; precalc=false,
         scalar_potential=false, velocity=true,
-        direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        direct_conditioning=pnl._self_panel_core_size_conditioning())
     out = copy(body.velocity)
     body.strength .= saved
     return out

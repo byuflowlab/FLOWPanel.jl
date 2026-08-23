@@ -19,7 +19,7 @@ export  solve, save, influence!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas,
         calc_shedding, calc_shedding_from_seed, trace_trailing_edge,
-        meshes2nodes_cells,
+        meshes2nodes_cells, read_gmsh,
         PressureBernoulli, PressureLaplace,
         JacobiPressurePreconditioner, NoPressurePreconditioner,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
@@ -90,7 +90,7 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "formulation", "kutta", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
+                    "wake", "gpu_influence", "gpu_wake", "formulation", "kutta", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
                     "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")
@@ -121,6 +121,18 @@ function __init__()
 
     catch e
         @warn "PythonPlot is not available; monitors will not be loaded"
+    end
+
+    # BRAINSTORM 025: pin the filament regularization family from the
+    # environment so frozen drivers can select it without code changes
+    # (compact/gaussian/vatistas; default compact).
+    if haskey(ENV, "FLOWPANEL_FILAMENT_REG")
+        set_filament_regularization!(Symbol(lowercase(ENV["FLOWPANEL_FILAMENT_REG"])))
+        # Log provenance: nothing else in a job log identifies the family, and
+        # the two families are only distinguishable after the fact by the FMM
+        # radius-inflation warning (37.6*rc vs 5.9*rc).
+        println("FLOWPanel: filament regularization = $(FILAMENT_REGULARIZATION[]) ",
+                "(pinned by FLOWPANEL_FILAMENT_REG)")
     end
 
 end

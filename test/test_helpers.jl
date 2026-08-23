@@ -60,7 +60,7 @@ make_nonlifting(::Type{E}, nodes=NODES_2TRI, cells=CELLS_2TRI; kwargs...) where 
 
 function make_octa_source_body()
     body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT);
-                kerneloffset=1e-12)
+                core_size=1e-12)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= 1.0

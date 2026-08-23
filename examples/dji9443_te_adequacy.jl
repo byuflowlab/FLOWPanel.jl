@@ -61,7 +61,7 @@ function make_shedding_bbox(nodes, seed_nodes)
     return (SVector{3}(lower...), SVector{3}(upper...))
 end
 
-function load_base(case; kerneloffset_panel=KERNEL_OFFSET_PANEL)
+function load_base(case; core_size_panel=KERNEL_OFFSET_PANEL)
     mesh_path = joinpath(pnl.examples_path, "data", case.mesh)
     isfile(mesh_path) || error("missing mesh: $(mesh_path)")
     mesh = pnl.read_gmsh(mesh_path)
@@ -70,9 +70,9 @@ function load_base(case; kerneloffset_panel=KERNEL_OFFSET_PANEL)
     nodes .*= R / source_radius
     kernel = Union{pnl.ConstantSource, pnl.VortexRing}
     body = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-        kerneloffset=kerneloffset_panel,
-        kerneloffset_panel=kerneloffset_panel,
-        kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+        core_size=core_size_panel,
+        core_size_panel=core_size_panel,
+        core_size_targets=KERNEL_OFFSET_TARGETS,
         kernelcutoff=KERNEL_CUTOFF,
         semiinfinite_wake=false, watertight=true, DBC=true)
     return body, source_radius
@@ -88,15 +88,15 @@ function trace_shedding(base, case)
     end
 end
 
-function build_case(case; kerneloffset_panel=KERNEL_OFFSET_PANEL)
-    base, source_radius = load_base(case; kerneloffset_panel)
+function build_case(case; core_size_panel=KERNEL_OFFSET_PANEL)
+    base, source_radius = load_base(case; core_size_panel)
     shedding = trace_shedding(base, case)
     kernel = Union{pnl.ConstantSource, pnl.VortexRing}
     body = pnl.RigidWakeBody{kernel}(
         copy(base.nodes), copy(base.cells), [copy(s) for s in shedding];
-        kerneloffset=kerneloffset_panel,
-        kerneloffset_panel=kerneloffset_panel,
-        kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+        core_size=core_size_panel,
+        core_size_panel=core_size_panel,
+        core_size_targets=KERNEL_OFFSET_TARGETS,
         kernelcutoff=KERNEL_CUTOFF,
         semiinfinite_wake=false, watertight=true,
         ensure_winding=true, DBC=true)
@@ -136,8 +136,8 @@ function validate_case(case)
         case=string(case.tag), mesh=case.mesh, source_radius=source_radius,
         scale_factor=R / source_radius, nodes=size(body.nodes, 2),
         panels=body.ncells, sections_per_blade=size(body.shedding[1], 2),
-        kerneloffset_panel=body.kerneloffset_panel,
-        kerneloffset_targets=body.kerneloffset_targets,
+        core_size_panel=body.core_size_panel,
+        core_size_targets=body.core_size_targets,
         status="pass")
 end
 
@@ -156,14 +156,14 @@ function prepare_steady_body!(body)
     return frames
 end
 
-function solve_case(case; kerneloffset_panel=KERNEL_OFFSET_PANEL)
-    body, _ = build_case(case; kerneloffset_panel)
+function solve_case(case; core_size_panel=KERNEL_OFFSET_PANEL)
+    body, _ = build_case(case; core_size_panel)
     elapsed = @elapsed begin
         prepare_steady_body!(body)
         pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
         G = zeros(eltype(body.strength), body.ncells, body.ncells)
-        pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel,
+        pnl._G!(G, body, body; core_size=body.core_size_panel,
             update_geometry=false)
         rhs = source_rhs(body)
         body.strength[:, 2] .= lu(G) \ rhs
@@ -176,7 +176,7 @@ function assemble_operators(body)
     pnl.calc_controlpoints!(body)
     G = zeros(eltype(body.strength), body.ncells, body.ncells)
     B = similar(G)
-    pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false)
+    pnl._G!(G, body, body; core_size=body.core_size_panel, update_geometry=false)
     pnl._assemble_B!(B, body)
     return G, B
 end
@@ -479,7 +479,7 @@ function induced_at(body, target; scalar_potential=true, velocity=true)
     phi = 0.0
     vel = SVector{3}(0.0, 0.0, 0.0)
     for j in 1:body.ncells
-        p, u, _ = pnl.induced(target, body, j, switch; kerneloffset=body.kerneloffset_panel)
+        p, u, _ = pnl.induced(target, body, j, switch; core_size=body.core_size_panel)
         phi += p
         vel += u
     end
@@ -526,18 +526,18 @@ function write_off_collocation(case, body)
     CSV.write(artifact("off_collocation", case), DataFrame(rows))
 end
 
-function write_kerneloffset_sweep(case)
+function write_core_size_sweep(case)
     rows = NamedTuple[]
     for factor in (0.1, 1.0, 10.0)
         ko = KERNEL_OFFSET_PANEL * factor
-        body, elapsed = solve_case(case; kerneloffset_panel=ko)
+        body, elapsed = solve_case(case; core_size_panel=ko)
         metrics = integrated_metrics_from_mu(body, body.strength[:, 2])
         push!(rows, (
-            case=string(case.tag), factor=factor, kerneloffset_panel=ko,
+            case=string(case.tag), factor=factor, core_size_panel=ko,
             solve_elapsed_s=elapsed, integrated=metrics.integrated,
             weighted=metrics.weighted, outboard=metrics.outboard))
     end
-    CSV.write(artifact("kerneloffset_panel_sweep", case), DataFrame(rows))
+    CSV.write(artifact("core_size_panel_sweep", case), DataFrame(rows))
 end
 
 function smoke_body()
@@ -550,9 +550,9 @@ function smoke_body()
     shedding = [1; 1; 2; 2; 1; 2][:, :]
     kernel = Union{pnl.ConstantSource, pnl.VortexRing}
     body = pnl.RigidWakeBody{kernel}(nodes, cells, [shedding];
-        kerneloffset=KERNEL_OFFSET_PANEL,
-        kerneloffset_panel=KERNEL_OFFSET_PANEL,
-        kerneloffset_targets=KERNEL_OFFSET_TARGETS,
+        core_size=KERNEL_OFFSET_PANEL,
+        core_size_panel=KERNEL_OFFSET_PANEL,
+        core_size_targets=KERNEL_OFFSET_TARGETS,
         kernelcutoff=KERNEL_CUTOFF,
         semiinfinite_wake=false, watertight=false,
         ensure_winding=false, DBC=true)
@@ -595,7 +595,7 @@ function run_diagnostic(case)
     write_geometry_influence(case, body, G, B)
     write_adjoint_and_perturbation(case, body, G, F)
     write_off_collocation(case, body)
-    write_kerneloffset_sweep(case)
+    write_core_size_sweep(case)
     open(joinpath(OUTPUT_DIR, "$(case.tag)_diagnostic_done.txt"), "w") do io
         println(io, "completed=$(Dates.format(now(), dateformat"yyyy-mm-dd HH:MM"))")
         println(io, "solve_elapsed_s=$(elapsed)")
@@ -604,11 +604,11 @@ end
 
 function summarize_case(case)
     required = ["geometry_influence", "adjoint_sensitivity",
-        "perturbation_response", "off_collocation", "kerneloffset_panel_sweep"]
+        "perturbation_response", "off_collocation", "core_size_panel_sweep"]
     all(isfile(artifact(name, case)) for name in required) || return nothing
     perturb = CSV.read(artifact("perturbation_response", case), DataFrame)
     off = CSV.read(artifact("off_collocation", case), DataFrame)
-    ko = CSV.read(artifact("kerneloffset_panel_sweep", case), DataFrame)
+    ko = CSV.read(artifact("core_size_panel_sweep", case), DataFrame)
     base = only(ko[ko.factor .== 1.0, :])
     return (
         case=string(case.tag),
@@ -618,9 +618,9 @@ function summarize_case(case)
         all_median_abs_phi=median(abs.(off.total_potential_residual)),
         te_max_abs_leakage=maximum(abs.(off[off.near_te .== true, :].exterior_normal_velocity_leakage)),
         all_max_abs_leakage=maximum(abs.(off.exterior_normal_velocity_leakage)),
-        max_abs_kerneloffset_integrated_percent=maximum(abs.(
+        max_abs_core_size_integrated_percent=maximum(abs.(
             100 .* (ko.integrated .- base.integrated) ./ max(abs(base.integrated), eps()))),
-        max_abs_kerneloffset_outboard_percent=maximum(abs.(
+        max_abs_core_size_outboard_percent=maximum(abs.(
             100 .* (ko.outboard .- base.outboard) ./ max(abs(base.outboard), eps()))))
 end
 
@@ -634,7 +634,7 @@ function run_analysis()
     open(report, "w") do io
         println(io, "# Phase 2 — TE Adequacy Report\n")
         println(io, "Generated: $(Dates.format(now(), dateformat"yyyy-mm-dd HH:MM"))\n")
-        println(io, "RPM: `5400`; `kerneloffset_panel` nominal: `$(KERNEL_OFFSET_PANEL)`.\n")
+        println(io, "RPM: `5400`; `core_size_panel` nominal: `$(KERNEL_OFFSET_PANEL)`.\n")
         println(io, "## Trigger Metrics\n")
         println(io, "| Case | Max integrated perturbation | Max outboard perturbation | Max kernel-offset integrated |")
         println(io, "|---|---:|---:|---:|")
@@ -642,7 +642,7 @@ function run_analysis()
             println(io, @sprintf("| %s | %.3f%% | %.3f%% | %.3f%% |",
                 row.case, row.max_abs_integrated_perturb_percent,
                 row.max_abs_outboard_perturb_percent,
-                row.max_abs_kerneloffset_integrated_percent))
+                row.max_abs_core_size_integrated_percent))
         end
         off40 = CSV.read(artifact("off_collocation", case_by_tag(:new40c)), DataFrame)
         off57 = CSV.read(artifact("off_collocation", case_by_tag(:new57c)), DataFrame)
@@ -662,11 +662,11 @@ function run_analysis()
         println(io, "\n## Decision\n")
         println(io, "- 1% operator-fragility perturbations did not move integrated or outboard circulation by 1%.")
         println(io, "- Adjoint sensitivity did not grow materially from 40 to 57 series.")
-        println(io, "- `kerneloffset_panel` changes over a decade had no reported effect on integrated or outboard circulation.")
+        println(io, "- `core_size_panel` changes over a decade had no reported effect on integrated or outboard circulation.")
         println(io, "- Off-collocation residuals were not TE-local outliers and did not show a degrading off-surface trend under refinement.")
         println(io, "\nSharp capped/Dirichlet TE adequacy is accepted for continuing to Phase 3. The conditional thickness/local-refinement study is not triggered by this batch.\n")
         println(io, "- Perturbations are operator-fragility diagnostics, not physical model changes.")
-        println(io, "- `kerneloffset_panel` is recorded separately from target offset and wake core.")
+        println(io, "- `core_size_panel` is recorded separately from target offset and wake core.")
     end
     println("Wrote $(report)")
 end

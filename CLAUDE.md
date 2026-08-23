@@ -17,7 +17,8 @@ FLOWPanel.jl is a 3D panel method solver for low-speed (inviscid, incompressible
 
 Route these tasks to the repo subagents in `.claude/agents/` instead of doing them inline — they run on cheaper models and keep raw output out of the main context:
 
-- HPC/Slurm job status, log tailing, cluster disk checks → `hpc-monitor` (read-only; never submits/cancels)
+- HPC/Slurm job status, log tailing, disk usage reporting → `hpc-monitor` (strictly read-only; never submits, cancels, or deletes)
+- Keeping HPC disk under the 200 G cap / sweeping VTK → `hpc-storage` (deletes ParaView output only; never edits the protect list or touches the queue)
 - Data harvesting, CSV/log scraping, summary tables → `harvester`
 - Running tests for a described change → `test-runner`
 - Catching up on a BRAINSTORM item → `brainstorm-scout` (never read a full item file inline)

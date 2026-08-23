@@ -930,12 +930,12 @@ end
     @testset "KuttaJoukowskiForce preserves kernel offsets" begin
         body = make_plate_vortex_body()
         other = make_octa_source_body()
-        body.kerneloffset_panel = 1e-9
-        body.kerneloffset_targets = 2e-3
-        body.kerneloffset = 7e-4
-        other.kerneloffset_panel = 3e-9
-        other.kerneloffset_targets = 4e-3
-        other.kerneloffset = 9e-4
+        body.core_size_panel = 1e-9
+        body.core_size_targets = 2e-3
+        body.core_size = 7e-4
+        other.core_size_panel = 3e-9
+        other.core_size_targets = 4e-3
+        other.core_size = 9e-4
         frames = pnl.ReferenceFrame(body)
 
         monitor = pnl.KuttaJoukowskiForce(body, 1, 1;
@@ -943,8 +943,8 @@ end
             normalization=pnl.NoNormalization())
         monitor((body, other), (nothing, nothing), frames, zeros(3), 0, 0.1)
 
-        @test body.kerneloffset == 7e-4
-        @test other.kerneloffset == 9e-4
+        @test body.core_size == 7e-4
+        @test other.core_size == 9e-4
     end
 
     @testset "BoundCirculationMonitor constructor and TE jump" begin

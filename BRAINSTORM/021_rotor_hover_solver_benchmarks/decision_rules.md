@@ -120,14 +120,25 @@ matched settings = bug; fix before Phase 2.
   counted once; each body subtracted exactly once).
 - Plus allocation during one solve (`@allocated`).
 
-## CSV schema (finalized in Phase 0 W4, provenance columns added 2026-08-12)
+## CSV schema (finalized in Phase 0 W4, provenance columns added 2026-08-12;
+## `filament_reg` added 2026-08-22)
 
 `runs.csv` — one row per solve:
 `run_id, phase, solver_config, mesh_file, n_panels, threading_mode, julia_threads,
 blas_threads, t_assembly, t_factorize, t_tree, t_precond, t_rhs, t_solve_min, k_reps,
 iterations, rms_residual, max_residual, mem_state_bytes, alloc_solve_bytes, commit,
-fm_commit, julia_version, hardware_tag, solver_settings, backend_settings, notes`
+fm_commit, julia_version, hardware_tag, filament_reg, solver_settings, backend_settings, notes`
 
+- **`filament_reg` (SCHEMA AMENDMENT, Ryan 2026-08-22)**: the filament regularization
+  family in force (`FLOWPanel.FILAMENT_REGULARIZATION[]`), recorded and never modified by
+  the harness. Added when the campaign moved from Vatistas to Gaussian and it emerged that
+  NOTHING recorded the family — leaving several 2026-08-20/21 wake-carrying arms
+  permanently indeterminate (BRAINSTORM/025 landed selectability mid-day on 08-20, so the
+  date column cannot resolve them, and every arm shares one `-dirty` commit SHA). Emitted
+  by `assert_and_banner()` in `benchmark/common.jl` so all 021 drivers inherit it, and
+  required non-empty by `validate_runs_csv`. Rows written before this date carry no
+  family column; treat their family as indeterminate unless the run predates 2026-08-20
+  (hardcoded Vatistas, not selectable).
 - `commit`/`fm_commit`: FLOWPanel and FastMultipole (dev checkout) SHAs with `-dirty`
   markers; `solver_settings`/`backend_settings`: flattened `k=v;…` from the metadata
   dicts (tolerances, itmax, preconditioner knobs, FMM knobs). The startup banner is also

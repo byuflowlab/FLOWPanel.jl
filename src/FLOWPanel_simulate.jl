@@ -441,20 +441,20 @@ end
 _collect_wake_probes(wake::AbstractFreeWake) = _collect_wake_probes((wake,))
 _collect_wake_probes(::Nothing) = ()
 
-function _set_kerneloffsets!(systems::Tuple, field::Symbol)
+function _set_core_sizes!(systems::Tuple, field::Symbol)
     for system in systems
-        system.kerneloffset = getfield(system, field)
+        system.core_size = getfield(system, field)
     end
     return nothing
 end
 
-function _self_panel_kerneloffset_conditioning()
+function _self_panel_core_size_conditioning()
     before! = function (source_buffer, source_system, i_source_system, target_buffer, i_target_system)
-        source_system.kerneloffset = source_system.kerneloffset_panel
+        source_system.core_size = source_system.core_size_panel
         return nothing
     end
     after! = function (source_buffer, source_system, i_source_system, target_buffer, i_target_system)
-        source_system.kerneloffset = source_system.kerneloffset_targets
+        source_system.core_size = source_system.core_size_targets
         return nothing
     end
     return FastMultipole.DirectConditioningRule(FastMultipole.SelfPairs(), before!, after!)
@@ -521,7 +521,7 @@ function _diagnose_particle_influence!(wakes_tuple::Tuple, systems_tuple::Tuple,
 
         j_total = _particle_j_rms(pfield)
         j_body = _diagnostic_particle_j_from_sources!(pfield, systems_tuple, backend_system;
-            direct_conditioning=_self_panel_kerneloffset_conditioning())
+            direct_conditioning=_self_panel_core_size_conditioning())
         j_panelwake = _diagnostic_particle_j_from_sources!(pfield, panel_sources, backend_wake)
         j_particles = _diagnostic_particle_j_from_sources!(pfield, particle_sources, backend_wake;
             velocity_gradient=particle_hessian_self)
@@ -657,7 +657,7 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         update_trailing_edges::Bool=false,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
-        body_gradient_kerneloffset::Float64=NaN,
+        body_gradient_core_size::Float64=NaN,
         body_on_wake::Bool=true,
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
@@ -687,17 +687,17 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         needs_induced_vorticity, wakerow_no_hessian_to_particles,
         panel_wake_on_particles, particle_hessian_self)
 
-    _set_kerneloffsets!(systems_tuple, :kerneloffset_panel)
+    _set_core_sizes!(systems_tuple, :core_size_panel)
     solve_formulation!(formulation, formulation_state, systems, systems_tuple,
         wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
 
     needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
         grad_mu_options=normalized_grad_mu_options)
 
-    _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+    _set_core_sizes!(systems_tuple, :core_size_targets)
     _sa_body_influence!(targets, systems_tuple, backend_system;
         needs_induced_vorticity, body_on_wake, body_hessian_to_particles,
-        body_gradient_kerneloffset)
+        body_gradient_core_size)
 
     if diagnose_particle_influence
         _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
@@ -807,7 +807,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
 end
 
 "Post-solve body-influence stage of `_steady_aerodynamics!` (pure code
-motion): body → (bodies, wake probes) at `kerneloffset_targets`, with the
+motion): body → (bodies, wake probes) at `core_size_targets`, with the
 legacy `body_on_wake` and split-gradient gates. The caller sets the target
 kernel offsets first."
 function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
@@ -815,7 +815,7 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
         needs_induced_vorticity::Bool=false,
         body_on_wake::Bool=true,
         body_hessian_to_particles::Bool=false,
-        body_gradient_kerneloffset::Float64=NaN)
+        body_gradient_core_size::Float64=NaN)
     if !body_on_wake
         # body-on-body only; skip the body-on-wake-probes pass so the wake
         # never receives body-induced velocity this step.
@@ -824,15 +824,15 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
             velocity=true,
             velocity_gradient=Tuple(requires_hessian(sys) for sys in systems_tuple),
             extra_outputs=_induced_vorticity_extra_outputs(systems_tuple, needs_induced_vorticity),
-            direct_conditioning=_self_panel_kerneloffset_conditioning())
+            direct_conditioning=_self_panel_core_size_conditioning())
     else
         # Optional split regularization: evaluate the body->particle velocity
         # GRADIENT with a larger kernel offset than the velocity itself
-        # (body_gradient_kerneloffset; NaN = disabled). Not strictly physical —
+        # (body_gradient_core_size; NaN = disabled). Not strictly physical —
         # it smooths the |∇U| "bumpiness" of piecewise-constant doublet panels
         # felt by nearby particles, while leaving the advecting velocity at the
-        # sharper kerneloffset_targets.
-        split_grad = body_hessian_to_particles && !isnan(body_gradient_kerneloffset) &&
+        # sharper core_size_targets.
+        split_grad = body_hessian_to_particles && !isnan(body_gradient_core_size) &&
             any(t isa FLOWVPM.ParticleField for t in targets)
         if !split_grad
             influence!(targets, systems_tuple, backend_system; precalc=false,
@@ -840,16 +840,16 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
                 velocity=true,
                 velocity_gradient=Tuple((sys isa FLOWVPM.ParticleField && !body_hessian_to_particles) ? false : requires_hessian(sys) for sys in targets),
                 extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
-                direct_conditioning=_self_panel_kerneloffset_conditioning())
+                direct_conditioning=_self_panel_core_size_conditioning())
         else
             # pass 1: velocity for all targets (+ gradient for non-particle
-            # targets) at kerneloffset_targets
+            # targets) at core_size_targets
             influence!(targets, systems_tuple, backend_system; precalc=false,
                 scalar_potential=false,
                 velocity=true,
                 velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in targets),
                 extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity),
-                direct_conditioning=_self_panel_kerneloffset_conditioning())
+                direct_conditioning=_self_panel_core_size_conditioning())
             # pass 2: gradient for particle targets at the larger offset. The
             # velocity computed alongside (backends may not support
             # hessian-only) is discarded via snapshot/restore so particles keep
@@ -858,7 +858,7 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
             # clobber the gradient offset).
             particle_targets = Tuple(t for t in targets if t isa FLOWVPM.ParticleField)
             for sys in systems_tuple
-                sys.kerneloffset = body_gradient_kerneloffset
+                sys.core_size = body_gradient_core_size
             end
             saved_U = [copy(pf.particles[FLOWVPM.U_INDEX, 1:pf.np]) for pf in particle_targets]
             influence!(particle_targets, systems_tuple, backend_system; precalc=false,
@@ -868,7 +868,7 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
             for (pf, U0) in zip(particle_targets, saved_U)
                 pf.particles[FLOWVPM.U_INDEX, 1:pf.np] .= U0
             end
-            _set_kerneloffsets!(systems_tuple, :kerneloffset_targets)
+            _set_core_sizes!(systems_tuple, :core_size_targets)
         end
     end
     return nothing
@@ -935,7 +935,7 @@ function steady!(systems, frames, uinf;
         compress_vtk::Bool=true,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
-        body_gradient_kerneloffset::Float64=NaN,
+        body_gradient_core_size::Float64=NaN,
         body_on_wake::Bool=true,
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
@@ -989,7 +989,7 @@ function steady!(systems, frames, uinf;
             body_solvers; backend_solve, backend_system, needs_induced_vorticity,
             wakerow_no_hessian_to_particles,
             body_hessian_to_particles,
-            body_gradient_kerneloffset,
+            body_gradient_core_size,
             body_on_wake,
             panel_wake_on_particles,
             particle_hessian_self,
@@ -1005,7 +1005,7 @@ function steady!(systems, frames, uinf;
             grad_mu_options, i_step,
             wakerow_no_hessian_to_particles,
             body_hessian_to_particles,
-            body_gradient_kerneloffset,
+            body_gradient_core_size,
             body_on_wake,
             panel_wake_on_particles,
             particle_hessian_self)
@@ -1065,7 +1065,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         compress_vtk::Bool=true,
         wakerow_no_hessian_to_particles::Bool=false,
         body_hessian_to_particles::Bool=false,
-        body_gradient_kerneloffset::Float64=NaN,
+        body_gradient_core_size::Float64=NaN,
         body_on_wake::Bool=true,
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
@@ -1212,7 +1212,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 needs_induced_vorticity, update_trailing_edges=true,
                 wakerow_no_hessian_to_particles,
                 body_hessian_to_particles,
-                body_gradient_kerneloffset,
+                body_gradient_core_size,
                 body_on_wake,
                 panel_wake_on_particles,
                 particle_hessian_self,
@@ -1228,7 +1228,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 needs_induced_vorticity, grad_mu_options, i_step,
                 wakerow_no_hessian_to_particles,
                 body_hessian_to_particles,
-                body_gradient_kerneloffset,
+                body_gradient_core_size,
                 body_on_wake,
                 panel_wake_on_particles,
                 particle_hessian_self)
@@ -1297,7 +1297,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                         panel_wake_on_particles,
                         particle_hessian_self,
                         body_hessian_to_particles,
-                        body_gradient_kerneloffset,
+                        body_gradient_core_size,
                         wakerow_no_hessian_to_particles,
                         bound_strength_rlx,
                     ),
@@ -1342,14 +1342,21 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 end
             end
 
-            # propagate rigid-body kinematics
-            propagate_kinematics!(systems_tuple, frames, dt)
+            # Propagate rigid-body kinematics first. Persistent solver target
+            # buffers consume control points, so mirror the rigid delta only
+            # AFTER normals/control points have been refreshed below; doing it
+            # here leaves those buffers one timestep behind the moved nodes.
+            step_transforms = propagate_kinematics!(systems_tuple, frames, dt)
 
             # update control points and normals according to Neumann/Dirichlet BCs
             for sys in systems_tuple
                 calc_normals!(sys)
-        calc_controlpoints!(sys)
+                calc_controlpoints!(sys)
             end
+
+            # Mirror the same rigid delta into persistent FMM state after all
+            # kernel-consumed target geometry is current.
+            transform_body_solvers!(body_solvers, systems_tuple, step_transforms)
 
             #--- shed new wake ---#
 

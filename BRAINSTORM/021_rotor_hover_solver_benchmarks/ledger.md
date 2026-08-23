@@ -76,3 +76,48 @@ re-measured in the capped floor runs. Drop rows marked per config, not per rung.
 | 2026-08-19 | 2b nfcache configs (local-smoke) | krylov_gmres_nfcache | R1 | 4/4 | ctor 0.14 | 33.794 (cold min-of-5) | 59 | certified BC rel-L2 9.673e-7 | cache 810,094,272 B/solve | cached shared knobs p14/mac0.5/leaf326 (tune_cached.csv); cache build 31.7 s INSIDE every solve (per-solve state) — build-dominated |
 | 2026-08-19 | 2b nfcache configs (local-smoke) | krylov_ilu_nfcache | R1 | 4/4 | ILU 3.81 | 33.050 (cold min-of-5) | 7 | certified BC rel-L2 8.295e-7 | cache 810,094,272 B/solve | same shared knobs; build-dominated — ILU's 59→7 iter saving worth <1 s at cached-apply cost |
 | 2026-08-19 | 2b nfcache configs (local-smoke) | fgmres_fgs_nfcache | R1 | 4/4 | precond 12.27 | 34.115 (cold min-of-5) | 1 | certified BC rel-L2 5.884e-7 | cache 810,094,272 B/solve | Stage-3 winner precond knobs unchanged; build-dominated ⇒ lever = staged rigid-motion cache persistence |
+
+## Phase-1 finding: the Barba ILU preconditioner scales ~N^1.5, not ~N (2026-08-22)
+
+Measured on this machine (4 threads, geometry-only probe over the frozen
+ladder; leaf_size=10, MAC=1.0 — the ILU knobs every 021 benchmark script uses).
+`nnz` equals the direct-list pattern entry count exactly at every rung.
+
+| Rung | N | Pattern entries (= nnz) | Entries/row | Construct [s] | Apply `ldiv!` [ms] | Apply [ns/nnz] |
+| --- | --- | --- | --- | --- | --- | --- |
+| R1 | 8,016 | 3,906,740 | 487.4 | 3.80 | 2.31 | 0.59 |
+| R2 | 15,760 | 8,002,490 | 507.8 | 7.12 | 4.85 | 0.61 |
+| R3 | 28,752 | 19,150,596 | 666.1 | 16.03 | 11.30 | 0.59 |
+| R4 | 58,192 | 48,433,784 | 832.3 | 53.53 | 29.52 | 0.61 |
+| R5 | 108,240 | 130,925,412 | 1,209.6 | 215.39 | 92.21 | 0.70 |
+| R6 | 212,108 | 436,830,804 | 2,059.5 | — | ~284 (projected) | — |
+| R7 | 419,276 | 1,547,431,218 | 3,690.7 | — | ~1,000 (projected) | — |
+
+R6/R7 pattern sizes are measured; their apply times are projected at the
+measured ~0.65 ns/nnz (apply is linear in nnz to within 2% across R1–R4, 18% at
+R5), because building the factors needs more RAM than this machine has.
+
+**Scaling.** Entries per row grow as ~sqrt(N), so nnz ~ N^1.5. Both costs follow
+it: construction R1→R5 is N x13.5 -> time x56.7 (exponent 1.55), apply is
+N x13.5 -> time x39.9 (exponent 1.44). Apply is linear in nnz at a near-constant
+~0.6 ns/nonzero, so the exponent is inherited from the pattern, not from the
+triangular solve.
+
+**Consequence for the campaign.** An FMM operator apply grows ~N log N while
+this preconditioner's apply grows ~N^1.5, so the ILU share of every GMRES
+iteration rises without bound along the ladder. At R7 one apply is ~1 s and the
+pattern alone is ~23 GiB before factors. The ILU rows in the Phase-1 table
+should therefore be read as rung-local results, not as a solver that carries to
+production mesh sizes; the crossover against the unpreconditioned/Jacobi arms is
+itself a Phase-1 deliverable worth stating explicitly.
+
+**Operational note.** `max_pattern_entries` was 2048*N in all seven benchmark
+scripts, set at R3. R6 needs 2,059.5 entries/row — 0.6% over — which is what
+killed `p1-table-R6-multi` (job 13206077) after 4 h 09 m. Raised to 8192*N
+(clears R7 with ~2.2x headroom); the limit is a guard only, nothing is allocated
+from it. The guard now reports the TOTAL entries required and entries/row
+instead of the running subtotal at which it tripped, so it can be sized in one
+shot. NOTE: the unit test "ILU(0) construction ladder remains linear"
+(test/runtests_unit_solver.jl:581) does not actually enforce linearity — it
+allows 2.5x nnz growth across ~2.1x N steps (i.e. up to N^1.28) on 128–512-panel
+spheres, a regime that does not reproduce the real meshes' N^1.5.

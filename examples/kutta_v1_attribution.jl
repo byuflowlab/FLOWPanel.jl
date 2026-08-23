@@ -455,14 +455,14 @@ end
 
 Run one configuration and emit the uniform battery row schema. `cell` carries
 `label`, `bodytype`, `caps`, and may override any of `eta`,
-`kerneloffset_over_c`, `n_span`, `n_airfoil`; anything absent falls back to
+`core_size_over_c`, `n_span`, `n_airfoil`; anything absent falls back to
 `KUTTAV1_GATE_COMMON`/`SSWConfig` defaults, so the gate's own call sites are
 unaffected. Every knob is recorded in the row, so a battery row and a gate row
 are directly comparable.
 
 A cell that throws is recorded with NaN metrics and a `status` naming the
 failure rather than being silently dropped or retried at a different setting —
-`kerneloffset = 0` may be genuinely singular for the vortex-ring body.
+`core_size = 0` may be genuinely singular for the vortex-ring body.
 """
 function _run_gate_cell(cell, basis; battery="gate", tag=nothing,
         record_strip_jump=false)
@@ -476,8 +476,8 @@ function _run_gate_cell(cell, basis; battery="gate", tag=nothing,
         error("formulation $(nameof(typeof(formulation))) requires " *
               "bodytype=:dirichlet; cell $(cell.label) is $(cell.bodytype)")
     overrides = (; eta=get_or(:eta, SSWConfig().eta),
-        kerneloffset_over_c=get_or(:kerneloffset_over_c,
-            SSWConfig().kerneloffset_over_c),
+        core_size_over_c=get_or(:core_size_over_c,
+            SSWConfig().core_size_over_c),
         n_span=get_or(:n_span, KUTTAV1_GATE_COMMON.n_span),
         n_airfoil=get_or(:n_airfoil, KUTTAV1_GATE_COMMON.n_airfoil),
         freestream_convection=get_or(:freestream_convection,
@@ -487,7 +487,7 @@ function _run_gate_cell(cell, basis; battery="gate", tag=nothing,
     label = something(tag, "$(cell.label)_$(basis.name)")
     println("$battery: $label")
     knobs = (; cell=label, battery, bodytype=cell.bodytype, caps=cell.caps,
-        basis=basis.name, config.eta, config.kerneloffset_over_c,
+        basis=basis.name, config.eta, config.core_size_over_c,
         config.n_span, config.n_airfoil,
         formulation=string(nameof(typeof(formulation))),
         config.freestream_convection)
@@ -530,7 +530,7 @@ function _run_gate_cell(cell, basis; battery="gate", tag=nothing,
         unsteady.summary.max_dp_hat_post, unsteady.summary.median_dp_hat_post,
         unsteady.summary.gamma_symmetry,
         _das_control(config, unsteady.body)...,
-        # A cell can fail without throwing: `kerneloffset = 0` makes the
+        # A cell can fail without throwing: `core_size = 0` makes the
         # vortex-ring near-wake self-influence singular and NaN propagates
         # silently through the solve. Non-finite results must say so.
         status=(isfinite(unsteady.summary.CL) &&
@@ -759,7 +759,7 @@ end
 #   B  mesh ladder — does the gap refine away, and is a 5% criterion attainable
 #                    at all for two formulations on this geometry? The whole
 #                    gate ran at one resolution.
-#   C  kerneloffset ladder — does the Dirichlet G regularization matter?
+#   C  core_size ladder — does the Dirichlet G regularization matter?
 #                    `SSWConfig` uses 1e-6*c while the DJI convention is an
 #                    unregularized Dirichlet G.
 
@@ -794,7 +794,7 @@ end
     run_gate_diagnosis(output; batteries)
 
 `batteries` selects sub-batteries (default all three), overridable with
-`KUTTAV1_DIAG_BATTERIES=eta,kerneloffset`. Single-threaded runs are slow enough
+`KUTTAV1_DIAG_BATTERIES=eta,core_size`. Single-threaded runs are slow enough
 that the refined-mesh ladder deserves to be launched separately from the cheap
 ladders, and a partial battery is still a complete answer to its own question.
 Output files are suffixed when a subset is selected so a partial run cannot
@@ -802,10 +802,10 @@ overwrite a full one.
 """
 function run_gate_diagnosis(output;
         batteries=Tuple(Symbol(strip(x)) for x in
-            split(get(ENV, "KUTTAV1_DIAG_BATTERIES", "eta,mesh,kerneloffset"), ',')))
+            split(get(ENV, "KUTTAV1_DIAG_BATTERIES", "eta,mesh,core_size"), ',')))
     for b in batteries
-        b in (:eta, :mesh, :kerneloffset) ||
-            error("unknown battery $b; use eta, mesh, kerneloffset")
+        b in (:eta, :mesh, :core_size) ||
+            error("unknown battery $b; use eta, mesh, core_size")
     end
     suffix = length(batteries) == 3 ? "" : "_" * join(sort(collect(string.(batteries))), "-")
     store = (; rows=NamedTuple[], gamma=NamedTuple[], history=NamedTuple[])
@@ -836,17 +836,17 @@ function run_gate_diagnosis(output;
             basis=basis.name, neumann=tags[:neumann], dirichlet=tags[:dirichlet]))
     end
 
-    # --- C: kerneloffset ladder (reference basis only; KJ is basis-blind) ---
+    # --- C: core_size ladder (reference basis only; KJ is basis-blind) ---
     basis = _diag_basis(KUTTAV1_GATE_REFERENCE_BASIS)
-    for offset in (:kerneloffset in batteries ? KUTTAV1_DIAG_OFFSETS : ())
+    for offset in (:core_size in batteries ? KUTTAV1_DIAG_OFFSETS : ())
         tags = Dict{Symbol, String}()
         for base in KUTTAV1_DIAG_PAIR
             tag = "ko$(_ssw_num_tag(offset))_$(base.label)_$(basis.name)"
-            _diag_push!(store, base, (; kerneloffset_over_c=offset), basis;
-                battery="kerneloffset", tag)
+            _diag_push!(store, base, (; core_size_over_c=offset), basis;
+                battery="core_size", tag)
             tags[base.bodytype] = tag
         end
-        push!(pairs, (; battery="kerneloffset", axis="kerneloffset_over_c",
+        push!(pairs, (; battery="core_size", axis="core_size_over_c",
             axis_value=offset, basis=basis.name,
             neumann=tags[:neumann], dirichlet=tags[:dirichlet]))
     end

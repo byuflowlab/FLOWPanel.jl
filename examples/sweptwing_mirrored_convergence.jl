@@ -103,12 +103,12 @@ function discretization(n_rfl::Int, n_span::Int)
     return rfl, span
 end
 
-function mirrored_negative_half(c, n_rfl::Int, n_span::Int, kerneloffset::Real)
+function mirrored_negative_half(c, n_rfl::Int, n_span::Int, core_size::Real)
     rfl, span = discretization(n_rfl, n_span)
     bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
     half = simplewing(c.b, c.ar, c.tr, c.twist_root, c.twist_tip, c.lambda, c.gamma;
         bodytype=bodytype,
-        bodyoptargs=(; kerneloffset),
+        bodyoptargs=(; core_size),
         airfoil_root=c.airfoil,
         airfoil_tip=c.airfoil,
         airfoil_path=c.airfoil_path,
@@ -158,10 +158,10 @@ function mirrored_negative_half(c, n_rfl::Int, n_span::Int, kerneloffset::Real)
     shedding = pnl.calc_shedding(nodes, cells, full_te_nodes, zeros(eltype(nodes), 3, 0))
     watertight, _ = pnl.iswatertight(nodes, cells)
     return bodytype(nodes, cells, [shedding]; watertight, ensure_winding=false,
-        kerneloffset)
+        core_size)
 end
 
-function build_body(c, n_rfl::Int, n_span::Int; kerneloffset::Real=1e-10,
+function build_body(c, n_rfl::Int, n_span::Int; core_size::Real=1e-10,
                     source_half::Symbol=:positive)
     if source_half == :positive
         rfl, span = discretization(n_rfl, n_span)
@@ -169,7 +169,7 @@ function build_body(c, n_rfl::Int, n_span::Int; kerneloffset::Real=1e-10,
         return simplewing_mirrored(c.b, c.ar, c.tr, c.twist_root, c.twist_tip,
             c.lambda, c.gamma;
             bodytype=bodytype,
-            bodyoptargs=(; kerneloffset),
+            bodyoptargs=(; core_size),
             airfoil_root=c.airfoil,
             airfoil_tip=c.airfoil,
             airfoil_path=c.airfoil_path,
@@ -179,7 +179,7 @@ function build_body(c, n_rfl::Int, n_span::Int; kerneloffset::Real=1e-10,
             verify_spline=false,
             verify_rflspline=false)
     elseif source_half == :negative
-        return mirrored_negative_half(c, n_rfl, n_span, kerneloffset)
+        return mirrored_negative_half(c, n_rfl, n_span, core_size)
     else
         error("source_half must be :positive or :negative; got $(source_half)")
     end
@@ -204,10 +204,10 @@ function solver_for(body, solver_name::Symbol)
     end
 end
 
-function solve_case(n_rfl::Int, n_span::Int; kerneloffset::Real=1e-10,
+function solve_case(n_rfl::Int, n_span::Int; core_size::Real=1e-10,
                     solver_name::Symbol=:backslash, source_half::Symbol=:positive)
     c = sweptwing_constants()
-    body = build_body(c, n_rfl, n_span; kerneloffset, source_half)
+    body = build_body(c, n_rfl, n_span; core_size, source_half)
     apply_wake_direction!(body, c.Vinf)
 
     Dhat = c.Vinf / LA.norm(c.Vinf)
@@ -231,7 +231,7 @@ function solve_case(n_rfl::Int, n_span::Int; kerneloffset::Real=1e-10,
     CL = LA.dot(force.force[:, 1], Lhat)
     CD = LA.dot(force.force[:, 1], Dhat)
     return (; n_rfl, n_span, panels=body.ncells, shedding=size(body.shedding[1], 2),
-        kerneloffset, offset_over_hmin=kerneloffset / hmin, source_half,
+        core_size, offset_over_hmin=core_size / hmin, source_half,
         CL, CD, CL_error_pct=100 * (CL - 0.238) / 0.238,
         lift_positive=sum(lift[y .> 0]), lift_negative=sum(lift[y .< 0]),
         elapsed)
@@ -245,7 +245,7 @@ end
 
 function print_result(r)
     @printf("%5d %6d %8d %6d %11.1e %11.3e %+10.6f %+11.3f %+11.6f %+11.4f %+11.4f %8.2f\n",
-        r.n_rfl, r.n_span, r.panels, r.shedding, r.kerneloffset,
+        r.n_rfl, r.n_span, r.panels, r.shedding, r.core_size,
         r.offset_over_hmin, r.CL, r.CL_error_pct, r.CD, r.lift_positive,
         r.lift_negative, r.elapsed)
 end
@@ -263,7 +263,7 @@ function main()
     source_halves = parse_symbol_list(get(ENV, "FLOWPANEL_SWEEP_SOURCE_HALVES",
         get(ENV, "FLOWPANEL_SWEEP_SOURCE_HALF", "positive,negative")))
     source_half_string = join(string.(source_halves), ",")
-    main_kerneloffset = parse(Float64, get(ENV, "FLOWPANEL_SWEEP_KERNEL_OFFSET", "1e-10"))
+    main_core_size = parse(Float64, get(ENV, "FLOWPANEL_SWEEP_KERNEL_OFFSET", "1e-10"))
 
     println("# Swept-wing mirrored convergence")
     println("# cases=$(case_string(cases))")
@@ -271,7 +271,7 @@ function main()
         println("# skipped cases above max_panels=$(max_panels): " *
             join(("$(nr):$(ns) ($(p) panels)" for (nr, ns, p) in skipped), ", "))
     end
-    println("# solver=$(solver_name), source_halves=$(source_half_string), main kerneloffset=$(main_kerneloffset)")
+    println("# solver=$(solver_name), source_halves=$(source_half_string), main core_size=$(main_core_size)")
     println("# max_panels=$(max_panels)")
     println("# CLexp=0.238")
     csv_path = get(ENV, "FLOWPANEL_SWEEP_CSV", "")
@@ -280,7 +280,7 @@ function main()
         println("\n# Source half: $(source_half)")
         print_header()
         for (n_rfl, n_span) in cases
-            r = solve_case(n_rfl, n_span; kerneloffset=main_kerneloffset,
+            r = solve_case(n_rfl, n_span; core_size=main_core_size,
                 solver_name, source_half)
             print_result(r)
             push!(csv_rows, r)
@@ -299,8 +299,8 @@ function main()
         for source_half in source_halves
             println("\n# Kernel-offset sensitivity at $(kernel_case[1]):$(kernel_case[2]), source_half=$(source_half)")
             print_header()
-            for kerneloffset in offsets
-                print_result(solve_case(kernel_case[1], kernel_case[2]; kerneloffset,
+            for core_size in offsets
+                print_result(solve_case(kernel_case[1], kernel_case[2]; core_size,
                     solver_name, source_half))
                 flush(stdout)
             end

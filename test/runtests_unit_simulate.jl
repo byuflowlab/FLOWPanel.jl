@@ -205,7 +205,7 @@ end
     @test solver.backend_seen === backend_solve
 
     body = make_plate_vortex_body()
-    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1,
+    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_core_size=0.1,
         SFS=FLOWVPM.ConstantSFS(FLOWVPM.Estr_fmm))
     frames = pnl.ReferenceFrame(body)
     solver = SimNoopSolver()
@@ -222,11 +222,11 @@ end
     @test backend_wake.calls == 2
     @test all(kwargs[:postcalc] == true for kwargs in backend_wake.kwargs_seen)
     @test backend_system.calls == 2
-    @test body.kerneloffset == body.kerneloffset_targets
-    @test body.kerneloffset_targets == 0.1
+    @test body.core_size == body.core_size_targets
+    @test body.core_size_targets == 0.1
 
     body = make_plate_vortex_body()
-    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1,
+    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_core_size=0.1,
         SFS=FLOWVPM.ConstantSFS(FLOWVPM.Estr_fmm))
     frames = pnl.ReferenceFrame(body)
     solver = SimNoopSolver()
@@ -242,7 +242,7 @@ end
     @test all(kwargs[:velocity_gradient][end] == true for kwargs in backend_system.kwargs_seen)
 
     body = make_plate_vortex_body()
-    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1,
+    wake = pnl.PanelParticleWake(body; nwakerows=2, particle_core_size=0.1,
         SFS=FLOWVPM.ConstantSFS(FLOWVPM.Estr_fmm))
     frames = pnl.ReferenceFrame(body)
     solver = SimNoopSolver()
@@ -342,7 +342,7 @@ end
     @test backend_system.calls == 1
     @test all(haskey(kwargs, :direct_conditioning) for kwargs in backend_system.kwargs_seen)
     @test all(kwargs[:direct_conditioning] isa FastMultipole.DirectConditioningRule for kwargs in backend_system.kwargs_seen)
-    @test body.kerneloffset == body.kerneloffset_targets
+    @test body.core_size == body.core_size_targets
     @test recorder.wakes_seen === (nothing,)
     @test recorder.i_step_seen == 1
     @test recorder.dt_seen == 0.25
@@ -1227,7 +1227,7 @@ end
     # Off (default): stock forward Euler — the step! branch selects _euler and
     # the recorded integration is unchanged from prior behavior.
     body = make_plate_vortex_body()
-    wake_off = pnl.PanelParticleWake(body; nwakerows=2, particle_kerneloffset=0.1)
+    wake_off = pnl.PanelParticleWake(body; nwakerows=2, particle_core_size=0.1)
     @test wake_off.pfield.integration === FLOWVPM.euler
     @test wake_off.pfield_optargs.integration === FLOWVPM.euler
 
@@ -1235,7 +1235,7 @@ end
     # reproduction metadata (pfield.integration is the single source of truth
     # for the step! branch).
     body2 = make_plate_vortex_body()
-    wake_on = pnl.PanelParticleWake(body2; nwakerows=2, particle_kerneloffset=0.1,
+    wake_on = pnl.PanelParticleWake(body2; nwakerows=2, particle_core_size=0.1,
         expint=true)
     @test wake_on.pfield.integration === FLOWVPM.euler_exp
     @test wake_on.pfield_optargs.integration === FLOWVPM.euler_exp

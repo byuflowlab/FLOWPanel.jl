@@ -90,7 +90,7 @@ function _direct_exterior_velocity(body, Uinf, points)
         velocity = SVector{3,Float64}(Uinf)
         for source in 1:body.ncells
             _, induced_velocity, _ = pnl.induced(target, body, source, switch;
-                kerneloffset=body.kerneloffset_targets)
+                core_size=body.core_size_targets)
             velocity += induced_velocity
         end
         velocities[:, ip] .= velocity
@@ -2266,7 +2266,7 @@ function _green_identity_semiinf_core(body, green, areas; label,
     pnl.calc_normals!(body); pnl.calc_controlpoints!(body)
     was = body.suppress_attached_wake[]
     saved_pot = copy(body.potential); saved_vel = copy(body.velocity)
-    orig_offset = body.kerneloffset          # regularized velocity core for the sheet
+    orig_offset = body.core_size          # regularized velocity core for the sheet
     local q_direct_raw, sigma
     try
         # scalar potential: full (attached wake on) minus body-only (wake off).
@@ -2284,7 +2284,7 @@ function _green_identity_semiinf_core(body, green, areas; label,
         # velocity: same on/off difference → wake-only u_f.  For the unregularized
         # probe only, drop the sheet's velocity kernel offset around both calls.
         try
-            velocity_core_size !== nothing && (body.kerneloffset = velocity_core_size)
+            velocity_core_size !== nothing && (body.core_size = velocity_core_size)
             body.velocity .= 0.0; body.suppress_attached_wake[] = false
             pnl.influence!((body,), (body,), backend;
                 scalar_potential=false, velocity=true)
@@ -2297,7 +2297,7 @@ function _green_identity_semiinf_core(body, green, areas; label,
             sigma = zeros(Float64, N); sigma0 = zeros(Float64, N)
             pnl._split_sigma!(sigma, sigma0, body, zeros(3, N))
         finally
-            body.kerneloffset = orig_offset
+            body.core_size = orig_offset
         end
     finally
         body.suppress_attached_wake[] = was
@@ -2558,7 +2558,7 @@ function run_green_identity_regularization(; path=DIRICHLET_DATA_PATH,
     end
 
     # semi-infinite attached sheet: no PanelWake core; the velocity core is the
-    # body's active kerneloffset.  Regularized keeps it; unregularized zeroes it
+    # body's active core_size.  Regularized keeps it; unregularized zeroes it
     # around the velocity calls only.  Solve once, evaluate both.
     label = "green-reg $(alpha_deg)° semiinf"
     t1 = run_task1(; path, alpha_deg)

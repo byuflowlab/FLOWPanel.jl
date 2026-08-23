@@ -43,8 +43,8 @@ R = 0.119
 shedding_r_over_R = parse(Float64, get(ENV, "SHEDDING_R_OVER_R", "0.1"))
 0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
 
-kerneloffset_panel = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-3")))
+core_size_panel = parse(Float64, get(ENV, "CORE_SIZE_PANEL", get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10))))
+core_size_targets = parse(Float64, get(ENV, "CORE_SIZE_TARGETS", get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "CORE_SIZE", get(ENV, "KERNELOFFSET", "1e-3")))))
 kernelcutoff = R * 1e-13
 init_Das_eta_kinematic = 0.2
 set_Das_min_kinematic_displacement = 0.01 * R
@@ -80,7 +80,7 @@ nodes .*= R / maximum(nodes[radial_dimension, :])
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC = kernel == pnl.VortexRing ? false : true
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 isdir(save_path) || mkpath(save_path)
@@ -132,7 +132,7 @@ shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1
     bbox=bbox2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=true, DBC)
 
@@ -183,7 +183,7 @@ force_monitor = pnl.ForceMonitor(1, 1;
     verbose=true)
 
 println("\nSteady solve of $(mesh_tag) ($(rotor.ncells) cells) at $(RPM) RPM...")
-println("  grad_mu_options = $(isempty(grad_mu_options) ? "(default)" : grad_mu_options); kerneloffset_targets = $(kerneloffset_targets)")
+println("  grad_mu_options = $(isempty(grad_mu_options) ? "(default)" : grad_mu_options); core_size_targets = $(core_size_targets)")
 @time pnl.steady!((rotor,), frames, Vinf;
     body_solvers=(pnl.Backslash(rotor),),
     backend,
@@ -198,10 +198,10 @@ println("\nCT (Bernoulli, steady) = $(CT)")
 
 # Accumulate the convergence history across runs, one row per mesh.
 csv_path = joinpath(save_path, "convergence_history.csv")
-header = "mesh,nnodes,ncells,CT,grad_mu_basis,kerneloffset_targets,RPM"
+header = "mesh,nnodes,ncells,CT,grad_mu_basis,core_size_targets,RPM"
 rows = isfile(csv_path) ? readlines(csv_path)[2:end] : String[]
 filter!(row -> split(row, ",")[1] != mesh_tag, rows)
-push!(rows, "$(mesh_tag),$(size(rotor.nodes, 2)),$(rotor.ncells),$(CT),$(grad_mu_tag),$(kerneloffset_targets),$(RPM)")
+push!(rows, "$(mesh_tag),$(size(rotor.nodes, 2)),$(rotor.ncells),$(CT),$(grad_mu_tag),$(core_size_targets),$(RPM)")
 sort!(rows, by=row -> parse(Int, split(row, ",")[3]))
 open(csv_path, "w") do io
     println(io, header)

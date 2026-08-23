@@ -66,8 +66,8 @@ sec_per_rev = 60 / RPM
 formulation_name = lowercase(get(ENV, "FORMULATION", "direct"))
 recompute_interval = parse(Int, get(ENV, "RECOMPUTE_INTERVAL", "1"))
 
-kerneloffset_panel   = parse(Float64, get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10)))
-kerneloffset_targets = parse(Float64, get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "KERNELOFFSET", "1e-3")))
+core_size_panel   = parse(Float64, get(ENV, "CORE_SIZE_PANEL", get(ENV, "KERNELOFFSET_PANEL", string(R * 1e-10))))
+core_size_targets = parse(Float64, get(ENV, "CORE_SIZE_TARGETS", get(ENV, "KERNELOFFSET_TARGETS", get(ENV, "CORE_SIZE", get(ENV, "KERNELOFFSET", "1e-3")))))
 kernelcutoff = R * 1e-13
 wake_core_size = parse(Float64, get(ENV, "WAKE_CORE_SIZE", "1e-3"))
 nbins = parse(Int, get(ENV, "NBINS", "30"))
@@ -107,7 +107,7 @@ nodes .*= R / maximum(nodes[radial_dimension, :])
 # (1) no-shedding body so the constructor re-winds cells; compute shedding from
 # ITS rewound .nodes/.cells (CLAUDE.md critical invariant).
 rotor = pnl.RigidWakeBody{kernel}(nodes, cells, pnl.noshedding;
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, DBC)
 
 function make_shedding_bbox(nodes, seed_nodes, radial_dimension, R, shedding_r_over_R)
@@ -136,7 +136,7 @@ shedding2 = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1
 
 # (3) rebuild with the derived shedding.
 rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    kerneloffset=kerneloffset_panel, kerneloffset_panel, kerneloffset_targets, kernelcutoff,
+    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
     semiinfinite_wake=false, watertight=true, ensure_winding=true, DBC)
 
 # --------------------------------------------------------- wake + solver setup --

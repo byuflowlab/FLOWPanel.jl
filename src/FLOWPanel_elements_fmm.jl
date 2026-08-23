@@ -227,13 +227,14 @@ end
 end
 
 """
-    induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
-    induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
+    induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); core_size=1.0e-3)
+    induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); core_size=1.0e-3)
 
 Evaluate the panel-induced potential, velocity, and optional gradient at
 `target` for source panel `i_source`.
 """
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix
     R, v1, v2, v3 = rotate_to_panel(source_system, source_buffer, i_source)
@@ -244,7 +245,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # evaluate influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, core_size, R, derivatives_switch, fam)
 
     # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
@@ -258,7 +259,8 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix
     R, v1, v2, v3 = rotate_to_panel(source_system, i_source)
@@ -268,7 +270,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
     # evaluate influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, core_size, R, derivatives_switch, fam)
 
     # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
@@ -279,13 +281,14 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
 
-    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
+    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, core_size $core_size and strength $strength")
 
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
 "Overload for non-rotated kernels"
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,NK}
 
     # get vertices
     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
@@ -294,7 +297,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, core_size, derivatives_switch, fam)
 
     # self-pair short-circuit
     control_point = (v1 + v2 + v3) * 0.3333333333333333
@@ -309,14 +312,15 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,NK}
 
     # get vertices
     v1, v2, v3 = get_vertices(source_system, i_source)
 
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, core_size, derivatives_switch, fam)
 
     # self-pair short-circuit
     control_point = (v1 + v2 + v3) * 0.3333333333333333
@@ -430,6 +434,14 @@ function recurse_source_dipole(target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_i
 end
 
 #------- constant source, normal doublet, source + normal doublet -------#
+
+# fam-discarding forwarder: the generic `induced` passes the filament
+# regularization Val unconditionally; source/doublet kernels ignore it
+_induced(target, vertices::NTuple, centroid::AbstractVector, strength,
+    kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}},
+    core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch, ::Val) =
+    _induced(target, vertices, centroid, strength, kernel, core_radius, R, derivatives_switch)
+
 
 function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
@@ -808,7 +820,8 @@ end
 
 #------- vortex ring panel -------#
 
-function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {NS,PS,VS,GS,NO,NM}
+function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM},
+        fam::Val=Val(FILAMENT_REGULARIZATION[])) where {NS,PS,VS,GS,NO,NM}
     TFT = eltype(target)
     TFP = eltype(strength)
     TF = promote_type(TFT,TFP)
@@ -846,12 +859,12 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
                     DEBUG[] = true
                     @show vertices[i], vertices[ip1], target
                 end
-                v = _bound_vortex_velocity(r1, r2, finite_core, core_size)
+                v = _bound_vortex_velocity(r1, r2, finite_core, core_size, fam)
                 velocity += v
             end
             if GS
                 # velocity gradient
-                g = _bound_vortex_gradient(r1, r2, finite_core, core_size)
+                g = _bound_vortex_gradient(r1, r2, finite_core, core_size, fam)
                 gradient += g
             end
         end
@@ -860,12 +873,79 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
     return potential, velocity * strength[1], gradient * strength[1]
 end
 
-_induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch) =
-    _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
+_induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch,
+    fam::Val=Val(FILAMENT_REGULARIZATION[])) =
+    _induced(target, vertices, strength, kernel, core_size, derivatives_switch, fam)
 
 
-function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_core, core_size) where TF
-    # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)
+"""
+    FilamentRegularization
+
+Selectable regularization family for the bound-vortex filament kernel
+(BRAINSTORM 025). All families share the numerator `c*q` and differ only in
+the scalar denominator `D` (velocity) and `∇D = κ ∇A` (gradient); derivations
+in `BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`.
+
+- `GaussianRegularization` (default; Ryan ruling 2026-08-20, matched-CORE-
+  SIZE convention): Lamb–Oseen transverse profile (`σ ≡ core_size`) — lowest
+  peak velocity AND gradient at fixed core size. Radius inflation is
+  GRADIENT-AWARE: `Δr = core_size·√(2z*)` with `z*` solving
+  `e^(-z)(1+2z) = tol` (≈ `5.90·core_size` at tol 1e-6); the velocity-only
+  radius `√(2 ln(1/tol))` would leave gradient error `tol·(1+2 ln(1/tol))`.
+- `CompactRegularization`: the same compact-support family the
+  doublet-velocity kernel uses (`regularize`) transplanted to the filament
+  transverse profile — exactly singular (velocity AND gradient) beyond
+  `core_size`, so `Δr = core_size`, tolerance-independent.
+- `VatistasRegularization`: the legacy Vatistas n=2 core
+  (`1/h² → 1/√(h⁴ + rc⁴)`); `Δr = core_size·(2/tol)^(1/4)` (velocity-derived,
+  legacy-pinned; leaves gradient error ≤ 1.25·tol at that radius — see
+  `radius_inflation`).
+
+Select via [`set_filament_regularization!`](@ref) or the
+`FLOWPANEL_FILAMENT_REG` environment variable (`compact`/`gaussian`/
+`vatistas`, read at package load) — the env hook exists so frozen drivers can
+pin a family without code changes. The FMM stays aligned with the direct
+kernel by construction: [`radius_inflation`](@ref) for `VortexRing` reads the
+same global.
+"""
+@enum FilamentRegularization begin
+    VatistasRegularization
+    CompactRegularization
+    GaussianRegularization
+end
+
+"Active filament regularization family (see [`FilamentRegularization`](@ref))."
+# Default: Gaussian (Ryan ruling 2026-08-20, matched-CORE-SIZE convention:
+# at fixed core_size the Gaussian has the lowest peak velocity (0.45 vs
+# compact 1.21, Vatistas 0.71, units Gamma/2pi/rc) AND lowest peak gradient
+# (0.50 vs 2.55 / 1.00); its radius inflation rc*sqrt(2 ln 1/tol) ~ 5rc still
+# removes the Vatistas 37.6rc pathology. See BRAINSTORM/025 phase_00 doc.
+const FILAMENT_REGULARIZATION = Ref(GaussianRegularization)
+
+"Set the active filament regularization family (type or Symbol
+`:compact`/`:gaussian`/`:vatistas`)."
+set_filament_regularization!(family::FilamentRegularization) =
+    (FILAMENT_REGULARIZATION[] = family)
+function set_filament_regularization!(family::Symbol)
+    family === :compact && return set_filament_regularization!(CompactRegularization)
+    family === :gaussian && return set_filament_regularization!(GaussianRegularization)
+    family === :vatistas && return set_filament_regularization!(VatistasRegularization)
+    throw(ArgumentError("unknown filament regularization $(repr(family)); " *
+        "use :compact, :gaussian, or :vatistas"))
+end
+
+# Performance contract (BRAINSTORM 025 regression fix, 2026-08-20): the hot
+# direct! loops must NEVER read FILAMENT_REGULARIZATION[] per edge — the
+# non-const Ref load + 3-way branch inside the innermost kernels measured
+# +34-49% on the production body influence pass (65.0 s vs 43.5-48.5 s,
+# cluster A/B). The family is read ONCE per direct!-level call and crossed
+# through a function barrier as `Val(family)`, so these `::Val{F}` methods
+# compile with zero runtime family branches. The Val-less methods below are
+# thin Ref-reading fallbacks for cold call sites (tests, probes) only.
+@inline function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_core, core_size,
+        ::Val{F}) where {TF, F}
+    # regularized filament kernel u = c*q/(4π D); D per the active
+    # FilamentRegularization family (phase_01_theory.md)
     nr1 = norm(r1)
     nr2 = norm(r2)
 
@@ -876,28 +956,42 @@ function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_cor
 
     num = cross(r1, r2)
     r0 = r1 - r2
-    dotrixrj = dot(num, num)        # |r1×r2|^2
-    r0sqr = dot(r0, r0)             # |r0|^2
+    dotrixrj = dot(num, num)        # A = |r1×r2|^2
+    r0sqr = dot(r0, r0)             # B = |r0|^2
     rijdothat = dot(r0, r1/nr1 - r2/nr2)
 
-    if finite_core
-        V = num * rijdothat / sqrt(dotrixrj*dotrixrj + core_size*core_size*core_size*core_size * r0sqr*r0sqr) / (4*pi)
-    else
+    if !finite_core
         # singular kernel (no regularization)
-        V = num * rijdothat / dotrixrj / (4*pi)
+        return num * rijdothat / dotrixrj / (4*pi)
     end
 
-    # if norm(V) > 500.0 && DEBUG[]
-    #     @warn "V large!"
-    #     @show V, nr1, nr2, finite_core, core_size
-    #     stop
-    #     println("============================================================================")
-    # end
+    if F === VatistasRegularization
+        # 1/h^2 → 1/sqrt(h^4 + rc^4)
+        V = num * rijdothat / sqrt(dotrixrj*dotrixrj + core_size*core_size*core_size*core_size * r0sqr*r0sqr) / (4*pi)
+    elseif F === CompactRegularization
+        # 1/h^2 → 1/(h^2 + δ(h)), δ = (h-rc)^2 inside the support, 0 beyond;
+        # D = A + δB is exactly A for h ≥ rc and Brc² > 0 at h = 0 (no guard needed)
+        h = sqrt(dotrixrj / r0sqr)
+        D = h < core_size ? dotrixrj + (h - core_size)*(h - core_size) * r0sqr : dotrixrj
+        V = num * rijdothat / D / (4*pi)
+    else # GaussianRegularization
+        # u = c*q*g(h)/(4π A), g = 1 - exp(-h²/2rc²); evaluated as
+        # g/A = (g/x²)/(B rc²) with x² = (h/rc)² so the h → 0 limit is exact
+        x2 = dotrixrj / (r0sqr * core_size * core_size)
+        gscaled = x2 < 1e-12 ? TF(0.5) : TF(-expm1(-x2/2) / x2)
+        V = num * rijdothat * gscaled / (r0sqr * core_size * core_size) / (4*pi)
+    end
 
     return V
 end
 
-function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size) where TF
+# cold-path fallback: one Ref read + one dynamic dispatch per CALL (not per
+# edge inside a hot loop) — hot paths pass Val explicitly via the barriers
+_bound_vortex_velocity(r1::SVector{3,<:Any}, r2::SVector{3,<:Any}, finite_core, core_size) =
+    _bound_vortex_velocity(r1, r2, finite_core, core_size, Val(FILAMENT_REGULARIZATION[]))
+
+@inline function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size,
+        ::Val{F}) where {TF, F}
     nr1 = norm(r1)
     nr2 = norm(r2)
 
@@ -912,11 +1006,41 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
     B = dot(s, s)
     q = dot(s, r1/nr1 - r2/nr2)
 
+    # per-family D and ∇D = κ ∇A with ∇A = 2 s×c (B is target-independent);
+    # see phase_01_theory.md for the κ derivations
     if finite_core
-        rc4 = core_size * core_size * core_size * core_size
-        D = sqrt(A*A + rc4 * B*B)
-        D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
-        dD_coeff = (A / D) * (2 * cross(s, c))
+        if F === VatistasRegularization
+            rc4 = core_size * core_size * core_size * core_size
+            D = sqrt(A*A + rc4 * B*B)
+            D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            κ = A / D
+        elseif F === CompactRegularization
+            B == zero(B) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            h = sqrt(A / B)
+            if h < core_size
+                D = A + (h - core_size)*(h - core_size) * B
+                # κ = 2 - rc/h; the h → 0 clamp keeps κ finite where ∇A → 0
+                # anyway (κ∇A has a finite limit; measure-zero perturbation)
+                κ = 2 - core_size / max(h, eps(TF)*core_size)
+            else
+                D = A
+                κ = one(TF)
+            end
+            D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+        else # GaussianRegularization
+            B == zero(B) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            x2 = A / (B * core_size * core_size)     # (h/rc)^2
+            if x2 < 1e-12
+                # series limits: D → 2 B rc², κ → 1/2
+                D = 2 * B * core_size * core_size
+                κ = TF(0.5)
+            else
+                g = -expm1(-x2/2)
+                D = A / g
+                κ = (1 - x2 * exp(-x2/2) / (2*g)) / g
+            end
+        end
+        dD_coeff = κ * (2 * cross(s, c))
     else
         D = A
         D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
@@ -938,13 +1062,18 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
     return ONE_OVER_4PI * (dc_dx * (q / D) + c * transpose(df_coeff))
 end
 
-function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch)
+# cold-path fallback (see _bound_vortex_velocity note)
+_bound_vortex_gradient(r1::AbstractVector, r2, finite_core, core_size) =
+    _bound_vortex_gradient(r1, r2, finite_core, core_size, Val(FILAMENT_REGULARIZATION[]))
+
+function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch,
+        fam::Val=Val(FILAMENT_REGULARIZATION[]))
 
     # source influence
     p, v, vg = _induced(target, vertices, centroid, SVector{1}(strength[1]), ConstantSource, core_radius, R, derivatives_switch)
 
     # vortex ring
-    p_vr, v_vr, vg_vr = _induced(target, vertices, SVector{1}(strength[2]), VortexRing, core_radius, derivatives_switch)
+    p_vr, v_vr, vg_vr = _induced(target, vertices, SVector{1}(strength[2]), VortexRing, core_radius, derivatives_switch, fam)
 
     return p + p_vr, v + v_vr, vg + vg_vr
 end
@@ -958,7 +1087,7 @@ end
 end
 
 """
-    radius_inflation(kernel, kerneloffset, tol)
+    radius_inflation(kernel, core_size, tol)
 
 Distance beyond which the offset-regularized kernel matches the singular kernel
 within relative tolerance `tol`. Added to the geometric panel radius written
@@ -969,26 +1098,51 @@ multipole-acceptance criterion only admits expansions — which represent the
 expansion order (021 Phase 1 finding, 2026-08-13).
 
 - Source/doublet kernels: [`regularize`](@ref) is compactly supported — the
-  regularized kernel is exactly singular beyond `kerneloffset` — so the
-  inflation is `kerneloffset`, independent of `tol`.
-- `VortexRing` (Vatistas n=2, `1/h² → 1/√(h⁴+rc⁴)`): relative far-field error
-  ≈ ½(rc/h)⁴, so `tol` is met at `h ≥ rc·(2/tol)^(1/4)`. The gradient kernel
-  (`_bound_vortex_gradient`) carries the same `√(A² + rc⁴B²)` structure with an
-  O(1) constant ≤ ~2 on the leading error, absorbed by the multipole-acceptance
-  margin (clearance ≥ Δ(1/MAC − 1) beyond the summed radii; thin for MAC > 0.5).
+  regularized kernel is exactly singular beyond `core_size` — so the
+  inflation is `core_size`, independent of `tol`.
+- `VortexRing`: per the active [`FilamentRegularization`](@ref) family
+  (BRAINSTORM 025; derivations in
+  `BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`):
+  - Gaussian (default): GRADIENT-AWARE radius. The velocity relative error is
+    `e^(-z)` with `z = h²/2rc²`, but the gradient relative error is
+    `e^(-z)(1+2z)`, so the velocity-derived radius `rc·√(2 ln(1/tol))` leaves
+    gradient error `tol·(1+2 ln(1/tol))` (28.6× at 1e-6). The inflation
+    solves `e^(-z*)(1+2z*) = tol` by the fixed point `z ← ln((1+2z)/tol)`
+    (contraction rate `2/(1+2z)` ≈ 0.06; 5 iterations from `z₀ = ln(1/tol)`)
+    ⇒ `Δr = rc·√(2z*)` ≈ `4.99rc / 5.47rc / 5.90rc` at tol `1e-4/1e-5/1e-6`.
+  - compact-support: exactly singular — velocity AND gradient — beyond `rc`
+    ⇒ inflation `rc`, independent of `tol` (matches the source/doublet rule).
+  - Vatistas n=2 (`1/h² → 1/√(h⁴+rc⁴)`, legacy): velocity relative error
+    ≈ ½(rc/h)⁴ ⇒ `rc·(2/tol)^(1/4)`. This shipped rule is velocity-derived
+    and pinned by legacy-reproduction tests — the gradient relative error
+    coefficient is 2.5(rc/h)⁴, so at the shipped radius the gradient error is
+    ≤ 2.5·(tol/2) = 1.25·tol, absorbed by the multipole-acceptance margin
+    (clearance ≥ Δ(1/MAC − 1) beyond the summed radii; thin for MAC > 0.5).
 
 `tol = Inf` disables the inflation (pre-2026-08-13 behavior, for A/B runs).
 """
-@inline radius_inflation(::Type{ConstantSource}, kerneloffset, tol) =
-    isinf(tol) ? zero(kerneloffset) : kerneloffset
-@inline radius_inflation(::Type{ConstantDoublet}, kerneloffset, tol) =
-    isinf(tol) ? zero(kerneloffset) : kerneloffset
-@inline radius_inflation(::Type{Union{ConstantSource, ConstantDoublet}}, kerneloffset, tol) =
-    isinf(tol) ? zero(kerneloffset) : kerneloffset
-@inline radius_inflation(::Type{VortexRing}, kerneloffset, tol) =
-    isinf(tol) ? zero(kerneloffset) : kerneloffset * (2 / tol)^0.25
-@inline radius_inflation(::Type{Union{ConstantSource, VortexRing}}, kerneloffset, tol) =
-    radius_inflation(VortexRing, kerneloffset, tol)
+@inline radius_inflation(::Type{ConstantSource}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline radius_inflation(::Type{ConstantDoublet}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline radius_inflation(::Type{Union{ConstantSource, ConstantDoublet}}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline function radius_inflation(::Type{VortexRing}, core_size, tol)
+    isinf(tol) && return zero(core_size)
+    family = FILAMENT_REGULARIZATION[]
+    family == CompactRegularization && return core_size * one(tol)
+    if family == GaussianRegularization
+        # gradient-aware: solve e^(-z)(1+2z) = tol (see docstring)
+        z = log(1 / tol)
+        for _ in 1:5
+            z = log((1 + 2z) / tol)
+        end
+        return core_size * sqrt(2z)
+    end
+    return core_size * (2 / tol)^0.25    # Vatistas (legacy, velocity-derived)
+end
+@inline radius_inflation(::Type{Union{ConstantSource, VortexRing}}, core_size, tol) =
+    radius_inflation(VortexRing, core_size, tol)
 
 #------- semi-infinite panels -------#
 
@@ -1089,7 +1243,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
 
         # evaluate potential
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; core_size=source_system.core_size)
         else
             # wake node connected to the first vertex (TE1)
             v1w_x = v1x + Dax
@@ -1101,7 +1255,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             control_point = (v1 + v2 + vw1) * 0.333333333333333
             strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
             R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
-            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
+            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.core_size, R, derivatives_switch)
 
             # wake node connected to the second vertex (TE2)
             Dbx, Dby, Dbz = source_system.Das[i_surf][1, das_col_2], source_system.Das[i_surf][2, das_col_2], source_system.Das[i_surf][3, das_col_2]
@@ -1113,7 +1267,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             # influence of the second triangle
             control_point = (vw1 + v2 + vw2) * 0.333333333333333
             R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
-            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
+            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, source_system.core_size, R, derivatives_switch)
             if PS
                 p += dp
             end
@@ -1175,7 +1329,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         TK = get_wake_kernel(source_system)
 
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; core_size=source_system.core_size)
         else
             # wake node connected to the first vertex
             v1w_x = v1x + Dax
@@ -1196,7 +1350,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
 
             # induced influence due to the quad
-            return _induced_quad(target, (v1, v2, vw2, vw1), strength_vec, TK, source_system.kerneloffset, derivatives_switch)
+            return _induced_quad(target, (v1, v2, vw2, vw1), strength_vec, TK, source_system.core_size, derivatives_switch)
 
         end
     else
@@ -1204,25 +1358,25 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
     end
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}, kerneloffset, derivatives_switch)
+function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}, core_size, derivatives_switch)
     # influence of first triangle
     v1 = vertices[1]
     v2 = vertices[2]
     vw1 = vertices[4]
     control_point = (v1 + v2 + vw1) * 0.333333333333333
     R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
-    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, core_size, R, derivatives_switch)
 
     # influence of the second triangle
     vw2 = vertices[3]
     control_point = (vw1 + v2 + vw2) * 0.333333333333333
     R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
-    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, core_size, R, derivatives_switch)
     
     return p+dp, vel+dvel, g+dg
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
+function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
     if PS
         # influence of first triangle
         v1 = vertices[1]
@@ -1230,42 +1384,42 @@ function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, ker
         vw1 = vertices[4]
         control_point = (v1 + v2 + vw1) * 0.333333333333333
         R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
-        p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+        p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, core_size, R, derivatives_switch)
 
         # influence of the second triangle
         vw2 = vertices[3]
         control_point = (vw1 + v2 + vw2) * 0.333333333333333
         R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
-        dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+        dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, core_size, R, derivatives_switch)
 
         return p+dp, vel+dvel, g+dg
     else
-        return _induced(target, vertices, strength, kernel, kerneloffset, derivatives_switch)
+        return _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
     end
 end
 
-function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args...; kerneloffset)
-    return induced_semiinfinite(target, ConstantDoublet, args...; kerneloffset)
+function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args...; core_size)
+    return induced_semiinfinite(target, ConstantDoublet, args...; core_size)
 end
 
-function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; kerneloffset) where {TF,PS,VS,GS,NO,NM}
+function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; core_size) where {TF,PS,VS,GS,NO,NM}
     potential = zero(TF)
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     if PS
-        potential += _phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        potential += _phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
     if VS
-        velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
     if GS
-        gradient += _U_semiinfinite_gradient(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        gradient += _U_semiinfinite_gradient(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
 
     return potential, velocity, gradient
 end
 
-function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
 
     # initialize result
     phi = zero(TF)
@@ -1325,7 +1479,7 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
         derivatives_switch = FastMultipole.DerivativesSwitch(true, false, false)
 
         # compute potential
-        potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, kerneloffset, R, derivatives_switch)
+        potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, core_size, R, derivatives_switch)
         phi += potential
 
     end
@@ -1352,27 +1506,27 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
     return phi
 end
 
-function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
     Ux1, Uy1, Uz1 = _U_semiinfinite_vortex(v1x, v1y, v1z,
                                     d1, d2, d3,
                                     -strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     Ux2, Uy2, Uz2 = _U_semiinfinite_vortex(v2x, v2y, v2z,
                                     d1, d2, d3,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     Uxb, Uyb, Uzb = _U_boundvortex(v1x, v1y, v1z,
                                     v2x, v2y, v2z,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     # Uxb, Uyb, Uzb = _bound_vortex_velocity(
     #                     FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z),
     #                     FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z),
     #                     true,
-    #                     kerneloffset
+    #                     core_size
     #                 ) .* strength
     
     # combine contributions
@@ -1383,21 +1537,21 @@ function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1
     return FastMultipole.StaticArrays.SVector{3,TF}(-Ux, -Uy, -Uz)
 end
 
-function _U_semiinfinite_gradient(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _U_semiinfinite_gradient(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
     g1 = _U_semiinfinite_vortex_gradient(v1x, v1y, v1z,
                                     d1, d2, d3,
                                     -strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     g2 = _U_semiinfinite_vortex_gradient(v2x, v2y, v2z,
                                     d1, d2, d3,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     gb = _U_boundvortex_gradient(v1x, v1y, v1z,
                                     v2x, v2y, v2z,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     return -(g1 + g2 + gb)
 end

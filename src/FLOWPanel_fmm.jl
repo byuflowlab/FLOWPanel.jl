@@ -60,13 +60,26 @@ has_semiinfinite_wake(self) = false
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMultipoleBackend;
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, precalc=false, postcalc=false,
-                     plan_slot=nothing, cache_nearfield::Bool=false, optargs...)
+                     plan_slot=nothing, cache_nearfield::Bool=false,
+                     nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
+                     nearfield_cache_max_build_time::Real=Inf, optargs...)
 
     # apply pre-calculations per system
     if precalc
         for target in target_bodies
             pre_evaluate_influence!(target)
         end
+    end
+
+    # 051 stage 2 seam: brute-force rectangular influence (host or CUDA) when
+    # armed via FLOWPANEL_GPU_INFLUENCE; a no-op returning false otherwise.
+    # Handles only the wake-influence and post-solve body-influence passes;
+    # the panel solve and anything unrecognized fall through to fmm! below.
+    # See src/FLOWPanel_gpu_influence.jl.
+    if _gpu_rect_influence!(target_bodies, source_bodies;
+            scalar_potential, velocity, velocity_gradient, optargs...)
+        postcalc && post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
+        return nothing
     end
 
     # determine if extra_farfield is needed based
@@ -80,7 +93,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
 
     # plan_slot (a Ref): reuse trees/lists/buffers across calls with frozen
     # geometry — only source STRENGTHS may change between calls (the FmmPlan
-    # contract; the buffer radii fold in the ACTIVE kerneloffset, so any
+    # contract; the buffer radii fold in the ACTIVE core_size, so any
     # offset flip requires the owner to clear the slot). The slot stores
     # (plan, key); a changed derivative request rebuilds rather than trusting
     # a mismatched plan.
@@ -106,9 +119,14 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
                 shrink=true)
             # cache_nearfield: freeze the near field as dense blocks owned by
             # the fresh plan (same lifetime/validity contract); fmm! picks the
-            # cache up from the plan automatically
+            # cache up from the plan automatically. The caps are forwarded so
+            # callers can size them to the case: FastMultipole's 4 GiB default
+            # is below what the larger 021 ladder rungs need (R4 ≈ 4.5 GiB),
+            # and the build is serial, so max_build_time is wall-clock.
             cache_nearfield && FastMultipole.build_nearfield_cache!(plan,
-                target_bodies, source_bodies)
+                target_bodies, source_bodies;
+                max_bytes=nearfield_cache_max_bytes,
+                max_build_time=nearfield_cache_max_build_time)
             plan_slot[] = (plan, key)
         end
         FastMultipole.fmm!(target_bodies, source_bodies, plan_slot[][1];

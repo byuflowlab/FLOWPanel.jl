@@ -203,6 +203,7 @@ function _solver_metadata_dict(solver)
             "warmstart" => solver.warmstart,
             "cache_tree" => solver.cache_tree,
             "cache_nearfield" => solver.cache_nearfield,
+            "persistent_plan" => solver.persistent_plan,
             "preconditioner" => _preconditioner_metadata_dict(solver.preconditioner),
             "backend" => _backend_metadata_dict(solver.backend),
         )

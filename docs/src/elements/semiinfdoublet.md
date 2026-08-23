@@ -169,7 +169,7 @@ Thus, the velocity is calculated as
 * Since the velocity induced by a vortex on itself must be zero, we also define a small threshold close to both the bound and semi-infinite vortices at which the velocity induced at $\mathbf{x}$ becomes zero.
 
 
-> **NOTE:** The small offset $\epsilon$ corresponds to `body.kerneloffset`, while the cutoff threshold for self-induced velocity corresponds to `body.kernelcutoff`.
+> **NOTE:** The small offset $\epsilon$ corresponds to `body.core_size`, while the cutoff threshold for self-induced velocity corresponds to `body.kernelcutoff`.
 
 The potential and velocity field of a semi-infinte doublet panel (or vortex horseshoe) of unitary strength ($\mu=1$ or $\Gamma=1$) is shown below
 

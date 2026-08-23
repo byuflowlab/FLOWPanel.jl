@@ -21,7 +21,7 @@ function dense_G(body)
     G = zeros(n, n)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
-    pnl._G!(G, body, body; kerneloffset=body.kerneloffset_panel)
+    pnl._G!(G, body, body; core_size=body.core_size_panel)
     return G
 end
 

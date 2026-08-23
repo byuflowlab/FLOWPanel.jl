@@ -64,7 +64,7 @@ function _G_U!(self::LiftingLine; optargs...)
                               self.controlpoints,                # Targets
                               view(self.G, :, ei);               # Velocity of ei-th panel on every CP
                               dot_with=self.normals,             # Normal of every CP
-                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              offset=self.core_size,          # Offset of kernel to avoid singularities
                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                               optargs...
                              )
@@ -96,7 +96,7 @@ function _G_U!(self::LiftingLine; optargs...)
                               self.controlpoints,                # Targets
                               view(self.G, :, ei);                    # Velocity of wake panel on every CP
                               dot_with=self.normals,                  # Normal of every CP
-                              offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                              offset=self.core_size,          # Offset of kernel to avoid singularities
                               cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                               optargs...
                              )

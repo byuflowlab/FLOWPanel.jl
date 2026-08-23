@@ -248,7 +248,7 @@ function write_diagnostics(; meshfile=joinpath(pnl.examples_path, "data", "wing_
     println()
     println("Summary:")
     println("  panels = $(body.ncells), edges = $nedges")
-    println("  kerneloffset = $kernel_offset")
+    println("  core_size = $kernel_offset")
     println("  median AR = $(median(AR)), p99 AR = $(quantile(AR, 0.99)), max AR = $(maximum(AR))")
     println("  median |u·n| = $(median(abs_udotn)), p99 = $(quantile(abs_udotn, 0.99))")
     println("  median rel |u·n| = $(median(rel_udotn)), p99 = $(quantile(rel_udotn, 0.99))")

@@ -1,0 +1,8 @@
+rung,n_panels,pattern_entries,nnz,entries_per_row,t_construct_s,t_ldiv_ms,ns_per_nnz,retained_bytes,measured,leaf_size,multipole_acceptance,threading_mode,julia_threads,hardware_tag,date
+R1,8016,3906740,3906740,487.4,3.80,2.31,0.59,94276527,measured,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R2,15760,8002490,8002490,507.8,7.12,4.85,0.61,193070143,measured,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R3,28752,19150596,19150596,666.1,16.03,11.30,0.59,461456175,measured,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R4,58192,48433784,48433784,832.3,53.53,29.52,0.61,1166136847,measured,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R5,108240,130925412,130925412,1209.6,215.39,92.21,0.70,3149138991,measured,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R6,212108,436830804,,2059.5,,,,,pattern_only,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22
+R7,419276,1547431218,,3690.7,,,,,pattern_only,10,1.0,multi,4,mecsrs-MacBook-Pro-188.local,2026-08-22

@@ -30,7 +30,7 @@ end
 
 function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where {K}
     body = pnl.NonLiftingBody{K}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                DBC=dbc, kerneloffset=1e-8)
+                                DBC=dbc, core_size=1e-8)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[1, :] .= 1.0
@@ -49,9 +49,9 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
 
     switch = kernel_switch(true, true, false)
     potential_self, velocity_self, _ =
-        pnl.induced(control_point, body, 1, switch; kerneloffset=body.kerneloffset)
+        pnl.induced(control_point, body, 1, switch; core_size=body.core_size)
     _, velocity_outward, _ =
-        pnl.induced(outward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+        pnl.induced(outward_target, body, 1, switch; core_size=body.core_size)
 
     @test isapprox(velocity_self, velocity_outward; atol=1e-10, rtol=1e-10)
 
@@ -66,20 +66,20 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
         velocity_continuous = zero(velocity_self)
         if K == Union{pnl.ConstantSource, pnl.ConstantDoublet}
             doublet_body = pnl.NonLiftingBody{pnl.ConstantDoublet}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                                  DBC=dbc, kerneloffset=1e-8)
+                                                                  DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(doublet_body)
             pnl.calc_controlpoints!(doublet_body)
             doublet_body.strength[:, 1] .= 1.0
             _, velocity_continuous, _ =
-                pnl.induced(control_point, doublet_body, 1, switch; kerneloffset=doublet_body.kerneloffset)
+                pnl.induced(control_point, doublet_body, 1, switch; core_size=doublet_body.core_size)
         elseif K == Union{pnl.ConstantSource, pnl.VortexRing}
             vortex_body = pnl.NonLiftingBody{pnl.VortexRing}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                            DBC=dbc, kerneloffset=1e-8)
+                                                            DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(vortex_body)
             pnl.calc_controlpoints!(vortex_body)
             vortex_body.strength[:, 1] .= 1.0
             _, velocity_continuous, _ =
-                pnl.induced(control_point, vortex_body, 1, switch; kerneloffset=vortex_body.kerneloffset)
+                pnl.induced(control_point, vortex_body, 1, switch; core_size=vortex_body.core_size)
         end
         @test isapprox(dot(velocity_self - velocity_continuous, normal),
                        0.5; atol=1e-12, rtol=0)
@@ -87,17 +87,17 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
 
     if has_jump_potential
         potential_inward, _, _ =
-            pnl.induced(inward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+            pnl.induced(inward_target, body, 1, switch; core_size=body.core_size)
         source_potential = zero(potential_self)
         if K == Union{pnl.ConstantSource, pnl.ConstantDoublet} ||
                 K == Union{pnl.ConstantSource, pnl.VortexRing}
             source_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                                DBC=dbc, kerneloffset=1e-8)
+                                                                DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(source_body)
             pnl.calc_controlpoints!(source_body)
             source_body.strength[:, 1] .= 1.0
             source_potential, _, _ =
-                pnl.induced(control_point, source_body, 1, switch; kerneloffset=source_body.kerneloffset)
+                pnl.induced(control_point, source_body, 1, switch; core_size=source_body.core_size)
         end
         @test isapprox(potential_self - source_potential, 0.5;
                        atol=1e-10, rtol=1e-10)
@@ -294,7 +294,7 @@ end
         )
         eval_kernel(x, ps, vs, gs) =
             pnl.induced_semiinfinite(x, pnl.ConstantDoublet, geom...,
-                                     kernel_switch(ps, vs, gs); kerneloffset=1e-8)
+                                     kernel_switch(ps, vs, gs); core_size=1e-8)
 
         assert_velocity_is_potential_gradient(eval_kernel, targets)
         assert_velocity_gradient_is_velocity_jacobian(eval_kernel, targets)
@@ -311,7 +311,7 @@ end
         )
         eval_kernel(x, ps, vs, gs) =
             pnl.induced_semiinfinite(x, pnl.VortexRing, geom...,
-                                     kernel_switch(ps, vs, gs); kerneloffset=1e-8)
+                                     kernel_switch(ps, vs, gs); core_size=1e-8)
 
         assert_velocity_gradient_is_velocity_jacobian(eval_kernel, targets)
     end

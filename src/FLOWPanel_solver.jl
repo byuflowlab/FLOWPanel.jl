@@ -112,7 +112,7 @@ _G_kernel_and_strength_index(::AbstractBody{Union{ConstantSource, ConstantDouble
 _G_kernel_and_strength_index(::AbstractBody{Union{ConstantSource, VortexRing}, 2}) = (VortexRing, 2)
 
 """
-    _G!(G, target_system, source_system; kerneloffset=source_system.kerneloffset, update_geometry=false)
+    _G!(G, target_system, source_system; core_size=source_system.core_size, update_geometry=false)
 
 Populate the influence matrix `G` such that `G[i, j]` is the influence of the
 j-th panel of `source_system` on the i-th control point of `target_system`.
@@ -138,7 +138,7 @@ type parameter.
 """
 function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
              source_system::AbstractBody{<:Any,NK,TF};
-             kerneloffset=source_system.kerneloffset,
+             core_size=source_system.core_size,
              update_geometry::Bool=false) where {DBC,NK,TF}
     M = target_system.ncells
     N = source_system.ncells
@@ -179,10 +179,10 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
             tx, ty, tz = CPs[1, i_target], CPs[2, i_target], CPs[3, i_target]
             target = FastMultipole.StaticArrays.SVector{3,TF}(tx, ty, tz)
 
-            phi, u, _ = induced(target, source_system, i_source, derivatives_switch; kerneloffset)
+            phi, u, _ = induced(target, source_system, i_source, derivatives_switch; core_size)
 
             if DBC
-                isnan(phi) && error("NaN encountered in G matrix computation: \ni_source = $i_source, i_target = $i_target, target = $target, source_strength = $(source_system.strength[i_source, strength_index]), kernel = $kernel, kerneloffset = $kerneloffset")
+                isnan(phi) && error("NaN encountered in G matrix computation: \ni_source = $i_source, i_target = $i_target, target = $target, source_strength = $(source_system.strength[i_source, strength_index]), kernel = $kernel, core_size = $core_size")
                 G[i_target, i_source] = phi
             else
                 G[i_target, i_source] = u[1] * normals[1, i_target] + u[2] * normals[2, i_target] + u[3] * normals[3, i_target]
@@ -228,7 +228,7 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
 
     calc_normals!(body)
     calc_controlpoints!(body)
-    _G!(G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false)
+    _G!(G, body, body; core_size=body.core_size_panel, update_geometry=false)
     Glu = lu!(G)
 
     return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
@@ -302,22 +302,29 @@ struct KrylovOperator{TB<:AbstractBody,B<:AbstractBackend,TF}
     strengths_scratch::Vector{TF}
     cache_tree::Bool               # reuse the FMM plan across applies within a solve
     cache_nearfield::Bool          # dense near-field cache on the plan (implies cache_tree)
+    nearfield_cache_max_bytes::Int # size cap for that cache (FastMultipole default is 4 GiB)
+    nearfield_cache_max_build_time::Float64  # wall-clock cap; the cache build is serial
     plan_slot::Base.RefValue{Any}  # (FmmPlan, key) or nothing; cleared around each solve
 end
 
 function KrylovOperator(body::AbstractBody, backend::AbstractBackend;
-                        cache_tree::Bool=false, cache_nearfield::Bool=false)
+                        cache_tree::Bool=false, cache_nearfield::Bool=false,
+                        nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
+                        nearfield_cache_max_build_time::Real=Inf)
     TF = numtype(body)
     return KrylovOperator{typeof(body),typeof(backend),TF}(
         body, backend, copy(body.normals), zeros(TF, body.ncells),
-        cache_tree, cache_nearfield, Ref{Any}(nothing))
+        cache_tree, cache_nearfield, Int(nearfield_cache_max_bytes),
+        Float64(nearfield_cache_max_build_time), Ref{Any}(nothing))
 end
 
 function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
     @assert length(B) == op.body.ncells "Length of strengths vector does not match number of panels in body."
     Gx = _apply_neumann_G!(op.body, B, op.backend, op.normals, op.strengths_scratch;
                            plan_slot=op.cache_tree ? op.plan_slot : nothing,
-                           cache_nearfield=op.cache_nearfield)
+                           cache_nearfield=op.cache_nearfield,
+                           nearfield_cache_max_bytes=op.nearfield_cache_max_bytes,
+                           nearfield_cache_max_build_time=op.nearfield_cache_max_build_time)
     C .*= β
     C .+= α .* Gx
 end
@@ -326,7 +333,9 @@ function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B, �
     @assert length(B) == op.body.ncells "Length of strengths vector does not match number of panels in body."
     Gx = _apply_dirichlet_G!(op.body, B, op.backend, op.strengths_scratch;
                              plan_slot=op.cache_tree ? op.plan_slot : nothing,
-                             cache_nearfield=op.cache_nearfield)
+                             cache_nearfield=op.cache_nearfield,
+                             nearfield_cache_max_bytes=op.nearfield_cache_max_bytes,
+                             nearfield_cache_max_build_time=op.nearfield_cache_max_build_time)
     C .*= β
     C .+= α .* Gx
 end
@@ -363,7 +372,7 @@ Options:
   reuse them across the solve's operator applies (021 Phase 2b); off by
   default. Scope is strictly per-solve: the plan is built on the first apply
   and dropped when the solve returns, so geometry and the active
-  `kerneloffset` (which feeds the FMM buffer radii via `radius_inflation`)
+  `core_size` (which feeds the FMM buffer radii via `radius_inflation`)
   are frozen for the plan's whole lifetime by construction. Only meaningful
   with a `FastMultipoleBackend`.
 - `cache_nearfield`: additionally freeze the plan's near field as dense
@@ -374,6 +383,19 @@ Options:
   cache shares the plan's lifetime and validity contract. Solution shifts at
   the rtol level are expected (BLAS summation order differs from the
   kernel's).
+- `persistent_plan`: keep the plan (and any near-field cache on it) alive
+  ACROSS solves instead of dropping it when each solve returns (the
+  originally deferred nearfield-cache commit 4, extended with rigid-motion
+  support). Implies (and requires) `cache_tree=true`. Contract: between
+  solves the body geometry either stays frozen or moves RIGIDLY with every
+  rigid step mirrored by [`transform_solver_geometry!`](@ref) (`simulate!`
+  does this automatically from the frame kinematics), and the active
+  core_size that governed the plan's buffer radii is restored before
+  every solve (the production Dirichlet path does this — the plan is built
+  lazily inside `_krylov_launch!` under the panel-offset state, which
+  `_set_core_sizes!` re-establishes each solve). The Dirichlet
+  scalar-potential operator (and its near-field cache blocks) is EXACTLY
+  invariant under rigid motion, so build cost amortizes over the run.
 
 After each solve, `solver.niter` and `solver.solved` report Krylov's stats.
 """
@@ -402,6 +424,7 @@ mutable struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP,TK
     solved::Bool           # convergence flag of the last solve
     cache_tree::Bool       # per-solve FMM plan reuse (see docstring)
     cache_nearfield::Bool  # dense near-field cache on the per-solve plan (see docstring)
+    persistent_plan::Bool  # cross-solve plan (+cache) persistence (see docstring)
 end
 
 function KrylovSolver(body::AbstractBody;
@@ -417,11 +440,17 @@ function KrylovSolver(body::AbstractBody;
         record_history::Bool=false, # capture per-iteration convergence history
         cache_tree::Bool=false,     # per-solve FMM plan reuse (021 Phase 2b)
         cache_nearfield::Bool=false, # dense near-field cache on the plan (021 Phase 2b)
+        # Caps for that cache. FastMultipole's 4 GiB default is below what the
+        # larger 021 rungs need (R4 ≈ 4.5 GiB), and the build is serial, so the
+        # time cap is wall-clock rather than a per-thread budget.
+        nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
+        nearfield_cache_max_build_time::Real=Inf,
+        persistent_plan::Bool=false, # cross-solve plan persistence (see docstring)
     )
     TF = numtype(body)
-    cache_tree |= cache_nearfield   # the cache lives on the plan, so it implies cache_tree
+    cache_tree |= cache_nearfield | persistent_plan  # both live on the plan, so they imply cache_tree
     cache_tree && !(backend isa FastMultipoleBackend) && throw(ArgumentError(
-        "cache_tree=true (or cache_nearfield=true) requires a FastMultipoleBackend (got $(typeof(backend)))"))
+        "cache_tree=true (or cache_nearfield/persistent_plan=true) requires a FastMultipoleBackend (got $(typeof(backend)))"))
     Uext = zeros(TF, 3, body.ncells)
     source_strengths = zeros(TF, body.ncells)
     unabbreviated_strengths = zeros(TF, body.ncells)
@@ -434,7 +463,8 @@ function KrylovSolver(body::AbstractBody;
     end
 
     # matrix-free operator + persistent workspace
-    kop = KrylovOperator(body, backend; cache_tree, cache_nearfield)
+    kop = KrylovOperator(body, backend; cache_tree, cache_nearfield,
+                         nearfield_cache_max_bytes, nearfield_cache_max_build_time)
     n = body.ncells
     prod! = (y, x, α, β) -> kop(y, x, α, β)
     A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)
@@ -451,7 +481,8 @@ function KrylovSolver(body::AbstractBody;
         body, backend, Uext, source_strengths, unabbreviated_strengths,
         kop, A, rhs, workspace, method, itmax, Float64(atol), Float64(rtol),
         Int(memory), preconditioner, warmstart, x_prev, false,
-        record_history, history, 0, false, cache_tree, cache_nearfield)
+        record_history, history, 0, false, cache_tree, cache_nearfield,
+        persistent_plan)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -497,9 +528,12 @@ function _krylov_launch!(solver::KrylovSolver)
     rhs = solver.rhs
 
     # cache_tree scope = exactly this launch: clear any stale plan so the
-    # first apply rebuilds under the CURRENT geometry + active kerneloffset
-    # (the buffer radii depend on it via radius_inflation)
-    solver.cache_tree && (solver.kop.plan_slot[] = nothing)
+    # first apply rebuilds under the CURRENT geometry + active core_size
+    # (the buffer radii depend on it via radius_inflation). persistent_plan
+    # opts out: the caller guarantees frozen-or-rigidly-mirrored geometry and
+    # restored core_size state across solves (see the KrylovSolver
+    # docstring), so the surviving plan stays valid.
+    solver.cache_tree && !solver.persistent_plan && (solver.kop.plan_slot[] = nothing)
 
     # convergence-history capture (021 ruling 4): iteration + timestamp +
     # Krylov's internal residual (preconditioned norm when a left
@@ -547,9 +581,63 @@ function _krylov_launch!(solver::KrylovSolver)
 
     # drop the plan at solve end: releases the Cache buffers (the dominant
     # allocation) and guarantees the next solve cannot reuse a plan built
-    # under a different kerneloffset/geometry
-    solver.cache_tree && (solver.kop.plan_slot[] = nothing)
+    # under a different core_size/geometry (persistent_plan keeps it — see
+    # the entry clear above for the contract)
+    solver.cache_tree && !solver.persistent_plan && (solver.kop.plan_slot[] = nothing)
 
+    return nothing
+end
+
+"""
+    transform_solver_geometry!(solver, body, R, t)
+
+Mirror one RIGID body motion `x -> R*x + t` into any FMM state the solver
+persists across solves, so that state remains valid without a rebuild:
+
+- `KrylovSolver` with `persistent_plan=true`: transforms the live `FmmPlan`
+  (trees, interaction lists, and any near-field cache) via
+  `FastMultipole.transform_plan!`. No-op while no plan is alive yet (the
+  first solve builds it lazily from current geometry).
+- `FGSSolver`: transforms the `FastGaussSeidel` trees via
+  `FastMultipole.transform_solver!` — this fixes the unsteady staleness bug
+  where far-field expansions were silently formed about construction-time
+  branch centers as rotation accumulated (BRAINSTORM 021
+  rigid_motion_tree_reuse item). The dense self/nonself matrices are
+  untouched (scalar rows are exactly rotation-invariant).
+- every other solver: no-op (`Backslash`'s dense Dirichlet/Neumann operators
+  are rotation-invariant; plain `KrylovSolver` rebuilds trees per apply).
+
+`simulate!` calls this automatically for each body/solver pair after
+`propagate_kinematics!` using the frame tree's per-step affine deltas; call
+it manually only when driving rigid motion outside `simulate!`.
+"""
+transform_solver_geometry!(solver, body, R, t) = nothing
+
+function transform_solver_geometry!(solver::KrylovSolver, body, R, t)
+    (solver.persistent_plan && solver.kop.plan_slot[] !== nothing) || return nothing
+    FastMultipole.transform_plan!(solver.kop.plan_slot[][1], (body,), R, t)
+    return nothing
+end
+
+"""
+    transform_body_solvers!(body_solvers, systems_tuple, transforms)
+
+Forward each body's per-step rigid transform (from `propagate_kinematics!`)
+to its solver via [`transform_solver_geometry!`](@ref). `transforms` is the
+per-system vector of `(R, t)` affine deltas; identity entries are skipped.
+Solver tuples that do not align one-to-one with the bodies (coupled solvers)
+are left untouched — their per-apply rebuilds remain correct.
+"""
+function transform_body_solvers!(body_solvers, systems_tuple::Tuple, transforms)
+    transforms === nothing && return nothing
+    solvers = body_solvers isa Tuple ? body_solvers : (body_solvers,)
+    length(solvers) == length(systems_tuple) || return nothing
+    for (solver, body, (R, t)) in zip(solvers, systems_tuple, transforms)
+        # skip identity deltas (static bodies) — cheap exact check: the
+        # kinematics emit exact I / zero for frames with no motion
+        R == I && iszero(t) && continue
+        transform_solver_geometry!(solver, body, R, t)
+    end
     return nothing
 end
 
@@ -849,7 +937,7 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
 
     if update_G
         solver.G .= zero(eltype(solver.G))
-        _G!(solver.G, body, body; kerneloffset=body.kerneloffset_panel, update_geometry=false, optargs...)
+        _G!(solver.G, body, body; core_size=body.core_size_panel, update_geometry=false, optargs...)
         # write the refreshed factorization back so later direct consumers of
         # solver.Glu (Kutta Route A, Green-family formulations) never see a
         # stale-pivot factorization (Glu.factors aliases solver.G)
@@ -873,7 +961,7 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
 
     if update_G
         solver.G .= 0.0
-        _G!(solver.G, self, self; kerneloffset=self.kerneloffset_panel, update_geometry=false)
+        _G!(solver.G, self, self; core_size=self.core_size_panel, update_geometry=false)
         # write back (see Neumann _solve! comment)
         solver.Glu = lu!(solver.G)
     end
@@ -949,6 +1037,16 @@ function _solve!(body::AbstractBody, solver::FGSSolver{Nothing}; optargs...)
           "carries options (e.g. as a formulation green_solver); it cannot "*
           "run the FastGaussSeidel body solve.")
 end
+
+# rigid-motion hook (see transform_solver_geometry! docstring above): fixes
+# the FGS unsteady staleness bug — far-field expansions about
+# construction-time branch centers under accumulated rotation
+function transform_solver_geometry!(solver::FGSSolver, body, R, t)
+    FastMultipole.transform_solver!(solver.fgs, (body,), R, t)
+    return nothing
+end
+
+transform_solver_geometry!(solver::FGSSolver{Nothing}, body, R, t) = nothing
 
 function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleBackend(
         expansion_order=solver.expansion_order,
@@ -1216,17 +1314,29 @@ function _ilu_direct_pattern(body::AbstractBody, leaf_size::Int,
 
         target_sort = target_tree.sort_index_list[1]
         source_sort = source_tree.sort_index_list[1]
-        diagonal_seen = falses(body.ncells)
+
+        # Size the pattern BEFORE walking it. This pass is arithmetic over
+        # branch pairs (cheap), whereas the diagonal pass below is O(entries);
+        # doing it first means an over-cap request reports the TOTAL it needs
+        # instead of the running subtotal at which it happened to trip, so the
+        # limit can be set in one shot rather than by bisection.
         requested = 0
+        for pair in direct_list
+            requested += length(target_tree.branches[pair[1]].bodies_index[1]) *
+                         length(source_tree.branches[pair[2]].bodies_index[1])
+        end
+        requested <= max_pattern_entries || throw(ArgumentError(
+            "Barba direct-list pattern requests $requested entries " *
+            "($(round(requested / body.ncells; digits=1)) per row) for N=$(body.ncells), " *
+            "exceeding max_pattern_entries=$max_pattern_entries " *
+            "($(round(max_pattern_entries / body.ncells; digits=1)) per row). Increase the " *
+            "explicit limit or adjust leaf_size/MAC; construction stopped before sparse " *
+            "allocation and kernel evaluation."))
+
+        diagonal_seen = falses(body.ncells)
         for pair in direct_list
             target_range = target_tree.branches[pair[1]].bodies_index[1]
             source_range = source_tree.branches[pair[2]].bodies_index[1]
-            requested += length(target_range) * length(source_range)
-            requested <= max_pattern_entries || throw(ArgumentError(
-                "Barba direct-list pattern requests more than max_pattern_entries=" *
-                "$max_pattern_entries entries for N=$(body.ncells). Increase the explicit " *
-                "limit or adjust leaf_size/MAC; construction stopped before sparse " *
-                "allocation and kernel evaluation."))
             for it in target_range, js in source_range
                 target_sort[it] == source_sort[js] &&
                     (diagonal_seen[target_sort[it]] = true)
@@ -1249,7 +1359,7 @@ end
 "Assemble the direct-list operator in one common (source-tree) ordering."
 function _assemble_ilu_operator(body::AbstractBody{<:Any,NK,TF,DBC},
         target_tree, source_tree, direct_list, diagonal_seen, requested;
-        kerneloffset=body.kerneloffset_panel) where {NK,TF,DBC}
+        core_size=body.core_size_panel) where {NK,TF,DBC}
     n = body.ncells
     permutation = copy(source_tree.sort_index_list[1])
     inverse_permutation = invperm(permutation)
@@ -1295,7 +1405,7 @@ function _assemble_ilu_operator(body::AbstractBody{<:Any,NK,TF,DBC},
                     target = FastMultipole.StaticArrays.SVector{3,TF}(
                         CPs[1, i_original], CPs[2, i_original], CPs[3, i_original])
                     phi, u, _ = induced(target, body, j_original, derivatives;
-                                        kerneloffset)
+                                        core_size)
                     value = DBC ? phi :
                         u[1] * normals[1, i_original] +
                         u[2] * normals[2, i_original] +
@@ -1315,7 +1425,7 @@ function _assemble_ilu_operator(body::AbstractBody{<:Any,NK,TF,DBC},
             tree_index = inverse_permutation[original]
             target = FastMultipole.StaticArrays.SVector{3,TF}(
                 CPs[1, original], CPs[2, original], CPs[3, original])
-            phi, u, _ = induced(target, body, original, derivatives; kerneloffset)
+            phi, u, _ = induced(target, body, original, derivatives; core_size)
             value = DBC ? phi : dot(u, view(normals, :, original))
             isfinite(value) || error("nonfinite ILU diagonal at body panel $original")
             k += 1

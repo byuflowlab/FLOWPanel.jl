@@ -103,7 +103,7 @@ where $\Delta\theta=2\pi$ if $(x,y,0)$ lies inside the quadrilateral, $\Delta\th
 **OBSERVATIONS**
 * The term $Q_{i,j}$ makes this formulation singular at all vertices and edges of a panel; hence, FLOWPanel adds a small epsilon to the denominator of the log argument to avoid the singularity.
 
-> **NOTE:** The small offset added to the denominator of $Q_{i,j}$ corresponds to `body.kerneloffset`.
+> **NOTE:** The small offset added to the denominator of $Q_{i,j}$ corresponds to `body.core_size`.
 
 The potential and velocity field of a source panel of unitary strength ($\sigma=1$) is shown below
 

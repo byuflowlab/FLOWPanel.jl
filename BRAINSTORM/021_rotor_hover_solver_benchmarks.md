@@ -8,6 +8,18 @@
 
 ## Current status
 
+> **STALE BELOW — last revised 2026-08-13.** As of 2026-08-22 the campaign is in
+> Phase 2, not "Phase 1 starting". Read
+> `021_rotor_hover_solver_benchmarks/log.md` (newest first) for true state; the
+> narrative below is kept for Phase-0 provenance only. Live summary: Phase 1
+> ladder frozen and tuned through R6 (R7 tune + R6 table failed, causes
+> diagnosed 2026-08-22); Phase 2 active since 08-17 with the near-field cache,
+> rigid-motion tree reuse and the FGS unsteady staleness fix landed; the
+> Phase-2b HPC campaign was 0/8 and awaits relaunch. Note also that
+> `fgs_wake_plateau_handoff_prompt.md` is SUPERSEDED — the plateau it stages a
+> hunt for was root-caused the same day as H3 (lifecycle ordering), not
+> H1/H2/H4.
+
 **Phase 0 TECHNICALLY COMPLETE 2026-08-13 (W1–W6).** W6 (sparse near-field ILU) was
 implemented directly by Ryan (Barba direct-list pattern + `ILUZero.jl`; the staged
 `phase_00_ilu_plan.md` is superseded), then session-reviewed (correct; ctor deduplicated,
@@ -158,8 +170,8 @@ The paper's comparison roster is rulings 1a–1f below. What exists today:
 | Phase | Deliverable | Status | Approval |
 | --- | --- | --- | --- |
 | [0](021_rotor_hover_solver_benchmarks/phase_00_availability.md) | All roster configs runnable in the rotor pipeline + instrumentation layer + **sparse near-field ILU preconditioner (W6, added 2026-08-12)** | TECHNICALLY COMPLETE 2026-08-13 (W1–W6; W6 smoke PASS both modes) | clear-context APPROVED 2026-08-13 (2nd review, after remediating the 1st's 6 findings); Ryan re-approval [ ] (Ryan 2026-08-13: proceed to Phase 1 meanwhile) |
-| [1](021_rotor_hover_solver_benchmarks/phase_01_consistency.md) | No-wake agreement across the ladder + frozen per-solver settings achieving matched residual levels | IN PROGRESS 2026-08-13 (tentative constant-AR ladder ×2/rung, 6.3k→405k panels; meshes to generate) | [ ] |
-| [2](021_rotor_hover_solver_benchmarks/phase_02_single_step_benchmarks.md) | Setup vs per-step cost benchmarks, bottleneck attribution, tuning + authorized source speedups, re-benchmark | NOT STARTED | [ ] |
+| [1](021_rotor_hover_solver_benchmarks/phase_01_consistency.md) | No-wake agreement across the ladder + frozen per-solver settings achieving matched residual levels | IN PROGRESS (ladder FROZEN R1–R7 8,016→419,276 panels; R1–R6 tuned; R7 tune + R6 table failed 2026-08-18, causes found 08-22, resubmission pending) | [ ] |
+| [2](021_rotor_hover_solver_benchmarks/phase_02_single_step_benchmarks.md) | Setup vs per-step cost benchmarks, bottleneck attribution, tuning + authorized source speedups, re-benchmark | IN PROGRESS since 2026-08-17 (near-field matrix cache, rigid-motion tree reuse + FGS staleness fix, cached-economics tune); 2b HPC campaign relaunch pending | [ ] |
 | [3](021_rotor_hover_solver_benchmarks/phase_03_warmstart.md) | Warmstart matrix (none / previous / Taylor-extrapolated) × (Krylov, FGS) in unsteady hover | NOT STARTED | [ ] |
 | [4](021_rotor_hover_solver_benchmarks/phase_04_blown_wing.md) | Rotor + NACA 0015 wing multi-body benchmarks; coupled-vs-iterative refactorization asymmetry | NOT STARTED | [ ] |
 

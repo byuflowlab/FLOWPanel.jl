@@ -6,11 +6,11 @@ v1x, v1y, v1z = 0.0, 0.0, 0.0
 v2x, v2y, v2z = 0.0, 1.0, 0.0
 d1, d2, d3 = 1.0, 0.0, 0.0
 strength = 1.0
-kerneloffset = 0.0
+core_size = 0.0
 zs = range(-1,stop=1,length=100)
 targets = [[0.5, 0.5, z] for z in zs]
-phis = [FLOWPanel._phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset) for target in targets]
-vs = [FLOWPanel._U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)[3] for target in targets]
+phis = [FLOWPanel._phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size) for target in targets]
+vs = [FLOWPanel._U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)[3] for target in targets]
 
 fig = figure("check doublet horseshoe")
 fig.clear()

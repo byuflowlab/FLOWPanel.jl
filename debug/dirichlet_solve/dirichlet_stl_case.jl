@@ -66,7 +66,7 @@ function build_stl_wing(path)
     bodytype = pnl.RigidWakeBody{
         Union{pnl.ConstantSource,pnl.ConstantDoublet}, 2, Float64, true}
     options = (;
-        kerneloffset=1e-6,
+        core_size=1e-6,
         kernelcutoff=1e-12,
         semiinfinite_wake=true,
         watertight=true,

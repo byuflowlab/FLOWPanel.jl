@@ -157,17 +157,17 @@ function (m::TEDownwashProbe)(systems, wakes, frames, uinf, i_step, dt)
 
     # DIAGNOSTIC: all sources (kernel-offset guard per DragPolarMonitor)
     all_sources = (systems_tuple..., wake_sources...)
-    old_offsets = [sys.kerneloffset for sys in systems_tuple]
+    old_offsets = [sys.core_size for sys in systems_tuple]
     try
         for (i, sys) in pairs(systems_tuple)
-            sys.kerneloffset = i == m.i_system ? sys.kerneloffset_panel :
-                                                 sys.kerneloffset_targets
+            sys.core_size = i == m.i_system ? sys.core_size_panel :
+                                                 sys.core_size_targets
         end
         pnl.influence!((m.probes,), all_sources, m.backend;
             precalc=false, scalar_potential=false, gradient=true, hessian=(false,))
     finally
         for (sys, offset) in zip(systems_tuple, old_offsets)
-            sys.kerneloffset = offset
+            sys.core_size = offset
         end
     end
 

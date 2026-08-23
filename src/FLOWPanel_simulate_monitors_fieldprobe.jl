@@ -174,12 +174,12 @@ function (m::CylindricalFieldProbeMonitor{TF})(systems, wakes,
     origin_global, R_f2g = frame_global_transform(frames, m.i_frame)
     _fieldprobe_set_global_positions!(m.probes, m.positions_local, origin_global, R_f2g)
 
-    # Set every body's kerneloffset to its off-body (target) value while we
+    # Set every body's core_size to its off-body (target) value while we
     # treat panels as sources for off-body probes.
-    saved_offsets = [sys.kerneloffset for sys in systems]
+    saved_offsets = [sys.core_size for sys in systems]
     try
         for sys in systems
-            sys.kerneloffset = sys.kerneloffset_targets
+            sys.core_size = sys.core_size_targets
         end
         for (label, source_tuple) in _fieldprobe_collect_entities(systems, wakes)
             _fieldprobe_zero!(m.probes)
@@ -201,7 +201,7 @@ function (m::CylindricalFieldProbeMonitor{TF})(systems, wakes,
         end
     finally
         for (sys, off) in zip(systems, saved_offsets)
-            sys.kerneloffset = off
+            sys.core_size = off
         end
     end
     return nothing

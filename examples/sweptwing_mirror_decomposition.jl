@@ -322,10 +322,10 @@ println("\nVerifying loaded velocity with one N-body evaluation on the +y mesh..
 velocity_loaded_pos = copy(body_pos.velocity)
 backend = pnl.FastMultipoleBackend()
 body_pos.velocity .= 0
-pnl._set_kerneloffsets!((body_pos,), :kerneloffset_targets)
+pnl._set_core_sizes!((body_pos,), :core_size_targets)
 @time pnl.influence!((body_pos,), (body_pos,), backend; precalc=false,
     scalar_potential=false, velocity=true,
-    direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+    direct_conditioning=pnl._self_panel_core_size_conditioning())
 body_pos.velocity .+= jump_pos
 pnl.apply_freestream!(body_pos, Vinf)
 verr = [_norm(body_pos.velocity[:, i] .- velocity_loaded_pos[:, i]) for i in 1:body_pos.ncells]
@@ -528,10 +528,10 @@ function CL_with_gamma(bd, gamma_new, areas)
     view(bd.strength, :, Gi) .= gamma_new
 
     bd.velocity .= 0
-    pnl._set_kerneloffsets!((bd,), :kerneloffset_targets)
+    pnl._set_core_sizes!((bd,), :core_size_targets)
     pnl.influence!((bd,), (bd,), backend; precalc=false,
         scalar_potential=false, velocity=true,
-        direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        direct_conditioning=pnl._self_panel_core_size_conditioning())
     bd.velocity .+= half_jump(bd)
     pnl.apply_freestream!(bd, Vinf)
     CL = compute_CL(bd, bd.velocity, areas)

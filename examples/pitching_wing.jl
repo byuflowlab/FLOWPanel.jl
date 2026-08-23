@@ -242,7 +242,7 @@ function build_pitching_wing_body(c, b; n_span::Integer=13, n_airfoil::Integer=1
     bodytype = pnl.RigidWakeBody{
         Union{pnl.ConstantSource, pnl.ConstantDoublet}, 2, Float64, true}
     bodyoptargs = (;
-        kerneloffset=1e-6 * c,
+        core_size=1e-6 * c,
         kernelcutoff=1e-12 * c,
         semiinfinite_wake,
         watertight=true,
