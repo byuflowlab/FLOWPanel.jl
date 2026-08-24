@@ -200,6 +200,13 @@ end
 # Relative tolerance for self-pair detection: ||target - centroid|| < ε_rel * √A.
 const SELF_PAIR_EPS_REL = 1.0e-12
 
+# On-plane snap for the solid-angle PV branch (see _induced): plain floats
+# snap so the ±2π branch side is deterministic across host/device/exact
+# arithmetic; AD duals pass through unchanged so their partials survive.
+@inline _onplane_snap(tRz::T, L2) where {T<:Union{Float32,Float64}} =
+    ifelse(tRz*tRz <= 1e-24 * L2, zero(T), tRz)
+@inline _onplane_snap(tRz, L2) = tRz
+
 @inline function _is_self_pair(target, control_point, vertices)
     v1, v2, v3 = vertices
     e1 = v2 - v1
@@ -455,7 +462,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
        abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
        # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
        # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
@@ -529,7 +536,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
        abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
        # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
        # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
@@ -612,7 +619,7 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
        abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
        # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
        # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
@@ -722,12 +729,25 @@ end
 function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TFP,NS,PS,VS,GS,NO,NM}
     #--- prelimilary computations ---#
 
-    # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     TFT = eltype(target)
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
     # No on-centroid nudge: when target_Rz == 0 the kernel returns the principal
     # value (compute_source_dipole forces tan_term = 0 at target_Rz == 0), and
     # `_self_limit` applies the fixed exterior velocity and interior potential limits at self pairs.
+    # On-plane snap: roundoff-scale target_Rz means the target IS on the panel
+    # plane; snapping to an exact zero makes every edge take the PV branch of
+    # the solid-angle tan_term, so the ±2π side cannot follow the sign of
+    # arithmetic junk (host/device FMA divergence, job 13309929, 2026-08-22).
+    # Mirrored in FastMultipole _rect_tri_source_doublet with the same 1e-24
+    # relative-tolerance-squared vs the panel scale L² = Σᵢ|vᵢ - centroid|².
+    # Plain-float types only: an AD dual must keep flowing through the smooth
+    # atan branch or zero(target_Rz) erases its partials (∇φ ≡ 0 at on-plane
+    # evaluation points, e.g. the control-point convergence tests).
+    L2 = zero(promote_type(TFT, TFP))
+    for v in vertices
+        L2 += (v[1]-centroid[1])^2 + (v[2]-centroid[2])^2 + (v[3]-centroid[3])^2
+    end
+    target_Rz = _onplane_snap(target_Rz, L2)
 
     #--- first recursive quantities ---#
 
