@@ -2744,3 +2744,92 @@ lack a usable `CT_per_rev`):
 **Still owed on this arm** (not done here): Γ̄ overlay *plot* vs the
 straight-sheet rungs. The numbers are in `data/<run>/monitors/`; the overlay is
 a figure task, deferred.
+
+---
+
+## 2026-08-24 — NT72/NT144 ladders harvested (all 8 arms) + SIGBUS forensics
+
+None of the eight NT-ladder arms completed: seven hit their 3 d wall (TIMEOUT)
+and `csarc_nt72_l2p4` (13245449) died on a SIGBUS at step 1454/2159. No arm
+wrote `CT_vs_rev.csv`; all eight are scored from `monitor02_force` (CT = −CFx),
+the validated fallback. Harvested to local `data/<run>/` (metadata + full
+monitors/, no VTK); cluster copies untouched.
+
+**Reach and windows** (whole-rev-aligned, settled portion only; the first
+scoring pass with revs 6–20 windows was transient-contaminated — drift
+1–3 %/rev — and was discarded):
+
+| arm | job | outcome | reach | M1 window |
+|---|---|---|---:|---|
+| `csarc_nt72_l2p4` | 13245449 | SIGBUS @1454 | rev 20 | 14–19 (6 rev) |
+| `csarc_nt72_l3p4` | 13245450 | TIMEOUT | rev 20 | 14–19 (6 rev) |
+| `csarc_nt72_l4p8` | 13245451 | TIMEOUT | rev 21 | 15–20 (6 rev) |
+| `csarc_nt144_l2p4` | 13245452 | TIMEOUT | rev 11 | 9–10 (2 rev, UNSETTLED) |
+| `csarc_nt144_l3p4` | 13245453 | TIMEOUT | rev 11 | 9–10 (2 rev, UNSETTLED) |
+| `csarc_nt144_l4p8` | 13245454 | TIMEOUT | rev 11 | 9–10 (2 rev, UNSETTLED) |
+| `csarc_n0_nt72_l4p8` | 13246048 | TIMEOUT | rev 20 | 15–19 (5 rev; still drifting +) |
+| `csarc_n0_nt144_l4p8` | 13246049 | TIMEOUT | rev 11 | 9–10 (2 rev, UNSETTLED) |
+
+**M1 — CT̄ across the NT ladder** (NT36 rows from 2026-08-22 entry; NT rungs
+are labeled model-def A/Bs under the exact-rate rule, rlxf 0.3/0.16334/0.08539):
+
+| λ | N | NT36 (15 rev) | NT72 (6 rev) | Δ36→72 | NT144 (2 rev) | Δ72→144 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2.4 | 1 | 0.070663 | 0.073702 | **+4.30%** | 0.074251 | +0.74% |
+| 3.4 | 1 | 0.071013 | 0.072689 | **+2.36%** | 0.074867 | +3.00% |
+| 4.8 | 1 | 0.070666 | 0.074214 | **+5.02%** | 0.074065 | −0.20% |
+| 4.8 | 0 | 0.071584 | 0.075730 | **+5.79%** | 0.073960 | −2.34% |
+
+**M2 — ε_Γ (0.3 ≤ r/R ≤ 0.95, matched settled windows):** NT72 vs NT36
+carrier: ε_max 5.50% / 3.77% / 8.78% (λ 2.4/3.4/4.8), n0 pair 10.63%.
+NT144 vs NT72: 4.44% / 5.15% / 1.87%, n0 pair 2.73%. All FAIL the 1% gate.
+
+### Verdicts
+
+1. **NT36 is not temporally converged.** Halving dt (NT36→NT72) moves CT̄ by
+   +2.4–5.0% and Γ̄ by 4–11% — an order of magnitude beyond the λ-axis scatter.
+   The 2026-08-22 λ doubling-gate PASS was a fixed-NT36 statement and is now
+   demoted: at NT72 the λ gate **FAILS** (M1 Δ2.4→4.8 = +0.69% > 0.5%; M2
+   ε_max 3.96% > 1%). At NT144 the λ endpoints agree to −0.25% / 1.17%, but on
+   unsettled 2-rev windows — suggestive, not scoreable.
+2. **NT72→NT144 deltas shrink** (|ΔCT| 0.2–3.0% vs 2.4–5.8% for 36→72),
+   consistent with approaching temporal convergence, but NT144 arms reached
+   only rev 11 of 30 and were still settling — the rung cannot be scored
+   without chaining (RYAN'S decision, standing rule).
+3. **N=0 vs N=1: +2.04% CT at NT72** (0.075730 vs 0.074214), larger than the
+   +1.30% at NT36 — the convert-at-shed effect is not an NT36 artifact. The
+   NT144 sign flip (−0.14%) is unsettled-window noise; hold adoption per the
+   2026-08-22 recommendation until NT144 settles.
+4. **SIGBUS forensics** (13185010, 13245449): different nodes (m12-2-6,
+   m12-4-14), 4 days apart, exit 7:0 (SIGBUS, not cgroup OOM), no disk/quota
+   pressure (home FS 7% full). 13245449's trace faults in `getfield`
+   (`ijl_get_nth_field_checked`) inside `_set_kerneloffsets!`
+   (cluster `FLOWPanel_simulate.jl:446`). Both jobs peaked ~67 G RSS on a 64 G
+   request while six sibling arms on the same code path ran 3 d clean —
+   consistent with sporadic memory-pressure faults, not a deterministic bug.
+   **Mitigation for chains/resubmits: request ≥80 G.**
+
+**Retention:** VTK for all eight arms still on cluster (swept to 36-step
+retention 2026-08-22, a few steps written since); disk 104 G/200 G. Restart
+snapshot sets preserved — chaining is possible from the retained sets.
+
+**2026-08-24 addendum — NT-ladder _s2 chains STAGED (not submitted).** Ryan
+approved chaining; the agent's `sbatch`/`scp` were blocked by the local
+permission classifier, so the full submission is staged in
+`scripts/p018_submit_nt_chains_s2.sh` (LOCAL ONLY — not yet on the cluster)
+for Ryan to push+run:
+`scp scripts/p018_submit_nt_chains_s2.sh orc:/home/rander39/projects/FLOWPanel.jl/scripts/ && ssh orc bash /home/rander39/projects/FLOWPanel.jl/scripts/p018_submit_nt_chains_s2.sh`
+Contents: all 8 arms chained to 30 revs (`P018_SETTLE_REVS=22`), NT72 48 h /
+NT144 72 h, **96G** (SIGBUS mitigation), pinned
+`FLOWPANEL_FILAMENT_REG=vatistas` + production FMM knobs (= driver defaults
+body 8/0.4/20, wake 4/0.4/50; verified the original arms ran the pre-08-21
+launcher/driver with no FMM env — their banners lack the `filament_reg` line
+and their metadata records no knobs). RESTART_STEP per arm = last step with
+all four warmstart pieces, verified aligned 2026-08-24: nt72 l2p4/l3p4/l4p8 =
+1453/1459/1518, n0_nt72 = 1449; nt144 l2p4/l3p4/l4p8 = 1648/1682/1663,
+n0_nt144 = 1648. NT144 s2 reaches only ~rev 22 in 72 h (~163 s/step) — an
+**s3 chain will be needed** from each s2's last snapshot to close 30 revs.
+After submission: verify banners (vatistas + 8/0.4/20 + 4/0.4/50, settle:22,
+restart line), re-arm the ≥100 G disk watchdog (8 VTK writers), and at
+analysis time stitch on `step` with the ≤0.05% seam gate. Score s2 segments
+from `monitor02_force` (driver summary zero-fills restored steps).

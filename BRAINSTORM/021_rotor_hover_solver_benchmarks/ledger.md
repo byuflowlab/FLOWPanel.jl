@@ -121,3 +121,40 @@ shot. NOTE: the unit test "ILU(0) construction ladder remains linear"
 (test/runtests_unit_solver.jl:581) does not actually enforce linearity — it
 allows 2.5x nnz growth across ~2.1x N steps (i.e. up to N^1.28) on 128–512-panel
 spheres, a regime that does not reproduce the real meshes' N^1.5.
+
+## Data quarantine: pre-Phase-3 `phase1_costcheck` timings (2026-08-24)
+
+The 021 Phase-3 solver-lifecycle fix (2026-08-23) added a one-body early break to
+the tuple `solve!` (`src/FLOWPanel_solver.jl:2000-2011`): a single-body tuple has
+no coupling to iterate, so the block-GS outer loop now exits after the first
+block solve instead of re-solving the identical system every outer iteration.
+Every `phase1_costcheck` / `phase0_smoke backslash_iterative` row measured before
+that date therefore carries **two** inner solves in `t_solve_min` and
+`alloc_solve_bytes`, and is not comparable to anything measured after it.
+
+Those rows were moved out of the live files (rows preserved verbatim with header,
+nothing deleted):
+
+| Was | Now | Rows |
+| --- | --- | --- |
+| `benchmark/results/phase1/multi/runs.csv` | `benchmark/results/phase1/multi/runs_pre_phase3.csv` | 17 (all `phase1_costcheck`, `backslash_ref`, R1–R3) |
+| `benchmark/results/smoke/multi/runs.csv` | `benchmark/results/smoke/multi/runs_pre_phase3.csv` | 1 (`backslash_iterative_multi`) |
+| `benchmark/results/smoke/single/runs.csv` | `benchmark/results/smoke/single/runs_pre_phase3.csv` | 1 (`backslash_iterative_single`) |
+
+The stale note strings that described the two-solve behaviour were corrected at
+the same time: `benchmark/rotor_hover_solver_phase1.jl:291` and
+`benchmark/rotor_hover_solver_smoke.jl:278-283,292`. No analysis script globs
+`runs*.csv`, so the quarantine filename is inert; `smoke` rewrites its `runs.csv`
+with `open(path, "w")` on every run, which is why the smoke rows had to be moved
+rather than left in place.
+
+Only the tuple path is affected. The other smoke configs and every
+`phase1_table` / `phase1_tune` row go through the single-body `solve!` or raw
+`_solve!`, which the same commit re-bracketed with the step lifecycle but did not
+change numerically for a cold (`warmstart=false`, `solution_history_length=0`)
+solve. The Dirichlet source-potential seam `_source_influence!`
+(`src/FLOWPanel_solver.jl:384-395`) falls back to the original
+`influence!(body, body, backend; scalar_potential=true)` whenever
+`solver.S === nothing`, and `Backslash`'s `assemble_source_potential` kwarg
+defaults to `false` — no benchmark driver opts in. **If a driver ever does opt
+in, Phase-1 timings stop being comparable across that boundary.**

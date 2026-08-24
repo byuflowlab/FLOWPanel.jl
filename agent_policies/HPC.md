@@ -58,6 +58,9 @@ output-log, and error-log directives. Use `set -euo pipefail` so a failed
 workflow stage stops the job. Slurm opens log paths before the script runs, so
 any requested log directory must already exist when the user submits the job.
 
+If a run does not require GPU and should not exceed 1 hour of walltime, use
+the test queue by appending a `SBATCH qos=test` line. This will dodge the waiting queue.
+
 If a run should use Julia or Python, include the appropriate module with `module load julia python` etc. Note that Julia 1.12 is used on the HPC by default, but 1.11 can be requested during the `module load julia` command by specifying the julia version.
 
 Set the single `THREADS=<N>` variable explicitly to the same CPU count requested

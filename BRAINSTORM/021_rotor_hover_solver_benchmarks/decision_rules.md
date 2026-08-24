@@ -78,6 +78,127 @@ overshoots 1e-6 by more than a half decade, report BOTH rows:
 (cost at the last iterate above 1e-6, its BC error snapped to the nearest
 half decade). Implemented in `..._table.jl` (solvetable.csv).
 
+## Iteration counting (Phase 3 amendment, 2026-08-22)
+
+Phase 3's headline metric is iterations-to-target per step, so the count must
+mean the same thing for every solver.
+
+- **Definition: `niter` = iterative work units actually performed** — Krylov
+  iterations for `KrylovSolver` (`ws.stats.niter`, unchanged), Gauss-Seidel
+  **sweeps** for `FGSSolver`. `Backslash` records `niter = -1`: a direct solve
+  has no iteration count, and that null is itself a reported Phase-3 result.
+- **FGS off-by-one.** Upstream FastMultipole keeps its count as a loop local and
+  exposes it only through the per-iteration `callback`, which fires at the TOP
+  of iteration $k$ on a residual reflecting $k-1$ completed sweeps, *before* the
+  tolerance check — hence upstream's own "converged after `iteration-1`
+  iterations" (`FastMultipole/src/solve.jl:1249`). FLOWPanel therefore records
+  $$\texttt{niter} = \begin{cases} k - 1 & \text{converged at callback iteration } k \\ k & \text{tolerance never met}\end{cases}$$
+  (the non-converged branch counts the sweep that still runs after the last
+  failed check). Exposed as `FGSSolver.niter` / `.solved`, alongside
+  `KrylovSolver.niter` / `.solved`, so the harness reads one uniform accessor.
+- **Consequence for comparability:** an FGS sweep and a Krylov iteration are NOT
+  the same unit of work. Iteration counts are comparable *within* a solver
+  across warmstart types — which is exactly what Phase 3 measures — and
+  wall-time-to-target remains the only cross-solver cost currency.
+- **`niter` is the LAST inner solve of the step; `niter_first` is the metric**
+  (amended 2026-08-23). `solver.niter` / `.solved` are kernel-level: they
+  describe whichever `_solve!` ran most recently. When a step contains several
+  per-body solves, sampling them after the step reports the *last* one, which
+  has already been warmed by its predecessors within the same step. Phase 3
+  therefore reads **`step_niter_first(solver)`** — the first per-body solve of
+  the step, the one that actually consumes the step-to-step initial guess — as
+  the warmstart headline metric, and keeps `niter` only as a legacy diagnostic
+  for continuity with Phase 1/2 rows.
+- **`nsolves` and step-level `solved`.** `step_nsolves(solver)` reports how many
+  per-body solves the completed step took, and `step_solved(solver)` is the AND
+  of those solves' inner convergence flags (it is *not* a multibody outer
+  convergence flag — that stays with the `ConvergenceHistory` kwarg and its
+  verbose warning). Both return `-1` / `true` for solvers that carry no step
+  statistics (`Backslash` and friends); `-1` means **unavailable**, never a
+  passed check.
+- **Block-GS outer counts** (spec: "record outer counts too") remain a documented
+  **non-deliverable for the rotor case** — but NOT because the loop is
+  degenerate. **Correction (2026-08-23):** the earlier claim that a 1-tuple's
+  outer loop was degenerate was wrong. `sources` is empty for a lone body, so the
+  block-GS map has no coupling update to apply, yet the loop still re-solved the
+  same system on every outer iteration until `max_delta` fell below tolerance —
+  a standing repeated-solve tax, and (with warm-start history advancing per
+  `_solve!`) a mechanism that could keep `max_delta` from ever settling. The
+  one-body case now **breaks after the first block solve by construction**, so a
+  1-tuple records exactly one outer entry and there is nothing to count.
+  Multibody outer counts are deferred to Phase 4 (blown wing), for which
+  `solve!(bodies::Tuple, solvers::Tuple)` accepts `solver_optargs` to reach the
+  inner per-body solve.
+
+## Solve-step lifecycle and warm-start history (2026-08-23)
+
+Warm-start history must hold **consecutive timestep solutions**, so it advances
+on exactly one event: a **completed top-level solve step**. Three events are now
+distinguished in `src/FLOWPanel_solver.jl`:
+
+1. a raw linear-solver kernel call (`_solve!`, `_krylov_launch!`) — updates only
+   `solver.niter` / `.solved`;
+2. one per-body solve inside a step — `note_step_solve!`;
+3. a completed top-level step — `save_step_solution!` (history) then
+   `publish_step_stats!` (statistics), together as `finalize_step_solution!`.
+
+Step boundaries live at the orchestration sites only: the two public single-body
+`solve!` methods, the tuple `solve!` (which brackets the whole outer loop with
+one begin/finalize per solver and calls the single-body methods with the internal
+`finalize_step=false`), and `TraceCorrected`'s direct `_solve!` bypass (finalized
+after `set_wake_correction!`, not inside the solve's `try`). Raw `_solve!` callers
+— the Phase 1/2 benchmarks, the solver-history tests, and `FGSPreconditioner`'s
+inner FGS solve — stay deliberately outside this accounting.
+
+Failure semantics: a step that throws leaves the previously published statistics
+and the history untouched; the next `begin_step_solution!` discards the partial
+transient state. A step that *completes* but whose inner solver hit its iteration
+limit still saves (unchanged from before) — the history means "one completed step
+state", not "a converged state"; the published `solved` flag is what the driver
+rejects on.
+
+**Memory (ruling 8 impact):** `SolveStepStats` is 48 bytes
+(`Base.summarysize`), plus an 8-byte reference in each `FGSSolver` /
+`KrylovSolver` — 56 bytes per solver, negligible against `solver_state_bytes`
+(MB–GB scale) but recorded here because solver memory is a reported metric.
+
+## Phase 3 unsteady CSV schema (2026-08-22)
+
+`unsteady.csv` uses a bespoke per-step schema, NOT `RUNS_CSV_COLUMNS`, and is
+not covered by `validate_runs_csv`. Phase 3 extends it with:
+`niter_first, nsolves, solved, warmstart, warmstart_order, restart_step,
+skip_steps, strength_checksum`, alongside the existing per-step columns.
+
+- `niter_first` (added 2026-08-23) is the iteration count of the FIRST inner
+  solve of the step and **is the warmstart comparison metric**. Legacy `niter`
+  is the LAST inner solve and is retained as a diagnostic only.
+- `nsolves` (added 2026-08-23) is the per-body solve count of the step. For the
+  one-body rotor runs it must be `1` on every wake-developed row; anything else
+  means the timestep re-solved and the row set is an invalid warmstart
+  comparison. `-1` means unavailable (direct/generic solver), not a pass. The
+  check is deliberately *not* generalized to multibody, where genuine block-GS
+  outer counts vary per timestep.
+- The driver refuses to append to an `unsteady.csv` whose first line is not the
+  current header, so pre-Phase-3 (narrower) rows can never be mixed under one
+  header; `benchmark/phase3_analysis.jl` likewise errors on inputs missing
+  `niter_first` / `nsolves`.
+
+- `warmstart` ∈ `cold | prev | extrap`; `warmstart_order` is the effective
+  polynomial order (0 for `cold` and `prev`).
+- `skip_steps` records how many leading steps the analysis must drop from
+  wake-developed averages — the warmstart history needs filling after a restart
+  (order $p$ needs $p+1$ solves). It is recorded, never applied destructively.
+- **Accuracy guard.** A certified BC error is deliberately NOT recorded per
+  unsteady step: the frozen BC metric above is defined against a static
+  single-step RHS, and the unsteady RHS moves every step, so reusing that column
+  would misreport it. The guard is instead (a) the per-step `solved` flag, which
+  catches a warm guess that lets a step stop short of tolerance, and (b) a
+  trajectory-identity check — cold and warm arms of the same config solve to the
+  same tolerance and so must agree on `n_particles_end` and
+  `strength_checksum`. Divergence means the guess changed the answer rather than
+  just reaching it faster. (This is the discriminator that resolved the
+  filament-family question at 328 vs 329 particles.)
+
 ## Historical agreement stage (COMPLETE 2026-08-14; thresholds retired)
 
 The reference-based strength-agreement thresholds (relL2 ≤ 1e-5 provisional;

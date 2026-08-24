@@ -4,6 +4,181 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
+### 2026-08-24 — all ten 08-22 jobs diagnosed (one cause), repaired, 13 relaunched
+
+**Ryan's report was "all HPC jobs failed"; the cause was single and load-time.**
+`sacct`: eight `FAILED` exit `1:0` after 52 s - 3 min 17 s; `13306604`/`13306605`
+`CANCELLED` at `00:00:00` as `afterok` casualties of `13306603` — chain
+casualties, not independent failures, the same confusion that cost a wrong
+diagnosis on 08-22. Every `.err` on both checkouts:
+
+```
+ERROR: LoadError: ArgumentError: Package GeoIO not found in current path.
+  [6] top-level scope @ ~/projects/.../benchmark/phase1_case.jl:27
+in expression starting at ~/projects/.../examples/dji9443_trailing_edge.jl:2
+```
+
+**Root cause — two individually-correct decisions that were jointly fatal.** On
+08-22 GeoIO was dropped from `Project.toml` on both cluster checkouts to close
+the `.CondaPkg/lock` EACCES class. Locally `examples/dji9443_trailing_edge.jl`
+lost its `import GeoIO` in the same generation (it reads meshes through the
+native `pnl.read_gmsh`; see `src/FLOWPanel_utils.jl:112`). But the standing sync
+ruling covers `src/` + `benchmark/` only, so `examples/` was never pushed. Both
+cluster copies kept `import GeoIO` on line 2 (md5 `0f8dce88…` on both vs local
+`d75e8df3…`), and `benchmark/phase1_case.jl:27` includes that file — so all five
+drivers died before touching solver code. An md5 sweep showed **45+ files under
+`examples/` were a full generation stale**; the TE detector was simply the one
+the 021 drivers reach.
+
+**Lesson for the catalogue: `examples/` is a real dependency of every Phase-1
+driver.** The sync ruling must be `src/` + `benchmark/` + `examples/`.
+
+**Repair (Ryan's rulings 2026-08-24).** Whole-tree rsync of `src/` +
+`benchmark/` + `examples/*.jl` to both checkouts, no `--delete`, excluding
+`Project.toml` / `Manifest.toml` / `examples/data/` **and `benchmark/results/`**
+— the last of these was nearly missed and would have clobbered the cluster's
+authoritative accepted data (561 files, per-rung R1–R6) with the thinner local
+tree. Verified **0 md5 mismatches over 236 files on both checkouts**; the only
+unmatched entries are two intentional cluster-only files preserved by omitting
+`--delete`. `import FLOWPanel` plus the exact failing include now load clean on
+both. Not committed (Ryan's call).
+
+**Hardware consistency audit (Ryan's request, mid-session).** Every job —
+failed and accepted alike (13206077, 13242659/61/63/65) — already ran
+`m12` / `zen3` / `AllocCPUS=128` / exclusive, so the existing ladder *is*
+mutually comparable. Only `ReqMem` drifted (64/128/192/256 G), and only because
+the flags were typed by hand: `p1_table.sh`'s documented submit line omitted
+`--constraint`/`--exclusive` entirely. Now pinned identically into all seven 021
+SBATCH headers — `--partition=m12 --constraint=zen3 --exclusive --mem=0` — plus a
+runtime assert that exits 1 if `SLURM_CPUS_ON_NODE != 128`, and a stable
+`HARDWARE_TAG=orc-m12-zen3-2x64c-512g`. Node spec measured by `scontrol`:
+Sockets=2, CoresPerSocket=64, ThreadsPerCore=1 ⇒ CPUTot=128, RealMemory=524288 MB,
+MaxMemPerNode=524288. `--mem=0` retires the per-rung memory knob entirely and
+clears both the R5 dense-G (~94 GiB) and the 32 GiB near-field cache cap.
+Pre-existing rows keep their old tags (`m12-2-30`, `zen3-exclusive`); all three
+labels denote the same verified hardware.
+
+**Chain semantics.** `p1_tune.sh` now documents `afterany`, not `afterok`, and
+carries a stage-input assert that names the missing CSV and exits 1 — so a
+downstream stage produces a diagnosable failure instead of vanishing.
+
+**Append-duplication swept before relaunch.** The failed jobs wrote nothing, but
+older partial output did: R6-multi already holds accepted `krylov_gmres` +
+`krylov_jacobi` rows (08-20, from 13206077 before it died on the ILU limit), so
+the R6 relaunch runs only `krylov_ilu:fgs:fgmres_fgs`. Phase 2b's R3 partial (3
+rows, no `tune_cached` — it died on the old 4 GiB/60 s caps) and R4 header-only
+file were quarantined to `*_20260820.csv`.
+
+**Relaunched 13 jobs.** Phase 1: `13396780` R6-multi (3 configs), `13396781`
+R6-single-a, `13396782` R6-single-jacobi, `13396783/784/785` R7 tune s1→s2→s3
+chained `afterany`. Phase 2a (R2–R5 multi, 6 configs — the `*_nfcache` variants
+need 2b's `tune_cached.csv`, which R2–R5 do not have yet): `13396805/807/809/811`.
+Phase 2b (R2–R4, raised caps): `13396813/815/817`. All validated with
+`sbatch --test-only` (128 processors, m12) before submission. The eight
+BRAINSTORM-018 jobs (`13396725`–`13396732`) are running and were not disturbed.
+
+**Two things left open by this round:** R6-single is a timeout risk (multi-mode
+gmres alone took 1364 s/solve at R6; single-threaded on 212k panels against a
+hard 72 h ceiling), and the R7 *table* still has no splitting strategy (~100 h vs
+72 h). R7's table is downstream of the tune chain, so it did not block.
+
+**Also corrected this session (local, no HPC impact).** The one-body early break
+in the tuple `solve!` made four prose sites wrong; see `ledger.md` "Data
+quarantine" for the note fixes and the pre-fix row quarantine, and
+`phase_12_relaunch_prompt.md` for the corrected "neither path is altered" claim
+(the single-body `solve!` and the FGS/Krylov kernels *were* changed; the
+no-measured-change conclusion survives on `assemble_source_potential=false`,
+which no driver opts into).
+
+### 2026-08-23 — Phase 3 solution-history / block-GS defect FIXED; smoke table replaced
+
+Implemented the approved plan (`plans/validated-scribbling-heron-reviewed.md`).
+Uncommitted, local only; no HPC submission.
+
+**What was wrong.** Warm-start persistence lived inside the raw kernels — FGS
+`save_solution!` at the end of `_solve!`, and Krylov's `x_prev` / `x_history`
+writes at the end of `_krylov_launch!`. `solve!(bodies::Tuple, solvers::Tuple)`
+calls a body solve once per block-GS *outer iteration*, so a single timestep
+wrote several history slots. Order-1 extrapolation across a duplicated pair then
+alternates around the answer, which can keep the outer `max_delta` test from
+settling. Separately, a lone body has no coupling to iterate (`sources` is
+empty), yet the outer loop still re-solved the same system every iteration — a
+standing repeated-solve tax that the campaign had noted since Phase 0 but never
+removed.
+
+**The fix — three events, not one.** `src/FLOWPanel_solver.jl` now distinguishes
+(1) a raw kernel call, which only updates `solver.niter`/`.solved`; (2) one
+per-body solve inside a step (`note_step_solve!`); (3) a completed top-level step
+(`save_step_solution!` then `publish_step_stats!`, together
+`finalize_step_solution!`). Only (3) advances warm-start history. Step boundaries
+sit at the orchestration sites: the two public single-body `solve!` methods (new
+internal `finalize_step` kwarg), the tuple `solve!` (one begin/finalize per
+solver bracketing the whole outer loop), and `TraceCorrected`'s direct `_solve!`
+bypass (finalized after `set_wake_correction!`). Raw `_solve!` callers — Phase
+1/2 benchmarks, solver-history tests, `FGSPreconditioner`'s inner solve — stay
+outside the accounting by design. A one-body tuple now breaks after the first
+block solve, so it records exactly one outer entry. Failure semantics are
+explicit: a step that throws leaves history and published statistics untouched.
+`SolveStepStats` costs 48 bytes + an 8-byte reference per solver (ruling 8).
+
+**Instrumentation was also wrong, independently.** The driver sampled
+`solver.niter` after the step, which returns the *last* inner solve — already
+warmed by its predecessors within the same step. `niter_first` (first inner
+solve of the step) and `nsolves` (per-body solves in the step) are new CSV
+columns; `niter_first` is the warmstart metric, legacy `niter` is a diagnostic.
+For these one-body runs the driver and `phase3_analysis.jl` both require
+`nsolves == 1` on every scored row, treat `nsolves == -1` as *unavailable*
+rather than as a pass, and refuse pre-Phase-3 (narrower) CSV inputs instead of
+mixing row widths under one header.
+
+**Voided.** The 2026-08-22 smoke table (`phase_03_history_fix_handoff.md`) —
+the "prev 6 → 0 iterations" reduction and the cold 4.378 s / prev 3.872 s /
+extrap 81.13 s comparison — is void and marked so in place. Both artifacts are
+now explained: last-solve sampling for the iteration column, redundant (and for
+extrap runaway) repeated solves for the wall times. Its particle/checksum
+columns are not comparable to anything current either, since Gaussian
+regularization landed in between (62d72db).
+
+**Post-fix smoke, R1/FGS/local 4T, `N_STEPS=6`** (7 marched steps;
+wake-developed window = steps 4–7; `nsolves == 1` on every scored row in all
+three arms):
+
+| arm | niter_first mean ± sd | Δiter vs cold | t_solve mean ± sd [s] | Δt vs cold | particles | checksum |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold | 6.00 ± 0.00 | — | 2.3050 ± 0.0366 | — | 407 | 114595.9408684665 |
+| prev (order 0) | 4.75 ± 0.50 | −20.8% | 2.1967 ± 0.0685 | −4.7% | 407 | 114595.9503456424 |
+| extrap (order 1) | 5.00 ± 0.00 | −16.7% | 2.2339 ± 0.0365 | −3.1% | 407 | 114595.9683812670 |
+
+All inner solves converged in all three arms. The extrapolation diagnostic
+(`SOLVER_VERBOSE=1`, order 1) shows the projected-minus-solved residual (first
+strength, column 2) going +1.09e-3 at the first projected step — the history is
+still filling there — then holding **one sign** and decaying monotonically
+across the wake-developed window: −8.01e-4, −2.83e-4, −2.06e-4, −1.45e-4. The
+pre-fix log's alternating ±7.8e-4 pair is gone.
+
+Note the modest, believable size of the warm-start benefit here: at R1 with a
+6-sweep cold solve, one or two sweeps saved is what a good guess buys. The
+extravagant pre-fix numbers were measurement artifacts in both directions.
+
+**Open for Ryan — trajectory-identity guard threshold.** The `phase3_analysis.jl`
+guard flags a warm arm as DIVERGED above 1e-8 relative checksum difference. Both
+warm arms match cold on particle count (407) but differ by 7.9e-8 (prev) and
+2.4e-7 (extrap) relative, so both are flagged. The arms all converge to the same
+solver tolerance (`tol_abs = 1.77e-8`, absolute, on ~8016 strengths) and the
+difference amplifies through the wake over steps, so 1e-8 on a *summed* checksum
+looks too tight to be the right test. The threshold is untouched pending your
+call; the plan's own acceptance bar was "about 1e-7 relative", which prev meets
+and extrap misses by ~2×.
+
+**Tests.** New/extended coverage in `test/runtests_unit_solver.jl` (per-step
+lifecycle, 51 assertions), `test/runtests_unit_solver_history.jl` (one-body and
+two-body tuple step semantics, `solver_optargs` guard),
+`test/runtests_unit_fgs_history.jl` (step-boundary writer), and
+`test/formulation_test.jl` (TraceCorrected). One documented limitation: the
+formulation validator admits only `Backslash` for `TraceCorrected`, which carries
+no step statistics, so that hook is currently inert — the test pins the no-op
+contract and the ordering, and says what to extend if the validator widens.
+
 ### 2026-08-22 (night) — Gaussian rerun executed: scope was 3 artifacts, not the campaign
 
 Executed the pre-Phase-3 rerun. The scope question ("what changes under
@@ -147,7 +322,15 @@ Vatistas** and ignores the global, while its gradient counterpart
 `semiinfinite_wake=true` path, which 021 does not use — latent, not live.
 Separate fix; flagged here so it is not rediscovered.
 
-## OPEN TODO — relabel the 10 in-flight jobs after they finish (Ryan, 2026-08-22)
+## ~~OPEN TODO — relabel the 10 in-flight jobs after they finish~~ — CLOSED 2026-08-24
+
+**Moot.** All ten jobs died at load time before reaching any solver code and
+produced **zero** rows (`find benchmark/results -newermt 2026-08-23` empty on
+both checkouts). There is nothing to relabel. The relaunched generation
+(13396780-13396817) runs Gaussian from the launcher default. Original text kept
+below for the record.
+
+### Original text (2026-08-22)
 
 The ten jobs queued on 2026-08-22 (13306549/50/54/56/57, 13306599/600,
 13306603/604/605) were submitted BEFORE the launcher default was flipped to

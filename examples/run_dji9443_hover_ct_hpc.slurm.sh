@@ -70,10 +70,13 @@ export FMM_BODY_LEAF_SIZE="${FMM_BODY_LEAF_SIZE:-109}"
 export FMM_WAKE_EXPANSION_ORDER="${FMM_WAKE_EXPANSION_ORDER:-16}"
 export FMM_WAKE_ACCEPTANCE="${FMM_WAKE_ACCEPTANCE:-0.6}"
 export FMM_WAKE_LEAF_SIZE="${FMM_WAKE_LEAF_SIZE:-38}"
-# Non-interactive submission shells don't put julia on PATH (Manifest pins 1.11.7);
-# fall back to the site spack julia-1.11.7 binary (the shared /apps/juliaup launcher is broken).
+# Non-interactive submission shells don't put julia on PATH (Manifest pins 1.12.6
+# since the 2026-08-22 env sync; the 8 _s2 chains of 2026-08-24 all died in ~4 min
+# when the old 1.11.7 fallback hit the 1.12 Manifest — OpenSSL_jll/HDF5_jll
+# precompile failure); fall back to the site spack julia-1.12.6 binary (the shared
+# /apps/juliaup launcher is broken).
 command -v julia >/dev/null 2>&1 || \
-  export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/bin:$PATH"
+  export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.12.6-dnqrzweknooxxbvvvkwvlkkveqlce3ln/juliaup/julia-1.12.6+0.x64.linux.gnu/bin:$PATH"
 
 # ---- Fixed Phase 2e configuration (identical for every case) ----------------
 # Mesh: Phase 2d production recipe. NEVER substitute a round-ct3 "capped" mesh.
