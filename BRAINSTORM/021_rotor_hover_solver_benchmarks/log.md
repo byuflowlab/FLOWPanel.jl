@@ -75,6 +75,33 @@ as pre-fix accuracy-only picks, not valid campaign knobs.
 `benchmark/p023_fmm_tune.jl`: left at `tree_amortization=1` deliberately, with a
 comment saying why (mature-wake unsteady step rebuilds the tree every step).
 
+**CONFIRMED: the PUBLISHED ladder carries the same ~2x leaf error
+(job 13443627, 2026-08-24).** This was inferred from R1 and never measured. It
+is now measured. `benchmark/fm_leaf_ab.jl` at R2 (15,760 panels), fixed
+p=17/MAC=0.5, on the current FM:
+
+| leaf | 9 | 21 | 40 | 60 | 71 |
+| --- | --- | --- | --- | --- | --- |
+| `t_solve_min` [s] | **36.71** | 46.72 | 54.58 | 73.17 | 80.20 |
+| niter | 62 | 63 | 62 | 62 | 60 |
+
+Monotone, **2.18x across the range at essentially constant iteration count**.
+R2's old campaign pick was leaf **59**, i.e. sitting at ~73 s where ~37 s was
+available — the same ~2x error R1 had, in a rung whose numbers were already
+published. By the same argument R3 (old pick leaf 58) is affected too.
+
+**Consequence for the published Phase 1 comparison.** The apply knobs are shared
+across configs within a rung (ruling 3), so the inflation hits every FMM-based
+config at R2/R3 roughly alike — but `backslash_ldiv` runs no FMM in its solve
+and is untouched. The published rungs therefore biased the comparison AGAINST
+the iterative FMM solvers by up to ~2x. Any conclusion drawn from those rows
+about backslash-vs-Krylov crossover needs re-reading once the retuned ladder
+lands.
+
+(`fm_leaf_ab.jl`'s `bc_rel_l2` column read ~1.02-1.09 here; that column is known
+INVALID — wrong args to `bc_error!` — and only the timings are sound. Accuracy
+parity rests on the campaign rows.)
+
 **Ryan's ruling: ignore the tree cost entirely for panel tuning
 (2026-08-24, latest).** `TUNE_TREE_AMORTIZATION` default is now **`Inf`**, not
 50. The panels-on-panels operator has FROZEN geometry: its tree is built once a
