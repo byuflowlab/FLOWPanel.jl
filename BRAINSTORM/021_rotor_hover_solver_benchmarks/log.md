@@ -75,6 +75,45 @@ as pre-fix accuracy-only picks, not valid campaign knobs.
 `benchmark/p023_fmm_tune.jl`: left at `tree_amortization=1` deliberately, with a
 comment saying why (mature-wake unsteady step rebuilds the tree every step).
 
+**Ryan's ruling on caching (2026-08-24, latest): cache in BOTH tuning and
+benchmarks for Phase 2.** Ignore the cache build cost while tuning (legitimate:
+panels-on-self has frozen geometry, so the cache is built once a priori);
+MEASURE it for benchmarks but keep it in its own column, never folded into the
+per-step solve cost. Only panels-on-self is worth caching — wake->body geometry
+moves every step, so those matrices change every step and are never reused
+inside a solve (the campaign already freezes `b` via `bcache_R*.bin`, which is
+the same fact). Ryan has NOT ruled on whether Phase 1 should also go cached.
+
+Gap this exposes: phase2b's cached tune (`TUNE_CACHED=1`,
+`rotor_hover_solver_phase2b_nearfield_cache.jl:195`) already excludes build cost
+— but drives it with stock `tune_fmm`, i.e. the accuracy-only objective we just
+fixed for the uncached path. `tune_fmm_perturb` has no cache support at all.
+Feasibility unmeasured: cache bytes ~ panels x leaf, R4 ~ 4.5 GiB recorded,
+naive scaling puts R7 near ~32 GiB (more once caching pushes leaf up), against
+a 32 GiB cap and a SERIAL build that `max_build_time` may bind first. Use
+`FastMultipole.estimate_nearfield_cache` (no build) to map where it caps.
+
+**BLOCKER: the tuner's objective still disagrees with a real solve.** Under
+`tree_amortization=Inf` at R1 (job 13447582, p=17/MAC=0.5, reps=5) the descent
+measured leaf 43 = 0.434 s and leaf 29 = 0.435 s — flat — and stopped after one
+move, while real solves at the same knobs fall monotonically to leaf 9
+(0.272 s/iter at 9 vs 0.458 at 40). The tuner minimizes ONE apply; Phase 1
+publishes solve wall clock, and below leaf ~40 the proxy stops tracking.
+RULED OUT: `tune=true` counting overhead (<=3%, only at leaf 9) and
+per-candidate plan allocation / NUMA first-touch (4 fresh plans scatter the same
+as 1 plan re-measured). Residual is ~+-9% against the solve-implied curve —
+enough to erase the true ~15% gap between leaf 43 and 29 at `improve_tol=0.02`.
+Unresolved whether that is resolution or a real apply-vs-solve divergence.
+
+**INSTRUMENT WARNING.** Ryan's laptop cannot measure any of this: min-of-5 apply
+timings scatter **22-39%** at fixed knobs locally, against a 15% effect. All
+timing evidence must come from an exclusive cluster node. An earlier local
+`tree_amortization` 1/50/Inf comparison logged in this session sat inside that
+noise band — the `Inf` code path is verified to RUN correctly, its effect on the
+answer is NOT verified.
+
+Handoff for the next agent: `phase_15_caching_and_objective_prompt.md`.
+
 **CONFIRMED: the PUBLISHED ladder carries the same ~2x leaf error
 (job 13443627, 2026-08-24).** This was inferred from R1 and never measured. It
 is now measured. `benchmark/fm_leaf_ab.jl` at R2 (15,760 panels), fixed
