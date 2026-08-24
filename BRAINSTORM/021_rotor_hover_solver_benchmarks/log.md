@@ -4,6 +4,231 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
+### 2026-08-24 (latest) — the tuner's stall was BIAS, not noise: tree build was charged to every apply
+
+**Revises the "reps is the fix" diagnosis in the entry below**, which is now
+half the story. Found while planning the `reps` change; the code fix landed the
+same day.
+
+**The defect.** `FastMultipole.tune_fmm_perturb` timed every candidate through
+`fmm!(targets, sources, cache; ...)` — the `Cache` path, which **rebuilds both
+octrees and the interaction lists inside every timed call** (`src/fmm.jl`,
+`fmm!(::Tuple, ::Tuple, ::Cache)`). A steady iterative solve does not pay that
+per apply: FLOWPanel builds one `FmmPlan` and reuses its trees/lists across
+every Krylov iteration (`src/FLOWPanel_fmm.jl`, the `plan_slot` branch), so one
+build is amortized over ~57 applies.
+
+**Why it biases toward large leaves.** Tree and interaction-list construction
+get MORE expensive as `leaf_size` shrinks. Charging a full build to every apply
+therefore adds a leaf-dependent penalty pointing in exactly the direction of
+the observed stall.
+
+**Why it is not just noise.** At R1 the descent moved 68 -> 45 (t=0.444 s), then
+measured leaf 30 at 0.450 s and stopped. The leaf sweep implies leaf 30 should
+be ~15-20% FASTER than 45. Min-of-2 timing jitter does not plausibly erase a
+20% gap; a leaf-dependent additive overhead does. Independent confirmation from
+a 20k-body smoke test after the fix: at the same knobs the tree-inclusive
+objective reads 0.026 s and the amortized one 0.018 s — the build is ~30% of the
+measured cost, and it is precisely the part that grows as leaf shrinks.
+
+**Ryan's ruling: this is a switch, not a replacement.** An unsteady run whose
+geometry moves every step DOES rebuild the tree per apply, so the old objective
+is correct there (e.g. 023's mature-wake tuning).
+
+**What changed.**
+
+`FastMultipole/src/autotune.jl`, `tune_fmm_perturb` — three additive keywords,
+defaults reproduce the old behaviour exactly:
+
+- `tree_amortization::Int=1` — how many applies share one tree/list build.
+  Candidate cost = `t_build/tree_amortization + t_apply`. `1` keeps the legacy
+  `Cache` path verbatim; `n>1` builds one `FmmPlan` per candidate (timed
+  separately, released with a `GC.gc()` after), then min-of-`reps` over applies
+  that reuse it. Caller `kwargs` are split between `FmmPlan` and the per-apply
+  `fmm!` via a new `FMMPLAN_STRUCTURAL_KWARGS` list in `src/fmm.jl` (`FmmPlan`
+  has no catch-all `optargs...`, so an unrecognized key would error).
+- `max_seconds=Inf` — wall-clock guard checked between candidates; on expiry it
+  returns best-so-far, `@warn`s "max_seconds EXPIRED", and reports
+  `timed_out=true`.
+- Third return value `info = (timed_out, t_elapsed, n_candidates, t_best)`.
+  Existing two-value destructuring still works.
+
+`benchmark/rotor_hover_solver_phase1_tune_hpc.jl`:
+
+- `TUNE_REPS` — default **5 at R1-R4, 2 at R5-R7**, asserted <= 5 (Ryan's cap).
+  Not 1: min-of-2 is what discards first-touch/page-fault cost on the first call
+  at a new leaf. (`expansion_order` is a runtime `Int`, not a type parameter, so
+  there is no per-candidate recompilation to worry about.)
+- `TUNE_TREE_AMORTIZATION` — default **50**. Phase 1 is a frozen single-step
+  solve that never sheds a wake, and its `KrylovSolver` runs ~50-60 applies
+  against one `FmmPlan` (R1 measured ~57 iterations).
+- `TUNE_MAX_SECONDS` — per-rung defaults 900/1800/3600/7200/14400/21600/43200 s
+  for R1-R7.
+- `tune.csv` gains `tune_reps,tree_amortization,tune_timed_out`, plus a header
+  guard that refuses to append to a pre-fix schema (the driver APPENDS and
+  `phase1_case.jl` reads knobs back by column name, so mixing objectives would
+  be silent). Purge a rung's CSVs and re-run; keep `bcache_R*.bin`.
+
+`benchmark/phase1_case.jl`: the hardcoded R1-R3 `TUNED` fallbacks are now marked
+as pre-fix accuracy-only picks, not valid campaign knobs.
+
+`benchmark/p023_fmm_tune.jl`: left at `tree_amortization=1` deliberately, with a
+comment saying why (mature-wake unsteady step rebuilds the tree every step).
+
+**Verification so far.** `FastMultipole` loads; `test/fmm_plan_test.jl` passes
+(11/11); a 20k-body gravitational descent runs to convergence under both
+`tree_amortization=1` and `=50` and reaches the same argmin there; the
+`max_seconds` guard fires, warns, and reports `timed_out=true`. **Not yet
+validated at R1 on the cluster** — that is the next step, and the pass criterion
+is a walk 68 -> 45 -> 30 -> 20 -> 13 -> 9 (or lower) with `krylov_gmres/standard`
+`t_solve_min` near 15.5 s.
+
+### 2026-08-24 — tuner objective was wrong; cost-based tuning added, R1 re-measuring, R7 tuning
+
+**The apparent FastMultipole regression was not one.** R1 under the new FM came
+out 1.5-2.5x slower on every FMM path at identical iteration counts and BC
+agreeing to 4 figures, while `backslash_ldiv` (no FMM in its solve) was flat at
+-4%. A leaf sweep on the current FM (job 13407693, p=17/mac=0.5) settled it:
+leaf 9 = 15.51 s, 21 = 20.65, 40 = 26.10, 60 = 32.64, 71 = 34.95 — monotone,
+2.25x across the range at constant niter. **At matched knobs (leaf 9) the two FM
+generations agree to +6%** (14.59 -> 15.51 s). The remaining ~140% was the knob.
+
+**Root cause.** Stock `FastMultipole.tune_fmm` optimizes a SINGLE evaluation
+against an error tolerance; it never measures iterative-solve cost, so it accepts
+a large leaf that is accurate but ~2x more expensive per apply — exactly the
+quantity Phase 1 measures.
+
+**Correction to an earlier claim in this log.** I first wrote that the old tuner
+picked leaf 9 and the new one picks 60, i.e. that the tuner had regressed. That is
+true only at R1. The old campaign's picks were 9 / 59 / 58 / 32 / 25 / 20 across
+R1-R6 — the same large-leaf behaviour. R1's 9 was a lucky pick, not a better
+tuner. **Implication: parts of the OLD accepted ladder may also be mis-tuned, R2
+and R3 most suspiciously.** Inferred from R1's sweep, not measured at R2; the
+cheap test is `benchmark/fm_leaf_ab.jl` with `RUNG=R2` against its old leaf 59.
+
+**Fix.** `rotor_hover_solver_phase1_tune_hpc.jl` now runs stock `tune_fmm` for an
+accuracy-valid seed, then `FastMultipole.tune_fmm_perturb` (`src/autotune.jl:337`)
+to coordinate-descend on BENCHMARKED wall-clock under the same error tolerance.
+`PERTURB_TUNE=0` restores the old behaviour (variant `tuned_seed_only`).
+
+**Cost tuner validated at R1 and found INSUFFICIENT (2026-08-24, later).**
+`tune_fmm_perturb` seeded from stock `tune_fmm` moved R1 from leaf 68 to leaf 45
+(~35 -> ~28 s) but stopped there, ~1.8x short of the ~15.5 s available at leaf 9.
+Trace: it probed BOTH directions correctly (leaf 102 upward = 0.943 s rejected,
+leaf 45 downward = 0.444 s accepted), then at iter 2 measured leaf 30 at 0.450 s
+— 1.4% WORSE than 45 — and terminated. That is a measured regression, not a
+below-threshold gain, so `improve_tol` is not the lever; `reps=2` simply cannot
+resolve the real difference (the sweep predicts ~0.40 s at leaf 30).
+**Fix agreed with Ryan: `reps=2 -> 7`, plus a `TUNE_MAX_SECONDS` wall-clock guard
+and possibly rung-scaled reps.** A custom leaf ladder was considered and rejected
+— `perturb` already does bidirectional coordinate descent over (p, mac, leaf) and
+correctly rejects candidates on accuracy; the only defect is the noise floor.
+Note the sweep never sampled below leaf 9, so the true optimum may be lower; FMM
+cost is U-shaped in leaf and R1/p=17 sits on the "too large" branch throughout.
+
+**Ryan's ruling: retune EVERY rung, not just R7** — the old knobs came from the
+same accuracy-only objective (leaf 9/59/58/32/25/20 across R1-R6), so reusing any
+of them is unsafe.
+
+**Campaign state.** All jobs cancelled and all results CSVs purged (the seven
+`bcache_R*.bin` kept — FM- and tuning-independent). Next agent picks up from
+`phase_14_cost_tuner_relaunch_prompt.md`: adjust the tuner in plan mode, retune
+all rungs, then relaunch. Earlier state: all earlier-generation jobs cancelled; all bad-knob CSVs
+purged (the seven `bcache_R*.bin` kept — direct N^2 assembly, FM-independent).
+Two validation chains launched: R1 tune+tables (13425064/65/67) as the check
+against the known-good leaf 9, and R7 tune s1-s3 + tables (13425069-77) since R7
+has never been tuned. R2-R6 wait on R1 validating. Ryan's ruling: R7 does not
+gate the others.
+
+**Trap recorded.** 21 held jobs had to be cancelled: `afterany` treats a CANCELLED
+upstream as satisfied, so releasing them would have run tables with no knobs.
+Tune->table chains now use `afterok`. Second trap: the new resume support skips
+any row already in the CSV, so stale bad rows are silently inherited — purge a
+rung's CSVs before re-running it.
+
+Handoff for the next agent: `phase_14_cost_tuner_relaunch_prompt.md`.
+
+### 2026-08-24 (late) — campaign restarted: new FMM generation, isolated checkout, half-node allocation
+
+The morning's relaunch (13396780-13396817) was cancelled before it ran. Reason:
+the source it would have used could not have worked. The 2026-08-24 FLOWPanel
+references nine FastMultipole symbols absent from the pinned `a9b734a` —
+including `NEARFIELD_CACHE_DEFAULT_MAX_BYTES` at `src/FLOWPanel_solver.jl:504,644`,
+i.e. the solver every 021 driver runs. My earlier claim that the mixed generation
+was "deliberate and, for 021, the correct state" was WRONG; the `import FLOWPanel`
+load test passed only because those symbols appear as default argument values,
+evaluated at call time rather than at load. Loading proved nothing about running.
+
+**Provenance was the deeper problem.** The old pin `fm_commit = a9b734ad...-dirty`
+was an uncommitted worktree whose `src/autotune.jl` blob (`47beaa59`) exists in no
+git history anywhere (checked with `git cat-file` and `--find-object`). When new
+FastMultipole content was first placed on the cluster it was laid on top of that
+same commit, so two entirely different FMM generations would both have recorded
+the identical string `a9b734ad...-dirty` — a validated CSV column turned actively
+misleading. Ryan then committed and pushed FastMultipole, FLOWPanel and FLOWVPM,
+and the campaign moved to clean clones.
+
+**New home: `~/flowpanel-021/`** — isolated from `~/projects/`, which is shared
+with 018/023 and where two agents collided earlier today. Layout is
+`FLOWPanel.jl` + sibling `FastMultipole` (symlink to the `.jl` clone; the Manifest
+dev path is `../FastMultipole`) + `FLOWVPM.jl`. All three clones zero-dirty:
+FLOWPanel `321473f`, FastMultipole `d8258a7d`, FLOWVPM `4494c25`. Two gaps had to
+be filled by rsync because they are untracked upstream: `benchmark/` (only 7 of
+its files are tracked) and `Manifest.toml`. 47/47 md5-verified.
+
+`Project.toml` was left ALONE. `PythonPlot` in it is a `[weakdeps]` entry, inert
+unless the extension triggers — instantiate ran clean and created no `.CondaPkg`.
+The 08-22 killer was `GeoIO`, a hard dep, and it is absent from the commit.
+
+**Knobs are re-tuned, not reused**: `tune_fmm` tunes FMM parameters, so its output
+is FM-dependent by construction. All of R1-R7 re-tune.
+
+**Half-node allocation (Ryan ruling).** 64 CPUs per job, not an exclusive 128.
+Julia runs 64 threads either way, so `--exclusive` wasted half of every node and
+made each job wait for a fully free one. At 64, two jobs pack per node: 24 of 32
+started immediately instead of queuing ~15 h. Trade-off recorded in `ledger.md`
+and in every launcher header — `OverSubscribe=YES:4` means a co-tenant can now
+contend for memory bandwidth, which is a real if small contaminant on a
+bandwidth-bound FMM/ILU workload.
+
+**Two self-inflicted errors, both caught before any row was written.**
+(1) `--ntasks=64 --cpus-per-task=64` requests 4096 CPUs; the correct spec for one
+64-thread process is `--nodes=1 --ntasks=1 --cpus-per-task=64`. (2) The runtime
+CPU assert used `nproc`, which honours `OMP_NUM_THREADS` — and Slurm presets that
+to 1 whenever `--cpus-per-task` is used, so it read 1 CPU while the real affinity
+was the full `0-63`. That false failure killed all 32 jobs in ~20 s each. Net
+positive: the assert exists precisely to stop a silent 64:1 thread
+oversubscription from inflating every timing, and the fix (assert on
+`SLURM_CPUS_ON_NODE` for the allocation, `getconf _NPROCESSORS_ONLN` for the node)
+is stronger than what it replaced.
+
+**Resume support added**, required because `standby` is preemptible and the
+launchers now set `--requeue`. `rotor_hover_solver_phase1_table.jl` and
+`..._phase2.jl` skip on `(rung, config, row_kind)`; `..._phase2b_nearfield_cache.jl`
+skips on `(rung, row_kind)`, driving its existing `SKIP_AB`/`TUNE_CACHED` gates.
+Rows flush as each measurement completes, so a row in the CSV means that
+measurement is finished and is never repeated. Parser validated against real
+data: recovers R6's 2 partial rows and R1's complete 7 including the `fgs` dual
+row.
+
+**Walltimes right-sized** from the measured 08-18/19 timings with ~2x margin
+instead of a blanket 7 days — on a priority-0 standby QOS an oversized request
+backfills far worse than an accurate one.
+
+**Launched: 32 jobs.** Tune R1-R6 plus R7 as three `afterany` stages; tables
+R1-R7 x multi/single with the ledger's cost-ceiling drops (`backslash_ldiv` out
+at R6-R7 both modes, `krylov_gmres` additionally out of single at R6-R7); Phase 2a
+R1-R5 multi (the `*_nfcache` variants wait on 2b's `tune_cached.csv`); Phase 2b
+R1-R4. Tables chain `afterany` on their own rung's tune. First R1 tune row landed
+clean under the new FMM: `p=17 MAC=0.5 leaf=71`, `meets_target=true`,
+`fm_commit=d8258a7d...` with no `-dirty` suffix.
+
+**Note for whoever compares generations:** R1's `rms(b)` moved from
+`0.011505099103413874` to `0.011505099103103312` — agreement to ~10 significant
+figures, differing in the 11th. b is a direct N^2 assembly, so this is the new
+FLOWPanel source, not the FMM; small, but it confirms the break is real rather
+than nominal.
+
 ### 2026-08-24 — all ten 08-22 jobs diagnosed (one cause), repaired, 13 relaunched
 
 **Ryan's report was "all HPC jobs failed"; the cause was single and load-time.**
