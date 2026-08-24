@@ -75,10 +75,35 @@ as pre-fix accuracy-only picks, not valid campaign knobs.
 `benchmark/p023_fmm_tune.jl`: left at `tree_amortization=1` deliberately, with a
 comment saying why (mature-wake unsteady step rebuilds the tree every step).
 
+**Early abandonment (Ryan 2026-08-24, later).** `abandon_factor=1.3` stops a
+trial as soon as its running min passes 1.3x the fastest COMPLETE,
+error-satisfying candidate so far. Such a point can no longer be accepted —
+acceptance needs `t < t0*(1-improve_tol)` and the incumbent `t0` is never below
+that best — so the remaining reps are waste. This is what makes `reps=5`
+affordable. Under `tree_amortization>1` the applies are skipped entirely when
+the amortized build alone already loses. The threshold only tightens, so an
+abandoned point stays rejected and its over-estimated time is safe to memoize;
+abandoned candidates never tighten the threshold themselves, and one abandoned
+at the build stage has NOT had its error tolerance verified (flagged
+`abandoned=true` in `history`, counted in `info.n_abandoned`).
+
+Why 1.3 and not tighter: the risk is a candidate whose first rep is unluckily
+slow but whose true min is competitive. 1.3 kills a point only when even its
+best rep is 30% above the best — well outside jitter. Anything near 1.0 would be
+exposed to exactly the sampling noise this campaign is trying to remove.
+`TUNE_ABANDON_FACTOR=Inf` disables it.
+
+Measured on a 20k-body descent at `reps=5`: `abandon_factor` Inf / 1.3 / 1.05
+all reach the identical argmin `(leaf 22, P 5, MAC 0.75)` and the same
+`t_best=0.018 s`, at **9.0 / 7.8 / 6.4 s** wall with 0 / 8 / 20 of 44 candidates
+abandoned. The saving is bounded below by one full trial per candidate, so it
+grows with `reps` and with the cost spread across the neighborhood — both larger
+on the real rungs than on this toy.
+
 **Verification so far.** `FastMultipole` loads; `test/fmm_plan_test.jl` passes
 (11/11); a 20k-body gravitational descent runs to convergence under both
 `tree_amortization=1` and `=50` and reaches the same argmin there; the
-`max_seconds` guard fires, warns, and reports `timed_out=true`. **Not yet
+`max_seconds` backstop fires, warns, and reports `timed_out=true`. **Not yet
 validated at R1 on the cluster** — that is the next step, and the pass criterion
 is a walk 68 -> 45 -> 30 -> 20 -> 13 -> 9 (or lower) with `krylov_gmres/standard`
 `t_solve_min` near 15.5 s.
