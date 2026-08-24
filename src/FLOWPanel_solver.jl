@@ -50,6 +50,98 @@ function _solve!(self, solver; optargs...)
 end
 
 ################################################################################
+# PER-STEP SOLVE STATISTICS AND WARM-START LIFECYCLE (BRAINSTORM 021 Phase 3)
+################################################################################
+
+"""
+    SolveStepStats()
+
+Per-*step* solve accounting for a solver object, where a "step" is one
+**completed top-level solve** — a public single-body `solve!`, one
+`solve!(bodies::Tuple, solvers::Tuple)` call, or one `solve_formulation!` of a
+formulation that drives `_solve!` directly.
+
+Three distinct events are tracked separately:
+
+1. a raw linear-solver kernel call (`_solve!` / `_krylov_launch!`) — updates
+   only `solver.niter` / `solver.solved`, and never touches this object;
+2. one per-body solve inside a top-level step — `note_step_solve!`;
+3. a completed top-level step — `publish_step_stats!` (statistics) and
+   `save_step_solution!` (warm-start history).
+
+The `acc_*` fields are transient accumulators for the step currently in
+progress; the unprefixed fields are the last **published** values. A step that
+throws leaves the published values untouched, and the next `begin_step_solution!`
+discards the partial transient state.
+
+`solved_all` is the AND of the *inner solver* convergence flags over the step. It
+is not a multibody outer (block Gauss–Seidel) convergence flag; that is reported
+through the tuple `solve!` `history` kwarg and its verbose warning.
+"""
+mutable struct SolveStepStats
+    acc_nsolves::Int        # per-body solves noted so far in the step in progress
+    acc_niter_first::Int    # `.niter` of the FIRST solve of that step
+    acc_solved_all::Bool    # AND of `.solved` over that step
+    nsolves::Int            # last published values
+    niter_first::Int
+    solved_all::Bool
+end
+
+SolveStepStats() = SolveStepStats(0, -1, true, 0, -1, true)
+
+"""
+    begin_step_solution!(solver)
+
+Open a top-level solve step, discarding any transient statistics left behind by
+an unfinished or failed step. No-op for solvers that carry no step statistics.
+"""
+begin_step_solution!(::AbstractSolver) = nothing
+
+"""
+    note_step_solve!(solver)
+
+Record one *successful* per-body solve inside the step in progress.
+"""
+note_step_solve!(::AbstractSolver) = nothing
+
+"""
+    publish_step_stats!(solver)
+
+Commit the transient step statistics as the published values.
+"""
+publish_step_stats!(::AbstractSolver) = nothing
+
+"Number of per-body solves in the last published step (-1 if unavailable)."
+step_nsolves(::AbstractSolver) = -1
+
+"`.niter` of the FIRST per-body solve of the last published step (-1 if unavailable)."
+step_niter_first(::AbstractSolver) = -1
+
+"AND of the inner-solver convergence flags over the last published step."
+step_solved(::AbstractSolver) = true
+
+"""
+    save_step_solution!(body, solver)
+
+Commit `body`'s solution into the solver's warm-start history. Called exactly
+once per completed top-level step, so the history holds consecutive *timestep*
+solutions rather than intra-step repeats. No-op for solvers without history.
+"""
+save_step_solution!(body, ::AbstractSolver) = nothing
+
+"""
+    finalize_step_solution!(body, solver)
+
+Close a top-level solve step: commit the warm-start history, then publish the
+step statistics. Call only after the top-level solve has completed successfully.
+"""
+function finalize_step_solution!(body, solver)
+    save_step_solution!(body, solver)
+    publish_step_stats!(solver)
+    return nothing
+end
+
+################################################################################
 
 
 ################################################################################
@@ -129,6 +221,12 @@ target body's boundary-condition flag (the 4th type parameter of
 `G` need not be square: its shape must be
 `(target_system.ncells, source_system.ncells)`.
 
+`kernel_and_strength_index` overrides which kernel/strength column is
+unit-activated; the default reproduces the historical behavior. Passing
+`(ConstantSource, 1)` on a combined source+doublet/ring body assembles the
+source-potential matrix `S` (`S*σ` = the interior source potential at the
+control points) instead of the solve operator.
+
 If `update_geometry=true`, the target body's normals and control points are
 recomputed before assembling `G`. Control points sit exactly on the panel
 surface (no offset); no separate diagonal jump term is added because `induced`
@@ -139,7 +237,8 @@ type parameter.
 function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
              source_system::AbstractBody{<:Any,NK,TF};
              core_size=source_system.core_size,
-             update_geometry::Bool=false) where {DBC,NK,TF}
+             update_geometry::Bool=false,
+             kernel_and_strength_index::Tuple=_G_kernel_and_strength_index(source_system)) where {DBC,NK,TF}
     M = target_system.ncells
     N = source_system.ncells
 
@@ -153,7 +252,7 @@ function _G!(G, target_system::AbstractBody{<:Any,<:Any,<:Any,DBC},
         calc_controlpoints!(target_system)
     end
 
-    kernel, strength_index = _G_kernel_and_strength_index(source_system)
+    kernel, strength_index = kernel_and_strength_index
 
     derivatives_switch = DBC ? FastMultipole.DerivativesSwitch(true, false, false) :
                                FastMultipole.DerivativesSwitch(false, true, false)
@@ -205,12 +304,18 @@ end
 ################################################################################
 
 """
-    Backslash(body)
+    Backslash(body; assemble_source_potential=false)
 
 Direct solver that assembles and LU-factors the influence matrix for `body`.
 The formulation (Neumann or Dirichlet) is chosen automatically from the body's
 `DBC` type parameter: control points are placed exterior for Neumann,
 interior for Dirichlet.
+
+`assemble_source_potential=true` (Dirichlet, NK=2 bodies only) additionally
+assembles the constant source-potential matrix `S` (see
+[`assemble_source_potential!`](@ref)); the per-solve source self-influence in
+`solve!` then becomes a dense gemv `S*σ` instead of an N-body `influence!`
+evaluation. Opt-in: `S` costs another `ncells^2` matrix of memory.
 """
 mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
@@ -218,9 +323,11 @@ mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     rhs::Vector{TF}
     Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
     phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
+    S::Union{Nothing,Matrix{TF}}   # source-potential matrix (opt-in; nothing = evaluate via influence!)
 end
 
-function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
+function Backslash(body::AbstractBody{<:Any,<:Any,TF};
+        assemble_source_potential::Bool=false) where TF
     G = zeros(TF, body.ncells, body.ncells)
     rhs = zeros(TF, body.ncells)
     Uext = zeros(TF, 3, body.ncells)
@@ -231,13 +338,85 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF}) where TF
     _G!(G, body, body; core_size=body.core_size_panel, update_geometry=false)
     Glu = lu!(G)
 
-    return Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext)
+    solver = Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext, nothing)
+    assemble_source_potential && assemble_source_potential!(solver, body)
+
+    return solver
 end
 
+"""
+    assemble_source_potential!(solver::Backslash, body)
 
+Assemble (or refresh) the constant source-potential matrix `S` on `solver`,
+where `S[i, j]` is the interior scalar potential at control point `i` induced
+by a unit source strength on panel `j` (`S*σ` reproduces the per-solve
+`influence!(body, body; scalar_potential=true)` with `μ = 0`, up to farfield
+truncation of the FMM backend it replaces). Only meaningful for Dirichlet
+(`DBC=true`) combined source+doublet/ring (NK=2) bodies.
+
+Like `G`, `S` is invariant under rigid motion of `body` (scalar potential of
+co-moving panels at co-moving control points), so it is assembled once at
+setup and never transformed — the same treatment `transform_solver_geometry!`
+gives `G`.
+"""
+function assemble_source_potential!(solver::Backslash{TF},
+        body::AbstractBody{<:Any,2,TF,true}) where TF
+    if solver.S === nothing
+        solver.S = zeros(TF, body.ncells, body.ncells)
+    else
+        solver.S .= zero(TF)
+    end
+    _G!(solver.S, body, body; core_size=body.core_size_panel,
+        update_geometry=false, kernel_and_strength_index=(ConstantSource, 1))
+    return solver
+end
+
+# Seam for the per-solve Dirichlet source self-influence: accumulates the
+# interior source potential of the body's current σ (strength column 1, μ = 0)
+# into `body.potential`. The default is the N-body evaluation through
+# `backend`; a solver carrying the precomputed `S` matrix takes the dense-gemv
+# shortcut instead. Future matrix-free/GPU backends (e.g. scalar-potential
+# output on the rectangular GPU seam) plug in here by dispatching on
+# `backend`/`solver` — `solve!` itself needs no further changes.
+# The gemv shortcut requires operator-mode input (wake correction inactive):
+# with the affine attached-wake correction active the influence! evaluation is
+# not the linear map S*σ, so fall back to the backend.
+_source_influence!(body, solver, backend; optargs...) =
+    influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+
+function _source_influence!(body::AbstractBody{<:Any,2,<:Any,true},
+        solver::Backslash, backend; optargs...)
+    S = solver.S
+    if S === nothing || _wake_correction_is_active(body)
+        return influence!(body, body, backend; scalar_potential=true,
+            velocity=false, optargs...)
+    end
+    return LA.mul!(body.potential, S, view(body.strength, :, 1), true, true)
+end
+
+_wake_correction_is_active(body::RigidWakeBody) = body.wake_correction_active[]
+_wake_correction_is_active(body) = false
+
+
+"""
+    solve!(body, solver; backend=DirectBackend(), finalize_step=true, optargs...)
+
+Solve a single body. By default this **is** a complete top-level solve step: the
+solver's per-step statistics are opened before the solve and published after it,
+and the warm-start history advances exactly once (021 Phase 3).
+
+`finalize_step=false` is an INTERNAL orchestration mode used by
+`solve!(bodies::Tuple, solvers::Tuple)`, where several per-body solves make up
+one step. It still notes the per-body solve, but neither opens nor closes the
+step; the caller must bracket its calls with `begin_step_solution!` and
+`finalize_step_solution!`.
+"""
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolver;
         backend=DirectBackend(),
+        finalize_step::Bool=true,
         optargs...)
+
+    finalize_step && begin_step_solution!(solver)
 
     potential_old = copy(body.potential)
 
@@ -247,17 +426,25 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,true}, solver::AbstractSolv
         # the interior self/source potential and the solve is homogeneous unless
         # external influences have already been assembled into that workspace.
         body.potential .= zero(eltype(body.potential))
-        influence!(body, body, backend; scalar_potential=true, velocity=false, optargs...)
+        _source_influence!(body, solver, backend; optargs...)
         _solve!(body, solver; backend, optargs...)
+        note_step_solve!(solver)
     finally
         body.potential .= potential_old
     end
 
+    # Only after the public solve has completed (including the Dirichlet state
+    # restore above) does the step commit.
+    finalize_step && finalize_step_solution!(body, solver)
+
     return nothing
 end
 
+# Neumann counterpart of the Dirichlet `solve!` above; same `finalize_step`
+# contract (021 Phase 3).
 function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSolver;
         backend=DirectBackend(),
+        finalize_step::Bool=true,
         optargs...)
 
     if body isa RigidWakeBody && body.watertight
@@ -267,7 +454,12 @@ function solve!(body::AbstractBody{<:Any,<:Any,<:Any,false}, solver::AbstractSol
               "surfaces, or remove a cap to make the surface non-watertight." maxlog=1
     end
 
+    finalize_step && begin_step_solution!(solver)
+
     _solve!(body, solver; backend, optargs...)
+    note_step_solve!(solver)
+
+    finalize_step && finalize_step_solution!(body, solver)
 
     return nothing
 end
@@ -418,10 +610,15 @@ mutable struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP,TK
     warmstart::Bool        # seed solves with x_prev (off by default)
     x_prev::Vector{TF}     # previous solution (warmstart seed)
     have_x_prev::Bool      # whether x_prev holds a valid solution
+    warmstart_order::Int   # 0 = previous solution; >=1 = polynomial extrapolation (021 Phase 3)
+    x_history::Matrix{TF}  # n × (order+1) rolling buffer, slot 1 = most recent; 0 columns when order<1
+    x_history_nsaved::Int  # populated slots, clamped to size(x_history, 2)
+    x0_scratch::Vector{TF} # extrapolated-guess buffer; empty when order<1
     record_history::Bool   # capture per-iteration convergence history
     history::ConvergenceHistory
     niter::Int             # iterations of the last solve
     solved::Bool           # convergence flag of the last solve
+    stats::SolveStepStats  # per-step accounting (021 Phase 3; see SolveStepStats)
     cache_tree::Bool       # per-solve FMM plan reuse (see docstring)
     cache_nearfield::Bool  # dense near-field cache on the per-solve plan (see docstring)
     persistent_plan::Bool  # cross-solve plan (+cache) persistence (see docstring)
@@ -437,6 +634,7 @@ function KrylovSolver(body::AbstractBody;
         preconditioner=nothing,     # preconditioner object (see docstring)
         preconditioner_cell_size::Real=0.0,  # cell size for block Jacobi preconditioner; ≤0 disables
         warmstart::Bool=false,      # seed solves with the previous solution
+        warmstart_order::Int=0,     # 0 = previous solution; >=1 = polynomial extrapolation
         record_history::Bool=false, # capture per-iteration convergence history
         cache_tree::Bool=false,     # per-solve FMM plan reuse (021 Phase 2b)
         cache_nearfield::Bool=false, # dense near-field cache on the plan (021 Phase 2b)
@@ -474,6 +672,12 @@ function KrylovSolver(body::AbstractBody;
         Krylov.krylov_workspace(Val(method), A, rhs)
 
     x_prev = zeros(TF, n)
+    # Allocate the extrapolation buffers ONLY when they are actually used: solver
+    # memory is a reported campaign metric (021 ruling 8, `solver_state_bytes`),
+    # so the default configuration must carry no extra bytes.
+    warmstart_order >= 0 || throw(ArgumentError("warmstart_order must be >= 0; got $warmstart_order"))
+    x_history = zeros(TF, n, warmstart_order >= 1 ? warmstart_order + 1 : 0)
+    x0_scratch = zeros(TF, warmstart_order >= 1 ? n : 0)
     history = ConvergenceHistory(:krylov_precnorm)
 
     return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner),
@@ -481,8 +685,9 @@ function KrylovSolver(body::AbstractBody;
         body, backend, Uext, source_strengths, unabbreviated_strengths,
         kop, A, rhs, workspace, method, itmax, Float64(atol), Float64(rtol),
         Int(memory), preconditioner, warmstart, x_prev, false,
-        record_history, history, 0, false, cache_tree, cache_nearfield,
-        persistent_plan)
+        warmstart_order, x_history, 0, x0_scratch,
+        record_history, history, 0, false, SolveStepStats(),
+        cache_tree, cache_nearfield, persistent_plan)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -552,32 +757,53 @@ function _krylov_launch!(solver::KrylovSolver)
 
     common = (; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax,
               history=solver.record_history, callback)
+    # Initial guess (021 Phase 3). warmstart_order == 0 keeps the historical
+    # previous-solution path bit-for-bit; >=1 builds a polynomial extrapolation
+    # from the rolling history using the SAME coefficients as FGS's
+    # project_solution!, via the shared _extrapolation_coefficients, so the two
+    # solvers' warm guesses are comparable by construction rather than by
+    # inspection.
     use_x0 = solver.warmstart && solver.have_x_prev
+    x0 = solver.x_prev
+    if use_x0 && solver.warmstart_order >= 1 && solver.x_history_nsaved >= 1
+        order = min(solver.warmstart_order, solver.x_history_nsaved - 1)
+        H = solver.x_history
+        @views @. solver.x0_scratch = _extrapolation_coefficient(order, 0) * H[:, 1]
+        @inbounds for j in 1:order
+            c = _extrapolation_coefficient(order, j)
+            @views @. solver.x0_scratch += c * H[:, j + 1]
+        end
+        x0 = solver.x0_scratch
+    end
 
     P = solver.preconditioner
     if P === nothing
-        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; common...) :
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, x0; common...) :
                  Krylov.krylov_solve!(ws, A, rhs; common...)
     elseif P isa FGSPreconditioner
         # flexible right preconditioning: the residual Krylov monitors stays
         # the true one, and FGMRES tolerates a per-iteration-varying apply
-        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; N=P, ldiv=true, common...) :
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, x0; N=P, ldiv=true, common...) :
                  Krylov.krylov_solve!(ws, A, rhs; N=P, ldiv=true, common...)
     else
         # right preconditioning for the Jacobi path too (021 ruling 11a): the
         # monitored/stopping residual stays the TRUE residual — left routing
         # stops on a preconditioned norm, which reported "converged" at a much
         # worse true residual in the Phase 0 smoke
-        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, solver.x_prev; N=P, ldiv=true, common...) :
+        use_x0 ? Krylov.krylov_solve!(ws, A, rhs, x0; N=P, ldiv=true, common...) :
                  Krylov.krylov_solve!(ws, A, rhs; N=P, ldiv=true, common...)
     end
 
     solver.niter = ws.stats.niter
     solver.solved = ws.stats.solved
 
-    # persist the solution as the next warmstart seed
-    solver.x_prev .= ws.x
-    solver.have_x_prev = true
+    # Warm-start persistence deliberately does NOT happen here (021 Phase 3).
+    # `_krylov_launch!` is a raw kernel call and may run many times inside one
+    # top-level step (block Gauss-Seidel outer iterations, preconditioner
+    # applications), so persisting here filled `x_prev`/`x_history` with
+    # intra-step repeats instead of consecutive timestep solutions. The commit
+    # now happens once per completed step in `save_step_solution!`, which reads
+    # `solver.workspace.x` — untouched between here and the step boundary.
 
     # drop the plan at solve end: releases the Cache buffers (the dominant
     # allocation) and guarantees the next solve cannot reuse a plan built
@@ -883,6 +1109,9 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     solution_history_nsaved::Int            # number of populated slots, clamped to NT
     project_solution::Bool                  # warm-start next solve via polynomial extrapolation
     project_solution_order::Int             # extrapolation order: 1 = linear, 2 = quadratic, ...
+    niter::Int                              # GS sweeps performed by the last solve (see _solve!)
+    solved::Bool                            # whether the last solve met `tolerance`
+    stats::SolveStepStats                   # per-step accounting (021 Phase 3; see SolveStepStats)
 end
 
 function FGSSolver(body::AbstractBody;
@@ -924,7 +1153,71 @@ function FGSSolver(body::AbstractBody;
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order)
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+end
+
+################################################################################
+# STEP LIFECYCLE FOR THE STATEFUL ITERATIVE SOLVERS (021 Phase 3)
+################################################################################
+
+# Solvers that carry a SolveStepStats. Raw `_solve!` / `_krylov_launch!` calls
+# deliberately stay outside this accounting: the Phase 1/2 benchmarks, the
+# solver-history tests, and `FGSPreconditioner`'s inner FGS solve all call the
+# kernels directly, and counting there would grow the accumulators without
+# bound and pollute a later published step.
+const _StepStatsSolver = Union{FGSSolver, KrylovSolver}
+
+function begin_step_solution!(solver::_StepStatsSolver)
+    stats = solver.stats
+    stats.acc_nsolves = 0
+    stats.acc_niter_first = -1
+    stats.acc_solved_all = true
+    return nothing
+end
+
+function note_step_solve!(solver::_StepStatsSolver)
+    stats = solver.stats
+    stats.acc_nsolves += 1
+    stats.acc_nsolves == 1 && (stats.acc_niter_first = solver.niter)
+    stats.acc_solved_all = stats.acc_solved_all && solver.solved
+    return nothing
+end
+
+function publish_step_stats!(solver::_StepStatsSolver)
+    stats = solver.stats
+    stats.nsolves = stats.acc_nsolves
+    stats.niter_first = stats.acc_niter_first
+    stats.solved_all = stats.acc_solved_all
+    return nothing
+end
+
+step_nsolves(solver::_StepStatsSolver) = solver.stats.nsolves
+step_niter_first(solver::_StepStatsSolver) = solver.stats.niter_first
+step_solved(solver::_StepStatsSolver) = solver.stats.solved_all
+
+# FGS keeps the existing rolling-history writer; only its CALL SITE moved out of
+# `_solve!` and up to the top-level step boundary.
+save_step_solution!(body::AbstractBody, solver::FGSSolver) =
+    save_solution!(body, solver)
+
+# Krylov commits the workspace solution (untouched between `_krylov_launch!` and
+# the end of the step) as the next warm-start seed, and pushes it into the
+# rolling history when extrapolation is configured. Slot 1 is most recent:
+# shift [1..NT-1] right, then write slot 1 — mirroring `save_solution!`.
+function save_step_solution!(body::AbstractBody, solver::KrylovSolver)
+    x = solver.workspace.x
+    solver.x_prev .= x
+    solver.have_x_prev = true
+    if solver.warmstart_order >= 1
+        H = solver.x_history
+        NT = size(H, 2)
+        @inbounds for j in NT:-1:2
+            @views @. H[:, j] = H[:, j - 1]
+        end
+        @views @. H[:, 1] = x
+        solver.x_history_nsaved = min(solver.x_history_nsaved + 1, NT)
+    end
+    return nothing
 end
 
 ################################################################################
@@ -964,6 +1257,8 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
         _G!(solver.G, self, self; core_size=self.core_size_panel, update_geometry=false)
         # write back (see Neumann _solve! comment)
         solver.Glu = lu!(solver.G)
+        # S is geometry-locked to G: refresh it whenever G is
+        solver.S === nothing || assemble_source_potential!(solver, self)
     end
 
     ldiv!(view(self.strength, :, 2), solver.Glu, solver.rhs)
@@ -998,19 +1293,49 @@ end
 
 # end
 
+"""
+    _extrapolation_coefficients(order::Int)
+
+Coefficients for polynomial extrapolation one step past the most recent sample,
+indexed by history slot (slot 1 = most recent):
+
+    s_new = Σ_{j=0..order} (-1)^j * binomial(order+1, j+1) * H[j+1]
+
+`order = 0` reproduces the most recent sample exactly, i.e. plain
+previous-solution reuse.
+
+Shared by [`project_solution!`](@ref) (FGS) and the `KrylovSolver` warm-start
+path so the two solvers' extrapolated initial guesses are identical by
+construction — BRAINSTORM 021 Phase 3 compares them against each other, which
+is only meaningful if the scheme is provably the same.
+"""
+@inline function _extrapolation_coefficient(order::Int, j::Int)
+    return ifelse(isodd(j), -1, 1) * binomial(order + 1, j + 1)
+end
+
+# Materialized form, for tests and introspection. The hot paths call the scalar
+# accessor above instead, so a warm solve allocates nothing for its coefficients
+# (per-solve allocation is a reported campaign metric, 021 ruling 8).
+function _extrapolation_coefficients(order::Int)
+    order >= 0 || throw(ArgumentError("extrapolation order must be >= 0; got $order"))
+    return Int[_extrapolation_coefficient(order, j) for j in 0:order]
+end
+
 # Polynomial extrapolation in time: warm-start body.strength using the rolling
 # history saved by save_solution!. Slot 1 holds the most recent saved strength.
-# Coefficients (slot 1 = most recent): s_new = Σ_{j=0..order} (-1)^j * binomial(order+1, j+1) * H[:,:,j+1]
 @inline function project_solution!(body::AbstractBody, solver::FGSSolver)
     solver.project_solution || return false
     n = solver.solution_history_nsaved
-    n < 2 && return false
+    n < 1 && return false
+    # order 0 is plain previous-solution reuse and needs only one sample. Higher
+    # orders keep the historical two-sample requirement, so existing
+    # project_solution=true runs are bit-unchanged at the first step.
+    n < 2 && solver.project_solution_order != 0 && return false
     order = min(solver.project_solution_order, n - 1)
     H = solver.solution_history
-    c0 = order + 1
-    @views @. body.strength = c0 * H[:, :, 1]
+    @views @. body.strength = _extrapolation_coefficient(order, 0) * H[:, :, 1]
     @inbounds for j in 1:order
-        c = ifelse(isodd(j), -binomial(order + 1, j + 1), binomial(order + 1, j + 1))
+        c = _extrapolation_coefficient(order, j)
         @views @. body.strength += c * H[:, :, j + 1]
     end
     return true
@@ -1075,6 +1400,25 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         nothing
     end
 
+    # Iteration-count capture (BRAINSTORM 021 Phase 3). Upstream keeps the count
+    # as a loop local, so the only exposure is the per-iteration callback. It
+    # fires at the TOP of iteration k, on a residual reflecting k-1 completed GS
+    # sweeps, and only then is the tolerance checked — hence upstream's own
+    # "converged after iteration-1 iterations". We therefore report `niter` as
+    # GS SWEEPS PERFORMED:
+    #   converged at callback iteration k -> k-1 sweeps
+    #   exhausted max_iterations at k     -> k sweeps (the sweep after the last
+    #                                       failed check still runs)
+    # Any user-supplied callback is chained, so _solve_history! is unaffected.
+    last_iteration = Ref(0)
+    last_residual = Ref(Inf)
+    counting_callback = function (iteration, residual)
+        last_iteration[] = iteration
+        last_residual[] = residual
+        callback === nothing || callback(iteration, residual)
+        return nothing
+    end
+
     # run solver
     FastMultipole.solve!(body, solver.fgs;
         max_iterations=solver.max_iterations,
@@ -1087,8 +1431,11 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false,
-        callback
+        callback=counting_callback
     )
+
+    solver.solved = last_residual[] <= solver.tolerance
+    solver.niter = solver.solved ? max(last_iteration[] - 1, 0) : last_iteration[]
 
     # restore properties
     if dirichlet_bc
@@ -1101,8 +1448,11 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         println("FGSSolver actual - projected first $(nprint) strengths: ", actual_strengths .- projected_strengths)
     end
 
-    # save converged strengths into rolling history (no-op if disabled)
-    save_solution!(body, solver)
+    # NOTE (021 Phase 3): the rolling history is NOT written here. `_solve!` is a
+    # raw kernel call that may run several times within one top-level step, so
+    # saving here recorded intra-step repeats rather than consecutive timestep
+    # solutions. `save_step_solution!` commits it once per completed step.
+    return nothing
 end
 
 """
@@ -1581,6 +1931,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
     outer_tolerance::Real = 1e-8,
     verbose::Bool = false,
     history::Union{Nothing,ConvergenceHistory} = nothing,
+    solver_optargs = (;),
     optargs...)
 
     # println("Tuple of bodies")
@@ -1591,8 +1942,23 @@ function solve!(bodies::Tuple, solvers::Tuple;
     @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
     backends = backend isa Tuple || backend isa AbstractVector ? backend : fill(backend, N)
 
+    # The lifecycle keyword is orchestration state owned by THIS method; a
+    # caller-supplied one would silently change which call commits the step.
+    :finalize_step in keys(solver_optargs) && throw(ArgumentError(
+        "solver_optargs may not contain :finalize_step — the tuple solve! owns " *
+        "the step boundary (021 Phase 3)"))
+
     prev_velocity = [copy(body.velocity) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
+
+    # One tuple solve! is ONE top-level step, however many block-GS outer
+    # iterations it takes. Opening the step here discards any transient state
+    # left by an earlier failed step, and freezes each solver's warm-start
+    # history for the whole outer loop, so every outer iteration starts from the
+    # same historical guess (021 Phase 3).
+    for solver in solvers
+        begin_step_solution!(solver)
+    end
 
     converged = false
     for iter in 1:max_outer_iterations
@@ -1608,7 +1974,13 @@ function solve!(bodies::Tuple, solvers::Tuple;
                     optargs...)
             end
 
-            solve!(body, solver; backend=backends[i])
+            # `optargs...` above is bound for `influence!`; per-body solver kwargs
+            # (e.g. an FGS `callback`) travel separately so the two cannot collide.
+            # Without this there is no route to the inner solve at all — the reason
+            # FGS iteration counts were unreachable from the 021 unsteady driver
+            # (BRAINSTORM 021 Phase 3; needed in earnest by Phase 4's multibody case).
+            solve!(body, solver; backend=backends[i], finalize_step=false,
+                   solver_optargs...)
         end
 
         max_delta = 0.0
@@ -1623,6 +1995,18 @@ function solve!(bodies::Tuple, solvers::Tuple;
 
         if verbose
             println("  Outer iteration $iter: max strength change = $max_delta")
+        end
+
+        # A one-body tuple has no coupling to iterate: `sources` is empty, so the
+        # block-GS map is the identity after the first solve and every further
+        # outer iteration re-solves the SAME system. Exiting here removes that
+        # redundant solve (021 Phase 3). The ConvergenceHistory contract changes
+        # intentionally: a one-body tuple records exactly one outer entry.
+        # Multibody behavior is unchanged.
+        if N == 1
+            converged = true
+            verbose && println("  Single body: one block solve completes the outer loop")
+            break
         end
 
         if max_delta < outer_tolerance
@@ -1641,6 +2025,14 @@ function solve!(bodies::Tuple, solvers::Tuple;
     # restore velocities
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
+    end
+
+    # Close the step exactly once, only after the whole tuple orchestration has
+    # completed normally: the warm-start history advances by one timestep and the
+    # step statistics become visible. If a body solve throws, control never gets
+    # here, so neither history nor published statistics are touched.
+    for (body, solver) in zip(bodies, solvers)
+        finalize_step_solution!(body, solver)
     end
 
     return nothing

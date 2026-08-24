@@ -691,6 +691,333 @@ end
         assert_boundary_residuals((body,); potential_atol=1e-7)
     end
 
+    @testset "Warmstart extrapolation coefficients (021 Phase 3)" begin
+        # Pinned values: c[j+1] = (-1)^j * binomial(order+1, j+1), slot 1 = most recent.
+        @test pnl._extrapolation_coefficients(0) == [1]
+        @test pnl._extrapolation_coefficients(1) == [2, -1]
+        @test pnl._extrapolation_coefficients(2) == [3, -3, 1]
+        @test pnl._extrapolation_coefficients(3) == [4, -6, 4, -1]
+        @test_throws ArgumentError pnl._extrapolation_coefficients(-1)
+
+        # Invariant that makes the scheme an extrapolation at all: a constant
+        # history must extrapolate to that constant, i.e. the coefficients sum
+        # to 1 at every order.
+        for order in 0:6
+            @test sum(pnl._extrapolation_coefficients(order)) == 1
+        end
+    end
+
+    @testset "FGSSolver project_solution! (021 Phase 3)" begin
+        body = make_octa_source_body()
+        nk = size(body.strength, 2)
+
+        # order 0 == plain previous-solution reuse, and needs only ONE sample
+        solver0 = pnl.FGSSolver(body; solution_history_length=3,
+                                project_solution=true, project_solution_order=0)
+        solver0.solution_history[:, :, 1] .= 7.0
+        solver0.solution_history_nsaved = 1
+        body.strength .= 0
+        @test pnl.project_solution!(body, solver0)
+        @test all(body.strength .== 7.0)
+
+        # order >= 1 keeps the historical two-sample requirement, so existing
+        # project_solution=true runs are unchanged at the first step
+        solver1 = pnl.FGSSolver(body; solution_history_length=3,
+                                project_solution=true, project_solution_order=1)
+        solver1.solution_history[:, :, 1] .= 7.0
+        solver1.solution_history_nsaved = 1
+        @test !pnl.project_solution!(body, solver1)
+
+        # order 2 against the hand-computed formula 3*H1 - 3*H2 + 1*H3
+        solver2 = pnl.FGSSolver(body; solution_history_length=3,
+                                project_solution=true, project_solution_order=2)
+        h1 = reshape(collect(1.0:(body.ncells * nk)), body.ncells, nk)
+        h2 = h1 .* 2.0
+        h3 = h1 .* 5.0
+        solver2.solution_history[:, :, 1] .= h1
+        solver2.solution_history[:, :, 2] .= h2
+        solver2.solution_history[:, :, 3] .= h3
+        solver2.solution_history_nsaved = 3
+        body.strength .= 0
+        @test pnl.project_solution!(body, solver2)
+        @test body.strength ≈ 3 .* h1 .- 3 .* h2 .+ h3
+
+        # constant history extrapolates to the constant, at every order
+        solver2.solution_history .= 4.0
+        body.strength .= 0
+        @test pnl.project_solution!(body, solver2)
+        @test all(body.strength .≈ 4.0)
+
+        # projection is disabled unless explicitly turned on
+        solver_off = pnl.FGSSolver(body; solution_history_length=3)
+        solver_off.solution_history_nsaved = 3
+        @test !pnl.project_solution!(body, solver_off)
+    end
+
+    @testset "FGSSolver niter/solved capture (021 Phase 3)" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        solver = pnl.FGSSolver(body; tolerance=1e-10, max_iterations=100)
+
+        @test solver.niter == 0          # fresh solver reports nothing yet
+        @test !solver.solved
+
+        pnl.solve!(body, solver)
+        @test solver.solved
+        @test solver.niter >= 0
+
+        # the count must agree with the convergence history recorded through the
+        # user-facing callback path, under the stated convention: the callback
+        # fires at the top of iteration k on a residual reflecting k-1 completed
+        # sweeps, so a converged solve reports length(history) - 1.
+        body2 = make_octa_source_body()
+        body2.velocity .= 0
+        body2.velocity[1, :] .= 1.0
+        solver2 = pnl.FGSSolver(body2; tolerance=1e-10, max_iterations=100)
+        history = pnl.ConvergenceHistory(:fgs_maxabs)
+        pnl._solve_history!(body2, solver2, history)
+        @test solver2.solved
+        @test solver2.niter == length(history) - 1
+        @test history.metric == :fgs_maxabs
+
+        # a solve that cannot reach tolerance reports not-solved and the full
+        # sweep count, rather than silently looking converged
+        body3 = make_octa_source_body()
+        body3.velocity .= 0
+        body3.velocity[1, :] .= 1.0
+        solver3 = pnl.FGSSolver(body3; tolerance=1e-16, max_iterations=3)
+        pnl.solve!(body3, solver3)
+        @test !solver3.solved
+        @test solver3.niter == 3
+    end
+
+    @testset "KrylovSolver warmstart_order (021 Phase 3)" begin
+        body = make_octa_source_body()
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+
+        # default carries NO extra state: solver memory is a reported campaign
+        # metric (ruling 8), so the untouched configuration must not grow
+        plain = pnl.KrylovSolver(body; backend=pnl.DirectBackend())
+        @test plain.warmstart_order == 0
+        @test size(plain.x_history, 2) == 0
+        @test isempty(plain.x0_scratch)
+
+        @test_throws ArgumentError pnl.KrylovSolver(body; backend=pnl.DirectBackend(),
+                                                   warmstart_order=-1)
+
+        # order 0 keeps the historical x_prev path and allocates nothing extra
+        order0 = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), warmstart=true,
+                                  atol=1e-10, rtol=1e-10, itmax=50, warmstart_order=0)
+        pnl.solve!(body, order0)
+        strengths_ref = copy(body.strength[:, 1])
+        @test order0.have_x_prev
+        @test size(order0.x_history, 2) == 0
+        @test order0.x_history_nsaved == 0
+
+        # order 2 allocates a 3-slot history and fills it one solve at a time
+        order2 = pnl.KrylovSolver(body; backend=pnl.DirectBackend(), warmstart=true,
+                                  atol=1e-10, rtol=1e-10, itmax=50, warmstart_order=2)
+        @test size(order2.x_history) == (body.ncells, 3)
+        pnl.solve!(body, order2)
+        @test order2.x_history_nsaved == 1
+        @test order2.x_history[:, 1] ≈ order2.x_prev
+        niter_cold = order2.niter
+
+        # repeated identical solves: the history is constant, so the
+        # extrapolated guess is that constant and the seeded solve cannot need
+        # more work than the cold one did
+        for _ in 1:3
+            pnl.solve!(body, order2)
+        end
+        @test order2.x_history_nsaved == 3
+        @test order2.niter <= niter_cold
+        @test isapprox(body.strength[:, 1], strengths_ref; atol=1e-8)
+
+        # and it still lands on the right answer after the RHS changes
+        body.velocity .= 0
+        body.velocity[2, :] .= 1.0
+        body_ref = make_octa_source_body()
+        body_ref.velocity .= 0
+        body_ref.velocity[2, :] .= 1.0
+        pnl.solve!(body_ref, pnl.Backslash(body_ref))
+        pnl.solve!(body, order2)
+        @test isapprox(body.strength[:, 1], body_ref.strength[:, 1]; atol=1e-7)
+    end
+
+    @testset "Block-GS solver_optargs forwarding (021 Phase 3)" begin
+        # Without this route there is no way to reach the inner per-body solve
+        # from a tuple solve — the reason FGS iteration counts were unreachable
+        # from the 021 unsteady driver, whose rotor case is a 1-tuple.
+        body1 = make_octa_source_body()
+        body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        body1.velocity .= 0
+        body2.velocity .= 0
+        body1.velocity[1, :] .= 1.0
+        body2.velocity[1, :] .= 1.0
+        solver1 = pnl.FGSSolver(body1; tolerance=1e-8)
+        solver2 = pnl.FGSSolver(body2; tolerance=1e-8)
+
+        seen = Int[]
+        pnl.solve!((body1, body2), (solver1, solver2);
+                   backend=(pnl.DirectBackend(), pnl.DirectBackend()),
+                   solver_optargs=(; callback=(iteration, residual) -> push!(seen, iteration)))
+        @test !isempty(seen)
+        @test solver1.niter >= 0
+        @test solver2.niter >= 0
+
+        # default (no solver_optargs) still works and still records counts
+        body3 = make_octa_source_body()
+        body4 = translated_nonlifting_target([3.0, 0.0, 0.0])
+        body3.velocity .= 0
+        body4.velocity .= 0
+        body3.velocity[1, :] .= 1.0
+        body4.velocity[1, :] .= 1.0
+        s3 = pnl.FGSSolver(body3; tolerance=1e-8)
+        s4 = pnl.FGSSolver(body4; tolerance=1e-8)
+        pnl.solve!((body3, body4), (s3, s4);
+                   backend=(pnl.DirectBackend(), pnl.DirectBackend()))
+        @test s3.solved
+        @test s4.solved
+    end
+
+    @testset "Per-step solve lifecycle (021 Phase 3)" begin
+        # The defect this replaces: `save_solution!` / `x_prev` persistence ran
+        # inside every `_solve!`, so a step made of several per-body solves
+        # filled the warm-start history with intra-step repeats instead of
+        # consecutive timestep solutions.
+        fresh() = (b = make_octa_source_body(); b.velocity .= 0;
+                   b.velocity[1, :] .= 1.0; b)
+
+        # --- 1. repeated standalone solves: one step each --------------------
+        bodyF = fresh()
+        solverF = pnl.FGSSolver(bodyF; tolerance=1e-10, max_iterations=100,
+                                solution_history_length=8, project_solution=true,
+                                project_solution_order=1)
+        @test pnl.step_nsolves(solverF) == 0      # nothing published yet
+        @test pnl.step_niter_first(solverF) == -1
+        for k in 1:3
+            pnl.solve!(bodyF, solverF)
+            @test pnl.step_nsolves(solverF) == 1
+            @test pnl.step_niter_first(solverF) == solverF.niter
+            @test pnl.step_solved(solverF) == solverF.solved
+            @test solverF.solution_history_nsaved == k   # advances exactly once
+        end
+
+        bodyK = fresh()
+        solverK = pnl.KrylovSolver(bodyK; backend=pnl.DirectBackend(), atol=1e-12,
+                                   rtol=1e-12, itmax=50, warmstart=true,
+                                   warmstart_order=2)
+        for k in 1:3
+            pnl.solve!(bodyK, solverK)
+            @test pnl.step_nsolves(solverK) == 1
+            @test pnl.step_niter_first(solverK) == solverK.niter
+            @test solverK.x_history_nsaved == min(k, 3)
+            @test solverK.have_x_prev
+        end
+
+        # --- 2. finalize_step=false cannot pollute the next published step ---
+        bodyP = fresh()
+        solverP = pnl.FGSSolver(bodyP; tolerance=1e-10, max_iterations=100,
+                                solution_history_length=8)
+        pnl.solve!(bodyP, solverP)
+        @test pnl.step_nsolves(solverP) == 1
+        @test solverP.solution_history_nsaved == 1
+
+        pnl.solve!(bodyP, solverP; finalize_step=false)
+        @test pnl.step_nsolves(solverP) == 1                # published untouched
+        @test solverP.solution_history_nsaved == 1          # history frozen
+        @test solverP.stats.acc_nsolves == 2                # but the step accrued
+
+        pnl.solve!(bodyP, solverP)                          # a real step again
+        @test pnl.step_nsolves(solverP) == 1                # partial state dropped
+        @test solverP.solution_history_nsaved == 2
+
+        # --- 3. a throwing inner solve neither saves nor publishes -----------
+        bodyE = fresh()
+        solverE = pnl.FGSSolver(bodyE; tolerance=1e-10, max_iterations=100,
+                                solution_history_length=8)
+        pnl.solve!(bodyE, solverE)
+        published = pnl.step_nsolves(solverE)
+        nsaved = solverE.solution_history_nsaved
+        @test_throws Exception pnl.solve!(bodyE, solverE;
+            callback=(iteration, residual) -> error("injected solve failure"))
+        @test pnl.step_nsolves(solverE) == published
+        @test solverE.solution_history_nsaved == nsaved     # history did not move
+        pnl.solve!(bodyE, solverE)                          # clean step afterwards
+        @test pnl.step_nsolves(solverE) == 1
+        @test solverE.solution_history_nsaved == nsaved + 1
+
+        # --- 7a. one-tuple result == the standalone solve --------------------
+        bodyT, bodyS = fresh(), fresh()
+        kw = (; tolerance=1e-10, max_iterations=100)
+        solverT = pnl.FGSSolver(bodyT; kw...)
+        solverS = pnl.FGSSolver(bodyS; kw...)
+        pnl.solve!((bodyT,), (solverT,); backend=(pnl.DirectBackend(),))
+        pnl.solve!(bodyS, solverS; backend=pnl.DirectBackend())
+        @test bodyT.strength == bodyS.strength
+        @test pnl.step_nsolves(solverT) == 1
+
+        # --- 7b. with the history frozen, repeated per-body solves are
+        #         idempotent — which is what makes the one-body short-circuit
+        #         safe rather than merely cheaper.
+        bodyR = fresh()
+        solverR = pnl.FGSSolver(bodyR; tolerance=1e-10, max_iterations=100,
+                                solution_history_length=4, project_solution=true,
+                                project_solution_order=1)
+        pnl.solve!(bodyR, solverR)
+        pnl.solve!(bodyR, solverR)              # fill history so projection fires
+        pnl.begin_step_solution!(solverR)
+        pnl.solve!(bodyR, solverR; finalize_step=false)
+        first_pass = copy(bodyR.strength)
+        pnl.solve!(bodyR, solverR; finalize_step=false)
+        @test bodyR.strength == first_pass
+        @test solverR.stats.acc_nsolves == 2
+
+        # same, on the Krylov Dirichlet path
+        make_dirichlet_body() = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+            Float64[0 1 1 0; 0 0 1 1; 0 0 0 0],
+            Int[1 1; 2 3; 3 4];
+            check_mesh=false, watertight=false)
+        bodyD = make_dirichlet_body()
+        bodyD.velocity .= 0
+        bodyD.velocity[1, :] .= 1.0
+        bodyD.velocity[3, :] .= 0.2
+        solverD = pnl.KrylovSolver(bodyD; backend=pnl.DirectBackend(), atol=1e-12,
+                                   rtol=1e-12, itmax=50, warmstart=true,
+                                   warmstart_order=1)
+        pnl.solve!(bodyD, solverD)
+        pnl.solve!(bodyD, solverD)
+        nsaved_D = solverD.x_history_nsaved
+        x_prev_D = copy(solverD.x_prev)
+        pnl.begin_step_solution!(solverD)
+        pnl.solve!(bodyD, solverD; finalize_step=false, backend=pnl.DirectBackend())
+        first_pass_D = copy(bodyD.strength)
+        pnl.solve!(bodyD, solverD; finalize_step=false, backend=pnl.DirectBackend())
+        @test bodyD.strength == first_pass_D
+        @test solverD.x_history_nsaved == nsaved_D    # frozen across both
+        @test solverD.x_prev == x_prev_D
+
+        # --- accumulator semantics, driven directly --------------------------
+        # niter_first is the FIRST solve of the step; `.niter` stays the last.
+        solverA = pnl.FGSSolver(fresh(); tolerance=1e-8)
+        pnl.begin_step_solution!(solverA)
+        solverA.niter, solverA.solved = 7, true
+        pnl.note_step_solve!(solverA)
+        solverA.niter, solverA.solved = 3, false
+        pnl.note_step_solve!(solverA)
+        pnl.publish_step_stats!(solverA)
+        @test pnl.step_nsolves(solverA) == 2
+        @test pnl.step_niter_first(solverA) == 7
+        @test solverA.niter == 3
+        @test !pnl.step_solved(solverA)      # AND over inner convergence flags
+
+        # generic solvers report "unavailable" rather than a false success
+        @test pnl.step_nsolves(pnl.Backslash(make_octa_source_body())) == -1
+        @test pnl.step_niter_first(pnl.Backslash(make_octa_source_body())) == -1
+    end
+
     @testset "KrylovSolver cache_tree (021 Phase 2b)" begin
         # FMM-plan reuse across a solve's operator applies must be bitwise
         # equivalent to the per-apply tree-rebuild path, and per-solve scoping
@@ -1428,6 +1755,54 @@ end
         end
 
         assert_boundary_residuals(bodies; backend, potential_atol=1e-4)
+    end
+
+    @testset "Backslash source-potential matrix S (051 Stage 3)" begin
+        body = make_dirichlet_diamond_body(nspan=4)
+        body.velocity .= 0
+        body.velocity[1, :] .= 1.0
+        body.velocity[3, :] .= 0.25
+
+        # reference: per-solve influence! path (no S)
+        ref_solver = pnl.Backslash(body)
+        @test ref_solver.S === nothing
+        pnl.solve!(body, ref_solver)
+        mu_ref = copy(body.strength[:, 2])
+
+        # opt-in S: assembled by the constructor kwarg
+        s_solver = pnl.Backslash(body; assemble_source_potential=true)
+        @test s_solver.S isa Matrix{Float64}
+        @test size(s_solver.S) == (body.ncells, body.ncells)
+
+        # direct equivalence of the matrix: S*σ == influence!-accumulated
+        # interior source potential at μ = 0 (DirectBackend is exact, so the
+        # two differ only by summation order)
+        pnl.set_strengths!(body)
+        sigma = copy(body.strength[:, 1])
+        potential_old = copy(body.potential)
+        body.potential .= 0
+        pnl.influence!(body, body, pnl.DirectBackend();
+            scalar_potential=true, velocity=false)
+        phi_influence = copy(body.potential)
+        body.potential .= potential_old
+        phi_gemv = s_solver.S * sigma
+        scale = max(maximum(abs, phi_influence), eps())
+        @test maximum(abs, phi_gemv .- phi_influence) / scale < 1e-12
+
+        # end-to-end: gemv-path solve reproduces the influence!-path solve
+        pnl.solve!(body, s_solver)
+        mu_gemv = copy(body.strength[:, 2])
+        mu_scale = max(maximum(abs, mu_ref), eps())
+        @test maximum(abs, mu_gemv .- mu_ref) / mu_scale < 1e-12
+
+        # S refreshes alongside G under update_G=true (geometry-locked)
+        s_solver.S .= 0
+        pnl.solve!(body, s_solver; update_G=true)
+        @test maximum(abs, s_solver.S * sigma .- phi_influence) / scale < 1e-12
+
+        # post-hoc attach on an existing solver (opt-in without reconstructing)
+        pnl.assemble_source_potential!(ref_solver, body)
+        @test maximum(abs, ref_solver.S .- s_solver.S) == 0
     end
 
 end

@@ -201,6 +201,7 @@ function _solver_metadata_dict(solver)
             "rtol" => solver.rtol,
             "memory" => solver.memory,
             "warmstart" => solver.warmstart,
+            "warmstart_order" => solver.warmstart_order,
             "cache_tree" => solver.cache_tree,
             "cache_nearfield" => solver.cache_nearfield,
             "persistent_plan" => solver.persistent_plan,

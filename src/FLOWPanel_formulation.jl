@@ -888,6 +888,11 @@ function solve_formulation!(f::TraceCorrected, state::TraceCorrectedState,
     # production-equivalent solve with the single added RHS term +W·c
     # (replicates the single-body Dirichlet solve!, which cannot be reused
     # because it clears preassembled external potential)
+    # This formulation drives the raw `_solve!` kernel directly (the public
+    # single-body solve! cannot be reused — it clears preassembled external
+    # potential), so it owns the top-level step boundary itself (021 Phase 3).
+    begin_step_solution!(solver)
+
     potential_old = copy(body.potential)
     try
         set_strengths!(body)
@@ -897,12 +902,17 @@ function solve_formulation!(f::TraceCorrected, state::TraceCorrectedState,
         LA.mul!(state.work, state.W, state.c)
         body.potential .-= state.work     # rhs = −potential = −S(σ0+σ) + W·c
         _solve!(body, solver; backend=backend_solve)
+        note_step_solve!(solver)
     finally
         body.potential .= potential_old
     end
 
     # physical mode: γ = C·μ̃ − c for every downstream consumer
     set_wake_correction!(body, state.c)
+
+    # Only now is the formulation complete: finalizing inside the `try` above
+    # would commit the step before the physical wake correction is installed.
+    finalize_step_solution!(body, solver)
     return nothing
 end
 
