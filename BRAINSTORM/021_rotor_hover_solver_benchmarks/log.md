@@ -75,6 +75,34 @@ as pre-fix accuracy-only picks, not valid campaign knobs.
 `benchmark/p023_fmm_tune.jl`: left at `tree_amortization=1` deliberately, with a
 comment saying why (mature-wake unsteady step rebuilds the tree every step).
 
+**Ryan's ruling: ignore the tree cost entirely for panel tuning
+(2026-08-24, latest).** `TUNE_TREE_AMORTIZATION` default is now **`Inf`**, not
+50. The panels-on-panels operator has FROZEN geometry: its tree is built once a
+priori and reused across every solve iteration *and* every timestep, so the
+build is a one-off that must not influence the choice of apply knobs at all.
+The right objective for panel tuning is pure apply cost.
+
+`tree_amortization=1` is retained and is the value to use when tuning a
+PARTICLE field — that tree must be rebuilt every timestep, so its build IS paid
+per apply and belongs in the objective. A finite `n` prices a build reused over
+exactly `n` applies. `Inf` makes `t_build/tree_amortization` exactly `0.0`; the
+plan is still built per candidate (the applies need it) but never charged.
+
+Verified on a 20k-body descent at `reps=5`: `t_best` 0.0346 / 0.0287 / 0.0264 s
+for `tree_amortization` 1 / 50 / Inf, argmin moving leaf 33 -> 22 -> 22 as the
+build charge drops — monotone in the expected direction.
+
+**R1's first validation run (job 13443626, tree_amortization=50) is therefore
+superseded.** For the record it seeded at p=14/MAC=0.4/leaf=58 (0.658 s) and
+descended 58 -> 39 -> 26 -> 17 to p=14/MAC=0.45/leaf=17 at 0.312 s — the
+large-leaf pull is gone, which was the point. It did NOT reach leaf 9, for two
+reasons visible in the trace: stock `tune_fmm` seeded a different (p, MAC)
+family this time (MAC 0.4/p 14 vs the earlier MAC 0.5/p 17 — its cost model
+rated them 0.662 vs 0.679, a 2.6% coin flip that picks the basin the local
+descent explores), and within that family the bottom is genuinely flat (leaf 17
+= 0.318 s vs leaf 11 = 0.315 s, 0.9%, below `improve_tol`). Leaf numbers are not
+comparable across (p, MAC) families.
+
 **Early abandonment (Ryan 2026-08-24, later).** `abandon_factor=1.3` stops a
 trial as soon as its running min passes 1.3x the fastest COMPLETE,
 error-satisfying candidate so far. Such a point can no longer be accepted —
