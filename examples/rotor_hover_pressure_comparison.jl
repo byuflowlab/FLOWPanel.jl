@@ -649,8 +649,8 @@ end
 # FLOWPANEL_GPU_INFLUENCE=cuda so every influence pass touching the device
 # field runs through the CUDA rectangular/radix seam). The device radix FMM
 # forbids autotuning, so the armed path pins the row-048-validated FMM
-# settings (p=4, ncrit=50, theta=0.4, autotune off). Default (unset/"array")
-# leaves the construction bit-identical to before this knob existed.
+# settings (p=4, ncrit=50, theta=0.4, autotune off). The CPU path pins the
+# same settings so the reference run is deterministic (see below).
 vpm_arraytype_name = lowercase(get(ENV, "VPM_ARRAYTYPE", "array"))
 wake_pfield_kwargs = if vpm_arraytype_name in ("cuarray", "cuda", "gpu")
     gpu_influence_mode = lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0"))
@@ -667,7 +667,13 @@ wake_pfield_kwargs = if vpm_arraytype_name in ("cuarray", "cuda", "gpu")
      pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4, autotune_p=false,
                          autotune_ncrit=false, autotune_reg_error=false))
 elseif vpm_arraytype_name in ("array", "matrix")
-    (;)
+    # CPU wake pins the SAME FMM settings as the device branch: FMM()'s
+    # autotune derives leaf_size from wall-clock timings, so timing noise
+    # occasionally shifts the octree and the run is not reproducible
+    # (proven by the 052a sfsdiag pair, jobs 13478788/13482261). Pinning
+    # makes the CPU reference deterministic and parameter-matched to GPU.
+    (pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4, autotune_p=false,
+                         autotune_ncrit=false, autotune_reg_error=false),)
 else
     error("Unknown VPM_ARRAYTYPE=$(repr(vpm_arraytype_name)); use array or cuarray")
 end
@@ -1534,6 +1540,10 @@ if save_path !== nothing
         println(io, "all_finite = $(block_finite)")
         println(io, "converged = $(converged)")
     end
+    # Julia prints non-finite floats as NaN/Inf/-Inf, which are invalid bare
+    # TOML values; rewrite them as the TOML-valid lowercase floats
+    write(meta_path, replace(read(meta_path, String),
+        r"= NaN$"m => "= nan", r"= Inf$"m => "= inf", r"= -Inf$"m => "= -inf"))
     println("Wrote case metadata: $meta_path")
 end
 
