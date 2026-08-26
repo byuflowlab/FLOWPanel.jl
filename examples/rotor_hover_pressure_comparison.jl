@@ -1,6 +1,8 @@
 ## Rotor hover: compare PressureBernoulli and PressureLaplace.
 ## KuttaJoukowskiForce is available as an opt-in diagnostic with RUN_KJ=true.
 
+rhpc_driver_start_ns = time_ns()
+
 import FLOWPanel as pnl
 # include(joinpath(pnl.examples_path, "helper_functions.jl"))
 using FLOWPanel.FastMultipole.StaticArrays
@@ -17,6 +19,7 @@ let n = tryparse(Int, get(ENV, "BLAS_NUM_THREADS", get(ENV, "OMP_NUM_THREADS", s
     end
     println("BLAS threads: $(LinearAlgebra.BLAS.get_num_threads()) (Julia threads: $(Threads.nthreads()))")
 end
+blas_threads_construction = LinearAlgebra.BLAS.get_num_threads()
 
 run_name = get(ENV, "RUN_NAME", "rotor_hover_pressure_comparison")
 save_path = parse(Bool, get(ENV, "SAVE_VTK", "true")) ? joinpath("data", run_name) : nothing
@@ -1030,7 +1033,56 @@ let sigma_handoff = tip_sigma_default, dt_handoff = t_range[2] - t_range[1]
 end
 parse(Bool, get(ENV, "RHPC_HANDOFF_PROFILE_ONLY", "false")) && exit(0)
 
-solver_rotor = pnl.Backslash(rotor)
+rhpc_solver_s = parse(Bool, get(ENV, "RHPC_SOLVER_S", "false"))
+rhpc_solver_s_gpu = parse(Bool, get(ENV, "RHPC_SOLVER_S_GPU", "false"))
+rhpc_solver_s_gpu && !rhpc_solver_s && error(
+    "RHPC_SOLVER_S_GPU=true requires RHPC_SOLVER_S=true")
+rhpc_solver_s_gpu && lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0")) ∉
+    ("cuda", "gpu") && error(
+    "RHPC_SOLVER_S_GPU=true requires FLOWPANEL_GPU_INFLUENCE=cuda")
+rhpc_solver_s_gpu_reserve_gib = parse(Float64,
+    get(ENV, "RHPC_SOLVER_S_GPU_RESERVE_GIB", "32"))
+rhpc_solver_s_gpu_emergency_gib = parse(Float64,
+    get(ENV, "RHPC_SOLVER_S_GPU_EMERGENCY_GIB", "4"))
+rhpc_solver_s_gpu_sample_interval = parse(Int,
+    get(ENV, "RHPC_SOLVER_S_GPU_SAMPLE_INTERVAL", "10"))
+rhpc_solver_s_gpu_reserve_gib >= 0 || error(
+    "RHPC_SOLVER_S_GPU_RESERVE_GIB must be nonnegative")
+rhpc_solver_s_gpu_emergency_gib >= 0 || error(
+    "RHPC_SOLVER_S_GPU_EMERGENCY_GIB must be nonnegative")
+rhpc_solver_s_gpu_sample_interval > 0 || error(
+    "RHPC_SOLVER_S_GPU_SAMPLE_INTERVAL must be positive")
+gib_bytes(x) = round(Int, x * 1024^3)
+solver_rotor = pnl.Backslash(rotor;
+    assemble_source_potential=rhpc_solver_s,
+    source_potential_gpu=rhpc_solver_s_gpu,
+    source_potential_gpu_reserve_bytes=gib_bytes(rhpc_solver_s_gpu_reserve_gib),
+    source_potential_gpu_emergency_bytes=gib_bytes(rhpc_solver_s_gpu_emergency_gib),
+    source_potential_gpu_sample_interval=rhpc_solver_s_gpu_sample_interval)
+solver_construction = pnl._backslash_construction_timings(solver_rotor)
+println("Backslash construction: total=$(round(solver_construction.total_s, digits=3)) s " *
+        "G_assembly=$(round(solver_construction.g_assembly_s, digits=3)) s " *
+        "LU=$(round(solver_construction.lu_s, digits=3)) s " *
+        "S_assembly=$(round(solver_construction.s_assembly_s, digits=3)) s " *
+        "S_GPU_upload=$(round(solver_construction.s_gpu_upload_s, digits=3)) s " *
+        "G=$(solver_construction.g_size) S=$(solver_construction.s_size) " *
+        "S_GPU_bytes=$(solver_construction.s_gpu_bytes)")
+if rhpc_solver_s && pnl._wake_correction_is_active(rotor)
+    @warn "RHPC_SOLVER_S assembled S, but wake correction is already active; " *
+          "source influence will use the backend and S will be bypassed"
+end
+
+blas_threads_march = blas_threads_construction
+if haskey(ENV, "BLAS_NUM_THREADS_MARCH")
+    requested = tryparse(Int, ENV["BLAS_NUM_THREADS_MARCH"])
+    requested !== nothing && requested > 0 || error(
+        "BLAS_NUM_THREADS_MARCH must be a positive integer (got " *
+        repr(ENV["BLAS_NUM_THREADS_MARCH"]) * ")")
+    LinearAlgebra.BLAS.set_num_threads(requested)
+    blas_threads_march = LinearAlgebra.BLAS.get_num_threads()
+    println("BLAS threads switched after solver construction: " *
+            "$(blas_threads_construction) -> $(blas_threads_march)")
+end
 # RHPC_BACKEND=direct is the BRAINSTORM/018 Phase-2 discriminator for the FMM
 # |Das|-panel-radius coupling (src/FLOWPanel_liftingbody.jl); fmm is production.
 rhpc_backend = get(ENV, "RHPC_BACKEND", "fmm")
@@ -1445,6 +1497,7 @@ if save_path !== nothing
     println("Wrote per-revolution block stats: $perrev_path")
 
     meta_path = joinpath(save_path, "$(run_name)_case_metadata.toml")
+    solver_s_gpu = pnl.source_potential_gpu_metadata(solver_rotor)
     open(meta_path, "w") do io
         println(io, "run_name = \"$(run_name)\"")
         println(io, "formulation = \"$(formulation_name)\"")
@@ -1496,6 +1549,52 @@ if save_path !== nothing
         println(io, "settle_revs = $(settle_revs)")
         println(io, "bernoulli_only = $(bernoulli_only)")
         println(io, "restart_step = $(restart_step)")
+        println(io, "restart_name = $(repr(restart_name))")
+        println(io, "restart_path = $(repr(abspath(restart_path)))")
+        println(io, "vpm_arraytype = $(repr(vpm_arraytype_name))")
+        println(io, "flowpanel_gpu_influence = ", repr(lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0"))))
+        println(io, "rhpc_solver_s = $(rhpc_solver_s)")
+        println(io, "rhpc_solver_s_gpu = $(rhpc_solver_s_gpu)")
+        println(io, "rhpc_solver_s_gpu_reserve_gib = $(rhpc_solver_s_gpu_reserve_gib)")
+        println(io, "rhpc_solver_s_gpu_emergency_gib = $(rhpc_solver_s_gpu_emergency_gib)")
+        println(io, "rhpc_solver_s_gpu_sample_interval = $(rhpc_solver_s_gpu_sample_interval)")
+        println(io, "blas_threads_construction = $(blas_threads_construction)")
+        println(io, "blas_threads_march = $(blas_threads_march)")
+        println(io, "solver_construction_s = $(solver_construction.total_s)")
+        println(io, "solver_G_assembly_s = $(solver_construction.g_assembly_s)")
+        println(io, "solver_LU_s = $(solver_construction.lu_s)")
+        println(io, "solver_S_assembly_s = $(solver_construction.s_assembly_s)")
+        println(io, "solver_G_rows = $(solver_construction.g_size[1])")
+        println(io, "solver_G_cols = $(solver_construction.g_size[2])")
+        println(io, "solver_S_rows = $(solver_construction.s_size[1])")
+        println(io, "solver_S_cols = $(solver_construction.s_size[2])")
+        println(io, "solver_S_gpu_enabled = $(solver_s_gpu.enabled)")
+        println(io, "solver_S_gpu_matrix_bytes = $(solver_s_gpu.matrix_bytes)")
+        println(io, "solver_S_gpu_allocation_bytes = $(solver_s_gpu.allocation_bytes)")
+        println(io, "solver_S_gpu_upload_s = $(solver_s_gpu.upload_seconds)")
+        println(io, "solver_S_gpu_upload_count = $(solver_s_gpu.upload_count)")
+        println(io, "solver_S_gpu_gemv_count = $(solver_s_gpu.gemv_count)")
+        println(io, "solver_S_gpu_total_before_bytes = $(solver_s_gpu.total_before_bytes)")
+        println(io, "solver_S_gpu_free_before_bytes = $(solver_s_gpu.free_before_bytes)")
+        println(io, "solver_S_gpu_pool_reserved_before_bytes = $(solver_s_gpu.pool_reserved_before_bytes)")
+        println(io, "solver_S_gpu_pool_used_before_bytes = $(solver_s_gpu.pool_used_before_bytes)")
+        println(io, "solver_S_gpu_total_after_bytes = $(solver_s_gpu.total_after_bytes)")
+        println(io, "solver_S_gpu_free_after_bytes = $(solver_s_gpu.free_after_bytes)")
+        println(io, "solver_S_gpu_pool_reserved_after_bytes = $(solver_s_gpu.pool_reserved_after_bytes)")
+        println(io, "solver_S_gpu_pool_used_after_bytes = $(solver_s_gpu.pool_used_after_bytes)")
+        println(io, "solver_S_gpu_last_total_bytes = $(solver_s_gpu.last_total_bytes)")
+        println(io, "solver_S_gpu_last_free_bytes = $(solver_s_gpu.last_free_bytes)")
+        println(io, "solver_S_gpu_last_pool_reserved_bytes = $(solver_s_gpu.last_pool_reserved_bytes)")
+        println(io, "solver_S_gpu_last_pool_used_bytes = $(solver_s_gpu.last_pool_used_bytes)")
+        println(io, "solver_S_gpu_min_free_bytes = $(solver_s_gpu.min_free_bytes)")
+        println(io, "flowpanel_step_timers = $(pnl.step_timers_enabled())")
+        println(io, "flowpanel_gpu_timers = $(pnl.gpu_timers_enabled())")
+        if vpm_arraytype_name in ("cuarray", "cuda", "gpu")
+            radix = get(FV._radix_fmm_settings, wake_rotor.pfield, FV.RadixFMMSettings())
+            radix_kernel = FV._radix_direct_kernel(radix)
+            println(io, "radix_expansion_order = $(radix.expansion_order)")
+            println(io, "radix_rho_t = $(radix_kernel.rho_t)")
+        end
         println(io, "backend_body_order = $(backend.expansion_order)")
         println(io, "backend_wake_order = $(backend_wake.expansion_order)")
         if rhpc_backend == "fmm"
@@ -1507,6 +1606,7 @@ if save_path !== nothing
         println(io, "filament_regularization = \"$(pnl.FILAMENT_REGULARIZATION[])\"")
         println(io, "julia_threads = $(Threads.nthreads())")
         println(io, "wall_time_s = $(sim_wall_seconds)")
+        println(io, "driver_wall_time_s = $((time_ns() - rhpc_driver_start_ns) / 1e9)")
         println(io, "convergence_revs = $(length(block_ranges))")
         println(io, "convergence_mean_tol = $(convergence_mean_tol)")
         println(io, "convergence_ptp_tol = $(convergence_ptp_tol)")
@@ -1548,5 +1648,11 @@ if save_path !== nothing
 end
 
 end # run_monitors
+
+if rhpc_solver_s_gpu
+    pnl.release_source_potential_gpu!(solver_rotor)
+    solver_rotor.S_gpu === nothing || error("GPU-S cleanup failed")
+    println("GPU-S cleanup verified")
+end
 
 end # !rhpc_setup_only

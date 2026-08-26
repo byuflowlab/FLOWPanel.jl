@@ -304,7 +304,7 @@ end
 ################################################################################
 
 """
-    Backslash(body; assemble_source_potential=false)
+    Backslash(body; assemble_source_potential=false, source_potential_gpu=false)
 
 Direct solver that assembles and LU-factors the influence matrix for `body`.
 The formulation (Neumann or Dirichlet) is chosen automatically from the body's
@@ -316,7 +316,31 @@ assembles the constant source-potential matrix `S` (see
 [`assemble_source_potential!`](@ref)); the per-solve source self-influence in
 `solve!` then becomes a dense gemv `S*σ` instead of an N-body `influence!`
 evaluation. Opt-in: `S` costs another `ncells^2` matrix of memory.
+
+`source_potential_gpu=true` additionally uploads `S` once and reuses resident
+CUDA matrix/vector buffers for subsequent products. It requires
+`assemble_source_potential=true`, the CUDA influence mode, and functional CUDA.
+The default 32 GiB post-upload reserve is configurable with
+`source_potential_gpu_reserve_bytes`.
 """
+mutable struct SourcePotentialGPUState{TF}
+    matrix::Any
+    input::Any
+    output::Any
+    host_output::Vector{TF}
+    matrix_bytes::Int
+    allocation_bytes::Int
+    upload_seconds::Float64
+    upload_count::Int
+    gemv_count::Int
+    sample_interval::Int
+    emergency_bytes::Int
+    before_upload::Any
+    after_upload::Any
+    last_memory::Any
+    min_free_bytes::Int
+end
+
 mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     G::Matrix{TF}
     Glu::TGLU              # aliases G's memory (lu!); refreshed in place on update_G=true
@@ -324,10 +348,34 @@ mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
     Uext::Matrix{TF}       # storage for external velocity (saved/restored around solve)
     phi_ext::Vector{TF}    # storage for external potential (saved/restored around solve)
     S::Union{Nothing,Matrix{TF}}   # source-potential matrix (opt-in; nothing = evaluate via influence!)
+    S_gpu::Union{Nothing,SourcePotentialGPUState{TF}}
 end
 
+const _BACKSLASH_CONSTRUCTION_TIMINGS = WeakKeyDict{Any,NamedTuple}()
+
+"Internal task-052 construction diagnostics; not part of the public solver API."
+_backslash_construction_timings(solver::Backslash) =
+    get(_BACKSLASH_CONSTRUCTION_TIMINGS, solver,
+        (; total_s=NaN, g_assembly_s=NaN, lu_s=NaN, s_assembly_s=NaN,
+           g_size=size(solver.G), s_size=isnothing(solver.S) ? (0, 0) : size(solver.S),
+           s_gpu_upload_s=0.0, s_gpu_bytes=0))
+
 function Backslash(body::AbstractBody{<:Any,<:Any,TF};
-        assemble_source_potential::Bool=false) where TF
+        assemble_source_potential::Bool=false,
+        source_potential_gpu::Bool=false,
+        source_potential_gpu_reserve_bytes::Integer=32 * 1024^3,
+        source_potential_gpu_emergency_bytes::Integer=4 * 1024^3,
+        source_potential_gpu_sample_interval::Integer=10) where TF
+    source_potential_gpu && !assemble_source_potential && throw(ArgumentError(
+        "source_potential_gpu=true requires assemble_source_potential=true"))
+    source_potential_gpu_reserve_bytes >= 0 || throw(ArgumentError(
+        "source_potential_gpu_reserve_bytes must be nonnegative"))
+    source_potential_gpu_emergency_bytes >= 0 || throw(ArgumentError(
+        "source_potential_gpu_emergency_bytes must be nonnegative"))
+    source_potential_gpu_sample_interval > 0 || throw(ArgumentError(
+        "source_potential_gpu_sample_interval must be positive"))
+    source_potential_gpu && _source_potential_cuda()
+    total_start = time_ns()
     G = zeros(TF, body.ncells, body.ncells)
     rhs = zeros(TF, body.ncells)
     Uext = zeros(TF, 3, body.ncells)
@@ -335,13 +383,187 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF};
 
     calc_normals!(body)
     calc_controlpoints!(body)
+    g_start = time_ns()
     _G!(G, body, body; core_size=body.core_size_panel, update_geometry=false)
+    g_assembly_s = (time_ns() - g_start) / 1e9
+    lu_start = time_ns()
     Glu = lu!(G)
+    lu_s = (time_ns() - lu_start) / 1e9
 
-    solver = Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext, nothing)
+    solver = Backslash{TF,typeof(Glu)}(G, Glu, rhs, Uext, phi_ext, nothing, nothing)
+    s_start = time_ns()
     assemble_source_potential && assemble_source_potential!(solver, body)
+    s_assembly_s = assemble_source_potential ? (time_ns() - s_start) / 1e9 : 0.0
+    source_potential_gpu && enable_source_potential_gpu!(solver;
+        reserve_bytes=source_potential_gpu_reserve_bytes,
+        emergency_bytes=source_potential_gpu_emergency_bytes,
+        sample_interval=source_potential_gpu_sample_interval)
+    gpu_state = solver.S_gpu
+    _BACKSLASH_CONSTRUCTION_TIMINGS[solver] = (;
+        total_s=(time_ns() - total_start) / 1e9,
+        g_assembly_s, lu_s, s_assembly_s,
+        g_size=size(solver.G),
+        s_size=isnothing(solver.S) ? (0, 0) : size(solver.S),
+        s_gpu_upload_s=isnothing(gpu_state) ? 0.0 : gpu_state.upload_seconds,
+        s_gpu_bytes=isnothing(gpu_state) ? 0 : gpu_state.allocation_bytes,
+    )
 
     return solver
+end
+
+function _source_potential_cuda()
+    gpu_influence_enabled()
+    GPU_INFLUENCE[] === :cuda || error(
+        "GPU-resident S requires FLOWPANEL_GPU_INFLUENCE=cuda")
+    _gpu_cuda_ready() || error(
+        "GPU-resident S requested but CUDA is not functional; refusing CPU fallback")
+    return getglobal(FastMultipole, :CUDA)
+end
+
+function _source_gpu_memory(CUDAmod)
+    # MemoryInfo is defined (unexported) in CUDACore and is not re-exported by
+    # the CUDA umbrella module in the cuda63-era package split
+    MemInfoT = isdefined(CUDAmod, :MemoryInfo) ? CUDAmod.MemoryInfo :
+        CUDAmod.CUDACore.MemoryInfo
+    info = Base.invokelatest(MemInfoT)
+    return (;
+        total_bytes=Int(info.total_bytes),
+        free_bytes=Int(info.free_bytes),
+        pool_reserved_bytes=isnothing(info.pool_reserved_bytes) ? -1 : Int(info.pool_reserved_bytes),
+        pool_used_bytes=isnothing(info.pool_used_bytes) ? -1 : Int(info.pool_used_bytes),
+    )
+end
+
+function _log_source_gpu_memory(label, snapshot)
+    @info "source_s_gpu_memory $(label) total_bytes=$(snapshot.total_bytes) " *
+          "free_bytes=$(snapshot.free_bytes) " *
+          "pool_reserved_bytes=$(snapshot.pool_reserved_bytes) " *
+          "pool_used_bytes=$(snapshot.pool_used_bytes)"
+    return nothing
+end
+
+"Upload an assembled source-potential matrix and allocate reusable cuBLAS buffers."
+function enable_source_potential_gpu!(solver::Backslash{TF};
+        reserve_bytes::Integer=32 * 1024^3,
+        emergency_bytes::Integer=4 * 1024^3,
+        sample_interval::Integer=10) where TF
+    solver.S === nothing && throw(ArgumentError(
+        "GPU-resident S requires an assembled source-potential matrix"))
+    solver.S_gpu === nothing || return solver
+    CUDAmod = _source_potential_cuda()
+    before = _source_gpu_memory(CUDAmod)
+    n = size(solver.S, 1)
+    matrix_bytes = sizeof(TF) * length(solver.S)
+    allocation_bytes = matrix_bytes + 2 * sizeof(TF) * n
+    required = allocation_bytes + Int(reserve_bytes)
+    before.free_bytes >= required || error(
+        "insufficient free GPU memory for resident S: free=$(before.free_bytes) " *
+        "required=$(required) (allocation=$(allocation_bytes), post-upload reserve=$(reserve_bytes))")
+    _log_source_gpu_memory("before_upload", before)
+    Base.invokelatest(CUDAmod.synchronize)
+    t0 = time_ns()
+    matrix = input = output = nothing
+    try
+        matrix = Base.invokelatest(CUDAmod.CuArray, solver.S)
+        input = Base.invokelatest(CUDAmod.zeros, TF, n)
+        output = Base.invokelatest(CUDAmod.zeros, TF, n)
+        Base.invokelatest(CUDAmod.synchronize)
+    catch
+        for buffer in (matrix, input, output)
+            buffer === nothing && continue
+            try
+                Base.invokelatest(CUDAmod.unsafe_free!, buffer)
+            catch
+            end
+        end
+        rethrow()
+    end
+    upload_seconds = (time_ns() - t0) / 1e9
+    after = _source_gpu_memory(CUDAmod)
+    if after.free_bytes < reserve_bytes
+        for buffer in (matrix, input, output)
+            try
+                Base.invokelatest(CUDAmod.unsafe_free!, buffer)
+            catch
+            end
+        end
+        error("resident S upload violated post-upload reserve: " *
+              "free=$(after.free_bytes), reserve=$(reserve_bytes)")
+    end
+    solver.S_gpu = SourcePotentialGPUState{TF}(
+        matrix, input, output, zeros(TF, n), matrix_bytes, allocation_bytes,
+        upload_seconds, 1, 0, Int(sample_interval), Int(emergency_bytes),
+        before, after, after, min(before.free_bytes, after.free_bytes))
+    _log_source_gpu_memory("after_upload", after)
+    @info "source_s_gpu_upload $(upload_seconds) s matrix_bytes=$(matrix_bytes) allocation_bytes=$(allocation_bytes)"
+    return solver
+end
+
+function _refresh_source_potential_gpu!(solver::Backslash)
+    state = solver.S_gpu
+    state === nothing && return solver
+    CUDAmod = _source_potential_cuda()
+    Base.invokelatest(CUDAmod.synchronize)
+    t0 = time_ns()
+    Base.invokelatest(copyto!, state.matrix, solver.S)
+    Base.invokelatest(CUDAmod.synchronize)
+    seconds = (time_ns() - t0) / 1e9
+    state.upload_seconds += seconds
+    state.upload_count += 1
+    snapshot = _source_gpu_memory(CUDAmod)
+    state.last_memory = snapshot
+    state.min_free_bytes = min(state.min_free_bytes, snapshot.free_bytes)
+    @info "source_s_gpu_refresh $(seconds) s upload_count=$(state.upload_count)"
+    _log_source_gpu_memory("after_refresh", snapshot)
+    return solver
+end
+
+"Release the resident S and its reusable device buffers. Safe to call repeatedly."
+function release_source_potential_gpu!(solver::Backslash)
+    state = solver.S_gpu
+    state === nothing && return solver
+    if isdefined(FastMultipole, :CUDA)
+        CUDAmod = getglobal(FastMultipole, :CUDA)
+        for buffer in (state.matrix, state.input, state.output)
+            try
+                Base.invokelatest(CUDAmod.unsafe_free!, buffer)
+            catch
+            end
+        end
+        Base.invokelatest(CUDAmod.synchronize)
+    end
+    solver.S_gpu = nothing
+    @info "source_s_gpu_released allocation_bytes=$(state.allocation_bytes)"
+    return solver
+end
+
+"Task-052 GPU-S diagnostics for metadata/report generation."
+function source_potential_gpu_metadata(solver::Backslash)
+    state = solver.S_gpu
+    state === nothing && return (;
+        enabled=false, matrix_bytes=0, allocation_bytes=0, upload_seconds=0.0,
+        upload_count=0, gemv_count=0, total_before_bytes=-1, free_before_bytes=-1,
+        pool_reserved_before_bytes=-1, pool_used_before_bytes=-1,
+        total_after_bytes=-1, free_after_bytes=-1, pool_reserved_after_bytes=-1,
+        pool_used_after_bytes=-1, last_total_bytes=-1, last_free_bytes=-1,
+        last_pool_reserved_bytes=-1, last_pool_used_bytes=-1, min_free_bytes=-1)
+    return (;
+        enabled=true, matrix_bytes=state.matrix_bytes,
+        allocation_bytes=state.allocation_bytes, upload_seconds=state.upload_seconds,
+        upload_count=state.upload_count, gemv_count=state.gemv_count,
+        total_before_bytes=state.before_upload.total_bytes,
+        free_before_bytes=state.before_upload.free_bytes,
+        pool_reserved_before_bytes=state.before_upload.pool_reserved_bytes,
+        pool_used_before_bytes=state.before_upload.pool_used_bytes,
+        total_after_bytes=state.after_upload.total_bytes,
+        free_after_bytes=state.after_upload.free_bytes,
+        pool_reserved_after_bytes=state.after_upload.pool_reserved_bytes,
+        pool_used_after_bytes=state.after_upload.pool_used_bytes,
+        last_total_bytes=state.last_memory.total_bytes,
+        last_free_bytes=state.last_memory.free_bytes,
+        last_pool_reserved_bytes=state.last_memory.pool_reserved_bytes,
+        last_pool_used_bytes=state.last_memory.pool_used_bytes,
+        min_free_bytes=state.min_free_bytes)
 end
 
 """
@@ -368,6 +590,7 @@ function assemble_source_potential!(solver::Backslash{TF},
     end
     _G!(solver.S, body, body; core_size=body.core_size_panel,
         update_geometry=false, kernel_and_strength_index=(ConstantSource, 1))
+    _refresh_source_potential_gpu!(solver)
     return solver
 end
 
@@ -387,9 +610,57 @@ _source_influence!(body, solver, backend; optargs...) =
 function _source_influence!(body::AbstractBody{<:Any,2,<:Any,true},
         solver::Backslash, backend; optargs...)
     S = solver.S
+    gpu = solver.S_gpu
+    if gpu !== nothing
+        _wake_correction_is_active(body) && error(
+            "GPU-resident S cannot be used while wake correction is active; refusing backend fallback")
+        CUDAmod = _source_potential_cuda()
+        next_gemv = gpu.gemv_count + 1
+        if next_gemv == 1 || next_gemv % gpu.sample_interval == 0
+            snapshot = _source_gpu_memory(CUDAmod)
+            gpu.last_memory = snapshot
+            gpu.min_free_bytes = min(gpu.min_free_bytes, snapshot.free_bytes)
+            _log_source_gpu_memory("gemv_$(next_gemv)", snapshot)
+            snapshot.free_bytes >= gpu.emergency_bytes || error(
+                "GPU free memory below resident-S emergency margin before gemv " *
+                "$(next_gemv): free=$(snapshot.free_bytes), margin=$(gpu.emergency_bytes)")
+        end
+        Base.invokelatest(CUDAmod.synchronize)
+        t0 = time_ns()
+        # 5-arg copyto! keeps the fast contiguous Array→CuArray method; a
+        # column view falls back to element-wise setindex! (scalar indexing,
+        # disallowed on GPU arrays). Column 1 is contiguous at linear offset 1.
+        Base.invokelatest(copyto!, gpu.input, 1, body.strength, 1, length(gpu.input))
+        Base.invokelatest(LA.mul!, gpu.output, gpu.matrix, gpu.input, one(eltype(S)), zero(eltype(S)))
+        Base.invokelatest(copyto!, gpu.host_output, gpu.output)
+        Base.invokelatest(CUDAmod.synchronize)
+        body.potential .+= gpu.host_output
+        seconds = (time_ns() - t0) / 1e9
+        gpu.gemv_count = next_gemv
+        @info "source_influence_s_gpu_gemv $(seconds) s"
+        return body.potential
+    end
     if S === nothing || _wake_correction_is_active(body)
+        if S !== nothing && _wake_correction_is_active(body)
+            @warn "assembled source-potential matrix bypassed because wake correction is active; using source_influence_backend" maxlog=1
+        end
+        if step_timers_enabled() || gpu_timers_enabled()
+            t0 = _step_timer_start()
+            result = influence!(body, body, backend; scalar_potential=true,
+                velocity=false, optargs...)
+            seconds = _step_timer_elapsed(t0)
+            @info "source_influence_backend $(seconds) s"
+            return result
+        end
         return influence!(body, body, backend; scalar_potential=true,
             velocity=false, optargs...)
+    end
+    if step_timers_enabled() || gpu_timers_enabled()
+        t0 = _step_timer_start()
+        result = LA.mul!(body.potential, S, view(body.strength, :, 1), true, true)
+        seconds = _step_timer_elapsed(t0)
+        @info "source_influence_s_gemv $(seconds) s"
+        return result
     end
     return LA.mul!(body.potential, S, view(body.strength, :, 1), true, true)
 end
