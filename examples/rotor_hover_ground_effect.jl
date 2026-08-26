@@ -114,6 +114,15 @@ gs_log       = parse(Bool,    get(ENV, "GS_LOG",       "true"))
 gs_verbose   = parse(Bool,    get(ENV, "GS_VERBOSE",   "false"))
 gs_max_outer = parse(Int,     get(ENV, "GS_MAX_OUTER", "50"))
 gs_tol       = parse(Float64, get(ENV, "GS_TOL",       "1e-8"))
+# --- Multi-rotor knobs (022 extension, Ryan's specs 2026-08-25) ---------------
+# NROTORS=1 is the exact legacy single-rotor path (bit-identical construction,
+# frames, monitors, and outputs). 2 = side-by-side pair, 4 = quadcopter square,
+# both at ROTOR_SPACING_R center-to-center and counter-rotating in adjacent
+# pairs (mirrored blade geometry + negated frame omega; see build_rotor below).
+nrotors = parse(Int, get(ENV, "NROTORS", "1"))
+nrotors in (1, 2, 4) || error("NROTORS must be 1, 2, or 4; got $(nrotors)")
+rotor_spacing_r = parse(Float64, get(ENV, "ROTOR_SPACING_R", "2.7"))
+rotor_directions_env = get(ENV, "ROTOR_DIRECTIONS", "")
 # -----------------------------------------------------------------------------
 
 # Ensure the run is long enough to cover ramp-up + hold + withdraw + a settle
@@ -296,16 +305,60 @@ radial_dimension = occursin("dji9443", msh_file) ? 2 : 1 # this might be wrong f
 
 Vinf_direction = occursin("dji9443", msh_file) ? [cosd(AOA), sind(AOA), 0.0] : [0.0, -cosd(AOA), sind(AOA)]
 
-msh = pnl.read_gmsh(msh_file)
-nodes, cells = pnl.meshes2nodes_cells(msh)
-nodes .*= R / maximum(nodes[radial_dimension, :])
+# --- Multi-rotor layout (022 extension) ---------------------------------------
+# The mirror dimension is the lateral axis that is neither axial nor radial
+# (dims are a permutation of 1:3): negating it flips blade handedness while
+# leaving every axial and radial coordinate -- and hence the TE seed indices,
+# root-clip radii, and shedding bboxes -- untouched. A mirrored blade spun with
+# negated omega thrusts in the same axial direction.
+mirror_dimension = 6 - axial_dimension - radial_dimension
+rotor_centers = if nrotors == 1
+    [zeros(3)]
+elseif nrotors == 2
+    s = rotor_spacing_r * R
+    [begin c = zeros(3); c[radial_dimension] = sgn * s / 2; c end
+     for sgn in (1.0, -1.0)]
+else  # 4: square in the lateral plane, ordered around the perimeter
+    s = rotor_spacing_r * R
+    [begin c = zeros(3); c[radial_dimension] = sa * s / 2; c[mirror_dimension] = sb * s / 2; c end
+     for (sa, sb) in ((1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0))]
+end
+# Counter-rotating pairs: 2r = (+1, -1); 4r = quadcopter alternation, adjacent
+# rotors opposite, diagonal pairs co-rotating (dir = sign(a)*sign(b)).
+rotor_directions = if !isempty(rotor_directions_env)
+    dirs = parse.(Int, split(rotor_directions_env, ','))
+    length(dirs) == nrotors || error("ROTOR_DIRECTIONS has $(length(dirs)) " *
+        "entries; NROTORS=$(nrotors)")
+    all(d -> d in (-1, 1), dirs) || error("ROTOR_DIRECTIONS entries must be +-1")
+    dirs
+elseif nrotors == 1
+    [1]
+elseif nrotors == 2
+    [1, -1]
+else
+    [Int(sign(c[radial_dimension]) * sign(c[mirror_dimension])) for c in rotor_centers]
+end
+max_rotor_offset = nrotors == 1 ? 0.0 : maximum(norm(c) for c in rotor_centers)
+# Multi-rotor supports the production carrier only; the exotic Das/sigma laws,
+# Laplace-family monitors, and warm start are single-rotor machinery.
+if nrotors > 1
+    bernoulli_only || error("NROTORS>1 requires BERNOULLI_ONLY=true " *
+        "(PressureLaplace monitors are single-body)")
+    (run_kj || lamb_only) && error("NROTORS>1 is incompatible with RUN_KJ / LAMB_ONLY")
+    isnan(sigma_chord_fraction) || error("NROTORS>1 does not support SIGMA_CHORD_FRACTION")
+    isnan(das_chord_fraction) || error("NROTORS>1 does not support DAS_CHORD_FRACTION")
+    das_arc_placed && error("NROTORS>1 does not support DAS_ARC_PLACED")
+    conversion_mode == "legacy" || error("NROTORS>1 requires CONVERSION=legacy")
+    formulation_name == "velocity" || error("NROTORS>1 requires RHPC_FORMULATION=velocity")
+end
+# -----------------------------------------------------------------------------
 
-shedding = pnl.noshedding
+msh = pnl.read_gmsh(msh_file)
+nodes0, cells0 = pnl.meshes2nodes_cells(msh)
+nodes0 .*= R / maximum(nodes0[radial_dimension, :])
+
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 DBC = kernel == pnl.VortexRing ? false : true
-rotor = pnl.RigidWakeBody{kernel}(nodes, cells, shedding;
-    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
-    semiinfinite_wake=false, watertight=true, DBC)
 
 0.0 <= shedding_r_over_R <= 1.0 || error("shedding_r_over_R must be between 0 and 1")
 
@@ -370,14 +423,6 @@ end
 # The bbox now only separates the two blades (cutoff 0).
 te_end_1 = length(te_indices_1) >= 3 ? te_indices_1[3] : nothing  # legacy hardcoded
 te_end_2 = length(te_indices_2) >= 3 ? te_indices_2[3] : nothing  # seeds give only 2
-blade_root_r_over_R = minimum(abs.(rotor.nodes[radial_dimension, :])) / R
-
-bbox1 = make_shedding_bbox(rotor.nodes, te_indices_1[1:2], radial_dimension, R, 0.0)
-shedding1_full = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_1[1], te_indices_1[2];
-    bbox=bbox1, end_node=te_end_1, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
-bbox2 = make_shedding_bbox(rotor.nodes, te_indices_2[1:2], radial_dimension, R, 0.0)
-shedding2_full = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indices_2[1], te_indices_2[2];
-    bbox=bbox2, end_node=te_end_2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
 
 # Modeling root clip, applied to the traced chain. Identical criterion to the old
 # bbox test (edge MIDPOINT radius), so the retained set -- and hence stock
@@ -392,9 +437,6 @@ function clip_shedding_root(nodes, shedding, cells, radial_dimension, R, clip_r_
     end
     return shedding[:, keep]
 end
-shedding1 = clip_shedding_root(rotor.nodes, shedding1_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
-shedding2 = clip_shedding_root(rotor.nodes, shedding2_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
-println("Trailing edge traced: blade1 $(size(shedding1_full, 2)) edges -> $(size(shedding1, 2)) after root clip at r/R $(shedding_r_over_R) (blade root r/R $(round(blade_root_r_over_R, digits=4)))")
 
 # Regression net: no shed edge may run CIRCUMFERENTIALLY. A trailing-edge edge
 # runs radially (spanwise); a root-cap perimeter edge runs around the cap, i.e.
@@ -414,17 +456,6 @@ function count_circumferential_shedding(nodes, shedding, cells, radial_dimension
     end
     return n
 end
-for (i, shed) in enumerate((shedding1, shedding2))
-    nbad = count_circumferential_shedding(rotor.nodes, shed, rotor.cells, radial_dimension)
-    nbad == 0 || error("shedding$(i) includes $(nbad) of $(size(shed, 2)) circumferential " *
-        "edges -- the trailing-edge chain has wrapped onto the ROOT CAP. The walk should " *
-        "be anchored by end_node (te_indices[3]); check that the TE detector returned it.")
-end
-
-rotor = pnl.RigidWakeBody{kernel}(rotor.nodes, rotor.cells, [shedding1, shedding2];
-    core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
-    semiinfinite_wake=false, watertight=true,
-    ensure_winding=true, DBC)
 
 function shedding_root_r_over_R(nodes, shedding, cells, radial_dimension, R)
     isempty(shedding) && return NaN
@@ -435,9 +466,68 @@ function shedding_root_r_over_R(nodes, shedding, cells, radial_dimension, R)
     return midpoint[radial_dimension] / R
 end
 
-println("Requested shedding root at |r/R| >= $(shedding_r_over_R)")
-println("  shedding1 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding1, rotor.cells, radial_dimension, R))")
-println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(rotor.nodes, shedding2, rotor.cells, radial_dimension, R))")
+# --- Per-rotor build (022 multi-rotor extension) ------------------------------
+# The CLAUDE.md shedding invariant is preserved PER ROTOR: construct a
+# noshedding body first (the constructor re-winds cells), trace the trailing
+# edge from THAT body's nodes/cells, then rebuild with the shedding.
+# direction == -1 mirrors the lateral (non-axial, non-radial) coordinate BEFORE
+# the noshedding build, flipping blade handedness while leaving the TE seed
+# indices and all radial bookkeeping valid; the constructor's outward-winding
+# pass re-orients the reflected cells. Translation to `center` happens only
+# AFTER the shedding is traced (a rigid translation is winding- and
+# shedding-invariant), so every radius/chord computation stays rotor-local --
+# downstream station math must use `local_nodes`, never the translated body's.
+function build_rotor(i, center, direction)
+    lab = nrotors == 1 ? "" : "rotor$(i) "
+    local_nodes0 = copy(nodes0)
+    direction == -1 && (local_nodes0[mirror_dimension, :] .*= -1)
+    # copy(cells0) is LOAD-BEARING: the constructor re-winds `cells` IN PLACE
+    # and may store the array without copying, so sharing one cells matrix
+    # across builds lets a later (mirrored) build flip an earlier rotor's
+    # already-constructed cells behind its back (measured: stock rotor gamma
+    # 2.4x off, CT collapsed 250x, with zero rotor-rotor interaction).
+    base = pnl.RigidWakeBody{kernel}(local_nodes0, copy(cells0), pnl.noshedding;
+        core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
+        semiinfinite_wake=false, watertight=true, DBC)
+
+    blade_root_r_over_R = minimum(abs.(base.nodes[radial_dimension, :])) / R
+
+    bbox1 = make_shedding_bbox(base.nodes, te_indices_1[1:2], radial_dimension, R, 0.0)
+    shedding1_full = pnl.calc_shedding_from_seed(base.nodes, base.cells, te_indices_1[1], te_indices_1[2];
+        bbox=bbox1, end_node=te_end_1, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+    bbox2 = make_shedding_bbox(base.nodes, te_indices_2[1:2], radial_dimension, R, 0.0)
+    shedding2_full = pnl.calc_shedding_from_seed(base.nodes, base.cells, te_indices_2[1], te_indices_2[2];
+        bbox=bbox2, end_node=te_end_2, normal_jump_tol=0.2, max_turn_angle=pi/3, debug=false)
+
+    shedding1 = clip_shedding_root(base.nodes, shedding1_full, base.cells, radial_dimension, R, shedding_r_over_R)
+    shedding2 = clip_shedding_root(base.nodes, shedding2_full, base.cells, radial_dimension, R, shedding_r_over_R)
+    println("$(lab)Trailing edge traced: blade1 $(size(shedding1_full, 2)) edges -> $(size(shedding1, 2)) after root clip at r/R $(shedding_r_over_R) (blade root r/R $(round(blade_root_r_over_R, digits=4)))")
+
+    for (k, shed) in enumerate((shedding1, shedding2))
+        nbad = count_circumferential_shedding(base.nodes, shed, base.cells, radial_dimension)
+        nbad == 0 || error("$(lab)shedding$(k) includes $(nbad) of $(size(shed, 2)) circumferential " *
+            "edges -- the trailing-edge chain has wrapped onto the ROOT CAP. The walk should " *
+            "be anchored by end_node (te_indices[3]); check that the TE detector returned it.")
+    end
+
+    final_nodes = all(iszero, center) ? base.nodes : base.nodes .+ center
+    body = pnl.RigidWakeBody{kernel}(final_nodes, base.cells, [shedding1, shedding2];
+        core_size=core_size_panel, core_size_panel, core_size_targets, kernelcutoff,
+        semiinfinite_wake=false, watertight=true,
+        ensure_winding=true, DBC)
+
+    println("$(lab)Requested shedding root at |r/R| >= $(shedding_r_over_R)")
+    println("  shedding1 root midpoint r/R = $(shedding_root_r_over_R(base.nodes, shedding1, base.cells, radial_dimension, R))")
+    println("  shedding2 root midpoint r/R = $(shedding_root_r_over_R(base.nodes, shedding2, base.cells, radial_dimension, R))")
+    nrotors > 1 && println("  $(lab)center/R = $(round.(center ./ R, digits=4)), " *
+        "direction = $(direction > 0 ? "+1 (stock)" : "-1 (mirrored, reversed)")")
+
+    return (; body, local_nodes=base.nodes, sheddings=(shedding1, shedding2), center, direction)
+end
+
+rotor_builds = [build_rotor(i, rotor_centers[i], rotor_directions[i]) for i in 1:nrotors]
+rotors = [rb.body for rb in rotor_builds]
+rotor = rotors[1]   # legacy alias: single-rotor code paths below use it directly
 
 # Diagnostic gate: ablate the clipping_backscatter strategy by replacing the
 # canonical SFS with an equivalent DynamicSFS that omits the clip. Default
@@ -674,14 +764,21 @@ end
 axial_unit = [i == axial_dimension ? 1.0 : 0.0 for i in 1:3]
 x_rotor_plane = sum(rotor.nodes[axial_dimension, :]) / size(rotor.nodes, 2)
 ground_x = x_rotor_plane + ground_h_r * R
+# Multi-rotor: the disc (and the truncation cylinder below) keep their
+# per-rotor margins by growing with the layout footprint -- effective radius =
+# nominal radius + the largest rotor-center offset (0 at NROTORS=1).
+ground_radius_eff = ground_radius_r * R + max_rotor_offset
 ground, solver_ground = if ground_enable
     ground_center = axial_unit .* ground_x
     ground_normal = -axial_unit                      # toward the rotor
-    g = pnl.FlatGround(ground_center, ground_normal, ground_radius_r * R;
+    g = pnl.FlatGround(ground_center, ground_normal, ground_radius_eff;
         panel_length=ground_panel_length_r * R)
     println("Ground plane: x_rotor_plane/R = $(round(x_rotor_plane / R, digits=4)), " *
         "ground at axial/R = $(round(ground_x / R, digits=4)) (h/R = $(ground_h_r)), " *
-        "disc radius $(ground_radius_r)R, panel_length $(ground_panel_length_r)R " *
+        "disc radius $(ground_radius_r)R" *
+        (nrotors > 1 ? " (+$(round(max_rotor_offset / R, digits=3))R layout offset -> " *
+            "$(round(ground_radius_eff / R, digits=3))R effective)" : "") *
+        ", panel_length $(ground_panel_length_r)R " *
         "-> $(g.ncells) panels, $(g.nnodes) nodes")
     g, pnl.FlatGroundSolver(g)
 else
@@ -706,7 +803,7 @@ ground_enable && trunc_radius_r > ground_radius_r && @warn(
     "support before the truncation cylinder deletes them. Widen the disc or " *
     "shrink the truncation radius.")
 trim_policies = (pnl.GlobalCylinder(-0.5R .* axial_unit,
-    effective_cylinder_depth .* axial_unit, trunc_radius_r * R),)
+    effective_cylinder_depth .* axial_unit, trunc_radius_r * R + max_rotor_offset),)
 if ground_enable && ground_particle_policy == "cull"
     box_lo = [-1e3 * R, -1e3 * R, -1e3 * R]
     box_hi = [1e3 * R, 1e3 * R, 1e3 * R]
@@ -715,7 +812,7 @@ if ground_enable && ground_particle_policy == "cull"
 end
 # -----------------------------------------------------------------------------
 
-wake_rotor = pnl.PanelParticleWake(rotor;
+wakes_rotor = [pnl.PanelParticleWake(r;
     nwakerows, max_particles=500_000, core_size=wake_core_size,
     particle_core_size=core_size_targets,
     viscous=viscous_scheme,
@@ -732,7 +829,8 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
                 sigma_relative=merge_sigma_relative),
         ))
-    )
+    ) for r in rotors]
+wake_rotor = wakes_rotor[1]   # legacy alias
 
 smoothstep(x) = x <= 0 ? zero(x) : x >= 1 ? one(x) : x * x * (3 - 2 * x)
 
@@ -765,16 +863,45 @@ function set_frame_omega!(frames, i_frame, ω)
     )
 end
 
-frames = pnl.ReferenceFrame(rotor;
-    origin=SVector{3}(0.0, 0.0, 0.0),
-    v=SVector{3}(0.0, 0.0, 0.0),
-    ω_axis=occursin("dji9443", msh_file) ? SVector{3}(-1.0, 0.0, 0.0) : SVector{3}(0.0, 1.0, 0.0),
-    ω=ω_full * spinup_fraction(t_range[1]),
-    R=SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-    name="vehicle",
-    child_index=Int[],
-    dependent_index=[1]
-)
+rotor_omega_axis = occursin("dji9443", msh_file) ? SVector{3}(-1.0, 0.0, 0.0) : SVector{3}(0.0, 1.0, 0.0)
+# NROTORS=1: the legacy single rotating root frame, bit-identical to before.
+# NROTORS>1: the root is INERT (omega = 0, v = 0) and each rotor gets its own
+# child frame at its center with omega = direction * omega_full. add_frame!
+# registers each rotor as a dependent of the root too, but an inert frame
+# contributes zero kinematic velocity, so there is no co-rotation (the
+# phase_00 trap requires a SPINNING ancestor). The ground stays in no frame.
+frames = if nrotors == 1
+    pnl.ReferenceFrame(rotor;
+        origin=SVector{3}(0.0, 0.0, 0.0),
+        v=SVector{3}(0.0, 0.0, 0.0),
+        ω_axis=rotor_omega_axis,
+        ω=ω_full * spinup_fraction(t_range[1]),
+        R=SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle",
+        child_index=Int[],
+        dependent_index=[1]
+    )
+else
+    f = pnl.ReferenceFrame(rotor;
+        origin=SVector{3}(0.0, 0.0, 0.0),
+        v=SVector{3}(0.0, 0.0, 0.0),
+        ω_axis=rotor_omega_axis,
+        ω=0.0,
+        R=SMatrix{3,3}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        name="vehicle",
+        child_index=Int[],
+        dependent_index=Int[]
+    )
+    for i in 1:nrotors
+        pnl.add_frame!(f, "rotor$(i)", 1,
+            SVector{3}(rotor_centers[i][1], rotor_centers[i][2], rotor_centers[i][3]),
+            [i];
+            ω_axis=rotor_omega_axis,
+            ω=rotor_directions[i] * ω_full * spinup_fraction(t_range[1]))
+    end
+    f
+end
+rotor_frame_index(i) = nrotors == 1 ? 1 : 1 + i
 
 # With DAS_REFRESH the pre-init is skipped: simulate! re-derives Das at every
 # step (including the first) from the same eta, so pre-initializing here would
@@ -941,7 +1068,7 @@ if !set_Das_refresh
                 ", max |u| = $(round(umax, sigdigits=4)) m/s " *
                 "($(round(umax / (ω_full * R), sigdigits=3)) of tip speed)")
         end
-        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+        pnl.initialize_Das!(Tuple(rotors), frames, Uinf, t_range[1], t_range[2] - t_range[1];
             set_Das_station_lengths=das_station_lengths,
             set_Das_station_drifts=das_station_drifts,
             set_Das_min_kinematic_displacement)
@@ -951,17 +1078,20 @@ if !set_Das_refresh
         # convention would otherwise re-introduce the 0.4x spin-up factor
         # through the velocity magnitude; lengths here are absolute).
         dt_das = t_range[2] - t_range[1]
-        lens_uniform = map(rotor.shedding) do shed
-            r = station_radii(rotor.nodes, shed, rotor.cells, radial_dimension)
+        # Station radii come from each rotor's LOCAL (untranslated) nodes: on a
+        # translated body abs(node[radial_dimension]) is not the blade radius.
+        lens_uniform_by_body = [map(rb.body.shedding) do shed
+            r = station_radii(rb.local_nodes, shed, rb.body.cells, radial_dimension)
             das_uniform_dsigma * tip_sigma_default .- (nwakerows - 1) .* ω_full .* r .* dt_das
-        end
-        for (k, lens) in enumerate(lens_uniform)
+        end for rb in rotor_builds]
+        lens_uniform = lens_uniform_by_body[1]
+        for (ib, lens_body) in enumerate(lens_uniform_by_body), (k, lens) in enumerate(lens_body)
             minimum(lens) > 0 || error("DAS_UNIFORM_DSIGMA=$(das_uniform_dsigma) " *
-                "infeasible: shedding$(k) min |Das| = $(minimum(lens)) <= 0 at " *
+                "infeasible: rotor$(ib) shedding$(k) min |Das| = $(minimum(lens)) <= 0 at " *
                 "N=$(nwakerows) (tip travel exceeds D*sigma; raise D or lower N)")
         end
         band = 0.02 * R
-        chords1 = station_chords(rotor.nodes, rotor.shedding[1], rotor.cells, radial_dimension; band)
+        chords1 = station_chords(rotor_builds[1].local_nodes, rotor.shedding[1], rotor.cells, radial_dimension; band)
         dasc = lens_uniform[1] ./ chords1
         println("Das uniform-clearance mode: |Das|_j = $(das_uniform_dsigma)*sigma" *
             " - (N-1)*travel_j (DAS_ETA_KINEMATIC ignored), sigma = " *
@@ -970,8 +1100,8 @@ if !set_Das_refresh
             "-$(round(maximum(lens_uniform[1])/R, digits=4)); Das/c_local range " *
             "$(round(minimum(dasc), digits=3))-$(round(maximum(dasc), digits=3)) " *
             "(014 band 0.25-1.5)")
-        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
-            set_Das_station_lengths=(Tuple(lens_uniform),),
+        pnl.initialize_Das!(Tuple(rotors), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_station_lengths=Tuple(Tuple(lens_body) for lens_body in lens_uniform_by_body),
             set_Das_min_kinematic_displacement)
     elseif !isnan(das_chord_fraction)
         band = 0.02 * R  # ~ one spanwise ring spacing on the 45-ring blade
@@ -985,11 +1115,11 @@ if !set_Das_refresh
             "max $(round(maximum(chords1)/R, digits=4)); " *
             "|Das|/R range $(round(das_chord_fraction*minimum(chords1)/R, digits=4))" *
             "-$(round(das_chord_fraction*maximum(chords1)/R, digits=4))")
-        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+        pnl.initialize_Das!(Tuple(rotors), frames, Uinf, t_range[1], t_range[2] - t_range[1];
             set_Das_station_lengths=das_station_lengths,
             set_Das_min_kinematic_displacement)
     else
-        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+        pnl.initialize_Das!(Tuple(rotors), frames, Uinf, t_range[1], t_range[2] - t_range[1];
             set_Das_eta_kinematic=init_Das_eta_kinematic,
             set_Das_min_kinematic_displacement,
             set_Das_kinematic_arc)
@@ -1040,18 +1170,20 @@ let sigma_handoff = tip_sigma_default, dt_handoff = t_range[2] - t_range[1]
             "one-step tip travel = $(round(ω_full * R * dt_handoff, sigdigits=5)) m)")
     csv_path = get(ENV, "RHPC_HANDOFF_CSV", "")
     rows = String[]
-    for (k, shed) in enumerate(rotor.shedding)
-        p = das_handoff_profile(rotor.nodes, shed, rotor.cells, rotor.Das[k],
+    for (ib, rb) in enumerate(rotor_builds), (k, shed) in enumerate(rb.body.shedding)
+        # local_nodes, not the translated body's: station radii are blade radii
+        p = das_handoff_profile(rb.local_nodes, shed, rb.body.cells, rb.body.Das[k],
                                 radial_dimension, ω_full, dt_handoff, nwakerows,
                                 sigma_handoff)
         jmin = argmin(p.dsigma)
-        println("  shedding$(k): d/sigma min $(round(p.dsigma[jmin], digits=3)) " *
+        println("  $(nrotors == 1 ? "" : "rotor$(ib) ")shedding$(k): d/sigma min $(round(p.dsigma[jmin], digits=3)) " *
                 "at r/R $(round(p.r[jmin] / R, digits=3)); " *
                 "max $(round(maximum(p.dsigma), digits=3)) " *
                 "at r/R $(round(p.r[argmax(p.dsigma)] / R, digits=3)); " *
                 "median $(round(sort(p.dsigma)[cld(length(p.dsigma), 2)], digits=3))")
         for j in eachindex(p.dsigma)
-            push!(rows, "$(k),$(j),$(p.r[j] / R),$(p.das[j]),$(p.travel[j])," *
+            push!(rows, "$((ib - 1) * length(rb.body.shedding) + k),$(j)," *
+                        "$(p.r[j] / R),$(p.das[j]),$(p.travel[j])," *
                         "$(p.d_front[j]),$(p.dsigma[j])")
         end
     end
@@ -1066,22 +1198,29 @@ let sigma_handoff = tip_sigma_default, dt_handoff = t_range[2] - t_range[1]
 end
 parse(Bool, get(ENV, "RHPC_HANDOFF_PROFILE_ONLY", "false")) && exit(0)
 
-solver_rotor = pnl.Backslash(rotor)
+solvers_rotor = [pnl.Backslash(r) for r in rotors]
+solver_rotor = solvers_rotor[1]   # legacy alias
 # RHPC_BACKEND=direct is the BRAINSTORM/018 Phase-2 discriminator for the FMM
 # |Das|-panel-radius coupling (src/FLOWPanel_liftingbody.jl); fmm is production.
 rhpc_backend = get(ENV, "RHPC_BACKEND", "fmm")
+# BRAINSTORM/023 + 025 (ported from rotor_hover_pressure_comparison.jl): the
+# body and wake passes tune independently, so each takes its own knob triple.
+# The shared FMM_* names remain the fallback, so any existing submission that
+# sets only FMM_EXPANSION_ORDER / FMM_ACCEPTANCE / FMM_LEAF_SIZE behaves
+# exactly as before.
+rhpc_fmm_knob(specific, shared, default) = get(ENV, specific, get(ENV, shared, default))
 backend, backend_wake = if rhpc_backend == "direct"
     pnl.DirectBackend(), pnl.DirectBackend()
 elseif rhpc_backend == "fmm"
     pnl.FastMultipoleBackend(;
-        expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "8")),
-        multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
-        leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "20")),
+        expansion_order=parse(Int, rhpc_fmm_knob("FMM_BODY_EXPANSION_ORDER", "FMM_EXPANSION_ORDER", "8")),
+        multipole_acceptance=parse(Float64, rhpc_fmm_knob("FMM_BODY_ACCEPTANCE", "FMM_ACCEPTANCE", "0.4")),
+        leaf_size=parse(Int, rhpc_fmm_knob("FMM_BODY_LEAF_SIZE", "FMM_LEAF_SIZE", "20")),
     ),
     pnl.FastMultipoleBackend(;
-        expansion_order=parse(Int, get(ENV, "FMM_EXPANSION_ORDER", "4")),
-        multipole_acceptance=parse(Float64, get(ENV, "FMM_ACCEPTANCE", "0.4")),
-        leaf_size=parse(Int, get(ENV, "FMM_LEAF_SIZE", "50")),
+        expansion_order=parse(Int, rhpc_fmm_knob("FMM_WAKE_EXPANSION_ORDER", "FMM_EXPANSION_ORDER", "4")),
+        multipole_acceptance=parse(Float64, rhpc_fmm_knob("FMM_WAKE_ACCEPTANCE", "FMM_ACCEPTANCE", "0.4")),
+        leaf_size=parse(Int, rhpc_fmm_knob("FMM_WAKE_LEAF_SIZE", "FMM_LEAF_SIZE", "50")),
     )
 else
     error("Unknown RHPC_BACKEND=$(repr(rhpc_backend)); use fmm or direct")
@@ -1101,7 +1240,10 @@ else
 end
 
 function maneuver!(frames, systems, wakes, t)
-    set_frame_omega!(frames, 1, ω_full * spinup_fraction(t))
+    for i in 1:nrotors
+        set_frame_omega!(frames, rotor_frame_index(i),
+            rotor_directions[i] * ω_full * spinup_fraction(t))
+    end
     return nothing
 end
 
@@ -1112,13 +1254,13 @@ end
 # dependent_index: propagate_kinematics!/kinematic_velocity! only touch frame
 # dependents, so the ground stays static with freestream-only onset flow.
 if ground_enable
-    systems = (rotor, ground)
-    wakes = (wake_rotor, nothing)
-    body_solvers = (solver_rotor, solver_ground)
+    systems = (rotors..., ground)
+    wakes = (wakes_rotor..., nothing)
+    body_solvers = (solvers_rotor..., solver_ground)
 else
-    systems = (rotor,)
-    wakes = (wake_rotor,)
-    body_solvers = (solver_rotor,)
+    systems = Tuple(rotors)
+    wakes = Tuple(wakes_rotor)
+    body_solvers = Tuple(solvers_rotor)
 end
 
 # --- GS outer-loop instrumentation (022 Phase 0 requirement) ------------------
@@ -1130,7 +1272,7 @@ end
 # iteration logic. Julia prints a method-overwrite warning; expected.
 gs_iters = Int[]
 gs_final_delta = Float64[]
-if ground_enable && gs_log
+if (ground_enable || nrotors > 1) && gs_log
     formulation_name == "velocity" || error(
         "GS logging (and the 022 ground path generally) assumes " *
         "RHPC_FORMULATION=velocity; got $(repr(formulation_name)). " *
@@ -1234,12 +1376,17 @@ pressure_bernoulli = pnl.PressureBernoulli(rho;
     unsteady=false,
     correct_kuttacondition=p_correct_kuttacondition_flag,
     backend=backend)
-force_monitor_bernoulli = pnl.ForceMonitor(length(t_range), 1;
-    i_frame=1,
-    normalization=pnl.RotorNormalization(rho, 2 * R, 1),
+# One ForceMonitor per rotor (i_system = i), each normalized by its OWN frame's
+# omega (RotorNormalization uses n^2, so counter-rotation is sign-safe). At
+# NROTORS=1 this is exactly the legacy single monitor.
+force_monitors_bernoulli = [pnl.ForceMonitor(length(t_range), i;
+    i_frame=rotor_frame_index(i),
+    normalization=pnl.RotorNormalization(rho, 2 * R, rotor_frame_index(i)),
     correct_kuttacondition=p_correct_kuttacondition_flag,
-    verbose=true)
+    verbose=true) for i in 1:nrotors]
+force_monitor_bernoulli = force_monitors_bernoulli[1]   # legacy alias
 
+if nrotors == 1
 pressure_laplace_matderiv = pnl.PressureLaplace(rotor, rho;
     acceleration_form=:material_derivative, verbose=true)
 force_monitor_laplace_matderiv = pnl.ForceMonitor(length(t_range), 1;
@@ -1293,6 +1440,12 @@ monitors = !run_monitors ? () : run_kj ? (
         force_monitor_bernoulli,
         bound_circulation,
     )
+else
+# NROTORS>1: bernoulli_only is enforced above; the Laplace/KJ family and the
+# BoundCirculationMonitor (whose radius bookkeeping assumes an on-axis rotor)
+# are not constructed. Order matters: pressure before the force monitors.
+monitors = !run_monitors ? () : (pressure_bernoulli, force_monitors_bernoulli...)
+end
 
 # Wake tripwire (BRAINSTORM/018 S0a). Appended LAST so existing monitor indices
 # -- and therefore existing monitor CSV filenames -- are unchanged. Diagnostic
@@ -1338,20 +1491,22 @@ ground_tangency_max = Float64[]
 ground_below_count = Int[]
 ground_below_gamma = Float64[]
 function ground_diagnostics_monitor(systems, wakes, frames, uinf, i_step, dt)
-    g = systems[2]
+    g = systems[nrotors + 1]
     normals = pnl.calc_normals(g)
     Udotn = sum(g.velocity .* normals, dims=1)
     rms = sqrt(sum(abs2, Udotn) / g.ncells)
     maxerr = maximum(abs.(Udotn))
-    pfield = wakes[1].pfield
     nbelow = 0
     gbelow = 0.0
-    for i in 1:pfield.np
-        x = pnl.FLOWVPM.get_X(pfield, i)
-        if x[axial_dimension] > ground_x
-            nbelow += 1
-            G = pnl.FLOWVPM.get_Gamma(pfield, i)
-            gbelow += sqrt(G[1]^2 + G[2]^2 + G[3]^2)
+    for w in wakes[1:nrotors]
+        pfield = w.pfield
+        for i in 1:pfield.np
+            x = pnl.FLOWVPM.get_X(pfield, i)
+            if x[axial_dimension] > ground_x
+                nbelow += 1
+                G = pnl.FLOWVPM.get_Gamma(pfield, i)
+                gbelow += sqrt(G[1]^2 + G[2]^2 + G[3]^2)
+            end
         end
     end
     push!(ground_steps, i_step)
@@ -1414,6 +1569,10 @@ println("\nBegin rotor hover ground effect run ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
         "RPM=$(RPM) rho=$(rho) R=$(R) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R " *
         "trunc_radius=$(trunc_radius_r)R nwakerows=$(nwakerows) das_refresh=$(set_Das_refresh)")
+nrotors > 1 && println("Rotors: NROTORS=$(nrotors), spacing=$(rotor_spacing_r)R " *
+    "(center-to-center), directions=$(rotor_directions), centers/R=" *
+    "$([round.(c ./ R, digits=3) for c in rotor_centers]), " *
+    "max_offset=$(round(max_rotor_offset / R, digits=3))R")
 println("Ground: GROUND_ENABLE=$(ground_enable)" * (ground_enable ?
         ", h/R=$(ground_h_r), disc_radius=$(ground_radius_r)R, " *
         "panel_length=$(ground_panel_length_r)R, ncells=$(ground.ncells), " *
@@ -1439,6 +1598,8 @@ if !rhpc_setup_only
 # CORE_SIZE_*, ...) and simulate!-kwarg knobs (BODY_HESSIAN_TO_PARTICLES,
 # ...) both take effect in the continuation.
 restart_step = parse(Int, get(ENV, "RESTART_STEP", "-1"))
+restart_step >= 0 && nrotors > 1 && error(
+    "Warm-start with NROTORS>1 is UNTESTED (multi-body restart state); run cold")
 restart_step >= 0 && ground_enable && error(
     "Warm-start with the ground body is UNTESTED (multi-body restart state); " *
     "run cold or set GROUND_ENABLE=false")
@@ -1508,7 +1669,7 @@ gs_iters_max = isempty(gs_iters) ? 0 : maximum(gs_iters)
 gs_iters_mean = isempty(gs_iters) ? NaN : sum(gs_iters) / length(gs_iters)
 gs_nonconverged = count(i -> gs_iters[i] >= gs_max_outer &&
     !(gs_final_delta[i] < gs_tol), eachindex(gs_iters))
-if ground_enable && gs_log
+if (ground_enable || nrotors > 1) && gs_log
     println("\nBlock Gauss-Seidel outer-loop summary ($(length(gs_iters)) solves):")
     println("  iterations: max=$(gs_iters_max) mean=$(round(gs_iters_mean, digits=2)) " *
         "cap=$(gs_max_outer)")
@@ -1562,10 +1723,21 @@ if !run_monitors
     println("\nRUN_MONITORS=false; skipping pressure/force history summary.")
 else
 
+if nrotors == 1
 CT_bernoulli   = lamb_only ? fill(NaN, length(t_range)) : force_monitor_bernoulli.force[axial_dimension, :]
 CT_laplace_md  = lamb_only ? fill(NaN, length(t_range)) : force_monitor_laplace_matderiv.force[axial_dimension, :]
 CT_laplace_lv  = force_monitor_laplace_lamb.force[axial_dimension, :]
 CT_kj          = run_kj ? kj_monitor.force[axial_dimension, :] : fill(NaN, length(t_range))
+CT_bernoulli_by_rotor = [CT_bernoulli]
+else
+# Per-rotor CT plus the layout total. Every rotor shares rho, D, and |omega|,
+# so the per-rotor coefficients share one reference and the total is their sum.
+CT_bernoulli_by_rotor = [m.force[axial_dimension, :] for m in force_monitors_bernoulli]
+CT_bernoulli   = sum(CT_bernoulli_by_rotor)
+CT_laplace_md  = fill(NaN, length(t_range))
+CT_laplace_lv  = fill(NaN, length(t_range))
+CT_kj          = fill(NaN, length(t_range))
+end
 
 function relative_difference(a, b)
     denom = max(abs(b), eps())
@@ -1615,10 +1787,16 @@ if save_path !== nothing
     isdir(save_path) || mkpath(save_path)
     csv_path = joinpath(save_path, "$(run_name)_CT_vs_rev.csv")
     open(csv_path, "w") do io
-        println(io, "step,revolution,CT_bernoulli,CT_laplace_matderiv,CT_laplace_lamb,CT_kj")
+        # Legacy header/columns at NROTORS=1; per-rotor columns appended after
+        # the legacy ones for N>1 (CT_bernoulli is then the layout TOTAL).
+        extra_cols = nrotors == 1 ? "" :
+            join(",CT_bernoulli_r$(i)" for i in 1:nrotors)
+        println(io, "step,revolution,CT_bernoulli,CT_laplace_matderiv,CT_laplace_lamb,CT_kj" * extra_cols)
         for k in 1:length(t_range)
             rev = (k - 1) * dt * RPM / 60
-            println(io, "$k,$rev,$(-CT_bernoulli[k]),$(-CT_laplace_md[k]),$(-CT_laplace_lv[k]),$(-CT_kj[k])")
+            extra = nrotors == 1 ? "" :
+                join(",$(-CT_bernoulli_by_rotor[i][k])" for i in 1:nrotors)
+            println(io, "$k,$rev,$(-CT_bernoulli[k]),$(-CT_laplace_md[k]),$(-CT_laplace_lv[k]),$(-CT_kj[k])" * extra)
         end
     end
     println("\nWrote CT vs revolution CSV: $csv_path")
@@ -1818,6 +1996,22 @@ if save_path !== nothing
         println(io, "gs_iters_max = $(gs_iters_max)")
         println(io, "gs_iters_mean = $(gs_iters_mean)")
         println(io, "gs_nonconverged = $(gs_nonconverged)")
+        # 022 multi-rotor keys
+        println(io, "nrotors = $(nrotors)")
+        println(io, "rotor_spacing_r = $(rotor_spacing_r)")
+        println(io, "rotor_directions = $(rotor_directions)")
+        println(io, "rotor_centers_r = [" *
+            join(("[" * join(round.(c ./ R, digits=6), ", ") * "]" for c in rotor_centers), ", ") * "]")
+        println(io, "max_rotor_offset_r = $(max_rotor_offset / R)")
+        println(io, "ground_radius_eff_r = $(ground_radius_eff / R)")
+        if nrotors > 1
+            for (i, ct) in enumerate(CT_bernoulli_by_rotor)
+                ct_thrust_i = -ct
+                wmean = isempty(block_ranges) ? NaN :
+                    sum(sum(ct_thrust_i[r]) / length(r) for r in block_ranges) / length(block_ranges)
+                println(io, "CT_window_mean_r$(i) = $(wmean)")
+            end
+        end
         if ground_enable && run_monitors && !isempty(ground_tangency_rms)
             println(io, "ground_tangency_rms_final = $(ground_tangency_rms[end])")
             println(io, "ground_tangency_rms_max = $(maximum(ground_tangency_rms))")
@@ -1825,6 +2019,10 @@ if save_path !== nothing
             println(io, "below_ground_count_max = $(maximum(ground_below_count))")
         end
     end
+    # Julia prints non-finite floats as NaN/Inf/-Inf, which are invalid bare
+    # TOML values; rewrite them as the TOML-valid lowercase floats
+    write(meta_path, replace(read(meta_path, String),
+        r"= NaN$"m => "= nan", r"= Inf$"m => "= inf", r"= -Inf$"m => "= -inf"))
     println("Wrote case metadata: $meta_path")
 end
 
