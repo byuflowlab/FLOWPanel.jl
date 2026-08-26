@@ -75,8 +75,11 @@ function _gpu_sync_mirror_from_device!(mirror::FLOWVPM.ParticleField,
                                        pfield::FLOWVPM.ParticleField)
     np = pfield.np
     if np > 0
-        copyto!(view(mirror.particles, :, 1:np),
-                view(pfield.particles, :, 1:np))
+        # columns 1:np are a contiguous linear prefix; the 5-arg copyto! keeps
+        # the fast CuArray↔Array method (a 2-arg SubArray copy falls back to
+        # element-wise scalar indexing, disallowed on GPU arrays)
+        copyto!(mirror.particles, 1, pfield.particles, 1,
+                size(pfield.particles, 1) * np)
     end
     mirror.np = np
     mirror.t = pfield.t
@@ -90,8 +93,9 @@ function _gpu_sync_device_from_mirror!(pfield::FLOWVPM.ParticleField,
                                        mirror::FLOWVPM.ParticleField)
     np = mirror.np
     if np > 0
-        copyto!(view(pfield.particles, :, 1:np),
-                view(mirror.particles, :, 1:np))
+        # same contiguous-prefix rationale as _gpu_sync_mirror_from_device!
+        copyto!(pfield.particles, 1, mirror.particles, 1,
+                size(mirror.particles, 1) * np)
     end
     pfield.np = np
     _gpu_copy_side_buffers!(pfield, mirror)

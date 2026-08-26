@@ -262,19 +262,26 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     missing = filter(field -> !(field in keys(point_data)), required_fields)
     isempty(missing) || throw(ArgumentError("Loaded particle VTK is missing required field(s): $(join(missing, ", "))."))
 
+    # Stage all fields in a host matrix, then push the contiguous column
+    # prefix with one linear 5-arg copyto!: broadcasting ReadVTK's lazy
+    # reinterpreted arrays into device row-views tries to compile a GPU
+    # kernel capturing a host array (and 2-arg SubArray copies fall back to
+    # scalar indexing), both disallowed on GPU-backed particle storage.
+    staging = zeros(eltype(pf.particles), size(pf.particles, 1), np)
     points = ReadVTK.get_points(vtk)  # 3 × np
-    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
-    pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
-    pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
-    pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
-    pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
-    pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
-    pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
-    pf.particles[FLOWVPM.C_INDEX, 1:np] .= ReadVTK.get_data(point_data["C"])
-    pf.particles[FLOWVPM.SFS_INDEX, 1:np] .= ReadVTK.get_data(point_data["SFS"])
+    staging[FLOWVPM.X_INDEX, :] .= points
+    staging[FLOWVPM.GAMMA_INDEX, :] .= ReadVTK.get_data(point_data["gamma"])
+    staging[FLOWVPM.SIGMA_INDEX, :] .= ReadVTK.get_data(point_data["sigma"])
+    staging[FLOWVPM.VOL_INDEX, :] .= ReadVTK.get_data(point_data["vol"])
+    staging[FLOWVPM.CIRCULATION_INDEX, :] .= ReadVTK.get_data(point_data["circulation"])
+    staging[FLOWVPM.U_INDEX, :] .= ReadVTK.get_data(point_data["velocity"])
+    staging[FLOWVPM.VORTICITY_INDEX, :] .= ReadVTK.get_data(point_data["vorticity"])
+    staging[FLOWVPM.C_INDEX, :] .= ReadVTK.get_data(point_data["C"])
+    staging[FLOWVPM.SFS_INDEX, :] .= ReadVTK.get_data(point_data["SFS"])
     J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
     # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
-    pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
+    staging[FLOWVPM.J_INDEX, :] .= reshape(J_arr, 9, np)
+    copyto!(pf.particles, 1, staging, 1, length(staging))
 
     pf.np = np
     return wake

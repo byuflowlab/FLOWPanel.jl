@@ -82,6 +82,16 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
         return nothing
     end
 
+    # Passes the seam does not handle run the host fmm! path below, which
+    # scalar-indexes particle storage — disallowed on a device-backed
+    # particle field. Swap such fields for their refreshed host mirrors
+    # (the mirror is cached per field, so FmmPlan reuse and pfield===source
+    # identity checks still hold across calls) and push the accumulated
+    # outputs back to any device field among the targets afterwards.
+    original_targets = target_bodies
+    target_bodies = map(_influence_host_system, target_bodies)
+    source_bodies = map(_influence_host_system, source_bodies)
+
     # determine if extra_farfield is needed based
     extra_farfield = false
     for body in source_bodies
@@ -137,6 +147,23 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
         post_evaluate_influence!(target_bodies, source_bodies, backend, outputs)
     end
 
+    _influence_push_back!(original_targets, target_bodies)
+
+    return nothing
+end
+
+# Device-wake seam for the non-rectangular influence paths: host view of a
+# device-backed particle field (identity for every other system), plus the
+# corresponding target write-back.
+_influence_host_system(x) = x
+function _influence_host_system(pf::FLOWVPM.ParticleField)
+    _gpu_pfield_on_device(pf) || return pf
+    return _gpu_sync_mirror_from_device!(_gpu_pfield_mirror(pf), pf)
+end
+function _influence_push_back!(originals::Tuple, hosted::Tuple)
+    for (orig, host) in zip(originals, hosted)
+        host === orig || _gpu_sync_device_from_mirror!(orig, host)
+    end
     return nothing
 end
 
@@ -151,15 +178,23 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectB
         end
     end
 
+    # same device-wake seam as the FastMultipoleBackend path: direct! also
+    # scalar-indexes particle storage on the host
+    original_targets = target_bodies
+    target_bodies = map(_influence_host_system, target_bodies)
+    source_bodies = map(_influence_host_system, source_bodies)
+
     FastMultipole.direct!(target_bodies, source_bodies;
         scalar_potential=scalar_potential,
         gradient=velocity,
-        hessian=velocity_gradient, 
+        hessian=velocity_gradient,
         optargs...)
 
     if postcalc
         post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
     end
+
+    _influence_push_back!(original_targets, target_bodies)
 
     return nothing
 end
