@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# p018_vtk_sweeper.sh -- restart-set-aware VTK sweeper for the 200 G home budget.
+# p018_vtk_sweeper.sh -- restart-set-aware VTK sweeper for the 400 G home budget.
 #
 # Encodes ruling 10 as amended (BRAINSTORM/018_.../ops_reference.md) mechanically so
 # a watchdog never has to do per-file bookkeeping by hand:
@@ -20,7 +20,7 @@
 #   * Runs named in the protect list are skipped entirely.
 #   * LIVE runs that are not protected ARE swept (Ryan, 2026-08-05: "for any run
 #     not in the protect list, you can delete files while it runs, so long as you
-#     leave the newest timesteps (keep count: $KEEP_STEPS, 36 since 2026-08-20) -- no need to wait for the run to
+#     leave the newest timesteps (keep count: $KEEP_STEPS, 288 since 2026-08-24) -- no need to wait for the run to
 #     complete").  Files younger than $LIVE_QUIET_SEC are still spared so the
 #     step currently being written is never touched, and the $KEEP_STEPS most recent
 #     restartable steps are kept exactly as for a closed run.  Together these
@@ -31,12 +31,32 @@
 #
 # Usage:
 #   scripts/p018_vtk_sweeper.sh [--apply] [--skip-live] [--only RUN] [--keep N]
+#                               [--last-resort]
+#
+# Retention ladder (Ryan, 2026-08-24; all G tiers dropped 100 G by Ryan 2026-08-25): 288 steps normally; 72 at the >300 G
+# escalation tier; 36 is the absolute floor and is a genuine last resort,
+# reachable only with --last-resort.  Anything below 36, or a non-integer,
+# is refused outright -- see the keep-value validation block below.
+#
+# Exit codes: 2 bad usage, 3 no protect list, 4 bad --keep, 5 unmatched --only,
+# 6 another sweeper already holds the lock.
 #
 # Run from the top level of the FLOWPanel.jl checkout.
 
 set -euo pipefail
 
-KEEP_STEPS="${KEEP_STEPS:-36}"      # restartable steps retained per run (10->36, Ryan 2026-08-20)
+# ------------------------------------------------------------------ locking
+# Two concurrent --apply runs would race on the same tree; a watchdog cron can
+# fire while the previous cycle is still sweeping.  Re-exec under flock so only
+# one sweeper touches data/ at a time.  Guarded on flock(1) being present so the
+# script stays runnable on macOS for syntax and fixture testing.
+LOCK="${TMPDIR:-/tmp}/.p018_vtk_sweeper.$(id -u).lock"
+if command -v flock >/dev/null 2>&1 && [[ -z "${SWEEPER_LOCK_HELD:-}" ]]; then
+    export SWEEPER_LOCK_HELD=1
+    exec flock -n -E 6 "$LOCK" "$0" "$@"
+fi
+
+KEEP_STEPS="${KEEP_STEPS:-288}"     # restartable steps retained per run (10->36 Ryan 2026-08-20; 36->288 Ryan 2026-08-24)
 LIVE_MTIME_MIN="${LIVE_MTIME_MIN:-20}"   # newer than this => run is LIVE
 LIVE_QUIET_SEC="${LIVE_QUIET_SEC:-300}"  # never delete files younger than this
 DATA_DIR="${DATA_DIR:-data}"
@@ -45,6 +65,7 @@ PROTECT_FILE="${PROTECT_FILE:-BRAINSTORM/018_dji9443_hover_convergence_campaign/
 APPLY=false
 SKIP_LIVE=false
 ONLY=""
+LAST_RESORT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,12 +74,44 @@ while [[ $# -gt 0 ]]; do
         --emergency) shift ;;   # accepted for compatibility; live sweeping is now default
         --only)      ONLY="$2"; shift 2 ;;
         --keep)      KEEP_STEPS="$2"; shift 2 ;;
-        -h|--help)   sed -n '2,40p' "$0"; exit 0 ;;
+        --last-resort) LAST_RESORT=true; shift ;;
+        -h|--help)   sed -n '2,44p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
 [[ -d "$DATA_DIR" ]] || { echo "no $DATA_DIR/ here -- run from the checkout root" >&2; exit 2; }
+
+# ------------------------------------------------------- keep-value validation
+# --keep is only ever passed under time pressure (the >300 G escalation tier),
+# and bad values are silently catastrophic: a KEEP_STEPS of 0, "" or negative
+# makes the awk top-list below retain NOTHING, deleting 100% of a run's VTK with
+# no warning.  Verified against a synthetic fixture 2026-08-24.  Validated here,
+# after arg parsing, so it covers the KEEP_STEPS environment variable too.
+HARD_FLOOR=36    # absolute floor; last-resort tier (Ryan, 2026-08-24)
+SOFT_FLOOR=72    # >300 G escalation tier; below this needs --last-resort
+
+if [[ ! "$KEEP_STEPS" =~ ^[0-9]+$ ]]; then
+    echo "FATAL: --keep must be a positive integer, got '$KEEP_STEPS'" >&2
+    exit 4
+fi
+if (( KEEP_STEPS < HARD_FLOOR )); then
+    echo "FATAL: --keep $KEEP_STEPS is below the hard floor of $HARD_FLOOR steps" >&2
+    exit 4
+fi
+if (( KEEP_STEPS < SOFT_FLOOR )) && ! $LAST_RESORT; then
+    echo "FATAL: --keep $KEEP_STEPS is below the ${SOFT_FLOOR}-step escalation floor." >&2
+    echo "       Pass --last-resort only if the 400 G cap is still breached at 72." >&2
+    exit 4
+fi
+
+# An --only that matches nothing must not look like a successful empty sweep:
+# during incremental escalation that reads as "swept, freed nothing" when the
+# truth is "never looked at it".
+if [[ -n "$ONLY" && ! -d "$DATA_DIR/$ONLY" ]]; then
+    echo "FATAL: --only '$ONLY' matches no directory under $DATA_DIR/" >&2
+    exit 5
+fi
 
 # ---------------------------------------------------------------- protect list
 # Read fresh on every invocation so it can be edited mid-flight.  This script
@@ -208,3 +261,4 @@ done
 
 echo "TOTAL_FREED_MB=$(( total_freed / 1048576 ))"
 echo "DF_AFTER=$(df -BG "$HOME" | tail -1 | awk '{print $3}')"
+echo "SWEEP_MODE=$( $APPLY && echo APPLY || echo DRY-RUN )"
