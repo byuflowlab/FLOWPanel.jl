@@ -2058,10 +2058,12 @@ function pre_evaluate_influence!(pfield::FLOWVPM.ParticleField)
         return nothing
     end
 
-    velocities = copy(view(pfield.particles, FLOWVPM.U_INDEX, 1:pfield.np))
-    pfield.SFS(pfield, FLOWVPM.BeforeUJ())
-    FLOWVPM._reset_particles(pfield)
-    pfield.particles[FLOWVPM.U_INDEX, 1:pfield.np] .= velocities
+    _step_timer_measure(:wake_sfs; nested=true) do
+        velocities = copy(view(pfield.particles, FLOWVPM.U_INDEX, 1:pfield.np))
+        pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+        FLOWVPM._reset_particles(pfield)
+        pfield.particles[FLOWVPM.U_INDEX, 1:pfield.np] .= velocities
+    end
     return nothing
 end
 
@@ -2071,10 +2073,12 @@ function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
     pfield === source || return nothing
     FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
 
-    _, _, target_tree, source_tree, _, direct_list, _ = outputs
-    FLOWVPM.Estr_fmm!(pfield, pfield, target_tree, source_tree, direct_list;
-        i_target_system=i_target, i_source_system=i_source)
-    pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    _step_timer_measure(:wake_sfs; nested=true) do
+        _, _, target_tree, source_tree, _, direct_list, _ = outputs
+        FLOWVPM.Estr_fmm!(pfield, pfield, target_tree, source_tree, direct_list;
+            i_target_system=i_target, i_source_system=i_source)
+        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    end
     return nothing
 end
 
@@ -2084,8 +2088,10 @@ function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
     pfield === source || return nothing
     FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
 
-    FLOWVPM.Estr_direct!(pfield)
-    pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    _step_timer_measure(:wake_sfs; nested=true) do
+        FLOWVPM.Estr_direct!(pfield)
+        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    end
     return nothing
 end
 

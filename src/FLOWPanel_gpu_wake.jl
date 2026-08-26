@@ -161,7 +161,9 @@ function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
     _gpu_pfield_on_device(pfield) || error(
         "seam-handled SFS self-influence post hook reached with a host " *
         "particle field; the rectangular seam should have fallen back to fmm!")
-    pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    _step_timer_measure(:wake_sfs; nested=true) do
+        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+    end
     return nothing
 end
 

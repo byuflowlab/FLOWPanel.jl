@@ -15,6 +15,92 @@
 =###############################################################################
 
 ################################################################################
+# ENV-GATED STEP TIMERS (task 052)
+################################################################################
+
+const _STEP_TIMERS = Ref{Union{Nothing,Bool}}(nothing)
+const _STEP_TIMER_TLS_KEY = :flowpanel_step_timer_accumulator
+
+"Whether FLOWPANEL_STEP_TIMERS is armed (read lazily, cached)."
+function step_timers_enabled()
+    if _STEP_TIMERS[] === nothing
+        _STEP_TIMERS[] = lowercase(get(ENV, "FLOWPANEL_STEP_TIMERS", "false")) in
+            ("1", "true", "on")
+    end
+    return _STEP_TIMERS[]::Bool
+end
+
+"Synchronize CUDA at an instrumented timing boundary when the CUDA seam is live."
+function _step_timer_sync()
+    step_timers_enabled() || return nothing
+    GPU_INFLUENCE[] === :cuda || return nothing
+    isdefined(FastMultipole, :CUDA) || return nothing
+    getglobal(FastMultipole, :CUDA).synchronize()
+    return nothing
+end
+
+function _step_timer_start()
+    _step_timer_sync()
+    return time_ns()
+end
+
+function _step_timer_elapsed(t0::UInt64)
+    _step_timer_sync()
+    return (time_ns() - t0) / 1e9
+end
+
+"Add time to the current step's exclusive or nested accumulator."
+function _step_timer_add!(label::Symbol, seconds::Real; nested::Bool=false)
+    step_timers_enabled() || return nothing
+    state = get(task_local_storage(), _STEP_TIMER_TLS_KEY, nothing)
+    state === nothing && return nothing
+    bucket = nested ? state.nested : state.exclusive
+    bucket[label] = get(bucket, label, 0.0) + Float64(seconds)
+    return nothing
+end
+
+function _step_timer_measure(f::F, label::Symbol; nested::Bool=false) where F
+    step_timers_enabled() || return f()
+    t0 = _step_timer_start()
+    try
+        return f()
+    finally
+        _step_timer_add!(label, _step_timer_elapsed(t0); nested)
+    end
+end
+
+function _step_timer_begin_step!()
+    step_timers_enabled() || return nothing
+    state = (exclusive=Dict{Symbol,Float64}(), nested=Dict{Symbol,Float64}())
+    task_local_storage(_STEP_TIMER_TLS_KEY, state)
+    _step_timer_sync()
+    return (state=state, start_ns=time_ns())
+end
+
+function _step_timer_finish_step!(token, i_step::Integer)
+    token === nothing && return nothing
+    _step_timer_sync()
+    total = (time_ns() - token.start_ns) / 1e9
+    labels = (
+        :controls_setup, :wake_influence, :solve, :body_influence,
+        :remaining_aerodynamics, :monitors, :io,
+        :wake_propagation_maintenance, :rigid_kinematics, :shedding,
+    )
+    classified = sum(get(token.state.exclusive, label, 0.0) for label in labels)
+    residual = total - classified
+    for label in labels
+        @info "step_timer $(label) step=$(i_step) $(get(token.state.exclusive, label, 0.0)) s"
+    end
+    for (label, seconds) in sort!(collect(token.state.nested); by=first)
+        @info "step_timer_nested $(label) step=$(i_step) $(seconds) s"
+    end
+    @info "step_timer total_step step=$(i_step) $(total) s"
+    @info "step_timer unclassified_residual step=$(i_step) $(residual) s"
+    task_local_storage(_STEP_TIMER_TLS_KEY, nothing)
+    return nothing
+end
+
+################################################################################
 # SHARED OPERATOR APPLICATION
 ################################################################################
 

@@ -670,41 +670,54 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
     normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
         default_basis=:quad)
 
-    wake_probes, targets, wake_sources = _sa_collect(systems_tuple, wakes_tuple)
-    _sa_reset_freestream_kinematic!(systems_tuple, wakes_tuple, frames, uinf)
+    wake_probes, targets, wake_sources = _step_timer_measure(:remaining_aerodynamics) do
+        collected = _sa_collect(systems_tuple, wakes_tuple)
+        _sa_reset_freestream_kinematic!(systems_tuple, wakes_tuple, frames, uinf)
 
-    if update_trailing_edges
-        for (sys, w) in zip(systems_tuple, wakes_tuple)
-            !isnothing(w) && update_TE!(w, sys)
+        if update_trailing_edges
+            for (sys, w) in zip(systems_tuple, wakes_tuple)
+                !isnothing(w) && update_TE!(w, sys)
+            end
         end
+
+        # snapshot pre-wake control-point velocity for formulations that isolate
+        # the wake-only contribution afterwards (no-op for the default)
+        formulation_prewake!(formulation, formulation_state, systems_tuple)
+        collected
     end
 
-    # snapshot pre-wake control-point velocity for formulations that isolate
-    # the wake-only contribution afterwards (no-op for the default)
-    formulation_prewake!(formulation, formulation_state, systems_tuple)
-
-    _sa_wake_influence!(targets, wake_sources, backend_wake;
-        needs_induced_vorticity, wakerow_no_hessian_to_particles,
-        panel_wake_on_particles, particle_hessian_self)
-
-    _set_core_sizes!(systems_tuple, :core_size_panel)
-    solve_formulation!(formulation, formulation_state, systems, systems_tuple,
-        wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
-
-    needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
-        grad_mu_options=normalized_grad_mu_options)
-
-    _set_core_sizes!(systems_tuple, :core_size_targets)
-    _sa_body_influence!(targets, systems_tuple, backend_system;
-        needs_induced_vorticity, body_on_wake, body_hessian_to_particles,
-        body_gradient_core_size)
-
-    if diagnose_particle_influence
-        _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
-            needs_induced_vorticity, particle_hessian_self, diagnostic_vertical)
+    _step_timer_measure(:wake_influence) do
+        _sa_wake_influence!(targets, wake_sources, backend_wake;
+            needs_induced_vorticity, wakerow_no_hessian_to_particles,
+            panel_wake_on_particles, particle_hessian_self)
     end
 
-    _sa_half_jump!(systems_tuple, normalized_grad_mu_options)
+    _step_timer_measure(:solve) do
+        _set_core_sizes!(systems_tuple, :core_size_panel)
+        solve_formulation!(formulation, formulation_state, systems, systems_tuple,
+            wakes_tuple, body_solvers; backend_solve, backend_wake, i_step)
+    end
+
+    _step_timer_measure(:remaining_aerodynamics) do
+        needs_induced_vorticity && _add_bound_surface_vorticity!(systems_tuple;
+            grad_mu_options=normalized_grad_mu_options)
+        _set_core_sizes!(systems_tuple, :core_size_targets)
+    end
+
+    _step_timer_measure(:body_influence) do
+        _sa_body_influence!(targets, systems_tuple, backend_system;
+            needs_induced_vorticity, body_on_wake, body_hessian_to_particles,
+            body_gradient_core_size)
+    end
+
+    _step_timer_measure(:remaining_aerodynamics) do
+        if diagnose_particle_influence
+            _diagnose_particle_influence!(wakes_tuple, systems_tuple, backend_wake, backend_system;
+                needs_induced_vorticity, particle_hessian_self, diagnostic_vertical)
+        end
+
+        _sa_half_jump!(systems_tuple, normalized_grad_mu_options)
+    end
 
     return nothing
 end
@@ -1162,6 +1175,17 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
     i_step = start_step
     _t_wall_prev = NaN
     for t in @view t_range[start_step+1:end]
+        _step_timer_token = _step_timer_begin_step!()
+        # When full step timing is explicitly armed, make WakeHealthMonitor's
+        # first wall sample cover the first continuation step instead of its
+        # historical NaN sentinel. Off-state behavior remains unchanged.
+        if _step_timer_token !== nothing
+            for monitor in monitors
+                if monitor isa WakeHealthMonitor && isnan(monitor.t_last)
+                    monitor.t_last = time()
+                end
+            end
+        end
         if verbose
             # Wall-clock stamp and flush: stdout is block-buffered when
             # redirected to a Slurm log, so an unflushed per-step line leaves a
@@ -1178,32 +1202,35 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             flush(stdout)
         end
 
-        #------- controls -------#
+        dynamics_toggle, uinf, dt = _step_timer_measure(:controls_setup) do
+            #------- controls -------#
 
-        # update frames based on maneuver
-        # (RPMs, tilting systems, prescribed trajectory, etc.)
-        dynamics_toggle = maneuver!(frames, systems_tuple, wakes_tuple, t)
+            # update frames based on maneuver
+            # (RPMs, tilting systems, prescribed trajectory, etc.)
+            dynamics_toggle_local = maneuver!(frames, systems_tuple, wakes_tuple, t)
 
-        #------- aerodynamics -------#
+            #------- aerodynamics -------#
 
-        uinf = Uinf(t)
+            uinf_local = Uinf(t)
 
-        # dt for this step
-        dt = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
+            # dt for this step
+            dt_local = i_step < length(t_range) - 1 ? t_range[i_step+2] - t_range[i_step+1] : t_range[i_step+1] - t_range[i_step]
 
-        # Re-derive the first-wake-row offset from the *current* kinematic state
-        # (BRAINSTORM 014). By default Das is frozen at its t=0 magnitude and
-        # only rotated by propagate_kinematics!, so it does not track the
-        # operating condition (e.g. it retains a spin-up-fraction RPM). Zeroing
-        # first is mandatory: the accumulate helpers are `+=`-based.
-        if set_Das_refresh &&
-                (!isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic))
-            for sys in systems_tuple
-                _das_zero!(sys)
+            # Re-derive the first-wake-row offset from the *current* kinematic state
+            # (BRAINSTORM 014). By default Das is frozen at its t=0 magnitude and
+            # only rotated by propagate_kinematics!, so it does not track the
+            # operating condition (e.g. it retains a spin-up-fraction RPM). Zeroing
+            # first is mandatory: the accumulate helpers are `+=`-based.
+            if set_Das_refresh &&
+                    (!isnan(set_Das_eta_freestream) || !isnan(set_Das_eta_kinematic))
+                for sys in systems_tuple
+                    _das_zero!(sys)
+                end
+                initialize_Das!(systems_tuple, frames, Uinf, t, dt_local;
+                    set_Das_eta_kinematic, set_Das_eta_freestream,
+                    set_Das_min_kinematic_displacement, set_Das_kinematic_arc)
             end
-            initialize_Das!(systems_tuple, frames, Uinf, t, dt;
-                set_Das_eta_kinematic, set_Das_eta_freestream,
-                set_Das_min_kinematic_displacement, set_Das_kinematic_arc)
+            (dynamics_toggle_local, uinf_local, dt_local)
         end
 
         if isnothing(kutta_runtime)
@@ -1236,22 +1263,24 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         # body bound-circulation low-pass (item 005 E4.8): damp body↔wake feedback
         # by under-relaxing the solved strength before it is shed into the wake.
-        if apply_bound_rlx
-            α = bound_strength_rlx
-            for (sys, prev) in zip(systems_tuple, prev_strengths)
-                if have_prev_strength
-                    @. sys.strength = (1 - α) * prev + α * sys.strength
+        _step_timer_measure(:remaining_aerodynamics) do
+            if apply_bound_rlx
+                α = bound_strength_rlx
+                for (sys, prev) in zip(systems_tuple, prev_strengths)
+                    if have_prev_strength
+                        @. sys.strength = (1 - α) * prev + α * sys.strength
+                    end
+                    prev .= sys.strength
                 end
-                prev .= sys.strength
-            end
-            if !isnothing(prev_c)
-                if have_prev_strength
-                    @. formulation_state.c = (1 - α) * prev_c + α * formulation_state.c
-                    set_wake_correction!(systems_tuple[1], formulation_state.c)
+                if !isnothing(prev_c)
+                    if have_prev_strength
+                        @. formulation_state.c = (1 - α) * prev_c + α * formulation_state.c
+                        set_wake_correction!(systems_tuple[1], formulation_state.c)
+                    end
+                    prev_c .= formulation_state.c
                 end
-                prev_c .= formulation_state.c
+                have_prev_strength = true
             end
-            have_prev_strength = true
         end
 
         #------- other solvers -------#
@@ -1265,20 +1294,23 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
         # Run monitors before VTK write so monitor-owned fields can be passed to
         # downstream monitors and output files.
-        monitor_context = MonitorContext()
-        monitor_set_time!(monitor_context, t)
-        monitor_csv_dir = isnothing(path) ? nothing : joinpath(path, "monitors")
-        for (i_monitor, monitor) in enumerate(monitors)
-            _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
-            if !isnothing(monitor_csv_dir)
-                write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
-                                   monitor_context, systems_tuple, i_step, dt;
-                                   overwrite=i_step == start_step)
+        _step_timer_measure(:monitors) do
+            monitor_context = MonitorContext()
+            monitor_set_time!(monitor_context, t)
+            monitor_csv_dir = isnothing(path) ? nothing : joinpath(path, "monitors")
+            for (i_monitor, monitor) in enumerate(monitors)
+                _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
+                if !isnothing(monitor_csv_dir)
+                    write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
+                                       monitor_context, systems_tuple, i_step, dt;
+                                       overwrite=i_step == start_step)
+                end
             end
         end
 
         #------- save state -------#
 
+        _step_timer_measure(:io) do
         if !isnothing(path)
             metadata_path = _metadata_toml_path(path, name)
             if i_step == start_step || !isfile(metadata_path)
@@ -1325,6 +1357,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 kutta=isnothing(kutta_runtime) ? nothing :
                     _kutta_step_dict(kutta_runtime))
         end
+        end
 
         #------- propagate system -------#
 
@@ -1333,12 +1366,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             #--- state evolution ---#
 
             # propagate wake
-            for w in wakes_tuple
-                if w isa PanelParticleWake
-                    propagate!(w, dt; relax=particle_relax,
-                        step=i_step, frames, diagnose_particle_gamma, diagnostic_vertical)
-                elseif !isnothing(w)
-                    propagate!(w, dt; step=i_step, frames)
+            _step_timer_measure(:wake_propagation_maintenance) do
+                for w in wakes_tuple
+                    if w isa PanelParticleWake
+                        propagate!(w, dt; relax=particle_relax,
+                            step=i_step, frames, diagnose_particle_gamma, diagnostic_vertical)
+                    elseif !isnothing(w)
+                        propagate!(w, dt; step=i_step, frames)
+                    end
                 end
             end
 
@@ -1346,31 +1381,37 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             # buffers consume control points, so mirror the rigid delta only
             # AFTER normals/control points have been refreshed below; doing it
             # here leaves those buffers one timestep behind the moved nodes.
-            step_transforms = propagate_kinematics!(systems_tuple, frames, dt)
+            _step_timer_measure(:rigid_kinematics) do
+                step_transforms = propagate_kinematics!(systems_tuple, frames, dt)
 
-            # update control points and normals according to Neumann/Dirichlet BCs
-            for sys in systems_tuple
-                calc_normals!(sys)
-                calc_controlpoints!(sys)
+                # update control points and normals according to Neumann/Dirichlet BCs
+                for sys in systems_tuple
+                    calc_normals!(sys)
+                    calc_controlpoints!(sys)
+                end
+
+                # Mirror the same rigid delta into persistent FMM state after all
+                # kernel-consumed target geometry is current.
+                transform_body_solvers!(body_solvers, systems_tuple, step_transforms)
             end
-
-            # Mirror the same rigid delta into persistent FMM state after all
-            # kernel-consumed target geometry is current.
-            transform_body_solvers!(body_solvers, systems_tuple, step_transforms)
 
             #--- shed new wake ---#
 
-            for (sys, w) in zip(systems_tuple, wakes_tuple)
-                !isnothing(w) && shed_wake!(w, sys)
+            _step_timer_measure(:shedding) do
+                for (sys, w) in zip(systems_tuple, wakes_tuple)
+                    !isnothing(w) && shed_wake!(w, sys)
+                end
+
+                # Route B topology advancement bookkeeping (BRAINSTORM 015): the
+                # accepted live block was just shifted into old-wake storage and
+                # the fresh row-1 deposit is the reserved next live slot.
+                isnothing(kutta_runtime) ||
+                    _kutta_advance_topology!(kutta_runtime, i_step)
             end
 
-            # Route B topology advancement bookkeeping (BRAINSTORM 015): the
-            # accepted live block was just shifted into old-wake storage and
-            # the fresh row-1 deposit is the reserved next live slot.
-            isnothing(kutta_runtime) ||
-                _kutta_advance_topology!(kutta_runtime, i_step)
-
         end
+
+        _step_timer_finish_step!(_step_timer_token, i_step)
 
         # increment step
         i_step += 1
