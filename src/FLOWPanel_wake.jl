@@ -1912,6 +1912,14 @@ function PanelParticleWake(body::AbstractLiftingBody;
         # (a device field REQUIRES all-off autotune; see FLOWVPM_fmm_radix.jl).
         arraytype=Matrix,
         pfield_fmm=FLOWVPM.FMM(autotune_reg_error=false),
+        # BRAINSTORM/022 Ruling 7: multiple wakes may shed into ONE shared
+        # particle field. Pass another wake's `.pfield` here; `nothing`
+        # allocates a private field (legacy behavior). Callers that share a
+        # field are responsible for sizing `max_particles` on the OWNING
+        # allocation — the simulate! loop deduplicates shared fields by
+        # identity, so per-step processing happens once regardless of how
+        # many wakes reference it.
+        pfield=nothing,
         kwargs...)
 
     # Resolve the legacy line policies against the selected strategy before any
@@ -1967,13 +1975,27 @@ function PanelParticleWake(body::AbstractLiftingBody;
     # `pfield.integration`, and under the FLOWVPM default (`rungekutta3`) a
     # CoreSpreading scheme hits the RK3 branch with zeroed stage weights —
     # no core spreading, no beta resets, silently inviscid.
-    pfield = FLOWVPM.ParticleField(max_particles, TF;
-        viscous,
-        fmm=pfield_fmm,
-        SFS,
-        integration=(Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler),
-        relaxation,
-        arraytype)
+    if pfield === nothing
+        pfield = FLOWVPM.ParticleField(max_particles, TF;
+            viscous,
+            fmm=pfield_fmm,
+            SFS,
+            integration=(Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler),
+            relaxation,
+            arraytype)
+    else
+        # Shared-field path (Ruling 7): the supplied field must already step
+        # with the scheme this wake expects — `propagate!` branches on
+        # `pfield.integration`, and a numtype mismatch would silently promote
+        # or truncate shed strengths.
+        eltype(pfield.particles) == TF || throw(ArgumentError(
+            "shared pfield numtype $(eltype(pfield.particles)) does not " *
+            "match this wake's numtype $(TF)"))
+        expected_integration = Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler
+        pfield.integration === expected_integration || throw(ArgumentError(
+            "shared pfield integration $(pfield.integration) does not match " *
+            "this wake's expint choice ($(expected_integration))"))
+    end
 
     # Capture the resolved FLOWVPM construction options for reproduction metadata.
     # Read back from the live particle field so the recorded values are authoritative
@@ -2111,9 +2133,14 @@ function reset!(w::PanelParticleWake)
     FLOWVPM._reset_particles_sfs(w.pfield)
 end
 
-function apply_freestream!(w::PanelParticleWake, uinf)
+function apply_freestream!(w::PanelParticleWake, uinf; include_pfield::Bool=true)
     # apply to panel wake
     apply_freestream!(w.panel_wake, uinf)
+
+    # Ruling 7: when several wakes share one particle field, the caller passes
+    # include_pfield=false for every wake after the first so the freestream is
+    # ADDED to particle velocities exactly once.
+    include_pfield || return nothing
 
     # Add freestream to particle velocities (broadcast on device-backed
     # fields, task 052; the scalar loop is kept for the host path)
@@ -2168,10 +2195,17 @@ function _particle_gamma_direction_stats(pfield::FLOWVPM.ParticleField;
 end
 
 function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing,
-        diagnose_particle_gamma::Bool=false, diagnostic_vertical=(0.0, 0.0, 1.0))
+        diagnose_particle_gamma::Bool=false, diagnostic_vertical=(0.0, 0.0, 1.0),
+        # Ruling 7: when several wakes share one particle field, the caller
+        # passes propagate_pfield=false for every wake after the first so the
+        # field is convected and maintained exactly once per step. The panel
+        # wake is per-body and always propagates.
+        propagate_pfield::Bool=true)
 
     # panel wake
     propagate!(w.panel_wake, dt)
+
+    propagate_pfield || return nothing
 
     gamma_before = diagnose_particle_gamma && w.pfield.np > 0 ?
         copy(view(w.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:w.pfield.np)) : nothing
@@ -2185,10 +2219,12 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
 
     # convect particles (`pfield.integration` is the single source of truth:
     # stock forward Euler unless the wake was built with `expint=true`)
-    if w.pfield.integration === FLOWVPM.euler_exp
-        FLOWVPM._euler_exp(w.pfield, dt; relax)
-    else
-        FLOWVPM._euler(w.pfield, dt; relax)
+    _step_timer_measure(:wake_convection; nested=true) do
+        if w.pfield.integration === FLOWVPM.euler_exp
+            FLOWVPM._euler_exp(w.pfield, dt; relax)
+        else
+            FLOWVPM._euler(w.pfield, dt; relax)
+        end
     end
 
     if diagnose_particle_gamma
@@ -2198,12 +2234,21 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     end
 
     # particle maintenance
-    apply_particle_maintenance!(w.pfield, w.particle_maintenance, ParticleMaintenanceContext(frames, step, dt))
+    _step_timer_measure(:wake_maintenance; nested=true) do
+        apply_particle_maintenance!(w.pfield, w.particle_maintenance,
+            ParticleMaintenanceContext(frames, step, dt))
+    end
 end
 
-function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress::Bool=true)
+function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress::Bool=true,
+        # Ruling 7: with a shared pfield the caller passes include_pfield=false
+        # for every wake after the first so the particle cloud is written once
+        # per step instead of once per referencing wake.
+        include_pfield::Bool=true)
     # panel wake (includes filaments)
     write_vtk(name, w.panel_wake, idx, t; overwrite, compress)
+
+    include_pfield || return nothing
 
     # particle wake — route block files to subdirectory
     vpm_path, vpm_name = splitdir(name)
@@ -2216,27 +2261,54 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress
     # Task 052: WriteVTK needs host arrays; on a device-backed field this is
     # the refreshed host mirror (D2H of the live prefix), else a no-op alias.
     host_particles = _wake_monitor_host_pfield(w.pfield).particles
-    X = view(host_particles, FLOWVPM.X_INDEX, 1:np)
+    # Task 052c io fix (Ryan-approved 2026-08-26, single-series ruling same
+    # day): ONE uncompressed particle series at a user-chosen precision
+    # (zlib costs ~10x the raw write for ~8% size on this data, so it is
+    # never used). FLOWPANEL_PARTICLE_PRECISION=f64 (default) keeps warm
+    # restarts replay-exact; f32 halves write time and disk for
+    # visualization-focused runs at the cost of exact continuation (the
+    # warm-start loader warns when restoring from Float32).
     cells = [WriteVTK.MeshCell(WriteVTK.PolyData.Verts(), 1:np)]
 
-    vtp_filename = particles_block * ".$idx.vtp"
-    vtp = WriteVTK.vtk_grid(vtp_filename, X, cells; compress)
+    _write_particles_vtp(particles_block * ".$idx.vtp", host_particles, np,
+        cells, _particle_vtp_eltype(host_particles))
+
+    vtp_relpath = joinpath(vpm_name * "_particles", vpm_name * "_particles.$idx.vtp")
+    _pvd_append!(particles_pvd_name * ".pvd", t, vtp_relpath; overwrite)
+end
+
+# Element type of the particle series per FLOWPANEL_PARTICLE_PRECISION:
+# "f64" (default) = the pfield eltype (replay-exact restarts), "f32" =
+# Float32 (half the write time and disk; restarts are not replay-exact).
+function _particle_vtp_eltype(host_particles)
+    precision = lowercase(get(ENV, "FLOWPANEL_PARTICLE_PRECISION", "f64"))
+    precision in ("f32", "f64") || error(
+        "FLOWPANEL_PARTICLE_PRECISION must be f32 or f64, got: $precision")
+    return precision == "f32" ? Float32 : eltype(host_particles)
+end
+
+# One particle-cloud .vtp at the requested element type (see
+# FLOWPANEL_PARTICLE_PRECISION above).
+# Always uncompressed; conversion is skipped when the data already matches.
+function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T}) where T
+    _conv(a) = eltype(a) === T ? a : T.(a)
+    X = _conv(view(host_particles, FLOWVPM.X_INDEX, 1:np))
+    vtp = WriteVTK.vtk_grid(filename, X, cells; compress=false)
 
     if np > 0
-        vtp["gamma", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.GAMMA_INDEX, 1:np)
-        vtp["sigma", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.SIGMA_INDEX, 1:np)
-        vtp["vol", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.VOL_INDEX, 1:np)
-        vtp["circulation", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.CIRCULATION_INDEX, 1:np)
-        vtp["velocity", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.U_INDEX, 1:np)
-        vtp["vorticity", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.VORTICITY_INDEX, 1:np)
-        vtp["C", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.C_INDEX, 1:np)
-        vtp["SFS", WriteVTK.VTKPointData()] = view(host_particles, FLOWVPM.SFS_INDEX, 1:np)
-        vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(view(host_particles, FLOWVPM.J_INDEX, 1:np), 3, 3, np)
+        vtp["gamma", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.GAMMA_INDEX, 1:np))
+        vtp["sigma", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.SIGMA_INDEX, 1:np))
+        vtp["vol", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.VOL_INDEX, 1:np))
+        vtp["circulation", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.CIRCULATION_INDEX, 1:np))
+        vtp["velocity", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.U_INDEX, 1:np))
+        vtp["vorticity", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.VORTICITY_INDEX, 1:np))
+        vtp["C", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.C_INDEX, 1:np))
+        vtp["SFS", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.SFS_INDEX, 1:np))
+        vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(_conv(view(host_particles, FLOWVPM.J_INDEX, 1:np)), 3, 3, np)
     end
 
     WriteVTK.vtk_save(vtp)
-    vtp_relpath = joinpath(vpm_name * "_particles", vpm_name * "_particles.$idx.vtp")
-    _pvd_append!(particles_pvd_name * ".pvd", t, vtp_relpath; overwrite)
+    return nothing
 end
 
 requires_hessian(::FLOWVPM.ParticleField) = true

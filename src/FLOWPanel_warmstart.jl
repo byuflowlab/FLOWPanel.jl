@@ -234,14 +234,37 @@ end
 Load `PanelParticleWake` state at step `idx`. First loads the panel-wake
 component, then loads the particle field from
 `{path}/{wake_name}_particles/{wake_name}_particles.{idx}.vtp`.
+
+`include_pfield=false` loads only the panel-wake component (Ruling 7: wakes
+sharing one particle field write/load it once, under the first referencing
+wake's name; a repeat load would clear and reload the already-restored field).
 """
-function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, wake_name::String, idx::Int)
+function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, wake_name::String, idx::Int;
+        include_pfield::Bool=true)
     _load_panel_wake_vtk!(wake.panel_wake, path, wake_name, idx)
 
+    include_pfield || return wake
+
+    # Current runs write ONE particle series (FLOWPANEL_PARTICLE_PRECISION,
+    # f64 default). The fp64 sidecar preference is kept read-only for runs
+    # written during the brief dual-write era (052c, 2026-08-26); restoring
+    # from a Float32 series warns that the continuation is not replay-exact.
+    fp64_path = joinpath(path, wake_name * "_particles_fp64",
+        "$(wake_name)_particles_fp64.$(idx).vtp")
     vtp_dir  = joinpath(path, wake_name * "_particles")
     vtp_path = joinpath(vtp_dir, "$(wake_name)_particles.$(idx).vtp")
-    isfile(vtp_path) || error("Particles VTP not found: $(vtp_path)")
+    if isfile(fp64_path)
+        vtp_path = fp64_path
+    else
+        isfile(vtp_path) || error("Particles VTP not found: $(vtp_path) " *
+            "(no fp64 checkpoint at $(fp64_path) either)")
+    end
     vtk = ReadVTK.VTKFile(vtp_path)
+    if vtp_path !== fp64_path && eltype(ReadVTK.get_points(vtk)) === Float32
+        @warn "Warm start restoring particles from a Float32 VTP " *
+            "(FLOWPANEL_PARTICLE_PRECISION=f32 run, or pre-052c F32 series); " *
+            "the continuation will not be replay-exact." maxlog=1
+    end
 
     # number of particles
     np = vtk.n_points
@@ -452,11 +475,17 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         _load_body_vtk!(sys, rpath, body_name, restart_step)
     end
 
+    seen_load_pfields = ()  # Ruling 7: a shared pfield is written once (under
+                            # the first referencing wake's name), so load its
+                            # particles once; panel-wake state is per-wake.
     for (i, w) in enumerate(wakes_tuple)
         isnothing(w) && continue
         wake_name = rname * "_wake$(i)"
         if w isa PanelParticleWake
-            _load_panel_particle_wake_vtk!(w, rpath, wake_name, restart_step)
+            repeat = any(p -> p === w.pfield, seen_load_pfields)
+            _load_panel_particle_wake_vtk!(w, rpath, wake_name, restart_step;
+                include_pfield=!repeat)
+            repeat || (seen_load_pfields = (seen_load_pfields..., w.pfield))
         elseif w isa PanelWake
             _load_panel_wake_vtk!(w, rpath, wake_name, restart_step)
         else
@@ -489,10 +518,49 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # 5. Replay the end-of-step-`restart_step` actions that simulate! skipped
     #    because that step was the final step of the previous run. Use the dt
     #    that simulate! itself would use at that step.
-    dt_end = t_range[restart_step + 2] - t_range[restart_step + 1]
-
+    #
+    # 5.0 The replayed propagate!/shed_wake! consume per-step runtime staging
+    # that simulate! had applied during step `restart_step`'s aerodynamics
+    # stage (_sa_reset_freestream_kinematic!) and that is NOT persisted to
+    # disk: `wake.freestream` (the freestream_convection propagate! branch
+    # convects rows by dt*freestream — zero on a freshly constructed wake, so
+    # the un-convected old row-1 ends up coincident with the freshly shed
+    # row-1, and the singular filament NaNs the first continued solve) and the
+    # bodies' `velocity_te` (shed row placement/Das direction). Restore them
+    # exactly: vte = 0 + uinf + kinematic, matching the uninterrupted run.
+    # Deliberately do NOT reset/re-apply wake node velocities or particle U:
+    # both were saved at io time (post-solve, induced contributions included)
+    # and restored by the VTK loaders — they are exactly what the
+    # shed_with_induced_velocity propagate! branch must consume.
+    uinf_replay = Uinf(t_range[restart_step + 1])
+    for sys in systems_tuple
+        reset!(sys)
+    end
+    apply_freestream!(systems_tuple, uinf_replay)
+    kinematic_velocity!(systems_tuple, frames)
     for w in wakes_tuple
-        !isnothing(w) && propagate!(w, dt_end; step=restart_step, frames)
+        isnothing(w) && continue
+        pw = w isa PanelParticleWake ? w.panel_wake : w
+        pw.freestream .= uinf_replay
+    end
+
+    dt_end = t_range[restart_step + 2] - t_range[restart_step + 1]
+    particle_relax = get(optargs, :particle_relax, true)
+    diagnose_particle_gamma = get(optargs, :diagnose_particle_gamma, false)
+    diagnostic_vertical = get(optargs, :diagnostic_vertical, (0.0, 0.0, 1.0))
+
+    seen_prop_pfields = ()  # Ruling 7: convect a shared pfield exactly once
+    for w in wakes_tuple
+        if w isa PanelParticleWake
+            repeat = any(p -> p === w.pfield, seen_prop_pfields)
+            propagate!(w, dt_end; relax=particle_relax,
+                step=restart_step, frames, diagnose_particle_gamma,
+                diagnostic_vertical,
+                propagate_pfield=!repeat)
+            repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
+        elseif !isnothing(w)
+            propagate!(w, dt_end; step=restart_step, frames)
+        end
     end
     propagate_kinematics!(systems_tuple, frames, dt_end)
     for sys in systems_tuple
