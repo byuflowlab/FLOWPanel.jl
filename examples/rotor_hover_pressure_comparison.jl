@@ -35,6 +35,11 @@ R = 0.119
 # meshes, whose blade root is outboard of it. NOT cap protection -- see the
 # end_node anchoring below.
 shedding_r_over_R = parse(Float64, get(ENV, "SHEDDING_R_OVER_R", "0.1"))
+# 052c (Ryan 2026-08-26): this launcher defaults the particle .vtp series to
+# Float32 (visualization-focused; halves io time and disk). The package-level
+# default stays f64 — the production choice for replay-exact warm restarts.
+haskey(ENV, "FLOWPANEL_PARTICLE_PRECISION") ||
+    (ENV["FLOWPANEL_PARTICLE_PRECISION"] = "f32")
 nrevs = parse(Float64, get(ENV, "NREVS", "10"))
 nt = parse(Int, get(ENV, "NT", "36"))
 dt = 60 / RPM / nt
@@ -965,13 +970,20 @@ end
 
 # --- Panel->particle handoff clearance profile (BRAINSTORM/018 S0c) ---------
 # The distance from the TE at which the panel wake hands off to particles is
-# NOT a knob: it is emergent from (Das, nwakerows, dt). Row 1 is rigidly pinned
-# at TE+Das; rows 2..N convect freely and are separated by one step of TE
-# travel (the Das cancels between consecutive rows); particles are deposited on
-# the segment spanning node rows N -> N+1 (`_convert_to_particles!`,
-# src/FLOWPanel_wake.jl). Hence, per station j,
+# NOT a knob: it is emergent from (Das, nwakerows, dt). Geometry (clarified
+# 2026-08-26 after the "row 1 is rigid" misreading): the RIGID Das row is
+# body-owned — the *_tw.vtu quads, TE extended by Das (save(), src/
+# FLOWPanel_liftingbody.jl) — and is NOT one of the N PanelWake rows. All N
+# PanelWake rows are free sheet: node row 1 (upstream edge of the newest row)
+# is pinned ON the TE+Das line, node rows 2..N+1 convect freely and are
+# separated by one step of TE travel (the Das cancels between consecutive
+# rows); particles are deposited on the OLDEST cell row, spanning node rows
+# N -> N+1 (`_convert_to_particles!`, src/FLOWPanel_wake.jl). Hence, per
+# station j, the upstream edge of the converting row sits at
 #
 #     d_front,j = |Das_j| + (N-1) * |w x r_j| * dt
+#
+# (so at N=1 the single free row spans [Das, Das+travel] and d_front = |Das|),
 #
 # and the quantity that governs whether the blade sees a particle singularity
 # is d_front/sigma -- BRAINSTORM/018 Phase 12 C1 measured the admissible value
@@ -1206,9 +1218,10 @@ wake_health_active = parse(Bool, get(ENV, "WAKE_HEALTH", "true"))
 wake_health_dtz = parse(Bool, get(ENV, "WAKE_HEALTH_DTZ", "false"))
 # min_sr attribution columns (BRAINSTORM/018 phase 15): p1 percentile of
 # sigma/sigma_shed + argmin position, appended AFTER the legacy columns so
-# positional readers of the existing columns are unaffected. Default ON so
-# campaign runs carry the attribution for free.
-wake_health_attribution = parse(Bool, get(ENV, "WAKE_HEALTH_ATTRIBUTION", "true"))
+# positional readers of the existing columns are unaffected. Default OFF
+# (052c, Ryan 2026-08-26): the extra O(np) pass + sort costs real walltime at
+# plateau N; opt in per run when the attribution columns are wanted.
+wake_health_attribution = parse(Bool, get(ENV, "WAKE_HEALTH_ATTRIBUTION", "false"))
 if run_monitors && wake_health_active
     monitors = (monitors..., pnl.WakeHealthMonitor(dtz=wake_health_dtz,
                                  attribution=wake_health_attribution))
@@ -1218,9 +1231,11 @@ end
 # per-band count, sum|Gamma|, vector-sum Gamma, and sigma quantiles. Appended
 # LAST so existing monitor CSV names are unchanged; diagnostic only. Bands end
 # at the MEASURED deletion boundary 3.5R downstream (the GlobalCylinder above
-# starts 0.5R upstream, so its 4R length = 3.5R downstream extent). Default ON
-# so the dt-ladder rungs double as the H1/H3 measurement runs.
-wake_inventory_active = parse(Bool, get(ENV, "WAKE_INVENTORY", "true"))
+# starts 0.5R upstream, so its 4R length = 3.5R downstream extent). Default OFF
+# (052c, Ryan 2026-08-26): the O(np) binning scan + per-cell quantile sorts
+# cost real walltime at plateau N; set WAKE_INVENTORY=true for H1/H3
+# measurement runs that need the banded inventory.
+wake_inventory_active = parse(Bool, get(ENV, "WAKE_INVENTORY", "false"))
 if run_monitors && wake_inventory_active
     monitors = (monitors..., pnl.WakeInventoryMonitor(R))
 end
