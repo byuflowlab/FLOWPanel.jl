@@ -139,7 +139,11 @@ and returns the host mirror (D2H of the live prefix, no write-back).
 function _wake_monitor_host_pfield(pfield::FLOWVPM.ParticleField)
     _gpu_pfield_on_device(pfield) || return pfield
     mirror = _gpu_pfield_mirror(pfield)
-    _gpu_sync_mirror_from_device!(mirror, pfield)
+    # 052c: nested timer isolates the D2H refresh cost wherever a host
+    # consumer (monitor, VTK writer) triggers it.
+    _step_timer_measure(:d2h_mirror_sync; nested=true) do
+        _gpu_sync_mirror_from_device!(mirror, pfield)
+    end
     return mirror
 end
 

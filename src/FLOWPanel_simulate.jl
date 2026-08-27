@@ -432,7 +432,13 @@ function _collect_wake_probes(wakes::Tuple)
     result = ()
     for w in wakes
         if !isnothing(w)
-            result = (result..., get_probes(w)...)
+            for p in get_probes(w)
+                # Ruling 7 (BRAINSTORM/022): wakes may share one particle
+                # field; a shared field must appear exactly once as an FMM
+                # target or velocities accumulate N times into it.
+                any(x -> x === p, result) && continue
+                result = (result..., p)
+            end
         end
     end
     return result
@@ -464,7 +470,12 @@ function _collect_wake_sources(wakes::Tuple)
     result = ()
     for w in wakes
         if !isnothing(w)
-            result = (result..., get_sources(w)...)
+            for s in get_sources(w)
+                # Ruling 7: a shared particle field must appear exactly once
+                # as an FMM source or it induces N times its velocity.
+                any(x -> x === s, result) && continue
+                result = (result..., s)
+            end
         end
     end
     return result
@@ -643,8 +654,16 @@ function _sa_reset_freestream_kinematic!(systems_tuple::Tuple,
     end
 
     apply_freestream!(systems_tuple, uinf)
-    for w in wakes_tuple
-        !isnothing(w) && apply_freestream!(w, uinf)
+    seen_pfields = ()   # Ruling 7: freestream is additive on particle U —
+    for w in wakes_tuple                    # apply once per shared pfield
+        isnothing(w) && continue
+        if w isa PanelParticleWake
+            repeat = any(p -> p === w.pfield, seen_pfields)
+            apply_freestream!(w, uinf; include_pfield=!repeat)
+            repeat || (seen_pfields = (seen_pfields..., w.pfield))
+        else
+            apply_freestream!(w, uinf)
+        end
     end
 
     kinematic_velocity!(systems_tuple, frames)
@@ -1299,11 +1318,17 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             monitor_set_time!(monitor_context, t)
             monitor_csv_dir = isnothing(path) ? nothing : joinpath(path, "monitors")
             for (i_monitor, monitor) in enumerate(monitors)
-                _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
+                # 052c: nested per-monitor timers split the monitors category
+                # (labels by type; duplicate types accumulate into one label).
+                _step_timer_measure(Symbol(:monitor_, nameof(typeof(monitor))); nested=true) do
+                    _run_monitor!(monitor, monitor_context, systems_tuple, wakes_tuple, frames, uinf, i_step, dt, t)
+                end
                 if !isnothing(monitor_csv_dir)
-                    write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
-                                       monitor_context, systems_tuple, i_step, dt;
-                                       overwrite=i_step == start_step)
+                    _step_timer_measure(Symbol(:monitorcsv_, nameof(typeof(monitor))); nested=true) do
+                        write_monitor_csv!(monitor, monitor_csv_dir, name, i_monitor,
+                                           monitor_context, systems_tuple, i_step, dt;
+                                           overwrite=i_step == start_step)
+                    end
                 end
             end
         end
@@ -1344,11 +1369,20 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                           compress=compress_vtk)
             end
 
+            seen_vtk_pfields = ()   # Ruling 7: write a shared pfield once
             for (i, w) in enumerate(wakes_tuple)
                 if !isnothing(w)
                     wake_name = name * "_wake$(i)"
-                    write_vtk(joinpath(path, wake_name), w, i_step, t;
-                              overwrite=i_step==0, compress=compress_vtk)
+                    if w isa PanelParticleWake
+                        repeat = any(p -> p === w.pfield, seen_vtk_pfields)
+                        write_vtk(joinpath(path, wake_name), w, i_step, t;
+                                  overwrite=i_step==0, compress=compress_vtk,
+                                  include_pfield=!repeat)
+                        repeat || (seen_vtk_pfields = (seen_vtk_pfields..., w.pfield))
+                    else
+                        write_vtk(joinpath(path, wake_name), w, i_step, t;
+                                  overwrite=i_step==0, compress=compress_vtk)
+                    end
                 end
             end
 
@@ -1367,10 +1401,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # propagate wake
             _step_timer_measure(:wake_propagation_maintenance) do
+                seen_prop_pfields = ()  # Ruling 7: convect a shared pfield once
                 for w in wakes_tuple
                     if w isa PanelParticleWake
+                        repeat = any(p -> p === w.pfield, seen_prop_pfields)
                         propagate!(w, dt; relax=particle_relax,
-                            step=i_step, frames, diagnose_particle_gamma, diagnostic_vertical)
+                            step=i_step, frames, diagnose_particle_gamma,
+                            diagnostic_vertical, propagate_pfield=!repeat)
+                        repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
                     elseif !isnothing(w)
                         propagate!(w, dt; step=i_step, frames)
                     end

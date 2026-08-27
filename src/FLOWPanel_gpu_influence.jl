@@ -645,7 +645,18 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
             push!(packed, _gpu_pack_source!(ssys, koff))
         end
         isempty(packed) && continue
-        _gpu_direct_batch!(out, tgt, packed, grad, device)
+        detail_label = if pass1
+            tsys isa RigidWakeBody ? :wake_to_rotor_panels :
+            tsys isa NonLiftingBody ? :wake_to_ground_panels : :wake_to_probes
+        else
+            tsys isa FLOWVPM.ParticleField && any(s -> s isa NonLiftingBody, sources) ?
+                :ground_panels_to_particles :
+            tsys isa FLOWVPM.ParticleField ? :rotor_panels_to_particles :
+                :panel_cross_targets
+        end
+        _step_timer_measure(detail_label; nested=true) do
+            _gpu_direct_batch!(out, tgt, packed, grad, device)
+        end
         _gpu_add_result!(tsys, out, grad)
     end
 
@@ -686,8 +697,10 @@ function _gpu_device_pfield_target!(pfield::FLOWVPM.ParticleField,
 
     # self influence via the device radix lifecycle
     if any(s -> s === pfield, sources)
-        FLOWVPM.UJ_fmm_gpu!(pfield; reset=false, reset_sfs=false,
-            sfs=FLOWVPM.isSFSenabled(pfield.SFS))
+        _step_timer_measure(:particle_self_uj; nested=true) do
+            FLOWVPM.UJ_fmm_gpu!(pfield; reset=false, reset_sfs=false,
+                sfs=FLOWVPM.isSFSenabled(pfield.SFS))
+        end
     end
 
     packed = Any[]
@@ -703,11 +716,16 @@ function _gpu_device_pfield_target!(pfield::FLOWVPM.ParticleField,
     tgt_d = P[1:3, 1:np]                       # device position slice
     nout = grad ? 12 : 3
     out_d = Base.invokelatest(CUDAmod.zeros, eltype(P), nout, np)
-    for (srcmat, kern) in packed
-        src_d = srcmat isa Matrix ?
-            Base.invokelatest(CUDAmod.CuArray, srcmat) : srcmat
-        Base.invokelatest(FastMultipole.direct_rectangular!, out_d, tgt_d,
-            kern, src_d; gradient=grad)
+    for ((srcmat, kern), ssys) in zip(packed,
+            Tuple(s for s in sources if s !== pfield && _gpu_source_columns(s) > 0))
+        label = ssys isa NonLiftingBody ?
+            :ground_panels_to_particles : :rotor_panels_to_particles
+        _step_timer_measure(label; nested=true) do
+            src_d = srcmat isa Matrix ?
+                Base.invokelatest(CUDAmod.CuArray, srcmat) : srcmat
+            Base.invokelatest(FastMultipole.direct_rectangular!, out_d, tgt_d,
+                kern, src_d; gradient=grad)
+        end
     end
     view(P, FLOWVPM.U_INDEX, 1:np) .+= view(out_d, 1:3, :)
     if grad
