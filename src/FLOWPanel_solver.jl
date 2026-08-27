@@ -304,7 +304,8 @@ end
 ################################################################################
 
 """
-    Backslash(body; assemble_source_potential=false, source_potential_gpu=false)
+    Backslash(body; assemble_source_potential=false, source_potential_gpu=false,
+              shared_operator=nothing)
 
 Direct solver that assembles and LU-factors the influence matrix for `body`.
 The formulation (Neumann or Dirichlet) is chosen automatically from the body's
@@ -322,6 +323,13 @@ CUDA matrix/vector buffers for subsequent products. It requires
 `assemble_source_potential=true`, the CUDA influence mode, and functional CUDA.
 The default 32 GiB post-upload reserve is configurable with
 `source_potential_gpu_reserve_bytes`.
+
+`shared_operator=owner` reuses `owner`'s assembled/factored `G` for a rigidly
+translated, rotated, or mirrored copy of the same ordered body. Each returned
+solver still owns independent RHS, velocity, and potential work buffers. The
+constructor validates the body/DBC type, cell order, panel core size, and a
+rigid/mirror-invariant body-frame geometry fingerprint. A shared solver rejects
+`update_G=true`, since its factorization is aliased by every owner.
 """
 mutable struct SourcePotentialGPUState{TF}
     matrix::Any
@@ -352,6 +360,66 @@ mutable struct Backslash{TF,TGLU} <: AbstractMatrixfulSolver{false}
 end
 
 const _BACKSLASH_CONSTRUCTION_TIMINGS = WeakKeyDict{Any,NamedTuple}()
+const _BACKSLASH_OPERATOR_SIGNATURES = WeakKeyDict{Any,NamedTuple}()
+const _BACKSLASH_SHARED_OWNERS = WeakKeyDict{Any,Any}()
+
+function _backslash_canonical_nodes(body)
+    X = body.nodes
+    center = vec(sum(X; dims=2)) ./ size(X, 2)
+    centered = X .- center
+    norms2 = vec(sum(abs2, centered; dims=1))
+    ia = argmax(norms2)
+    e1 = centered[:, ia]
+    n1 = LA.norm(e1)
+    n1 > eps(eltype(X)) || throw(ArgumentError(
+        "cannot fingerprint a degenerate body with coincident nodes"))
+    e1 = e1 ./ n1
+    cross2 = [LA.norm(LA.cross(e1, centered[:, j]))^2 for j in axes(X, 2)]
+    ib = argmax(cross2)
+    e2 = centered[:, ib] .- e1 .* LA.dot(e1, centered[:, ib])
+    n2 = LA.norm(e2)
+    n2 > sqrt(eps(eltype(X))) * n1 || throw(ArgumentError(
+        "cannot fingerprint a collinear body"))
+    e2 ./= n2
+    e3 = LA.cross(e1, e2)
+    return vcat(transpose(e1), transpose(e2), transpose(e3)) * centered
+end
+
+function _backslash_operator_signature(body)
+    return (;
+        body_type=typeof(body),
+        ncells=body.ncells,
+        cells=copy(body.cells),
+        core_size_panel=body.core_size_panel,
+        canonical_nodes=_backslash_canonical_nodes(body),
+    )
+end
+
+function _validate_shared_backslash_operator(body, owner::Backslash;
+        geometry_rtol::Real=5e-11, geometry_atol::Real=5e-12)
+    owner_sig = get(_BACKSLASH_OPERATOR_SIGNATURES, owner, nothing)
+    owner_sig === nothing && throw(ArgumentError(
+        "shared Backslash owner has no construction fingerprint"))
+    typeof(body) == owner_sig.body_type || throw(ArgumentError(
+        "shared Backslash body/element/DBC type mismatch: $(typeof(body)) != $(owner_sig.body_type)"))
+    body.ncells == owner_sig.ncells || throw(ArgumentError(
+        "shared Backslash cell-count mismatch: $(body.ncells) != $(owner_sig.ncells)"))
+    body.cells == owner_sig.cells || throw(ArgumentError(
+        "shared Backslash requires identical cell connectivity and order"))
+    isequal(body.core_size_panel, owner_sig.core_size_panel) || throw(ArgumentError(
+        "shared Backslash panel core-size mismatch: $(body.core_size_panel) != $(owner_sig.core_size_panel)"))
+    canonical = _backslash_canonical_nodes(body)
+    same = isapprox(canonical, owner_sig.canonical_nodes;
+        rtol=geometry_rtol, atol=geometry_atol)
+    mirrored = isapprox(vcat(canonical[1:2, :], -canonical[3:3, :]),
+        owner_sig.canonical_nodes; rtol=geometry_rtol, atol=geometry_atol)
+    (same || mirrored) || throw(ArgumentError(
+        "shared Backslash body-frame geometry/operator fingerprint mismatch"))
+    return nothing
+end
+
+_backslash_shared_owner(solver::Backslash) =
+    get(_BACKSLASH_SHARED_OWNERS, solver, nothing)
 
 "Internal task-052 construction diagnostics; not part of the public solver API."
 _backslash_construction_timings(solver::Backslash) =
@@ -363,6 +431,7 @@ _backslash_construction_timings(solver::Backslash) =
 function Backslash(body::AbstractBody{<:Any,<:Any,TF};
         assemble_source_potential::Bool=false,
         source_potential_gpu::Bool=false,
+        shared_operator::Union{Nothing,Backslash}=nothing,
         source_potential_gpu_reserve_bytes::Integer=32 * 1024^3,
         source_potential_gpu_emergency_bytes::Integer=4 * 1024^3,
         source_potential_gpu_sample_interval::Integer=10) where TF
@@ -374,15 +443,35 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF};
         "source_potential_gpu_emergency_bytes must be nonnegative"))
     source_potential_gpu_sample_interval > 0 || throw(ArgumentError(
         "source_potential_gpu_sample_interval must be positive"))
+    shared_operator !== nothing && assemble_source_potential && throw(ArgumentError(
+        "shared_operator cannot be combined with assemble_source_potential"))
+    shared_operator !== nothing && source_potential_gpu && throw(ArgumentError(
+        "shared_operator cannot be combined with source_potential_gpu"))
     source_potential_gpu && _source_potential_cuda()
     total_start = time_ns()
-    G = zeros(TF, body.ncells, body.ncells)
     rhs = zeros(TF, body.ncells)
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
 
     calc_normals!(body)
     calc_controlpoints!(body)
+    if shared_operator !== nothing
+        _validate_shared_backslash_operator(body, shared_operator)
+        solver = Backslash{TF,typeof(shared_operator.Glu)}(
+            shared_operator.G, shared_operator.Glu, rhs, Uext, phi_ext,
+            nothing, nothing)
+        _BACKSLASH_OPERATOR_SIGNATURES[solver] =
+            _BACKSLASH_OPERATOR_SIGNATURES[shared_operator]
+        _BACKSLASH_SHARED_OWNERS[solver] = shared_operator
+        _BACKSLASH_CONSTRUCTION_TIMINGS[solver] = (;
+            total_s=(time_ns() - total_start) / 1e9,
+            g_assembly_s=0.0, lu_s=0.0, s_assembly_s=0.0,
+            g_size=size(solver.G), s_size=(0, 0),
+            s_gpu_upload_s=0.0, s_gpu_bytes=0)
+        return solver
+    end
+
+    G = zeros(TF, body.ncells, body.ncells)
     g_start = time_ns()
     _G!(G, body, body; core_size=body.core_size_panel, update_geometry=false)
     g_assembly_s = (time_ns() - g_start) / 1e9
@@ -407,6 +496,7 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF};
         s_gpu_upload_s=isnothing(gpu_state) ? 0.0 : gpu_state.upload_seconds,
         s_gpu_bytes=isnothing(gpu_state) ? 0 : gpu_state.allocation_bytes,
     )
+    _BACKSLASH_OPERATOR_SIGNATURES[solver] = _backslash_operator_signature(body)
 
     return solver
 end
@@ -1500,6 +1590,8 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     ) where {TK, NK, TF}
 
     if update_G
+        _backslash_shared_owner(solver) === nothing || throw(ArgumentError(
+            "update_G=true is invalid for a Backslash solver with an aliased shared operator"))
         solver.G .= zero(eltype(solver.G))
         _G!(solver.G, body, body; core_size=body.core_size_panel, update_geometry=false, optargs...)
         # write the refreshed factorization back so later direct consumers of
@@ -1512,7 +1604,9 @@ function _solve!(body::AbstractBody{TK,NK,TF,false}, solver::Backslash;
     rhs .= zero(eltype(rhs))
     calc_bc_noflowthrough!(rhs, body.velocity, body.normals)
 
-    ldiv!(view(body.strength, :, strength_index), solver.Glu, rhs)
+    _step_timer_measure(:host_ldiv; nested=true) do
+        ldiv!(view(body.strength, :, strength_index), solver.Glu, rhs)
+    end
 
     return nothing
 end
@@ -1524,6 +1618,8 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
     solver.rhs .= -self.potential
 
     if update_G
+        _backslash_shared_owner(solver) === nothing || throw(ArgumentError(
+            "update_G=true is invalid for a Backslash solver with an aliased shared operator"))
         solver.G .= 0.0
         _G!(solver.G, self, self; core_size=self.core_size_panel, update_geometry=false)
         # write back (see Neumann _solve! comment)
@@ -1532,7 +1628,9 @@ function _solve!(self::AbstractBody{<:Union{Union{ConstantSource, ConstantDouble
         solver.S === nothing || assemble_source_potential!(solver, self)
     end
 
-    ldiv!(view(self.strength, :, 2), solver.Glu, solver.rhs)
+    _step_timer_measure(:host_ldiv; nested=true) do
+        ldiv!(view(self.strength, :, 2), solver.Glu, solver.rhs)
+    end
 
     return nothing
 end
@@ -2232,17 +2330,39 @@ function solve!(bodies::Tuple, solvers::Tuple;
     end
 
     converged = false
+    iterations_completed = 0
+    final_max_delta = Inf
     for iter in 1:max_outer_iterations
+        iterations_completed = iter
 
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
 
             sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
             if !isempty(sources)
-                influence!((body,), sources, backends[i];
-                    scalar_potential=false,
-                    velocity=true,
-                    optargs...)
+                if step_timers_enabled()
+                    rotor_sources = Tuple(s for s in sources if s isa RigidWakeBody)
+                    ground_sources = Tuple(s for s in sources if s isa NonLiftingBody)
+                    if !isempty(rotor_sources)
+                        label = body isa NonLiftingBody ?
+                            :rotor_ground_cross : :rotor_rotor_cross
+                        _step_timer_measure(label; nested=true) do
+                            influence!((body,), rotor_sources, backends[i];
+                                scalar_potential=false, velocity=true, optargs...)
+                        end
+                    end
+                    if !isempty(ground_sources)
+                        _step_timer_measure(:rotor_ground_cross; nested=true) do
+                            influence!((body,), ground_sources, backends[i];
+                                scalar_potential=false, velocity=true, optargs...)
+                        end
+                    end
+                else
+                    influence!((body,), sources, backends[i];
+                        scalar_potential=false,
+                        velocity=true,
+                        optargs...)
+                end
             end
 
             # `optargs...` above is bound for `influence!`; per-body solver kwargs
@@ -2250,8 +2370,10 @@ function solve!(bodies::Tuple, solvers::Tuple;
             # Without this there is no route to the inner solve at all — the reason
             # FGS iteration counts were unreachable from the 021 unsteady driver
             # (BRAINSTORM 021 Phase 3; needed in earnest by Phase 4's multibody case).
-            solve!(body, solver; backend=backends[i], finalize_step=false,
-                   solver_optargs...)
+            _step_timer_measure(:panel_self_cached_operator; nested=true) do
+                solve!(body, solver; backend=backends[i], finalize_step=false,
+                       solver_optargs...)
+            end
         end
 
         max_delta = 0.0
@@ -2263,6 +2385,7 @@ function solve!(bodies::Tuple, solvers::Tuple;
         end
 
         history === nothing || record!(history, iter, max_delta)
+        final_max_delta = max_delta
 
         if verbose
             println("  Outer iteration $iter: max strength change = $max_delta")
@@ -2293,6 +2416,12 @@ function solve!(bodies::Tuple, solvers::Tuple;
         println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
     end
 
+    isempty(solvers) || (_BLOCK_GS_STATUS[first(solvers)] = (;
+        iterations=iterations_completed, final_max_delta,
+        converged, tolerance=Float64(outer_tolerance),
+        cap=max_outer_iterations))
+    step_timers_enabled() && @info "step_timer_count block_gs_iterations $(iterations_completed)"
+
     # restore velocities
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
@@ -2307,6 +2436,18 @@ function solve!(bodies::Tuple, solvers::Tuple;
     end
 
     return nothing
+end
+
+const _BLOCK_GS_STATUS = IdDict{Any,NamedTuple}()
+
+"Status of the most recent tuple/block-GS solve containing `solvers`."
+function block_gs_status(solvers)
+    tuple = solvers isa Tuple ? solvers : (solvers,)
+    isempty(tuple) && return (iterations=0, final_max_delta=NaN,
+        converged=false, tolerance=NaN, cap=0)
+    return get(_BLOCK_GS_STATUS, first(tuple),
+        (iterations=0, final_max_delta=NaN, converged=false,
+         tolerance=NaN, cap=0))
 end
 
 
