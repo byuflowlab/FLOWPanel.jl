@@ -902,9 +902,13 @@ _induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_si
     FilamentRegularization
 
 Selectable regularization family for the bound-vortex filament kernel
-(BRAINSTORM 025). All families share the numerator `c*q` and differ only in
-the scalar denominator `D` (velocity) and `∇D = κ ∇A` (gradient); derivations
-in `BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`.
+(BRAINSTORM 025). The three point-blob-profile families share the numerator
+`c*q` and differ only in the scalar denominator `D` (velocity) and
+`∇D = κ ∇A` (gradient); derivations in
+`BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`.
+`LineGaussRegularization` is instead the exact line-convolved kernel — its
+gradient does not fit the `(D, κ∇A)` shape and uses a dedicated cylindrical
+assembly (052d DERIVATION.md §5).
 
 - `GaussianRegularization` (default; Ryan ruling 2026-08-20, matched-CORE-
   SIZE convention): Lamb–Oseen transverse profile (`σ ≡ core_size`) — lowest
@@ -920,10 +924,20 @@ in `BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`.
   (`1/h² → 1/√(h⁴ + rc⁴)`); `Δr = core_size·(2/tol)^(1/4)` (velocity-derived,
   legacy-pinned; leaves gradient error ≤ 1.25·tol at that radius — see
   `radius_inflation`).
+- `LineGaussRegularization`: exact closed form of the singular segment kernel
+  convolved with the FLOWVPM Gaussian blob (`σ ≡ core_size`; FastMultipole
+  `MATRIX_OPERATOR_REFACTOR/prototypes/052d_compact_kernel/DERIVATION.md`,
+  2026-08-28). `GaussianRegularization` is exactly its infinite-line limit;
+  the deviation from the singular kernel decays as `poly·e^(−d²/2σ²)` in the
+  distance `d` to the SEGMENT — the Gaussian family's open along-line error
+  channel closes by construction, so the radius inflation truly bounds the
+  direct/expansion mismatch in the geometry the MAC measures. Inflation is
+  the Gaussian gradient-aware fixed point plus a measured `0.35σ` pad
+  (`≈ 6.25σ` at tol 1e-6). Costs 4 erf + 1 exp per edge (vs 1 expm1).
 
 Select via [`set_filament_regularization!`](@ref) or the
 `FLOWPANEL_FILAMENT_REG` environment variable (`compact`/`gaussian`/
-`vatistas`, read at package load) — the env hook exists so frozen drivers can
+`vatistas`/`linegauss`, read at package load) — the env hook exists so frozen drivers can
 pin a family without code changes. The FMM stays aligned with the direct
 kernel by construction: [`radius_inflation`](@ref) for `VortexRing` reads the
 same global.
@@ -932,6 +946,7 @@ same global.
     VatistasRegularization
     CompactRegularization
     GaussianRegularization
+    LineGaussRegularization
 end
 
 "Active filament regularization family (see [`FilamentRegularization`](@ref))."
@@ -943,15 +958,197 @@ end
 const FILAMENT_REGULARIZATION = Ref(GaussianRegularization)
 
 "Set the active filament regularization family (type or Symbol
-`:compact`/`:gaussian`/`:vatistas`)."
+`:compact`/`:gaussian`/`:vatistas`/`:linegauss`)."
 set_filament_regularization!(family::FilamentRegularization) =
     (FILAMENT_REGULARIZATION[] = family)
 function set_filament_regularization!(family::Symbol)
     family === :compact && return set_filament_regularization!(CompactRegularization)
     family === :gaussian && return set_filament_regularization!(GaussianRegularization)
     family === :vatistas && return set_filament_regularization!(VatistasRegularization)
+    family === :linegauss && return set_filament_regularization!(LineGaussRegularization)
     throw(ArgumentError("unknown filament regularization $(repr(family)); " *
-        "use :compact, :gaussian, or :vatistas"))
+        "use :compact, :gaussian, :vatistas, or :linegauss"))
+end
+
+#------- LineGauss closed-form kernel (052d, 2026-08-28) -------#
+# Exact blob-line convolution of the segment Biot–Savart kernel with the
+# FLOWVPM Gaussian core g(t) = erf(t/√2) − √(2/π)·t·e^(−t²/2). Derivation and
+# validation live in FastMultipole `MATRIX_OPERATOR_REFACTOR/prototypes/
+# 052d_compact_kernel/` (DERIVATION.md; k01/k03 harnesses). All lengths in
+# the helpers are σ-scaled (σ ≡ core_size). Guard thresholds and series
+# truncations are Float64-derived; a Float32 device port needs re-derivation.
+
+const _LG_SQ2OPI = sqrt(2 / pi)
+const _lg_erf = FLOWVPM.erf   # SpecialFunctions.erf via the FLOWVPM dep
+
+# blob velocity function g(t) (odd in t), series-guarded as t → 0
+@inline function _lg_gfun(t)
+    at = abs(t)
+    at >= 9.3 && return copysign(one(t), t)   # deviation < 2e-18
+    if at < 0.125
+        t2 = t * t
+        term = t * t2 / 3
+        s = term
+        for m in 1:12
+            term *= -t2 * (2m + 1) / (2m * (2m + 3))
+            s += term
+        end
+        return _LG_SQ2OPI * s
+    end
+    return _lg_erf(t / sqrt(2)) - _LG_SQ2OPI * t * exp(-t * t / 2)
+end
+
+# on-axis antiderivative ψ (odd, ψ(0) = 0): M_axis = ψ(ẑ1) − ψ(ẑ2)
+@inline function _lg_psi(z)
+    z == 0 && return zero(z)
+    if abs(z) < 0.125
+        z2 = z * z
+        return _LG_SQ2OPI * z * (1 / 3 - z2 / 30 + z2^2 / 280 -
+                                 z2^3 / 3024 + z2^4 / 38016 - z2^5 / 549120)
+    end
+    return _LG_SQ2OPI * (z / 2) * exp(-z * z / 2) -
+           _lg_gfun(z) / (2 * z * z) + _lg_gfun(z) / 2
+end
+
+# g(R)/R³ including its finite R = 0 limit (gradient axial factor)
+@inline function _lg_kfun(R)
+    if R < 0.125
+        r2 = R * R
+        return _LG_SQ2OPI * (1 / 3 - r2 / 10 + r2^2 / 56 -
+                             r2^3 / 432 + r2^4 / 4224 - r2^5 / 49920)
+    end
+    return _lg_gfun(R) / R^3
+end
+
+# Fixed threshold at the error crossover: the axis limit truncates O(ĥ²)
+# terms (rel err ≈ 0.25·ĥ² for a long mid-span segment) while the general
+# branch loses ~eps/ĥ² to cancellation in N = ĥ²·M — both ≤ ~2.5e-8 at
+# ĥ² = 1e-7. Scaling the threshold by min ẑ² (pre-2026-08-28 form) let the
+# guard fire at physically large ĥ for long segments (ẑ ~ 4·10³ ⇒ ĥ² < 0.16),
+# silently dropping the 1% O(ĥ²) correction at ĥ = 0.2.
+@inline _lg_axis_guard(ĥ2, ẑ1, ẑ2) =
+    ĥ2 < 1e-7 && ẑ1 != 0 && ẑ2 != 0
+
+# wholly-small configuration: term-by-term integral of the convolution;
+# returns M and the radial-gradient factor D = M + 2ĥ²·∂M/∂ĥ²
+function _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+    M = zero(ĥ2)
+    dM = zero(ĥ2)
+    coeff = 1 / 3
+    for m in 0:12
+        Im = zero(ĥ2)
+        dIm = zero(ĥ2)
+        for k in 0:m
+            p = m - k
+            dzpow = (ẑ1^(2k + 1) - ẑ2^(2k + 1)) / (2k + 1)
+            bc = binomial(m, k)
+            Im += bc * ĥ2^p * dzpow
+            p > 0 && (dIm += bc * p * ĥ2^(p - 1) * dzpow)
+        end
+        M += coeff * Im
+        dM += coeff * dIm
+        coeff *= -(2m + 3) / (2 * (m + 1) * (2m + 5))
+    end
+    M *= _LG_SQ2OPI
+    return M, M + 2ĥ2 * _LG_SQ2OPI * dM
+end
+
+# one endpoint in the small-radius region: split the integral at |ẑ| = SMALL_R
+const _LG_SMALL_R = 0.125
+@inline _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2) =
+    ĥ2 < 1e-8 * _LG_SMALL_R^2 && min(abs(ẑ1), abs(ẑ2)) < _LG_SMALL_R &&
+    max(R̂1, R̂2) >= _LG_SMALL_R
+
+function _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+    if abs(ẑ1) < _LG_SMALL_R
+        split = -_LG_SMALL_R
+        Mc, Dc = _lg_small_radius_MD(ẑ1, split, ĥ2)
+        Mf = _lg_psi(split) - _lg_psi(ẑ2)
+    else
+        split = _LG_SMALL_R
+        Mc, Dc = _lg_small_radius_MD(split, ẑ2, ĥ2)
+        Mf = _lg_psi(ẑ1) - _lg_psi(split)
+    end
+    return Mf + Mc, Mf + Dc
+end
+
+# M = N/ĥ² with u = c·M/(4π σ² L); guarded near the axis and endpoints
+function _lg_M(ẑ1, ẑ2, ĥ2, R̂1, R̂2)
+    if ĥ2 == 0
+        return _lg_psi(ẑ1) - _lg_psi(ẑ2)
+    elseif max(R̂1, R̂2) < _LG_SMALL_R
+        M, _ = _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+        return M
+    elseif _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2)
+        M, _ = _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+        return M
+    elseif _lg_axis_guard(ĥ2, ẑ1, ẑ2)
+        return _lg_psi(ẑ1) - _lg_psi(ẑ2)
+    end
+    # cancellation-reduced closed form: the endpoint Gaussians inside the
+    # four g functions cancel exactly — 4 erf + 1 exp per edge
+    G = exp(-ĥ2 / 2)
+    N = ẑ1 * _lg_erf(R̂1 / sqrt(2)) / R̂1 -
+        ẑ2 * _lg_erf(R̂2 / sqrt(2)) / R̂2 -
+        G * (_lg_erf(ẑ1 / sqrt(2)) - _lg_erf(ẑ2 / sqrt(2)))
+    return N / ĥ2
+end
+
+@inline _lg_skewmat(t::SVector{3,TF}) where TF = SMatrix{3,3,TF,9}(
+    zero(TF), t[3], -t[2],
+    -t[3], zero(TF), t[1],
+    t[2], -t[1], zero(TF))
+
+# LineGauss ∂u_i/∂x_j per unit Γ (cylindrical assembly, DERIVATION.md §5);
+# same index convention as _bound_vortex_gradient (pinned by k01 T3c)
+function _linegauss_gradient(r1::AbstractVector{TF}, r2, σ) where TF
+    Z = zero(SMatrix{3,3,TF,9})
+    s = r1 - r2
+    B = dot(s, s)
+    L = sqrt(B)
+    L < 5 * eps(TF) && return Z
+    that = -s / L
+    ẑ1 = -dot(that, r1) / σ
+    ẑ2 = ẑ1 - L / σ
+    c = cross(r1, r2)
+    ĥ2 = dot(c, c) / (B * σ * σ)
+    R̂1 = norm(r1) / σ
+    R̂2 = norm(r2) / σ
+    M = _lg_M(ẑ1, ẑ2, ĥ2, R̂1, R̂2)
+    C = 1 / (4 * pi * σ * σ)
+    if ĥ2 == 0
+        # on the segment axis: the regularized transverse derivative is finite
+        return (C * M) * _lg_skewmat(that)
+    end
+    ĥ = sqrt(ĥ2)
+    hvec = -r1 - (σ * ẑ1) * that      # h n̂ = (x − P1) − z1 t̂
+    nh = norm(hvec)
+    if nh <= 1e-10 * σ * max(R̂1, R̂2)
+        # transverse direction lost to projection roundoff (can be exactly
+        # zero → NaN): collapse to the deterministic axis-limit skew form
+        return (C * M) * _lg_skewmat(that)
+    end
+    n̂ = hvec / nh
+    b̂ = cross(that, n̂)
+    k1 = _lg_kfun(R̂1)
+    k2 = _lg_kfun(R̂2)
+    duθdz = C * ĥ * (k1 - k2)
+    if max(R̂1, R̂2) < _LG_SMALL_R
+        _, radial = _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+        duθdh = C * radial
+    elseif _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2)
+        _, radial = _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+        duθdh = C * radial
+    elseif _lg_axis_guard(ĥ2, ẑ1, ẑ2)
+        duθdh = C * M          # bracket → 2M on the axis, so brk − M → M
+    else
+        G = exp(-ĥ2 / 2)
+        brk = -ẑ1 * k1 + ẑ2 * k2 +
+              G * (_lg_erf(ẑ1 / sqrt(2)) - _lg_erf(ẑ2 / sqrt(2)))
+        duθdh = C * (brk - M)
+    end
+    uθ_h = C * M
+    return duθdh * (b̂ * n̂') + duθdz * (b̂ * that') - uθ_h * (n̂ * b̂')
 end
 
 # Performance contract (BRAINSTORM 025 regression fix, 2026-08-20): the hot
@@ -994,6 +1191,14 @@ end
         h = sqrt(dotrixrj / r0sqr)
         D = h < core_size ? dotrixrj + (h - core_size)*(h - core_size) * r0sqr : dotrixrj
         V = num * rijdothat / D / (4*pi)
+    elseif F === LineGaussRegularization
+        # u = c·M/(4π σ² L): exact blob-line convolution (LineGauss section
+        # above); matches the singular kernel to tol beyond ~6σ of the SEGMENT
+        L = sqrt(r0sqr)
+        σ = core_size
+        ẑ1 = dot(r0, r1) / (L * σ)
+        M = _lg_M(ẑ1, ẑ1 - L / σ, dotrixrj / (r0sqr * σ * σ), nr1 / σ, nr2 / σ)
+        V = num * (M / (4*pi * σ * σ * L))
     else # GaussianRegularization
         # u = c*q*g(h)/(4π A), g = 1 - exp(-h²/2rc²); evaluated as
         # g/A = (g/x²)/(B rc²) with x² = (h/rc)² so the h → 0 limit is exact
@@ -1018,6 +1223,11 @@ _bound_vortex_velocity(r1::SVector{3,<:Any}, r2::SVector{3,<:Any}, finite_core, 
     # target coincides with a filament endpoint: induced gradient is zero in the limit
     if nr1 < 5*eps(TF) || nr2 < 5*eps(TF)
         return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+    end
+
+    # LineGauss does not fit the (D, κ∇A) shape — dedicated cylindrical assembly
+    if finite_core && F === LineGaussRegularization
+        return _linegauss_gradient(r1, r2, core_size)
     end
 
     c = cross(r1, r2)
@@ -1132,6 +1342,15 @@ expansion order (021 Phase 1 finding, 2026-08-13).
     ⇒ `Δr = rc·√(2z*)` ≈ `4.99rc / 5.47rc / 5.90rc` at tol `1e-4/1e-5/1e-6`.
   - compact-support: exactly singular — velocity AND gradient — beyond `rc`
     ⇒ inflation `rc`, independent of `tol` (matches the source/doublet rule).
+  - LineGauss: the Gaussian fixed-point radius plus a `0.35rc` pad, calibrated
+    against the measured segment-distance matching radii `5.25/5.75/6.25rc`
+    at tol `1e-4/1e-5/1e-6` (052d k01 T7/T7b dense L/direction scans; the
+    bare fixed point `4.99/5.47/5.90rc` is slightly non-conservative for the
+    finite segment's polynomial prefactor). Semantic upgrade: for LineGauss
+    the deviation from the singular kernel is bounded by distance to the
+    SEGMENT — exactly the geometry the multipole-acceptance sphere measures —
+    so the inflated radius is a true bound (the Gaussian family's line-
+    distance `h` caveat does not apply).
   - Vatistas n=2 (`1/h² → 1/√(h⁴+rc⁴)`, legacy): velocity relative error
     ≈ ½(rc/h)⁴ ⇒ `rc·(2/tol)^(1/4)`. This shipped rule is velocity-derived
     and pinned by legacy-reproduction tests — the gradient relative error
@@ -1151,12 +1370,19 @@ expansion order (021 Phase 1 finding, 2026-08-13).
     isinf(tol) && return zero(core_size)
     family = FILAMENT_REGULARIZATION[]
     family == CompactRegularization && return core_size * one(tol)
-    if family == GaussianRegularization
+    if family == GaussianRegularization || family == LineGaussRegularization
         # gradient-aware: solve e^(-z)(1+2z) = tol (see docstring)
         z = log(1 / tol)
         for _ in 1:5
             z = log((1 + 2z) / tol)
         end
+        # LineGauss: +0.35rc pad calibrated against the measured SEGMENT-
+        # distance matching radii 5.25/5.75/6.25rc at tol 1e-4/1e-5/1e-6
+        # (052d k01 T7/T7b dense scans) vs the bare fixed point
+        # 4.99/5.47/5.90rc; unlike the Gaussian family the bound is by
+        # segment distance — exactly what the MAC sphere geometry measures
+        family == LineGaussRegularization &&
+            return core_size * (sqrt(2z) + oftype(sqrt(2z), 0.35))
         return core_size * sqrt(2z)
     end
     return core_size * (2 / tol)^0.25    # Vatistas (legacy, velocity-derived)

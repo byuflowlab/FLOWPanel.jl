@@ -19,6 +19,9 @@ const REG_FAMILIES = (
     (pnl.CompactRegularization, u_inf_compact),
     (pnl.GaussianRegularization, u_inf_gaussian),
     (pnl.VatistasRegularization, u_inf_vatistas),
+    # the Gaussian transverse profile is exactly LineGauss's infinite-line
+    # limit (052d DERIVATION.md) — same closed form applies
+    (pnl.LineGaussRegularization, u_inf_gaussian),
 )
 
 @testset "filament regularization families" begin
@@ -34,6 +37,8 @@ const REG_FAMILIES = (
             @test pnl.FILAMENT_REGULARIZATION[] == pnl.GaussianRegularization
             pnl.set_filament_regularization!(:compact)
             @test pnl.FILAMENT_REGULARIZATION[] == pnl.CompactRegularization
+            pnl.set_filament_regularization!(:linegauss)
+            @test pnl.FILAMENT_REGULARIZATION[] == pnl.LineGaussRegularization
             @test_throws ArgumentError pnl.set_filament_regularization!(:bogus)
         end
 
@@ -169,6 +174,11 @@ const REG_FAMILIES = (
             @test Δr_g > rc * sqrt(2 * log(1/tol))
             pnl.set_filament_regularization!(pnl.VatistasRegularization)
             @test pnl.radius_inflation(pnl.VortexRing, rc, tol) ≈ rc * (2/tol)^0.25
+            @test pnl.radius_inflation(pnl.VortexRing, rc, Inf) == 0.0
+            # LineGauss: Gaussian gradient-aware fixed point + 0.35rc pad
+            # (segment-distance calibration, 052d k01 T7/T7b dense scans)
+            pnl.set_filament_regularization!(pnl.LineGaussRegularization)
+            @test pnl.radius_inflation(pnl.VortexRing, rc, tol) ≈ Δr_g + 0.35rc
             @test pnl.radius_inflation(pnl.VortexRing, rc, Inf) == 0.0
             # source/doublet rule unchanged
             @test pnl.radius_inflation(pnl.ConstantSource, rc, tol) == rc

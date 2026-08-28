@@ -275,6 +275,16 @@ end
             z_g = (Δr_g / 0.05)^2 / 2
             @test isapprox(exp(-z_g) * (1 + 2z_g), 1e-6; rtol=1e-4)
             @test Δr_g > 0.05 * sqrt(2 * log(1e6))
+            # LineGauss: Gaussian gradient-aware fixed point + 0.35·koff pad
+            # (segment-distance calibration, 052d k01 T7/T7b dense scans):
+            # ≈ 5.34/5.82/6.25·koff at tol 1e-4/1e-5/1e-6
+            pnl.set_filament_regularization!(pnl.LineGaussRegularization)
+            @test pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6) ≈ Δr_g + 0.35 * 0.05
+            for (tol_k, ratio) in ((1e-4, 5.34), (1e-5, 5.82), (1e-6, 6.25))
+                @test isapprox(pnl.radius_inflation(pnl.VortexRing, 0.05, tol_k) / 0.05,
+                               ratio; atol=0.01)
+            end
+            @test pnl.radius_inflation(pnl.VortexRing, 0.05, Inf) == 0.0
             # Vatistas n=2 (legacy): rel error ½(koff/h)^4 ≤ tol at h ≥ koff·(2/tol)^(1/4)
             pnl.set_filament_regularization!(pnl.VatistasRegularization)
             @test pnl.radius_inflation(pnl.VortexRing, 0.05, 1e-6) ≈ 0.05 * (2e6)^0.25
