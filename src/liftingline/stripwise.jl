@@ -421,7 +421,7 @@ function calc_cd(self::GeneralAirfoil{5}, args...; optargs...)
     interp5d(self.interp1d, self.parameters..., self.cd, args...; optargs...)[1]
 end
 function calc_cm(self::GeneralAirfoil{5}, args...; optargs...)
-    interp4d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
+    interp5d(self.interp1d, self.parameters..., self.cm, args...; optargs...)[1]
 end
 
 function extrapolate(self::GeneralAirfoil, args...; optargs...)
