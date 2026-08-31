@@ -61,6 +61,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, precalc=false, postcalc=false,
                      plan_slot=nothing, cache_nearfield::Bool=false,
+                     production_route=nothing,
                      nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
                      nearfield_cache_max_build_time::Real=Inf, optargs...)
 
@@ -77,7 +78,8 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
     # the panel solve and anything unrecognized fall through to fmm! below.
     # See src/FLOWPanel_gpu_influence.jl.
     if _gpu_rect_influence!(target_bodies, source_bodies;
-            scalar_potential, velocity, velocity_gradient, optargs...)
+            scalar_potential, velocity, velocity_gradient, production_route,
+            optargs...)
         postcalc && post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
         return nothing
     end
@@ -169,7 +171,8 @@ end
 
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
                      scalar_potential=false, velocity=false,
-                     velocity_gradient=false, precalc=false, postcalc=false, optargs...)
+                     velocity_gradient=false, precalc=false, postcalc=false,
+                     production_route=nothing, optargs...)
 
     # apply pre-calculations per system
     if precalc

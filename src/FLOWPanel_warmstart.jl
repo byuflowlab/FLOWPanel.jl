@@ -295,6 +295,19 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     staging[FLOWVPM.X_INDEX, :] .= points
     staging[FLOWVPM.GAMMA_INDEX, :] .= ReadVTK.get_data(point_data["gamma"])
     staging[FLOWVPM.SIGMA_INDEX, :] .= ReadVTK.get_data(point_data["sigma"])
+    # SIGMA_CEIL band-aid (BRAINSTORM item 026): also clamp RESTORED core
+    # sizes — the FMM cache is built at the continuation's first evaluation,
+    # before any euler-step clamp runs, and a snapshot carrying an overgrown
+    # outlier would seed a degenerate shallow radix geometry that no later
+    # trigger deepens.
+    sigma_ceil = parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))
+    if isfinite(sigma_ceil)
+        sig_row = view(staging, FLOWVPM.SIGMA_INDEX, :)
+        n_over = count(>(sigma_ceil), sig_row)
+        n_over > 0 && println("Warm start: clamping $(n_over) restored particle " *
+            "core size(s) to SIGMA_CEIL=$(sigma_ceil) m")
+        sig_row .= min.(sig_row, sigma_ceil)
+    end
     staging[FLOWVPM.VOL_INDEX, :] .= ReadVTK.get_data(point_data["vol"])
     staging[FLOWVPM.CIRCULATION_INDEX, :] .= ReadVTK.get_data(point_data["circulation"])
     staging[FLOWVPM.U_INDEX, :] .= ReadVTK.get_data(point_data["velocity"])
@@ -548,6 +561,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     particle_relax = get(optargs, :particle_relax, true)
     diagnose_particle_gamma = get(optargs, :diagnose_particle_gamma, false)
     diagnostic_vertical = get(optargs, :diagnostic_vertical, (0.0, 0.0, 1.0))
+    sigma_guard = get(optargs, :sigma_guard, NamedTuple())
 
     seen_prop_pfields = ()  # Ruling 7: convect a shared pfield exactly once
     for w in wakes_tuple
@@ -556,7 +570,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
             propagate!(w, dt_end; relax=particle_relax,
                 step=restart_step, frames, diagnose_particle_gamma,
                 diagnostic_vertical,
-                propagate_pfield=!repeat)
+                propagate_pfield=!repeat, sigma_guard)
             repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
         elseif !isnothing(w)
             propagate!(w, dt_end; step=restart_step, frames)

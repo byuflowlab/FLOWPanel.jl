@@ -1576,7 +1576,8 @@ function _kutta_step!(rt::KuttaRuntime{TF}, systems_tuple::Tuple,
         body_gradient_core_size::Float64=NaN,
         body_on_wake::Bool=true,
         panel_wake_on_particles::Bool=true,
-        particle_hessian_self::Bool=true) where {TF}
+        particle_hessian_self::Bool=true,
+        particle_body_overlap_policy::ParticleBodyOverlapPolicy=ParticleBodyOverlapPolicy()) where {TF}
 
     body = rt.body
     closure = rt.closure
@@ -1595,6 +1596,9 @@ function _kutta_step!(rt::KuttaRuntime{TF}, systems_tuple::Tuple,
         rt.live_active = !isnothing(rt.wake) && rt.wake.live_rows[] > 0
         _update_TE_route_b!(rt)
     end
+
+    check_particle_body_overlap!(particle_body_overlap_policy,
+        systems_tuple, wakes_tuple, i_step)
 
     _sa_wake_influence!(targets, wake_sources, backend_wake;
         needs_induced_vorticity, wakerow_no_hessian_to_particles,

@@ -1459,6 +1459,406 @@ end
         assert_boundary_residuals((body1, body2); tangency_atol=1e-7)
     end
 
+    @testset "Tuple solve validation and status lifetime (052b)" begin
+        body = make_octa_source_body()
+        solver = pnl.Backslash(body)
+        @test_throws ArgumentError pnl.solve!((body,), (solver,);
+            max_outer_iterations=0)
+        @test_throws ArgumentError pnl.solve!((body,), (solver,);
+            outer_tolerance=NaN)
+        @test_throws ArgumentError pnl.solve!((body,), (solver,);
+            dirichlet_residual_scale=Inf)
+        @test_throws DimensionMismatch pnl.solve!((body,), ())
+        @test_throws DimensionMismatch pnl.solve!((body,), (solver,);
+            backend=(pnl.DirectBackend(), pnl.DirectBackend()))
+
+        body.velocity .= NaN
+        err = try
+            pnl.solve!((body,), (solver,); backend=pnl.DirectBackend())
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ErrorException
+        status = pnl.block_gs_status((solver,))
+        @test !status.converged
+        @test status.failure == "nonfinite residual"
+        @test !isfinite(status.normalized_residual)
+
+        function make_weak_status_key()
+            b = make_octa_source_body()
+            b.velocity .= 0
+            b.velocity[1, :] .= 1
+            s = pnl.Backslash(b)
+            pnl.solve!((b,), (s,); backend=pnl.DirectBackend(),
+                outer_tolerance=1e-8)
+            @test haskey(pnl._BLOCK_GS_STATUS, s)
+            return WeakRef(s)
+        end
+        weak_solver = make_weak_status_key()
+        GC.gc(true)
+        GC.gc(true)
+        @test weak_solver.value === nothing
+    end
+
+    @testset "Dirichlet block-GS matches coupled oracle (052b)" begin
+        function make_four_rotors_ground()
+            rotors = map(((-1.5, -1.5), (1.5, -1.5),
+                          (-1.5, 1.5), (1.5, 1.5))) do (x, y)
+                nodes = 0.4 .* copy(NODES_OCT)
+                nodes .+= [x, y, 2.0]
+                body = pnl.NonLiftingBody{
+                    Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+                    nodes, copy(CELLS_OCT); DBC=true, core_size=1e-12)
+                pnl.calc_normals!(body)
+                pnl.calc_controlpoints!(body)
+                body
+            end
+            ground_nodes = Float64[
+                -6  6  6 -6;
+                -6 -6  6  6;
+                 0  0  0  0;
+            ]
+            ground_cells = Int[1 1; 2 3; 3 4]
+            ground = pnl.NonLiftingBody{pnl.ConstantSource}(
+                ground_nodes, ground_cells; core_size=1e-12)
+            pnl.calc_normals!(ground)
+            pnl.calc_controlpoints!(ground)
+            bodies = (rotors..., ground)
+            for body in bodies
+                body.velocity .= 0
+                body.velocity[1, :] .= 1.0
+                body.velocity[3, :] .= 0.1
+                body.potential .= range(-0.03, 0.02; length=body.ncells)
+            end
+            return bodies
+        end
+
+        oracle_bodies = make_four_rotors_ground()
+        oracle = pnl.BackslashCoupled(oracle_bodies)
+        pnl.solve!(oracle_bodies, oracle; backend=pnl.DirectBackend(),
+            update_G=true)
+
+        gs_bodies = make_four_rotors_ground()
+        gs_solvers = (map(pnl.Backslash, gs_bodies[1:4])...,
+            pnl.FlatGroundSolver(gs_bodies[5]))
+        pnl.solve!(gs_bodies, gs_solvers;
+            backend=ntuple(_ -> pnl.DirectBackend(), 5),
+            max_outer_iterations=200, outer_tolerance=1e-11,
+            dirichlet_residual_scale=1.0,
+            neumann_residual_scale=1.0,
+            require_outer_convergence=true)
+
+        status = pnl.block_gs_status(gs_solvers)
+        @test status.converged
+        @test status.normalized_residual < 1e-11
+        @test status.dirichlet_residual < 1e-11
+        @test status.neumann_residual < 1e-11
+        for (actual, expected) in zip(gs_bodies, oracle_bodies)
+            scale = max(maximum(abs, expected.strength), eps())
+            @test maximum(abs, actual.strength .- expected.strength) / scale < 1e-9
+        end
+
+        # The oracle is genuinely coupled: removing all but a rotor's own
+        # field leaves a nonzero cross-body potential at its control points.
+        rotor = gs_bodies[1]
+        rotor.potential .= 0
+        pnl.influence!((rotor,), gs_bodies[2:end], pnl.DirectBackend();
+            scalar_potential=true, velocity=false)
+        @test maximum(abs, rotor.potential) > 1e-8
+
+        # The rectangular target-output seam must carry corrected block
+        # cross-potential and cross-velocity calls without an FMM fallback.
+        old_gpu_mode = pnl.GPU_INFLUENCE[]
+        try
+            pnl.set_gpu_influence!(:host)
+            pnl.reset_gpu_influence_routes!()
+
+            phi_ref = deepcopy(gs_bodies[1])
+            phi_rect = deepcopy(gs_bodies[1])
+            phi_ref.potential .= 0
+            phi_rect.potential .= 0
+            pnl.influence!((phi_ref,), gs_bodies[2:end], pnl.DirectBackend();
+                scalar_potential=true, velocity=false)
+            pnl.influence!((phi_rect,), gs_bodies[2:end],
+                pnl.FastMultipoleBackend(); scalar_potential=true,
+                velocity=false)
+            @test phi_rect.potential ≈ phi_ref.potential rtol=1e-12
+
+            vel_ref = deepcopy(gs_bodies[5])
+            vel_rect = deepcopy(gs_bodies[5])
+            vel_ref.velocity .= 0
+            vel_rect.velocity .= 0
+            pnl.influence!((vel_ref,), gs_bodies[1:4], pnl.DirectBackend();
+                scalar_potential=false, velocity=true)
+            pnl.influence!((vel_rect,), gs_bodies[1:4],
+                pnl.FastMultipoleBackend(); scalar_potential=false,
+                velocity=true)
+            @test vel_rect.velocity ≈ vel_ref.velocity rtol=1e-12
+
+            # Every production tuple-solve route is named, including calls
+            # whose target also appears in the source tuple (self source and
+            # full physical residual evaluation).
+            self_target = deepcopy(gs_bodies[1])
+            self_target.potential .= 0
+            self_target.strength[:, 2:end] .= 0
+            pnl.influence!((self_target,), (self_target,),
+                pnl.FastMultipoleBackend(); scalar_potential=true,
+                velocity=false, production_route=:self_source_potential)
+            residual_target = deepcopy(gs_bodies[5])
+            residual_target.velocity .= 0
+            pnl.influence!((residual_target,), gs_bodies,
+                pnl.FastMultipoleBackend(); scalar_potential=false,
+                velocity=true, production_route=:block_residual_velocity)
+
+            routes = pnl.gpu_influence_route_snapshot()
+            @test get(routes.hits, :host_block_cross_potential, 0) == 1
+            @test get(routes.hits, :host_block_cross_velocity, 0) == 1
+            @test get(routes.hits, :host_self_source_potential, 0) == 1
+            @test get(routes.hits, :host_block_residual_velocity, 0) == 1
+            @test isempty(routes.fallbacks)
+        finally
+            pnl.GPU_INFLUENCE[] = old_gpu_mode
+            pnl.reset_gpu_influence_routes!()
+        end
+    end
+
+    @testset "Block-GS implicit warm start across steps (052b)" begin
+        # The tuple solve! never zeroes body strengths, and reset!/extra_reset!
+        # do not touch them either, so at timestep k+1 the first sweep sees the
+        # converged strengths of timestep k through the cross-body influence.
+        # This implicit warm start is load-bearing for the production budget;
+        # pin it so a refactor that starts zeroing strengths between steps
+        # fails loudly instead of silently multiplying the sweep count.
+        function make_warmstart_bodies()
+            rotors = map(((-1.2, 0.0), (1.2, 0.0))) do (x, y)
+                nodes = 0.4 .* copy(NODES_OCT)
+                nodes .+= [x, y, 1.5]
+                body = pnl.NonLiftingBody{
+                    Union{pnl.ConstantSource, pnl.ConstantDoublet}}(
+                    nodes, copy(CELLS_OCT); DBC=true, core_size=1e-12)
+                pnl.calc_normals!(body)
+                pnl.calc_controlpoints!(body)
+                body
+            end
+            ground_nodes = Float64[
+                -5  5  5 -5;
+                -5 -5  5  5;
+                 0  0  0  0;
+            ]
+            ground_cells = Int[1 1; 2 3; 3 4]
+            ground = pnl.NonLiftingBody{pnl.ConstantSource}(
+                ground_nodes, ground_cells; core_size=1e-12)
+            pnl.calc_normals!(ground)
+            pnl.calc_controlpoints!(ground)
+            return (rotors..., ground)
+        end
+        function set_incident!(bodies, ux)
+            for body in bodies
+                body.velocity .= 0
+                body.velocity[1, :] .= ux
+                body.velocity[3, :] .= 0.1
+                body.potential .= 0
+            end
+        end
+
+        bodies = make_warmstart_bodies()
+        solvers = (map(pnl.Backslash, bodies[1:2])...,
+            pnl.FlatGroundSolver(bodies[3]))
+        common = (backend=ntuple(_ -> pnl.DirectBackend(), 3),
+            max_outer_iterations=200, outer_tolerance=1e-11,
+            dirichlet_residual_scale=1.0, neumann_residual_scale=1.0,
+            require_outer_convergence=true)
+
+        # Step 1 from zero strengths.
+        set_incident!(bodies, 1.0)
+        history_cold = pnl.ConvergenceHistory()
+        pnl.solve!(bodies, solvers; history=history_cold, common...)
+        iters_step1 = pnl.block_gs_status(solvers).iterations
+
+        # Step 2: slightly different incident field, strengths carried over.
+        set_incident!(bodies, 1.02)
+        history_warm = pnl.ConvergenceHistory()
+        pnl.solve!(bodies, solvers; history=history_warm, common...)
+        iters_warm = pnl.block_gs_status(solvers).iterations
+        warm_strengths = [copy(body.strength) for body in bodies]
+
+        # The same step 2 restarted cold: identical converged answer, but the
+        # first measured residual starts orders of magnitude higher.
+        set_incident!(bodies, 1.02)
+        for body in bodies
+            body.strength .= 0
+        end
+        history_cold2 = pnl.ConvergenceHistory()
+        pnl.solve!(bodies, solvers; history=history_cold2, common...)
+        iters_cold2 = pnl.block_gs_status(solvers).iterations
+
+        @test pnl.block_gs_status(solvers).converged
+        @test iters_warm <= iters_cold2
+        @test first(history_warm.residual_internal) <
+            0.1 * first(history_cold2.residual_internal)
+        for (body, expected) in zip(bodies, warm_strengths)
+            scale = max(maximum(abs, expected), eps())
+            @test maximum(abs, body.strength .- expected) / scale < 1e-9
+        end
+        @test iters_step1 >= iters_warm
+    end
+
+    @testset "Lifting-body block-GS matches coupled oracle (052b)" begin
+        # Same parity gate as the Dirichlet oracle testset above, but with the
+        # production body type: two RigidWakeBody lifting surfaces (Kutta rows
+        # and semi-infinite wake strips in every influence block) plus the
+        # Neumann ground, so the frozen-source block-GS convention is checked
+        # against the monolithic coupled solve on the body type the 052b
+        # driver actually flies.
+        function make_lifting_pair_ground()
+            base_nodes, cells = make_seeded_te_mesh()
+            bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
+            shedding = pnl.calc_shedding_from_seed(base_nodes, cells, 1, 2;
+                bbox=bbox, end_node=3)
+
+            lift = [0.0, 0.0, 3.0]
+            nodes1 = translate_nodes!(copy(base_nodes), SVector(lift...))
+            nodes2 = translate_nodes!(copy(base_nodes),
+                SVector(2.5 + lift[1], lift[2], lift[3]))
+            body1 = pnl.RigidWakeBody{
+                Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(
+                nodes1, copy(cells), copy(shedding);
+                check_mesh=false, watertight=true)
+            body2 = pnl.RigidWakeBody{
+                Union{<:pnl.ConstantSource, <:pnl.ConstantDoublet}}(
+                nodes2, copy(cells), copy(shedding);
+                check_mesh=false, watertight=false)
+
+            ground_nodes = Float64[
+                -8 10 10 -8;
+                -8 -8 10 10;
+                 0  0  0  0;
+            ]
+            ground_cells = Int[1 1; 2 3; 3 4]
+            ground = pnl.NonLiftingBody{pnl.ConstantSource}(
+                ground_nodes, ground_cells; core_size=1e-12)
+            pnl.calc_normals!(ground)
+            pnl.calc_controlpoints!(ground)
+
+            Vinf = [10.0, 0.0, 0.0]
+            for body in (body1, body2, ground)
+                body.velocity .= 0
+                body.potential .= 0
+                pnl.apply_freestream!(body, Vinf)
+            end
+            for body in (body1, body2)
+                pnl.calc_normals!(body)
+                pnl.calc_controlpoints!(body)
+                for i in eachindex(body.Das)
+                    body.Das[i] .= repeat(Vinf ./ 10.0, 1,
+                        size(body.Das[i], 2))
+                end
+            end
+            return (body1, body2, ground)
+        end
+
+        oracle_bodies = make_lifting_pair_ground()
+        oracle = pnl.BackslashCoupled(oracle_bodies)
+        pnl.solve!(oracle_bodies, oracle; backend=pnl.DirectBackend(),
+            update_G=true)
+
+        gs_bodies = make_lifting_pair_ground()
+        gs_solvers = (map(pnl.Backslash, gs_bodies[1:2])...,
+            pnl.FlatGroundSolver(gs_bodies[3]))
+        pnl.solve!(gs_bodies, gs_solvers;
+            backend=ntuple(_ -> pnl.DirectBackend(), 3),
+            max_outer_iterations=200, outer_tolerance=1e-11,
+            dirichlet_residual_scale=1.0, neumann_residual_scale=1.0,
+            require_outer_convergence=true)
+
+        status = pnl.block_gs_status(gs_solvers)
+        @test status.converged
+        @test status.normalized_residual < 1e-11
+        for (actual, expected) in zip(gs_bodies, oracle_bodies)
+            scale = max(maximum(abs, expected.strength), eps())
+            @test maximum(abs, actual.strength .- expected.strength) / scale < 1e-9
+        end
+
+        # The coupling is genuinely exercised: the neighbors' fields leave a
+        # nonzero potential at the first lifting body's control points.
+        probe = gs_bodies[1]
+        probe.potential .= 0
+        pnl.influence!((probe,), gs_bodies[2:end], pnl.DirectBackend();
+            scalar_potential=true, velocity=false)
+        @test maximum(abs, probe.potential) > 1e-8
+    end
+
+    @testset "Backslash shared operator reuse (052b)" begin
+        body1 = make_octa_source_body()
+        body2 = make_octa_source_body()
+        body2.nodes .+= [3.0, -2.0, 0.5]
+        pnl.calc_normals!(body2)
+        pnl.calc_controlpoints!(body2)
+        owner = pnl.Backslash(body1)
+        shared = pnl.Backslash(body2; shared_operator=owner)
+
+        @test shared.G === owner.G
+        @test shared.Glu === owner.Glu
+        @test shared.rhs !== owner.rhs
+        @test shared.Uext !== owner.Uext
+        @test shared.phi_ext !== owner.phi_ext
+        @test pnl._backslash_shared_owner(shared) === owner
+        timing = pnl._backslash_construction_timings(shared)
+        @test timing.g_assembly_s == 0
+        @test timing.lu_s == 0
+
+        body_ref = make_octa_source_body()
+        body_ref.nodes .+= [3.0, -2.0, 0.5]
+        pnl.calc_normals!(body_ref)
+        pnl.calc_controlpoints!(body_ref)
+        fresh = pnl.Backslash(body_ref)
+        for body in (body2, body_ref)
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            body.velocity[3, :] .= 0.2
+        end
+        pnl.solve!(body2, shared)
+        pnl.solve!(body_ref, fresh)
+        # ≈ not ==: the fresh operator is assembled at translated coordinates,
+        # and influence-coefficient assembly is not bitwise translation-invariant
+        @test body2.strength ≈ body_ref.strength rtol=1e-12
+
+        # Reflection is not an operator invariant under the current ordered
+        # connectivity convention. Prove the mismatch directly, then require
+        # shared-factor construction to reject it.
+        mirrored = make_octa_source_body()
+        mirrored.nodes[2, :] .*= -1
+        pnl.calc_normals!(mirrored)
+        pnl.calc_controlpoints!(mirrored)
+        mirrored_fresh = pnl.Backslash(mirrored)
+        parity_scale = max(norm(owner.G), eps())
+        @test norm(mirrored_fresh.G .- owner.G) / parity_scale > 1e-3
+        @test_throws ArgumentError pnl.Backslash(mirrored;
+            shared_operator=owner)
+
+        bad_geometry = make_octa_source_body()
+        bad_geometry.nodes .+= [3.0, 0.0, 0.0]
+        bad_geometry.nodes[1, 1] += 0.01
+        pnl.calc_normals!(bad_geometry)
+        pnl.calc_controlpoints!(bad_geometry)
+        @test_throws ArgumentError pnl.Backslash(bad_geometry; shared_operator=owner)
+
+        bad_order = make_octa_source_body()
+        bad_order.nodes .+= [3.0, 0.0, 0.0]
+        bad_order.cells[:, [1, 2]] = bad_order.cells[:, [2, 1]]
+        @test_throws ArgumentError pnl.Backslash(bad_order; shared_operator=owner)
+
+        bad_core = make_octa_source_body()
+        bad_core.nodes .+= [3.0, 0.0, 0.0]
+        bad_core.core_size_panel *= 2
+        @test_throws ArgumentError pnl.Backslash(bad_core; shared_operator=owner)
+
+        vortex = make_plate_vortex_body()
+        @test_throws ArgumentError pnl.Backslash(vortex; shared_operator=owner)
+        @test_throws ArgumentError pnl.solve!(body2, shared; update_G=true)
+    end
+
     @testset "KrylovCoupled nonlifting" begin
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
@@ -1766,6 +2166,9 @@ end
         # reference: per-solve influence! path (no S)
         ref_solver = pnl.Backslash(body)
         @test ref_solver.S === nothing
+        @test ref_solver.S_gpu === nothing
+        @test !pnl.source_potential_gpu_metadata(ref_solver).enabled
+        @test_throws ArgumentError pnl.Backslash(body; source_potential_gpu=true)
         pnl.solve!(body, ref_solver)
         mu_ref = copy(body.strength[:, 2])
 
@@ -1773,6 +2176,12 @@ end
         s_solver = pnl.Backslash(body; assemble_source_potential=true)
         @test s_solver.S isa Matrix{Float64}
         @test size(s_solver.S) == (body.ncells, body.ncells)
+        construction = pnl._backslash_construction_timings(s_solver)
+        @test construction.total_s >= construction.g_assembly_s
+        @test construction.total_s >= construction.lu_s
+        @test construction.total_s >= construction.s_assembly_s
+        @test construction.g_size == (body.ncells, body.ncells)
+        @test construction.s_size == (body.ncells, body.ncells)
 
         # direct equivalence of the matrix: S*σ == influence!-accumulated
         # interior source potential at μ = 0 (DirectBackend is exact, so the
@@ -1790,7 +2199,13 @@ end
         @test maximum(abs, phi_gemv .- phi_influence) / scale < 1e-12
 
         # end-to-end: gemv-path solve reproduces the influence!-path solve
-        pnl.solve!(body, s_solver)
+        old_step_timers = pnl._STEP_TIMERS[]
+        pnl._STEP_TIMERS[] = true
+        try
+            @test_logs (:info, r"source_influence_s_gemv") pnl.solve!(body, s_solver)
+        finally
+            pnl._STEP_TIMERS[] = old_step_timers
+        end
         mu_gemv = copy(body.strength[:, 2])
         mu_scale = max(maximum(abs, mu_ref), eps())
         @test maximum(abs, mu_gemv .- mu_ref) / mu_scale < 1e-12
@@ -1803,6 +2218,48 @@ end
         # post-hoc attach on an existing solver (opt-in without reconstructing)
         pnl.assemble_source_potential!(ref_solver, body)
         @test maximum(abs, ref_solver.S .- s_solver.S) == 0
+
+        # GPU-S never silently accepts a host influence configuration.
+        old_gpu_mode = pnl.GPU_INFLUENCE[]
+        try
+            pnl.set_gpu_influence!(:host)
+            @test_throws ErrorException pnl.Backslash(body;
+                assemble_source_potential=true, source_potential_gpu=true,
+                source_potential_gpu_reserve_bytes=0)
+        finally
+            pnl.GPU_INFLUENCE[] = old_gpu_mode
+        end
+
+        # Opt-in CUDA gate: run on a CUDA worker with
+        # FLOWPANEL_TEST_GPU_S=true to cover cuBLAS agreement, buffer reuse,
+        # reassembly refresh, and explicit cleanup.
+        if parse(Bool, get(ENV, "FLOWPANEL_TEST_GPU_S", "false"))
+            old_gpu_mode = pnl.GPU_INFLUENCE[]
+            try
+                pnl.set_gpu_influence!(:cuda)
+                gpu_solver = pnl.Backslash(body;
+                    assemble_source_potential=true, source_potential_gpu=true,
+                    source_potential_gpu_reserve_bytes=0,
+                    source_potential_gpu_emergency_bytes=0,
+                    source_potential_gpu_sample_interval=1)
+                state = gpu_solver.S_gpu
+                buffers = (state.matrix, state.input, state.output)
+                pnl.solve!(body, gpu_solver)
+                mu_gpu = copy(body.strength[:, 2])
+                @test maximum(abs, mu_gpu .- mu_ref) / mu_scale < 1e-11
+                @test (state.matrix, state.input, state.output) === buffers
+                @test state.upload_count == 1
+                @test state.gemv_count == 1
+                pnl.assemble_source_potential!(gpu_solver, body)
+                @test state.upload_count == 2
+                @test (state.matrix, state.input, state.output) === buffers
+                pnl.release_source_potential_gpu!(gpu_solver)
+                @test gpu_solver.S_gpu === nothing
+                pnl.release_source_potential_gpu!(gpu_solver)
+            finally
+                pnl.GPU_INFLUENCE[] = old_gpu_mode
+            end
+        end
     end
 
 end

@@ -71,11 +71,11 @@ end
                    backend=(pnl.DirectBackend(), pnl.DirectBackend()),
                    outer_tolerance=1e-10, history=h)
 
-        @test h.metric == :blockgs_maxdelta
+        @test h.metric == :blockgs_normalized_residual
         @test length(h) >= 2                       # at least one coupling update + convergence check
         @test h.iter == collect(1:length(h))
         @test issorted(h.t_ns)
-        @test h.residual_internal[end] < 1e-10     # converged on max |Δstrength|
+        @test h.residual_internal[end] < 1e-10     # converged on normalized BC residual
 
         # history capture must not perturb the solution
         body1_ref = make_octa_source_body()

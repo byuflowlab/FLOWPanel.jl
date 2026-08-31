@@ -9,6 +9,30 @@ end
 struct WarmstartNoopSolver <: pnl.AbstractSolver end
 pnl._solve!(::pnl.AbstractBody, ::WarmstartNoopSolver; kwargs...) = nothing
 
+mutable struct WarmstartIGEAudit <: pnl.AbstractMonitor
+    rotor_forces::Dict{Int,Tuple{Vector{Float64},Vector{Float64}}}
+    ground_strength::Dict{Int,Vector{Float64}}
+    ground_tangency::Dict{Int,Tuple{Float64,Float64}}
+    gs_status::Dict{Int,NamedTuple}
+    force1::Any
+    force2::Any
+end
+
+function (m::WarmstartIGEAudit)(systems, wakes, frames, uinf,
+        i_step::Int, dt::Real)
+    m.rotor_forces[i_step] =
+        (copy(m.force1.force[:, i_step + 1]), copy(m.force2.force[:, i_step + 1]))
+    ground = systems[3]
+    m.ground_strength[i_step] = copy(ground.strength[:, 1])
+    un = vec(sum(ground.velocity .* ground.normals; dims=1))
+    m.ground_tangency[i_step] =
+        (sqrt(sum(abs2, un) / length(un)), maximum(abs, un))
+    m.gs_status[i_step] = pnl.block_gs_status(IGE_TEST_SOLVERS[])
+    return nothing
+end
+
+const IGE_TEST_SOLVERS = Ref{Any}(())
+
 @testset "smooth conversion warm start crosses a conversion boundary" begin
     import FastMultipole
 
@@ -188,6 +212,163 @@ end
     @test body_C.strength == body_D.strength
     @test frames_C[1].x == frames_D[1].x
     @test wake_C.panel_wake.nwakes[] == wake_D.panel_wake.nwakes[]
+end
+
+@testset "multi-rotor IGE warm start: shared and legacy particle layouts" begin
+    import FastMultipole
+
+    function setup_ige_case(shared::Bool, ntime::Int)
+        r1 = make_plate_vortex_body()
+        r2 = make_plate_vortex_body()
+        r2.nodes[1, :] .+= 2.0
+        pnl.calc_normals!(r2)
+        pnl.calc_controlpoints!(r2)
+        ground = pnl.FlatGround([1.0, 0.5, -1.0], [0.0, 0.0, 1.0], 3.0;
+            panel_length=1.5)
+
+        w1 = pnl.PanelParticleWake(r1; nwakerows=100, max_particles=4000,
+            freestream_convection=true, SFS=pnl.FLOWVPM.noSFS,
+            relaxation=pnl.FLOWVPM.relaxation_none)
+        w2 = pnl.PanelParticleWake(r2; nwakerows=100, max_particles=4000,
+            freestream_convection=true,
+            SFS=pnl.FLOWVPM.noSFS,
+            relaxation=pnl.FLOWVPM.relaxation_none,
+            pfield=shared ? w1.pfield : nothing)
+        s1 = pnl.Backslash(r1)
+        s2 = pnl.Backslash(r2; shared_operator=s1)
+        sg = pnl.FlatGroundSolver(ground)
+        solvers = (s1, s2, sg)
+        IGE_TEST_SOLVERS[] = solvers
+
+        pressure = pnl.PressureBernoulli(1.0; unsteady=false,
+            correct_kuttacondition=false)
+        f1 = pnl.ForceMonitor(ntime, 1; normalization=pnl.NoNormalization(),
+            correct_kuttacondition=false)
+        f2 = pnl.ForceMonitor(ntime, 2; normalization=pnl.NoNormalization(),
+            correct_kuttacondition=false)
+        audit = WarmstartIGEAudit(
+            Dict{Int,Tuple{Vector{Float64},Vector{Float64}}}(),
+            Dict{Int,Vector{Float64}}(),
+            Dict{Int,Tuple{Float64,Float64}}(),
+            Dict{Int,NamedTuple}(), f1, f2)
+        frames = pnl.ReferenceFrame(r1; name="vehicle")
+        return (r1, r2, ground), (w1, w2, nothing), frames, solvers,
+            (pressure, f1, f2, audit), audit
+    end
+
+    Uinf = t -> [0.2, 0.0, 0.1]
+    t_range = collect(range(0.0; step=0.04, length=8))
+    restart_step = 3
+    maneuver = (frames, systems, wakes, t) -> nothing
+    common = (backend=pnl.DirectBackend(),
+        backend_wake=pnl.FastMultipoleBackend(expansion_order=4,
+            multipole_acceptance=0.4, leaf_size=20),
+        grad_mu_options=(; basis=:tri),
+        name="ige", particle_hessian_self=false, particle_relax=false,
+        panel_wake_on_particles=false)
+
+    for shared in (true, false)
+        # Isolated nonempty VTP round trip for both checkpoint layouts. Keep
+        # these serialization probes out of the reduced physical continuation
+        # so the restart comparison exercises only panel/ground dynamics.
+        layout_systems, layout_wakes, _, _, _, _ =
+            setup_ige_case(shared, length(t_range))
+        pnl.FLOWVPM.add_particle(layout_wakes[1].pfield, (0.25, 0.25, 0.4),
+            (0.0, 0.0, 0.01), 0.2)
+        pnl.FLOWVPM.add_particle(layout_wakes[2].pfield, (2.25, 0.25, 0.4),
+            (0.0, 0.0, -0.01), 0.2)
+        for (body, wake) in zip(layout_systems[1:2], layout_wakes[1:2])
+            pnl.update_TE!(wake, body)
+            pnl.shed_wake!(wake, body)
+        end
+        layout_path = mktempdir()
+        seen_layout = ()
+        for (iw, wake) in enumerate(layout_wakes[1:2])
+            repeat = any(p -> p === wake.pfield, seen_layout)
+            pnl.write_vtk(joinpath(layout_path, "layout_wake$(iw)"), wake,
+                restart_step, t_range[restart_step + 1];
+                include_pfield=!repeat)
+            repeat || (seen_layout = (seen_layout..., wake.pfield))
+        end
+        p1 = joinpath(layout_path, "layout_wake1_particles",
+            "layout_wake1_particles.$(restart_step).vtp")
+        p2 = joinpath(layout_path, "layout_wake2_particles",
+            "layout_wake2_particles.$(restart_step).vtp")
+        @test isfile(p1)
+        @test isfile(p2) == !shared
+        vtk1 = pnl.ReadVTK.VTKFile(p1)
+        @test all(isfinite, pnl.ReadVTK.get_points(vtk1))
+        pdata1 = pnl.ReadVTK.get_point_data(vtk1)
+        for field in ("velocity", "gamma", "C", "SFS", "velocity_gradient")
+            @test all(isfinite, pnl.ReadVTK.get_data(pdata1[field]))
+        end
+        _, probe_wakes, _, _, _, _ = setup_ige_case(shared, length(t_range))
+        seen_probe = ()
+        for (iw, wake) in enumerate(probe_wakes[1:2])
+            repeat = any(p -> p === wake.pfield, seen_probe)
+            pnl._load_panel_particle_wake_vtk!(wake, layout_path,
+                "layout_wake$(iw)", restart_step; include_pfield=!repeat)
+            repeat || (seen_probe = (seen_probe..., wake.pfield))
+        end
+        for (wl, wp) in zip(layout_wakes[1:2], probe_wakes[1:2])
+            @test wl.pfield.np == wp.pfield.np
+            @test view(wl.pfield.particles, 1:9, 1:wl.pfield.np) ≈
+                  view(wp.pfield.particles, 1:9, 1:wp.pfield.np)
+        end
+
+        systems_a, wakes_a, frames_a, solvers_a, monitors_a, audit_a =
+            setup_ige_case(shared, length(t_range))
+        path_a = mktempdir()
+        pnl.simulate!(systems_a, wakes_a, frames_a, maneuver, Uinf, t_range;
+            body_solvers=solvers_a, monitors=monitors_a, path=path_a, common...)
+
+        systems_b, wakes_b, frames_b, solvers_b, monitors_b, _ =
+            setup_ige_case(shared, length(t_range))
+        path_b = mktempdir()
+        pnl.simulate!(systems_b, wakes_b, frames_b, maneuver, Uinf,
+            t_range[1:restart_step + 1]; body_solvers=solvers_b,
+            monitors=monitors_b, path=path_b, common...)
+
+        systems_c, wakes_c, frames_c, solvers_c, monitors_c, audit_c =
+            setup_ige_case(shared, length(t_range))
+        pnl.simulate_warmstart!(systems_c, wakes_c, frames_c, maneuver, Uinf,
+            t_range; restart_step, body_solvers=solvers_c,
+            monitors=monitors_c, path=path_b, common...)
+
+        continued = (restart_step + 1):(length(t_range) - 1)
+        @test length(continued) >= 3
+        for i in continued
+            @test audit_c.rotor_forces[i][1] ≈ audit_a.rotor_forces[i][1] atol=1e-11 rtol=1e-10
+            @test audit_c.rotor_forces[i][2] ≈ audit_a.rotor_forces[i][2] atol=1e-11 rtol=1e-10
+            @test audit_c.ground_strength[i] ≈ audit_a.ground_strength[i] atol=1e-11 rtol=1e-10
+            @test audit_c.ground_tangency[i][1] ≈ audit_a.ground_tangency[i][1] atol=1e-11 rtol=1e-10
+            @test audit_c.ground_tangency[i][2] ≈ audit_a.ground_tangency[i][2] atol=1e-11 rtol=1e-10
+            @test audit_c.gs_status[i] == audit_a.gs_status[i]
+            @test audit_c.gs_status[i].converged
+            @test audit_c.gs_status[i].iterations <= audit_c.gs_status[i].cap
+        end
+
+        for (wa, wc) in zip(wakes_a[1:2], wakes_c[1:2])
+            @test wa.pfield.np == wc.pfield.np
+            np = wa.pfield.np
+            @test view(wa.pfield.particles, :, 1:np) ≈
+                  view(wc.pfield.particles, :, 1:np) atol=1e-11 rtol=1e-10
+            nw = wa.panel_wake.nwakes[]
+            @test nw == wc.panel_wake.nwakes[]
+            for isurf in eachindex(wa.panel_wake.nodes)
+                @test view(wa.panel_wake.nodes[isurf], :, 1:nw + 1, :) ≈
+                      view(wc.panel_wake.nodes[isurf], :, 1:nw + 1, :) atol=1e-11 rtol=1e-10
+                @test view(wa.panel_wake.strength[isurf], :, 1:nw, :) ≈
+                      view(wc.panel_wake.strength[isurf], :, 1:nw, :) atol=1e-11 rtol=1e-10
+            end
+        end
+        if shared
+            @test wakes_c[1].pfield === wakes_c[2].pfield
+            @test wakes_c[1].pfield.np == wakes_a[1].pfield.np
+        else
+            @test wakes_c[1].pfield !== wakes_c[2].pfield
+        end
+    end
 end
 
 @testset "convert-at-shed nwakerows=0 warm start (BRAINSTORM 024)" begin

@@ -2200,7 +2200,10 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         # passes propagate_pfield=false for every wake after the first so the
         # field is convected and maintained exactly once per step. The panel
         # wake is per-body and always propagates.
-        propagate_pfield::Bool=true)
+        propagate_pfield::Bool=true,
+        # sigma-collapse guards forwarded to the FLOWVPM euler core-size
+        # update (052c trial 1) — see FLOWVPM._sigma_guard_params.
+        sigma_guard::NamedTuple=NamedTuple())
 
     # panel wake
     propagate!(w.panel_wake, dt)
@@ -2221,9 +2224,11 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     # stock forward Euler unless the wake was built with `expint=true`)
     _step_timer_measure(:wake_convection; nested=true) do
         if w.pfield.integration === FLOWVPM.euler_exp
+            isempty(sigma_guard) || throw(ArgumentError(
+                "sigma_guard is not supported by the euler_exp integrator"))
             FLOWVPM._euler_exp(w.pfield, dt; relax)
         else
-            FLOWVPM._euler(w.pfield, dt; relax)
+            FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
         end
     end
 

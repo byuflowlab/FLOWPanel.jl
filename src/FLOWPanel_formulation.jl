@@ -2,13 +2,16 @@
 # DESCRIPTION
     Swappable wake→body solve formulations for the Dirichlet finite-wake solve.
 
-    The production route (`VelocityThroughSources`) transfers free-wake
+    The 052b production formulation (`VelocityThroughSources`) transfers free-wake
     influence to the body through velocity only, converted to source strengths.
     `docs/wake_solve_schemes.md` derives two alternatives implemented here:
 
     - `GreenReconstruction`: reconstruct the wake body-trace q by solving the
       body-only Green system (I−B)q = Sσ from sampled wake velocities, then
       solve the explicit-potential system G·μE = −S·σ0 − q.
+    - `HybridWakePotential`: evaluate retained panel-wake potential directly,
+      Green-reconstruct only the particle contribution, and preserve
+      target-specific potential/velocity coupling in a multibody solve.
     - `TraceCorrected`: solve G·μ̃ = −S(σ0+σ) + W·c and apply the affine Kutta
       relation γ = C·μ̃ − c downstream through the body's wake-strength
       correction channel (see `set_wake_correction!`).
@@ -25,13 +28,40 @@
 abstract type AbstractSolveFormulation end
 
 """
-    VelocityThroughSources()
+    VelocityThroughSources(; max_outer_iterations=50, outer_tolerance=1e-8,
+                           dirichlet_residual_scale=1,
+                           neumann_residual_scale=1,
+                           require_outer_convergence=false)
 
-Default wake→body solve formulation: the free wake acts on the body through
-velocity only, converted to source strengths inside `solve!`. This is the
-production behavior; it carries no options and no runtime state.
+Production 052b wake→body solve formulation: the free wake acts on the body through
+velocity only, converted to source strengths inside `solve!`. The outer-solve
+options mirror [`HybridWakePotential`](@ref), allowing production baseline
+runs to hard-fail on a nonconverged multibody solve. It has no runtime state.
 """
-struct VelocityThroughSources <: AbstractSolveFormulation end
+struct VelocityThroughSources <: AbstractSolveFormulation
+    max_outer_iterations::Int
+    outer_tolerance::Float64
+    dirichlet_residual_scale::Float64
+    neumann_residual_scale::Float64
+    require_outer_convergence::Bool
+
+    function VelocityThroughSources(; max_outer_iterations::Int=50,
+            outer_tolerance::Real=1e-8,
+            dirichlet_residual_scale::Real=1,
+            neumann_residual_scale::Real=1,
+            require_outer_convergence::Bool=false)
+        max_outer_iterations >= 1 || error("max_outer_iterations must be >= 1")
+        isfinite(outer_tolerance) && outer_tolerance > 0 || error(
+            "outer_tolerance must be finite and positive")
+        isfinite(dirichlet_residual_scale) && dirichlet_residual_scale > 0 || error(
+            "dirichlet_residual_scale must be finite and positive")
+        isfinite(neumann_residual_scale) && neumann_residual_scale > 0 || error(
+            "neumann_residual_scale must be finite and positive")
+        new(max_outer_iterations, Float64(outer_tolerance),
+            Float64(dirichlet_residual_scale), Float64(neumann_residual_scale),
+            require_outer_convergence)
+    end
+end
 
 """
     GreenReconstruction(; gauge=:area_mean, recompute_interval=1,
@@ -79,6 +109,59 @@ struct GreenReconstruction{TS<:Union{Nothing,KrylovSolver,FGSSolver}} <: Abstrac
         recompute_interval >= 1 ||
             error("recompute_interval must be >= 1; got $recompute_interval.")
         return new{typeof(green_solver)}(gauge, recompute_interval, green_solver)
+    end
+end
+
+"""
+    HybridWakePotential(; gauge=:area_mean, recompute_interval=1,
+                        max_outer_iterations=50, outer_tolerance=1e-8,
+                        dirichlet_residual_scale=1,
+                        neumann_residual_scale=1,
+                        require_outer_convergence=false)
+
+Experimental 052e multibody explicit-potential formulation for mixed
+panel/particle wakes. It is a comparison/regression API, not a 052b production
+acceptance dependency.
+Retained `PanelWake` potential is evaluated directly. The particle contribution
+is isolated from the sampled wake velocity and projected independently onto
+each Dirichlet body's harmonic boundary trace through the gauge-fixed Green
+system `(I-B)q=Sσ`. During the coupled solve, Dirichlet sources are formed from
+freestream/kinematics only; other bodies and both wake traces enter through
+scalar potential. Neumann bodies (for example a paneled ground) retain the
+complete wake velocity.
+
+The dense body-local Green factorization is intentionally independent for each
+body. Shared rigid-body factors are not enabled until callers have separately
+validated exact operator parity.
+"""
+struct HybridWakePotential <: AbstractSolveFormulation
+    gauge::Symbol
+    recompute_interval::Int
+    max_outer_iterations::Int
+    outer_tolerance::Float64
+    dirichlet_residual_scale::Float64
+    neumann_residual_scale::Float64
+    require_outer_convergence::Bool
+
+    function HybridWakePotential(; gauge::Symbol=:area_mean,
+            recompute_interval::Int=1, max_outer_iterations::Int=50,
+            outer_tolerance::Real=1e-8,
+            dirichlet_residual_scale::Real=1,
+            neumann_residual_scale::Real=1,
+            require_outer_convergence::Bool=false)
+        gauge in (:area_mean, :lsq) || error(
+            "Invalid HybridWakePotential gauge :$gauge; expected :area_mean or :lsq.")
+        recompute_interval >= 1 || error("recompute_interval must be >= 1")
+        max_outer_iterations >= 1 || error("max_outer_iterations must be >= 1")
+        isfinite(outer_tolerance) && outer_tolerance > 0 || error(
+            "outer_tolerance must be finite and positive")
+        isfinite(dirichlet_residual_scale) && dirichlet_residual_scale > 0 || error(
+            "dirichlet_residual_scale must be finite and positive")
+        isfinite(neumann_residual_scale) && neumann_residual_scale > 0 || error(
+            "neumann_residual_scale must be finite and positive")
+        new(gauge, recompute_interval, max_outer_iterations,
+            Float64(outer_tolerance), Float64(dirichlet_residual_scale),
+            Float64(neumann_residual_scale), require_outer_convergence)
     end
 end
 
@@ -305,6 +388,28 @@ struct GreenReconstructionState{TF, TG<:AbstractGreenState}
     last_recompute::Base.RefValue{Int}
 end
 
+struct HybridBodyState{TF,TG<:AbstractGreenState}
+    green::TG
+    u_prewake::Matrix{TF}
+    panel_velocity::Matrix{TF}
+    particle_velocity::Matrix{TF}
+    sigma_particle::Vector{TF}
+    Ssigma::Vector{TF}
+    q_panel::Vector{TF}
+    q_total::Vector{TF}
+    q_hodge::Vector{TF}
+    green_residual::Base.RefValue{TF}
+    gauge_defect::Base.RefValue{TF}
+    green_hodge_mismatch::Base.RefValue{TF}
+    tangential_projection_defect::Base.RefValue{TF}
+end
+
+struct HybridWakePotentialState
+    bodies::Vector{Any}
+    body_indices::Vector{Int}
+    last_recompute::Base.RefValue{Int}
+end
+
 struct TraceCorrectedState{TF, TG<:Union{AbstractGreenState, Nothing},
                            TP}
     edges::SheddingEdgeMap
@@ -378,6 +483,36 @@ assumption `Backslash` reuse already makes).
 """
 initialize_formulation(::VelocityThroughSources, systems_tuple, wakes_tuple,
     body_solvers, backend_solve, backend_system) = nothing
+
+function initialize_formulation(f::HybridWakePotential, systems_tuple,
+        wakes_tuple, body_solvers, backend_solve, backend_system)
+    any(!isnothing, wakes_tuple) || error(
+        "HybridWakePotential requires at least one wake system")
+    solvers_tuple = body_solvers isa Tuple ? body_solvers : (body_solvers,)
+    length(solvers_tuple) == length(systems_tuple) || error(
+        "HybridWakePotential requires one solver per body")
+    states = Any[]
+    indices = Int[]
+    for (i, (body, solver)) in enumerate(zip(systems_tuple, solvers_tuple))
+        has_dirichlet_bc(body) || continue
+        body isa RigidWakeBody{<:Any,2,<:Any,true} || error(
+            "HybridWakePotential Dirichlet target $i must be a source+doublet RigidWakeBody")
+        solver isa Backslash || error(
+            "HybridWakePotential Dirichlet target $i requires a Backslash solver")
+        TF = eltype(body.strength)
+        N = body.ncells
+        green = _build_green_state(body, f.gauge, nothing)
+        push!(states, HybridBodyState{TF,typeof(green)}(green,
+            zeros(TF, 3, N), zeros(TF, 3, N), zeros(TF, 3, N),
+            zeros(TF, N), zeros(TF, N), zeros(TF, N), zeros(TF, N),
+            zeros(TF, N), Ref(TF(Inf)), Ref(TF(Inf)), Ref(TF(Inf)),
+            Ref(TF(Inf))))
+        push!(indices, i)
+    end
+    isempty(indices) && error(
+        "HybridWakePotential requires at least one Dirichlet body")
+    return HybridWakePotentialState(states, indices, Ref(-1))
+end
 
 function initialize_formulation(f::GreenReconstruction, systems_tuple,
         wakes_tuple, body_solvers, backend_solve, backend_system)
@@ -786,6 +921,13 @@ Snapshotting formulations record the pre-wake control-point velocity so the
 wake-only contribution can be isolated afterwards.
 """
 formulation_prewake!(::VelocityThroughSources, state, systems_tuple) = nothing
+function formulation_prewake!(::HybridWakePotential,
+        state::HybridWakePotentialState, systems_tuple)
+    for (bs, i) in zip(state.bodies, state.body_indices)
+        bs.u_prewake .= systems_tuple[i].velocity
+    end
+    return nothing
+end
 formulation_prewake!(::AbstractSolveFormulation, state, systems_tuple) =
     (state.u_prewake .= systems_tuple[1].velocity; nothing)
 
@@ -796,12 +938,192 @@ formulation_prewake!(::AbstractSolveFormulation, state, systems_tuple) =
 Formulation-dispatched replacement for the body solve inside
 `_steady_aerodynamics!`. The default method is exactly the production solve.
 """
-function solve_formulation!(::VelocityThroughSources, state, systems,
+function solve_formulation!(f::VelocityThroughSources, state, systems,
         systems_tuple, wakes_tuple, body_solvers;
         backend_solve, backend_wake, i_step::Int=0)
     t0 = time()   # task 052: env-gated solve timer (FLOWPANEL_GPU_TIMERS)
-    solve!(systems, body_solvers; backend=backend_solve)
+    if systems isa Tuple
+        solve!(systems, body_solvers; backend=backend_solve,
+            max_outer_iterations=f.max_outer_iterations,
+            outer_tolerance=f.outer_tolerance,
+            dirichlet_residual_scale=f.dirichlet_residual_scale,
+            neumann_residual_scale=f.neumann_residual_scale,
+            require_outer_convergence=f.require_outer_convergence)
+    else
+        # Preserve the exact historical single-body solve call. Outer-loop
+        # controls apply only to tuple/block-GS orchestration.
+        solve!(systems, body_solvers; backend=backend_solve)
+    end
     _gpu_timer_log("solve step=$(i_step)", time() - t0)
+    return nothing
+end
+
+function _wake_panel_velocity!(out::AbstractMatrix, body::AbstractBody,
+        wakes_tuple::Tuple, backend)
+    sources = ()
+    for w in wakes_tuple
+        isnothing(w) && continue
+        pw = w isa PanelParticleWake ? w.panel_wake : w
+        pw isa PanelWake || continue
+        sources = (sources..., get_sources(pw)...)
+    end
+    old_velocity = copy(body.velocity)
+    try
+        body.velocity .= zero(eltype(body.velocity))
+        isempty(sources) || influence!((body,), sources, backend;
+            scalar_potential=false, velocity=true, precalc=true)
+        out .= body.velocity
+    finally
+        body.velocity .= old_velocity
+    end
+    return out
+end
+
+function _green_diagnostics!(state::HybridBodyState, body::RigidWakeBody)
+    Bq = similar(state.green.q)
+    _with_green_scratch(body) do
+        _green_B_product!(Bq, body, state.green.q, DirectBackend())
+    end
+    areas = eltype(Bq).(_panel_areas(body))
+    # Dense :area_mean uses the bordered equation
+    # (I-B)q + a*lambda = Ssigma. Include the compatibility multiplier in
+    # the reported linear-system residual instead of mislabelling it as error.
+    lambda = state.green.gauge === :area_mean ? state.green.sol_b[end] :
+        zero(eltype(Bq))
+    defect = state.green.q .- Bq .+ areas .* lambda .- state.Ssigma
+    state.green_residual[] = LA.norm(defect) /
+        max(LA.norm(state.Ssigma), eps(eltype(defect)))
+    state.gauge_defect[] = abs(LA.dot(areas, state.green.q)) /
+        max(LA.norm(areas) * LA.norm(state.green.q), eps(eltype(defect)))
+    return nothing
+end
+
+_has_active_particles(wakes_tuple::Tuple) = any(w ->
+    w isa PanelParticleWake && w.pfield.np > 0, wakes_tuple)
+
+"""
+    surface_hodge_trace!(q, body, velocity)
+
+Independent edge-based least-squares surface-Hodge reconstruction. Adjacent
+panel traces are fitted so `q[j]-q[i]` matches the line integral of the
+sampled tangential velocity between their control points, with an
+area-weighted zero-mean gauge. Returns the relative tangential projection
+defect. This diagnostic does not participate in the solve.
+"""
+function surface_hodge_trace!(q::AbstractVector, body::AbstractBody,
+        velocity::AbstractMatrix)
+    owners = Dict{Tuple{Int,Int},Int}()
+    pairs = Tuple{Int,Int}[]
+    for panel in axes(body.cells, 2)
+        c = view(body.cells, :, panel)
+        for (a, b) in ((c[1], c[2]), (c[2], c[3]), (c[3], c[1]))
+            edge = a < b ? (a, b) : (b, a)
+            if haskey(owners, edge)
+                push!(pairs, (owners[edge], panel))
+            else
+                owners[edge] = panel
+            end
+        end
+    end
+    TF = eltype(q)
+    m = length(pairs)
+    A = zeros(TF, m + 1, body.ncells)
+    rhs = zeros(TF, m + 1)
+    for (row, (i, j)) in enumerate(pairs)
+        A[row, i] = -one(TF)
+        A[row, j] = one(TF)
+        dx = view(body.controlpoints, :, j) .- view(body.controlpoints, :, i)
+        u = (view(velocity, :, i) .+ view(velocity, :, j)) ./ 2
+        n = view(body.normals, :, i) .+ view(body.normals, :, j)
+        nn = LA.norm(n)
+        ut = nn > eps(TF) ? u .- n .* (LA.dot(u, n) / (nn * nn)) : u
+        rhs[row] = LA.dot(ut, dx)
+    end
+    areas = TF.(_panel_areas(body))
+    A[end, :] .= areas ./ max(LA.norm(areas), eps(TF))
+    q .= A \ rhs
+    defect = LA.norm(view(A, 1:m, :) * q - view(rhs, 1:m)) /
+        max(LA.norm(view(rhs, 1:m)), eps(TF))
+    return defect
+end
+
+function solve_formulation!(f::HybridWakePotential,
+        state::HybridWakePotentialState, systems, systems_tuple, wakes_tuple,
+        body_solvers; backend_solve, backend_wake, i_step::Int=0)
+    saved_velocity = [copy(body.velocity) for body in systems_tuple]
+    saved_potential = [copy(body.potential) for body in systems_tuple]
+    recompute = state.last_recompute[] < 0 ||
+        i_step - state.last_recompute[] >= f.recompute_interval
+    has_particles = _has_active_particles(wakes_tuple)
+    try
+        for (bs, i) in zip(state.bodies, state.body_indices)
+            body = systems_tuple[i]
+            solve_backend = backend_solve isa Tuple ||
+                backend_solve isa AbstractVector ? backend_solve[i] : backend_solve
+            clear_wake_correction!(body)
+            if recompute
+                if has_particles
+                    _wake_panel_velocity!(bs.panel_velocity, body, wakes_tuple,
+                        backend_wake)
+                    # total sampled wake velocity minus retained panel-wake
+                    # velocity leaves the particle-only contribution
+                    for k in eachindex(bs.sigma_particle)
+                        sigma = zero(eltype(bs.sigma_particle))
+                        for d in 1:3
+                            up = saved_velocity[i][d, k] - bs.u_prewake[d, k] -
+                                bs.panel_velocity[d, k]
+                            bs.particle_velocity[d, k] = up
+                            sigma -= up * body.normals[d, k]
+                        end
+                        bs.sigma_particle[k] = sigma
+                    end
+                    _source_potential!(bs.Ssigma, body, bs.sigma_particle,
+                        solve_backend)
+                    _green_solve_q!(bs.green, bs.Ssigma, body, solve_backend)
+                    _green_diagnostics!(bs, body)
+                    bs.tangential_projection_defect[] = surface_hodge_trace!(
+                        bs.q_hodge, body, bs.particle_velocity)
+                    bs.green_hodge_mismatch[] = LA.norm(
+                        bs.green.q .- bs.q_hodge) / max(LA.norm(bs.green.q),
+                        LA.norm(bs.q_hodge), eps(eltype(bs.q_hodge)))
+                else
+                    fill!(bs.panel_velocity, 0)
+                    fill!(bs.particle_velocity, 0)
+                    fill!(bs.sigma_particle, 0)
+                    fill!(bs.Ssigma, 0)
+                    fill!(bs.green.q, 0)
+                    bs.green_residual[] = 0
+                    bs.gauge_defect[] = 0
+                    fill!(bs.q_hodge, 0)
+                    bs.green_hodge_mismatch[] = 0
+                    bs.tangential_projection_defect[] = 0
+                end
+                _wake_potential!(bs.q_panel, body, wakes_tuple, backend_wake)
+                bs.q_total .= bs.q_panel .+ bs.green.q
+            end
+            # Frozen Dirichlet sources see only freestream/kinematics. The
+            # prescribed wake trace is carried in potential and preserved by
+            # the corrected tuple solve.
+            body.velocity .= bs.u_prewake
+            # `body.potential` on entry is accumulated simulation workspace
+            # from prior passes/steps, not an independently prescribed
+            # incident trace. The hybrid RHS owns its wake trace explicitly.
+            body.potential .= bs.q_total
+        end
+        recompute && (state.last_recompute[] = i_step)
+        solvers_tuple = body_solvers isa Tuple ? body_solvers : (body_solvers,)
+        solve!(systems_tuple, solvers_tuple; backend=backend_solve,
+            max_outer_iterations=f.max_outer_iterations,
+            outer_tolerance=f.outer_tolerance,
+            dirichlet_residual_scale=f.dirichlet_residual_scale,
+            neumann_residual_scale=f.neumann_residual_scale,
+            require_outer_convergence=f.require_outer_convergence)
+    finally
+        for (i, body) in enumerate(systems_tuple)
+            body.velocity .= saved_velocity[i]
+            body.potential .= saved_potential[i]
+        end
+    end
     return nothing
 end
 

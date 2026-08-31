@@ -275,7 +275,8 @@ norms:
 - `:krylov_precnorm` — Krylov.jl residual history (preconditioned norm when a
   left preconditioner is active; true 2-norm otherwise)
 - `:fgs_maxabs` — FastGaussSeidel residual (max-abs, despite its MSE print label)
-- `:blockgs_maxdelta` — tuple block-Gauss–Seidel max strength change
+- `:blockgs_normalized_residual` — tuple block-Gauss–Seidel maximum normalized
+  Dirichlet-potential/Neumann-normal-velocity residual
 
 Call [`reset!`](@ref) before a solve to stamp `t0_ns`, and [`record!`](@ref)
 once per iteration.

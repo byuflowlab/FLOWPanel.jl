@@ -1,4 +1,5 @@
 using Test
+using Logging
 import FLOWPanel as pnl
 import FastMultipole
 import FLOWVPM
@@ -6,6 +7,90 @@ using LinearAlgebra: dot, norm, cross
 
 if !isdefined(@__MODULE__, :make_plate_vortex_body)
     include("test_helpers.jl")
+end
+
+struct SimSlowMonitor <: pnl.AbstractMonitor end
+function (::SimSlowMonitor)(systems, wakes, frames, uinf, i_step::Int, dt::Real)
+    sleep(0.012)
+    return nothing
+end
+
+@testset "FLOWPANEL_STEP_TIMERS exclusive accounting and off-state silence" begin
+    old = pnl._STEP_TIMERS[]
+    try
+        pnl._STEP_TIMERS[] = true
+        io = IOBuffer()
+        with_logger(SimpleLogger(io, Logging.Info)) do
+            token = pnl._step_timer_begin_step!()
+            pnl._step_timer_measure(:monitors) do
+                sleep(0.015)
+            end
+            pnl._step_timer_measure(:io) do
+                sleep(0.010)
+            end
+            pnl._step_timer_measure(:wake_sfs; nested=true) do
+                sleep(0.005)
+            end
+            pnl._step_timer_finish_step!(token, 7)
+        end
+        logtext = String(take!(io))
+        @test occursin("step_timer monitors step=7", logtext)
+        @test occursin("step_timer io step=7", logtext)
+        @test occursin("step_timer_nested wake_sfs step=7", logtext)
+        @test occursin("step_timer total_step step=7", logtext)
+        @test occursin("step_timer unclassified_residual step=7", logtext)
+
+        values = Dict{String,Float64}()
+        for match in eachmatch(r"step_timer ([a-z_]+) step=7 ([0-9.eE+\-]+) s", logtext)
+            values[match.captures[1]] = parse(Float64, match.captures[2])
+        end
+        labels = ("controls_setup", "wake_influence", "solve", "body_influence",
+                  "remaining_aerodynamics", "monitors", "io",
+                  "wake_propagation_maintenance", "rigid_kinematics", "shedding")
+        @test values["monitors"] >= 0.01
+        @test values["io"] >= 0.005
+        @test isapprox(sum(values[label] for label in labels) +
+                       values["unclassified_residual"], values["total_step"];
+                       rtol=1e-10, atol=1e-10)
+
+        # Exercise the real monitor and VTK-I/O hook points with a deliberate
+        # slow callback; both must appear in the exclusive categories.
+        mktempdir() do dir
+            body = make_plate_vortex_body()
+            frames = pnl.ReferenceFrame(body)
+            solver = pnl.Backslash(body)
+            simlog = IOBuffer()
+            with_logger(SimpleLogger(simlog, Logging.Info)) do
+                pnl.simulate!(body, nothing, frames, (args...) -> nothing,
+                    t -> FastMultipole.SVector{3}(0.0, 0.0, 0.0), [0.0, 0.01];
+                    body_solvers=solver, backend=pnl.DirectBackend(),
+                    monitors=(SimSlowMonitor(),), path=dir, name="timer_stub",
+                    grad_mu_options=(; basis=:tri))
+            end
+            simtext = String(take!(simlog))
+            monitor_values = [parse(Float64, m.captures[1]) for m in
+                eachmatch(r"step_timer monitors step=\d+ ([0-9.eE+\-]+) s", simtext)]
+            io_values = [parse(Float64, m.captures[1]) for m in
+                eachmatch(r"step_timer io step=\d+ ([0-9.eE+\-]+) s", simtext)]
+            @test length(monitor_values) == 2
+            @test all(>=(0.01), monitor_values)
+            @test length(io_values) == 2
+            @test all(>(0), io_values)
+        end
+
+        pnl._STEP_TIMERS[] = false
+        quiet = IOBuffer()
+        with_logger(SimpleLogger(quiet, Logging.Info)) do
+            token = pnl._step_timer_begin_step!()
+            pnl._step_timer_measure(:monitors) do
+                sleep(0.001)
+            end
+            pnl._step_timer_finish_step!(token, 8)
+        end
+        @test isempty(String(take!(quiet)))
+    finally
+        pnl._STEP_TIMERS[] = old
+    end
 end
 
 mutable struct SimNoopSolver <: pnl.AbstractSolver
@@ -1284,4 +1369,78 @@ end
             @test diag.total_deposited ≈ diag.total_expected atol=1e-10
         end
     end
+end
+
+@testset "shared particle field across wakes (022 Ruling 7 / 052b Phase A.1)" begin
+    # Multiple wakes shedding into ONE particle field must behave identically
+    # to the same particles living in separate private fields: the field is a
+    # single FMM source/target, is convected by exactly one Euler increment per
+    # step, and receives the freestream exactly once.
+    Uinf = t -> [1.0, 0.0, 0.0]
+    maneuver = (frames, systems, wakes, t) -> nothing
+    t_range = [0.0:0.05:0.15;]   # 3 steps
+
+    function make_pair()
+        b1 = make_plate_vortex_body()
+        b2 = make_plate_vortex_body()
+        b2.nodes[2, :] .+= 2.0
+        pnl.calc_normals!(b2)
+        pnl.calc_controlpoints!(b2)
+        for b in (b1, b2)
+            b.strength[1, 1] = 1.0
+            b.strength[2, 1] = 2.0
+        end
+        return b1, b2
+    end
+    wake_kwargs = (; nwakerows=2, max_particles=10_000,
+        freestream_convection=true)
+
+    # Constructor: the supplied field is adopted by identity; numtype and
+    # integration-scheme mismatches are rejected up front.
+    b1, b2 = make_pair()
+    w1 = pnl.PanelParticleWake(b1; wake_kwargs...)
+    w2 = pnl.PanelParticleWake(b2; pfield=w1.pfield, wake_kwargs...)
+    @test w2.pfield === w1.pfield
+    @test_throws ArgumentError pnl.PanelParticleWake(b2; pfield=w1.pfield,
+        expint=true, wake_kwargs...)
+
+    # A shared field appears exactly once among FMM sources and probes.
+    @test count(s -> s === w1.pfield, pnl._collect_wake_sources((w1, w2))) == 1
+    @test count(p -> p === w1.pfield, pnl._collect_wake_probes((w1, w2))) == 1
+
+    # Reference run: two private fields (legacy path). The same particles in
+    # one shared field see the same sources, so shed count must add and
+    # positions must agree; any double convection or double freestream would
+    # separate the trajectories immediately.
+    bA1, bA2 = make_pair()
+    wA1 = pnl.PanelParticleWake(bA1; wake_kwargs...)
+    wA2 = pnl.PanelParticleWake(bA2; wake_kwargs...)
+    framesA = pnl.ReferenceFrame(bA1)
+    pnl.simulate!((bA1, bA2), (wA1, wA2), framesA, maneuver, Uinf, t_range;
+        body_solvers=SimCoupledNoopSolver(),
+        backend=pnl.DirectBackend(),
+        path=nothing,
+        grad_mu_options=(; basis=:tri),
+    )
+
+    bB1, bB2 = make_pair()
+    wB1 = pnl.PanelParticleWake(bB1; wake_kwargs...)
+    wB2 = pnl.PanelParticleWake(bB2; pfield=wB1.pfield, wake_kwargs...)
+    framesB = pnl.ReferenceFrame(bB1)
+    pnl.simulate!((bB1, bB2), (wB1, wB2), framesB, maneuver, Uinf, t_range;
+        body_solvers=SimCoupledNoopSolver(),
+        backend=pnl.DirectBackend(),
+        path=nothing,
+        grad_mu_options=(; basis=:tri),
+    )
+
+    npA1, npA2 = wA1.pfield.np, wA2.pfield.np
+    npB = wB1.pfield.np
+    @test npA1 > 0 && npA2 > 0
+    @test npB == npA1 + npA2
+    PA = hcat(wA1.pfield.particles[1:3, 1:npA1],
+              wA2.pfield.particles[1:3, 1:npA2])
+    PB = wB1.pfield.particles[1:3, 1:npB]
+    @test isapprox(sortslices(PA; dims=2), sortslices(PB; dims=2);
+        rtol=1e-10, atol=1e-12)
 end

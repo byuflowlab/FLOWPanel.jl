@@ -685,11 +685,13 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         grad_mu_options=(;),
         formulation::AbstractSolveFormulation=VelocityThroughSources(),
         formulation_state=nothing,
+        step_telemetry_callback=nothing,
+        particle_body_overlap_policy::ParticleBodyOverlapPolicy=ParticleBodyOverlapPolicy(),
         i_step::Int=0)
     normalized_grad_mu_options = _normalize_grad_mu_options(grad_mu_options;
         default_basis=:quad)
 
-    wake_probes, targets, wake_sources = _step_timer_measure(:remaining_aerodynamics) do
+    wake_probes, targets, wake_sources, overlap_report = _step_timer_measure(:remaining_aerodynamics) do
         collected = _sa_collect(systems_tuple, wakes_tuple)
         _sa_reset_freestream_kinematic!(systems_tuple, wakes_tuple, frames, uinf)
 
@@ -699,10 +701,13 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
             end
         end
 
+        overlap_report = check_particle_body_overlap!(particle_body_overlap_policy,
+            systems_tuple, wakes_tuple, i_step)
+
         # snapshot pre-wake control-point velocity for formulations that isolate
         # the wake-only contribution afterwards (no-op for the default)
         formulation_prewake!(formulation, formulation_state, systems_tuple)
-        collected
+        (collected..., overlap_report)
     end
 
     _step_timer_measure(:wake_influence) do
@@ -736,6 +741,11 @@ function _steady_aerodynamics!(systems, systems_tuple::Tuple, wakes_tuple::Tuple
         end
 
         _sa_half_jump!(systems_tuple, normalized_grad_mu_options)
+    end
+
+    if !isnothing(step_telemetry_callback)
+        step_telemetry_callback((; i_step, formulation, formulation_state,
+            overlap_report))
     end
 
     return nothing
@@ -1102,12 +1112,18 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
         panel_wake_on_particles::Bool=true,
         particle_hessian_self::Bool=true,
         particle_relax::Bool=true,
+        # sigma-collapse guards for the particle core-size update (052c
+        # trial 1); forwarded to FLOWVPM euler via propagate! — see
+        # FLOWVPM._sigma_guard_params for recognized keys.
+        sigma_guard::NamedTuple=NamedTuple(),
+        particle_body_overlap_policy::ParticleBodyOverlapPolicy=ParticleBodyOverlapPolicy(),
         bound_strength_rlx::Real=1.0,
         diagnose_particle_gamma::Bool=false,
         diagnose_particle_influence::Bool=false,
         diagnostic_vertical=(0.0, 0.0, 1.0),
         grad_mu_options=(;),
         formulation::AbstractSolveFormulation=VelocityThroughSources(),
+        step_telemetry_callback=nothing,
         wake_attachment::AbstractWakeAttachment=RigidTransitionAttachment(),
         kutta_closure::AbstractKuttaClosure=JumpKutta(),
         verbose=false
@@ -1267,6 +1283,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 grad_mu_options,
                 formulation,
                 formulation_state,
+                step_telemetry_callback,
+                particle_body_overlap_policy,
                 i_step)
         else
             _kutta_step!(kutta_runtime, systems_tuple, wakes_tuple, frames, uinf;
@@ -1277,7 +1295,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                 body_gradient_core_size,
                 body_on_wake,
                 panel_wake_on_particles,
-                particle_hessian_self)
+                particle_hessian_self,
+                particle_body_overlap_policy)
         end
 
         # body bound-circulation low-pass (item 005 E4.8): damp body↔wake feedback
@@ -1407,7 +1426,8 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                         repeat = any(p -> p === w.pfield, seen_prop_pfields)
                         propagate!(w, dt; relax=particle_relax,
                             step=i_step, frames, diagnose_particle_gamma,
-                            diagnostic_vertical, propagate_pfield=!repeat)
+                            diagnostic_vertical, propagate_pfield=!repeat,
+                            sigma_guard)
                         repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
                     elseif !isnothing(w)
                         propagate!(w, dt; step=i_step, frames)

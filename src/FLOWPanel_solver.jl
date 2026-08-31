@@ -305,7 +305,7 @@ end
 
 """
     Backslash(body; assemble_source_potential=false, source_potential_gpu=false,
-              shared_operator=nothing)
+              shared_operator=nothing, direct_matrix_parity_validated=false)
 
 Direct solver that assembles and LU-factors the influence matrix for `body`.
 The formulation (Neumann or Dirichlet) is chosen automatically from the body's
@@ -325,11 +325,16 @@ The default 32 GiB post-upload reserve is configurable with
 `source_potential_gpu_reserve_bytes`.
 
 `shared_operator=owner` reuses `owner`'s assembled/factored `G` for a rigidly
-translated, rotated, or mirrored copy of the same ordered body. Each returned
+translated or properly rotated copy of the same ordered body. Reflections are
+rejected because direct matrix parity is not invariant under the current
+ordered-connectivity convention. Each returned
 solver still owns independent RHS, velocity, and potential work buffers. The
 constructor validates the body/DBC type, cell order, panel core size, and a
 rigid/mirror-invariant body-frame geometry fingerprint. A shared solver rejects
 `update_G=true`, since its factorization is aliased by every owner.
+`direct_matrix_parity_validated=true` bypasses only the geometry fingerprint
+after the caller has separately assembled both ordered production matrices and
+recorded direct parity; type, connectivity, and core-size checks still apply.
 """
 mutable struct SourcePotentialGPUState{TF}
     matrix::Any
@@ -396,7 +401,8 @@ function _backslash_operator_signature(body)
 end
 
 function _validate_shared_backslash_operator(body, owner::Backslash;
-        geometry_rtol::Real=5e-11, geometry_atol::Real=5e-12)
+        geometry_rtol::Real=5e-11, geometry_atol::Real=5e-12,
+        direct_matrix_parity_validated::Bool=false)
     owner_sig = get(_BACKSLASH_OPERATOR_SIGNATURES, owner, nothing)
     owner_sig === nothing && throw(ArgumentError(
         "shared Backslash owner has no construction fingerprint"))
@@ -408,13 +414,13 @@ function _validate_shared_backslash_operator(body, owner::Backslash;
         "shared Backslash requires identical cell connectivity and order"))
     isequal(body.core_size_panel, owner_sig.core_size_panel) || throw(ArgumentError(
         "shared Backslash panel core-size mismatch: $(body.core_size_panel) != $(owner_sig.core_size_panel)"))
+    direct_matrix_parity_validated && return nothing
     canonical = _backslash_canonical_nodes(body)
     same = isapprox(canonical, owner_sig.canonical_nodes;
         rtol=geometry_rtol, atol=geometry_atol)
-    mirrored = isapprox(vcat(canonical[1:2, :], -canonical[3:3, :]),
-        owner_sig.canonical_nodes; rtol=geometry_rtol, atol=geometry_atol)
-    (same || mirrored) || throw(ArgumentError(
-        "shared Backslash body-frame geometry/operator fingerprint mismatch"))
+    same || throw(ArgumentError(
+        "shared Backslash body-frame geometry/operator fingerprint mismatch; " *
+        "reflected bodies require an independently assembled operator"))
     return nothing
 end
 
@@ -432,11 +438,14 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF};
         assemble_source_potential::Bool=false,
         source_potential_gpu::Bool=false,
         shared_operator::Union{Nothing,Backslash}=nothing,
+        direct_matrix_parity_validated::Bool=false,
         source_potential_gpu_reserve_bytes::Integer=32 * 1024^3,
         source_potential_gpu_emergency_bytes::Integer=4 * 1024^3,
         source_potential_gpu_sample_interval::Integer=10) where TF
     source_potential_gpu && !assemble_source_potential && throw(ArgumentError(
         "source_potential_gpu=true requires assemble_source_potential=true"))
+    direct_matrix_parity_validated && shared_operator === nothing &&
+        throw(ArgumentError("direct_matrix_parity_validated requires shared_operator"))
     source_potential_gpu_reserve_bytes >= 0 || throw(ArgumentError(
         "source_potential_gpu_reserve_bytes must be nonnegative"))
     source_potential_gpu_emergency_bytes >= 0 || throw(ArgumentError(
@@ -456,7 +465,8 @@ function Backslash(body::AbstractBody{<:Any,<:Any,TF};
     calc_normals!(body)
     calc_controlpoints!(body)
     if shared_operator !== nothing
-        _validate_shared_backslash_operator(body, shared_operator)
+        _validate_shared_backslash_operator(body, shared_operator;
+            direct_matrix_parity_validated)
         solver = Backslash{TF,typeof(shared_operator.Glu)}(
             shared_operator.G, shared_operator.Glu, rhs, Uext, phi_ext,
             nothing, nothing)
@@ -2294,10 +2304,26 @@ function LA.ldiv!(y::AbstractVector, P::ILUPreconditioner, x::AbstractVector)
     return y
 end
 
+const _BLOCK_GS_STATUS = WeakKeyDict{Any,NamedTuple}()
+
+_empty_block_gs_status() = (iterations=0, final_max_delta=NaN,
+    dirichlet_residual=NaN, neumann_residual=NaN,
+    normalized_residual=NaN, converged=false, tolerance=NaN, cap=0,
+    dirichlet_residual_scale=NaN, neumann_residual_scale=NaN,
+    failure=nothing)
+
+function _publish_block_gs_status!(solvers, status)
+    isempty(solvers) || (_BLOCK_GS_STATUS[first(solvers)] = status)
+    return status
+end
+
 function solve!(bodies::Tuple, solvers::Tuple;
     backend = fill(DirectBackend(), length(bodies)),
     max_outer_iterations::Int = 50,
     outer_tolerance::Real = 1e-8,
+    dirichlet_residual_scale::Real = 1,
+    neumann_residual_scale::Real = 1,
+    require_outer_convergence::Bool = false,
     verbose::Bool = false,
     history::Union{Nothing,ConvergenceHistory} = nothing,
     solver_optargs = (;),
@@ -2305,11 +2331,23 @@ function solve!(bodies::Tuple, solvers::Tuple;
 
     # println("Tuple of bodies")
 
-    history === nothing || reset!(history; metric=:blockgs_maxdelta)
+    max_outer_iterations >= 1 || throw(ArgumentError(
+        "max_outer_iterations must be at least 1"))
+    isfinite(outer_tolerance) && outer_tolerance > 0 || throw(ArgumentError(
+        "outer_tolerance must be finite and positive"))
+    isfinite(dirichlet_residual_scale) && dirichlet_residual_scale > 0 || throw(ArgumentError(
+        "dirichlet_residual_scale must be positive"))
+    isfinite(neumann_residual_scale) && neumann_residual_scale > 0 || throw(ArgumentError(
+        "neumann_residual_scale must be positive"))
 
     N = length(bodies)
-    @assert length(solvers) == N "Number of solvers ($(length(solvers))) must match number of bodies ($N)"
+    N >= 1 || throw(ArgumentError("tuple solve! requires at least one body"))
+    length(solvers) == N || throw(DimensionMismatch(
+        "Number of solvers ($(length(solvers))) must match number of bodies ($N)"))
     backends = backend isa Tuple || backend isa AbstractVector ? backend : fill(backend, N)
+    length(backends) == N || throw(DimensionMismatch(
+        "Number of backends ($(length(backends))) must match number of bodies ($N)"))
+    history === nothing || reset!(history; metric=:blockgs_normalized_residual)
 
     # The lifecycle keyword is orchestration state owned by THIS method; a
     # caller-supplied one would silently change which call commits the step.
@@ -2318,7 +2356,26 @@ function solve!(bodies::Tuple, solvers::Tuple;
         "the step boundary (021 Phase 3)"))
 
     prev_velocity = [copy(body.velocity) for body in bodies]
+    prev_potential = [copy(body.potential) for body in bodies]
     prev_strengths = [copy(body.strength) for body in bodies]
+    fixed_sources = Vector{Any}(undef, N)
+
+    # Dirichlet source strengths represent only the incident velocity selected
+    # by the caller (VTS includes wake velocity; explicit-potential
+    # formulations pass the pre-wake field). Freeze them for the whole outer
+    # solve: other bodies enter a Dirichlet target through scalar potential,
+    # never a second time through velocity-derived sources.
+    for (i, body) in enumerate(bodies)
+        calc_normals!(body)
+        calc_controlpoints!(body)
+        if has_dirichlet_bc(body)
+            body.velocity .= prev_velocity[i]
+            set_strengths!(body)
+            fixed_sources[i] = copy(view(body.strength, :, 1))
+        else
+            fixed_sources[i] = nothing
+        end
+    end
 
     # One tuple solve! is ONE top-level step, however many block-GS outer
     # iterations it takes. Opening the step here discards any transient state
@@ -2332,14 +2389,25 @@ function solve!(bodies::Tuple, solvers::Tuple;
     converged = false
     iterations_completed = 0
     final_max_delta = Inf
+    final_dirichlet_residual = Inf
+    final_neumann_residual = Inf
+    final_normalized_residual = Inf
+    # Ratio of the last measured normalized physical residual to the strength
+    # delta of the same iteration. Both quantities contract at the block-GS
+    # spectral rate, so the ratio predicts the residual of later iterations
+    # from their (cheap) delta. Zero forces a measurement on iteration 1.
+    residual_per_delta = 0.0
     for iter in 1:max_outer_iterations
         iterations_completed = iter
 
         for (i, (body, solver)) in enumerate(zip(bodies, solvers))
             body.velocity .= prev_velocity[i]
+            body.potential .= prev_potential[i]
 
             sources = tuple((bodies[j] for j in eachindex(bodies) if j != i)...)
             if !isempty(sources)
+                want_potential = has_dirichlet_bc(body)
+                want_velocity = !want_potential
                 if step_timers_enabled()
                     rotor_sources = Tuple(s for s in sources if s isa RigidWakeBody)
                     ground_sources = Tuple(s for s in sources if s isa NonLiftingBody)
@@ -2348,19 +2416,29 @@ function solve!(bodies::Tuple, solvers::Tuple;
                             :rotor_ground_cross : :rotor_rotor_cross
                         _step_timer_measure(label; nested=true) do
                             influence!((body,), rotor_sources, backends[i];
-                                scalar_potential=false, velocity=true, optargs...)
+                                scalar_potential=want_potential,
+                                velocity=want_velocity,
+                                production_route=want_potential ?
+                                    :rotor_cross_potential : :rotor_cross_velocity,
+                                optargs...)
                         end
                     end
                     if !isempty(ground_sources)
                         _step_timer_measure(:rotor_ground_cross; nested=true) do
                             influence!((body,), ground_sources, backends[i];
-                                scalar_potential=false, velocity=true, optargs...)
+                                scalar_potential=want_potential,
+                                velocity=want_velocity,
+                                production_route=want_potential ?
+                                    :ground_cross_potential : :ground_cross_velocity,
+                                optargs...)
                         end
                     end
                 else
                     influence!((body,), sources, backends[i];
-                        scalar_potential=false,
-                        velocity=true,
+                        scalar_potential=want_potential,
+                        velocity=want_velocity,
+                        production_route=want_potential ?
+                            :block_cross_potential : :block_cross_velocity,
                         optargs...)
                 end
             end
@@ -2371,8 +2449,21 @@ function solve!(bodies::Tuple, solvers::Tuple;
             # FGS iteration counts were unreachable from the 021 unsteady driver
             # (BRAINSTORM 021 Phase 3; needed in earnest by Phase 4's multibody case).
             _step_timer_measure(:panel_self_cached_operator; nested=true) do
-                solve!(body, solver; backend=backends[i], finalize_step=false,
-                       solver_optargs...)
+                if has_dirichlet_bc(body)
+                    body.strength[:, 1] .= fixed_sources[i]
+                    # `_source_influence!` is a general body influence call
+                    # when no assembled S is present. Put the target in pure
+                    # source mode so its previous doublet iterate is not
+                    # accidentally added to the right-hand side.
+                    body.strength[:, 2:end] .= 0
+                    _source_influence!(body, solver, backends[i];
+                        production_route=:self_source_potential, optargs...)
+                    _solve!(body, solver; backend=backends[i], solver_optargs...)
+                    note_step_solve!(solver)
+                else
+                    _solve!(body, solver; backend=backends[i], solver_optargs...)
+                    note_step_solve!(solver)
+                end
             end
         end
 
@@ -2384,11 +2475,78 @@ function solve!(bodies::Tuple, solvers::Tuple;
             prev_strengths[i] .= body.strength
         end
 
-        history === nothing || record!(history, iter, max_delta)
         final_max_delta = max_delta
 
+        # The physical-residual pass below evaluates every body against ALL
+        # bodies (self included), so it costs more than the update sweep
+        # itself. Skip it while the delta-based prediction says the residual
+        # is still far (>100x) from tolerance; convergence is only ever
+        # declared from a measured residual, and the final allowed iteration
+        # always measures so the published status carries real residuals.
+        # Diagnostic modes (history/verbose) measure every iteration to keep
+        # their per-iteration contract unchanged. A nonfinite delta measures
+        # immediately so the nonfinite hard-throw is not delayed to the cap.
+        measure_residual = history !== nothing || verbose ||
+            iter == max_outer_iterations || !isfinite(max_delta) ||
+            residual_per_delta * max_delta <= 100 * outer_tolerance
+        if !measure_residual
+            continue
+        end
+
+        # Measure the actual frozen-source block equations. These are the
+        # quantities with consistent physical meaning across rotor doublets
+        # and ground sources; raw mixed-unit strength deltas are diagnostic.
+        dirichlet_residual = 0.0
+        neumann_residual = 0.0
+        for (i, body) in enumerate(bodies)
+            body.velocity .= prev_velocity[i]
+            body.potential .= prev_potential[i]
+            if has_dirichlet_bc(body)
+                influence!((body,), bodies, backends[i];
+                    scalar_potential=true, velocity=false,
+                    production_route=:block_residual_potential, optargs...)
+                dirichlet_residual = max(dirichlet_residual,
+                    maximum(abs, body.potential))
+            else
+                influence!((body,), bodies, backends[i];
+                    scalar_potential=false, velocity=true,
+                    production_route=:block_residual_velocity, optargs...)
+                normal_residual = zero(eltype(body.velocity))
+                for k in axes(body.velocity, 2)
+                    un = zero(eltype(body.velocity))
+                    for d in 1:3
+                        un += body.velocity[d, k] * body.normals[d, k]
+                    end
+                    normal_residual = max(normal_residual, abs(un))
+                end
+                neumann_residual = max(neumann_residual, normal_residual)
+            end
+        end
+        normalized_residual = max(
+            dirichlet_residual / dirichlet_residual_scale,
+            neumann_residual / neumann_residual_scale)
+        if !isfinite(dirichlet_residual) || !isfinite(neumann_residual) ||
+                !isfinite(normalized_residual)
+            status = (; iterations=iterations_completed, final_max_delta=max_delta,
+                dirichlet_residual, neumann_residual, normalized_residual,
+                converged=false, tolerance=Float64(outer_tolerance),
+                cap=max_outer_iterations,
+                dirichlet_residual_scale=Float64(dirichlet_residual_scale),
+                neumann_residual_scale=Float64(neumann_residual_scale),
+                failure="nonfinite residual")
+            _publish_block_gs_status!(solvers, status)
+            throw(ErrorException("block Gauss-Seidel produced a nonfinite " *
+                "physical residual at outer iteration $iter"))
+        end
+        final_dirichlet_residual = dirichlet_residual
+        final_neumann_residual = neumann_residual
+        final_normalized_residual = normalized_residual
+        residual_per_delta = normalized_residual / max(max_delta, eps(Float64))
+        history === nothing || record!(history, iter, normalized_residual)
+
         if verbose
-            println("  Outer iteration $iter: max strength change = $max_delta")
+            println("  Outer iteration $iter: normalized block residual = " *
+                "$normalized_residual (strength delta = $max_delta)")
         end
 
         # A one-body tuple has no coupling to iterate: `sources` is empty, so the
@@ -2398,12 +2556,12 @@ function solve!(bodies::Tuple, solvers::Tuple;
         # intentionally: a one-body tuple records exactly one outer entry.
         # Multibody behavior is unchanged.
         if N == 1
-            converged = true
+            converged = normalized_residual < outer_tolerance
             verbose && println("  Single body: one block solve completes the outer loop")
             break
         end
 
-        if max_delta < outer_tolerance
+        if normalized_residual < outer_tolerance
             converged = true
             if verbose
                 println("  Converged after $iter outer iterations")
@@ -2416,15 +2574,22 @@ function solve!(bodies::Tuple, solvers::Tuple;
         println("  WARNING: outer iteration did not converge after $max_outer_iterations iterations")
     end
 
-    isempty(solvers) || (_BLOCK_GS_STATUS[first(solvers)] = (;
+    _publish_block_gs_status!(solvers, (;
         iterations=iterations_completed, final_max_delta,
+        dirichlet_residual=final_dirichlet_residual,
+        neumann_residual=final_neumann_residual,
+        normalized_residual=final_normalized_residual,
         converged, tolerance=Float64(outer_tolerance),
-        cap=max_outer_iterations))
+        cap=max_outer_iterations,
+        dirichlet_residual_scale=Float64(dirichlet_residual_scale),
+        neumann_residual_scale=Float64(neumann_residual_scale),
+        failure=converged ? nothing : "iteration cap"))
     step_timers_enabled() && @info "step_timer_count block_gs_iterations $(iterations_completed)"
 
     # restore velocities
     for (i, body) in enumerate(bodies)
         body.velocity .= prev_velocity[i]
+        body.potential .= prev_potential[i]
     end
 
     # Close the step exactly once, only after the whole tuple orchestration has
@@ -2435,19 +2600,20 @@ function solve!(bodies::Tuple, solvers::Tuple;
         finalize_step_solution!(body, solver)
     end
 
+    if !converged && require_outer_convergence
+        throw(ErrorException("block Gauss-Seidel failed to converge in " *
+            "$max_outer_iterations iterations: normalized residual " *
+            "$final_normalized_residual exceeds tolerance $outer_tolerance"))
+    end
+
     return nothing
 end
-
-const _BLOCK_GS_STATUS = IdDict{Any,NamedTuple}()
 
 "Status of the most recent tuple/block-GS solve containing `solvers`."
 function block_gs_status(solvers)
     tuple = solvers isa Tuple ? solvers : (solvers,)
-    isempty(tuple) && return (iterations=0, final_max_delta=NaN,
-        converged=false, tolerance=NaN, cap=0)
-    return get(_BLOCK_GS_STATUS, first(tuple),
-        (iterations=0, final_max_delta=NaN, converged=false,
-         tolerance=NaN, cap=0))
+    isempty(tuple) && return _empty_block_gs_status()
+    return get(_BLOCK_GS_STATUS, first(tuple), _empty_block_gs_status())
 end
 
 

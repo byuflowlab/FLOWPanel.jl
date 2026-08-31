@@ -109,6 +109,16 @@ gamma0 = [0.1*UMAG*C_CHORD*sin(pi*(i - 0.5)/M) for i in 1:M]
     @test bodyA.strength == bodyB.strength
     @test bodyA.velocity == bodyB.velocity
 
+    strict_vts = pnl.VelocityThroughSources(max_outer_iterations=17,
+        outer_tolerance=2e-9, require_outer_convergence=true)
+    @test strict_vts.max_outer_iterations == 17
+    @test strict_vts.outer_tolerance == 2e-9
+    @test strict_vts.require_outer_convergence
+    @test_throws ErrorException pnl.VelocityThroughSources(
+        max_outer_iterations=0)
+    @test_throws ErrorException pnl.VelocityThroughSources(
+        outer_tolerance=0)
+
     # validation errors
     semiinf = small_body(; semiinfinite_wake=true, das_length_c=1.0)
     @test_throws ErrorException pnl.initialize_formulation(
@@ -644,6 +654,67 @@ end
     st_fmm = pnl.initialize_formulation(f, (deepcopy(body0),), (wake,), solver0,
         DIRECT, fmm)
     @test st_fmm isa pnl.DirectWakePotentialState
+end
+
+# ------------------------------------------------------------------------------
+@testset "Stage 9b: HybridWakePotential panel-only oracle" begin
+    wake = flat_wake(body0, gamma0)
+
+    bodyD = deepcopy(body0)
+    solverD = pnl.Backslash(bodyD)
+    fD = pnl.DirectWakePotential()
+    stD = pnl.initialize_formulation(fD, (bodyD,), (wake,), solverD,
+        DIRECT, DIRECT)
+    run_aero!(bodyD, deepcopy(wake), solverD; formulation=fD,
+        formulation_state=stD)
+
+    bodyH = deepcopy(body0)
+    solverH = pnl.Backslash(bodyH)
+    fH = pnl.HybridWakePotential(outer_tolerance=1e-11,
+        require_outer_convergence=true)
+    stH = pnl.initialize_formulation(fH, (bodyH,), (wake,), solverH,
+        DIRECT, DIRECT)
+    run_aero!(bodyH, deepcopy(wake), solverH; formulation=fH,
+        formulation_state=stH)
+
+    @test view(bodyH.strength, :, 1) ≈ view(bodyD.strength, :, 1) atol=1e-12
+    @test view(bodyH.strength, :, 2) ≈ view(bodyD.strength, :, 2) rtol=1e-10
+    bs = stH.bodies[1]
+    @test norm(bs.sigma_particle) <= 1e-12
+    @test bs.green_residual[] <= 1e-10
+    @test bs.gauge_defect[] <= 1e-10
+    @test bs.q_total ≈ bs.q_panel atol=1e-12
+    @test pnl.block_gs_status((solverH,)).normalized_residual < 1e-11
+
+    # Mixed-wake smoke: particle velocity is reconstructed rather than sent
+    # through Dirichlet sources, and both independent trace diagnostics remain
+    # finite. The particle is deliberately far from the body; near-core
+    # overlap is a separate production rejection gate.
+    bodyP = deepcopy(body0)
+    solverP = pnl.Backslash(bodyP)
+    ppw = pnl.PanelParticleWake(bodyP; nwakerows=8, max_particles=8,
+        include_final_filament=false)
+    flat = flat_wake(bodyP, gamma0)
+    for (dst, src) in zip(ppw.panel_wake.nodes, flat.nodes)
+        dst .= src
+    end
+    for (dst, src) in zip(ppw.panel_wake.strength, flat.strength)
+        dst .= src
+    end
+    ppw.panel_wake.nwakes[] = flat.nwakes[]
+    pnl.FLOWVPM.add_particle(ppw.pfield, [5.0, 0.0, 2.0],
+        [0.0, 0.1, 0.0], 0.2)
+    stP = pnl.initialize_formulation(fH, (bodyP,), (ppw,), solverP,
+        DIRECT, DIRECT)
+    run_aero!(bodyP, ppw, solverP; formulation=fH, formulation_state=stP)
+    bp = stP.bodies[1]
+    @test norm(bp.sigma_particle) > 0
+    @test all(isfinite, bp.green.q)
+    @test isfinite(bp.green_residual[])
+    @test isfinite(bp.gauge_defect[])
+    @test isfinite(bp.green_hodge_mismatch[])
+    @test isfinite(bp.tangential_projection_defect[])
+    @test pnl.block_gs_status((solverP,)).converged
 end
 
 # ------------------------------------------------------------------------------

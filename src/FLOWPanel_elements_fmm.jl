@@ -910,7 +910,7 @@ Selectable regularization family for the bound-vortex filament kernel
 gradient does not fit the `(D, κ∇A)` shape and uses a dedicated cylindrical
 assembly (052d DERIVATION.md §5).
 
-- `GaussianRegularization` (default; Ryan ruling 2026-08-20, matched-CORE-
+- `GaussianRegularization` (Ryan ruling 2026-08-20, matched-CORE-
   SIZE convention): Lamb–Oseen transverse profile (`σ ≡ core_size`) — lowest
   peak velocity AND gradient at fixed core size. Radius inflation is
   GRADIENT-AWARE: `Δr = core_size·√(2z*)` with `z*` solving
@@ -924,7 +924,8 @@ assembly (052d DERIVATION.md §5).
   (`1/h² → 1/√(h⁴ + rc⁴)`); `Δr = core_size·(2/tol)^(1/4)` (velocity-derived,
   legacy-pinned; leaves gradient error ≤ 1.25·tol at that radius — see
   `radius_inflation`).
-- `LineGaussRegularization`: exact closed form of the singular segment kernel
+- `LineGaussRegularization` (default; Ryan ruling 2026-08-29, task 052d):
+  exact closed form of the singular segment kernel
   convolved with the FLOWVPM Gaussian blob (`σ ≡ core_size`; FastMultipole
   `MATRIX_OPERATOR_REFACTOR/prototypes/052d_compact_kernel/DERIVATION.md`,
   2026-08-28). `GaussianRegularization` is exactly its infinite-line limit;
@@ -950,12 +951,16 @@ same global.
 end
 
 "Active filament regularization family (see [`FilamentRegularization`](@ref))."
-# Default: Gaussian (Ryan ruling 2026-08-20, matched-CORE-SIZE convention:
-# at fixed core_size the Gaussian has the lowest peak velocity (0.45 vs
-# compact 1.21, Vatistas 0.71, units Gamma/2pi/rc) AND lowest peak gradient
-# (0.50 vs 2.55 / 1.00); its radius inflation rc*sqrt(2 ln 1/tol) ~ 5rc still
-# removes the Vatistas 37.6rc pathology. See BRAINSTORM/025 phase_00 doc.
-const FILAMENT_REGULARIZATION = Ref(GaussianRegularization)
+# Default: LineGauss (Ryan ruling 2026-08-29, task 052d). It keeps the
+# Gaussian family's velocity/gradient profile advantages (the 2026-08-20
+# matched-core-size ruling, BRAINSTORM/025 phase_00) while closing the
+# Gaussian's open along-line error channel: its deviation from the singular
+# kernel decays with distance to the SEGMENT, not the infinite line, so
+# radius_inflation genuinely bounds the direct/expansion mismatch (the
+# Gaussian default cost 9e-4 relU on far-field just-shed wake particles;
+# 052d handoff 2026-08-29m). Override with FLOWPANEL_FILAMENT_REG
+# (e.g. =gaussian to reproduce pre-2026-08-29 ladder runs).
+const FILAMENT_REGULARIZATION = Ref(LineGaussRegularization)
 
 "Set the active filament regularization family (type or Symbol
 `:compact`/`:gaussian`/`:vatistas`/`:linegauss`)."

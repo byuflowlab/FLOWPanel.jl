@@ -61,6 +61,19 @@
         field into host fmm!.
       - env-gated pass timers (FLOWPANEL_GPU_TIMERS=1).
 
+    Task 052d extension (panels -> particles host tree-FMM, default OFF):
+      - when PANEL_INFLUENCE_FMM (or `set_panel_influence_fmm!(:on)`) is armed,
+        AbstractBody sources of a ParticleField target — the
+        `rotor_panels_to_particles` / `ground_panels_to_particles` legs — are
+        evaluated by host `FastMultipole.fmm!` in ONE call (ProbeSystemArray
+        target view; U always, J when the pass requests the gradient; never
+        the scalar potential) instead of the dense rectangular kernels, timed
+        under `:rotor_panels_to_particles_fmm`. Device-resident particle
+        fields round-trip positions D2H and results H2D once per call. All
+        other targets (bodies, probes) and all non-body sources are untouched.
+        Tunables (read live): PANEL_INFLUENCE_FMM_P (default 8),
+        PANEL_INFLUENCE_FMM_THETA (0.4), PANEL_INFLUENCE_FMM_LEAF (50).
+
     Known deviation from the CPU fmm! path: `direct_conditioning`
     (`_self_panel_core_size_conditioning`) flips the source core_size to
     `core_size_panel` only for NEARFIELD self-pair blocks, while farfield
@@ -84,6 +97,61 @@ const GPU_INFLUENCE = Ref{Symbol}(:unset)
 
 "Diagnostic: number of influence! calls the seam has fully handled."
 const GPU_INFLUENCE_HITS = Ref{Int}(0)
+const GPU_INFLUENCE_ROUTE_HITS = Dict{Symbol,Int}()
+const GPU_INFLUENCE_ROUTE_FALLBACKS = Dict{Symbol,Int}()
+const GPU_INFLUENCE_ROUTE_LOCK = ReentrantLock()
+
+function reset_gpu_influence_routes!()
+    lock(GPU_INFLUENCE_ROUTE_LOCK) do
+        GPU_INFLUENCE_HITS[] = 0
+        empty!(GPU_INFLUENCE_ROUTE_HITS)
+        empty!(GPU_INFLUENCE_ROUTE_FALLBACKS)
+    end
+    return nothing
+end
+
+function gpu_influence_route_snapshot(; since=nothing)
+    device = gpu_influence_enabled() ? _gpu_device() : :off
+    total, cumulative_hits, cumulative_fallbacks = lock(GPU_INFLUENCE_ROUTE_LOCK) do
+        (GPU_INFLUENCE_HITS[], copy(GPU_INFLUENCE_ROUTE_HITS),
+            copy(GPU_INFLUENCE_ROUTE_FALLBACKS))
+    end
+    if since === nothing
+        hits, fallbacks, total_hits = cumulative_hits, cumulative_fallbacks, total
+    else
+        hits = Dict(k => v - get(since.cumulative_hits, k, 0)
+            for (k, v) in cumulative_hits if v != get(since.cumulative_hits, k, 0))
+        fallbacks = Dict(k => v - get(since.cumulative_fallbacks, k, 0)
+            for (k, v) in cumulative_fallbacks
+            if v != get(since.cumulative_fallbacks, k, 0))
+        total_hits = total - since.cumulative_total_hits
+    end
+    return (; requested_mode=GPU_INFLUENCE[], device, total_hits, hits, fallbacks,
+        cumulative_total_hits=total, cumulative_hits, cumulative_fallbacks)
+end
+
+function _gpu_route_hit!(route::Symbol, device::Symbol)
+    key = Symbol(device, :_, route)
+    lock(GPU_INFLUENCE_ROUTE_LOCK) do
+        GPU_INFLUENCE_HITS[] += 1
+        GPU_INFLUENCE_ROUTE_HITS[key] =
+            get(GPU_INFLUENCE_ROUTE_HITS, key, 0) + 1
+    end
+    return nothing
+end
+
+function _gpu_route_fallback!(route::Symbol, reason::AbstractString)
+    lock(GPU_INFLUENCE_ROUTE_LOCK) do
+        GPU_INFLUENCE_ROUTE_FALLBACKS[route] =
+            get(GPU_INFLUENCE_ROUTE_FALLBACKS, route, 0) + 1
+    end
+    if GPU_INFLUENCE[] === :cuda &&
+            !parse(Bool, get(ENV, "GPU_ALLOW_FALLBACK", "true"))
+        error("FLOWPanel gpu influence: required route $route cannot use CUDA " *
+            "($reason); GPU_ALLOW_FALLBACK=false")
+    end
+    return false
+end
 
 """
     gpu_influence_enabled()
@@ -416,18 +484,25 @@ _gpu_target_supported(t::FastMultipole.ProbeSystem) = true
 # RESULT WRITE-BACK (same storage the fmm!/buffer path accumulates into)
 ################################################################################
 
-# out rows: 1:3 velocity; 4:12 gradient with out[3+(j-1)*3+i] = du_i/dx_j
+# out rows: 1:3 velocity; 4:12 gradient with out[3+(j-1)*3+i] = du_i/dx_j;
+# optional scalar potential is row 4 without a gradient or row 13 with one.
 
-function _gpu_add_result!(body::AbstractBody, out, grad::Bool)
+function _gpu_add_result!(body::AbstractBody, out, grad::Bool,
+        velocity::Bool=true, scalar_potential::Bool=false)
     n = FastMultipole.get_n_bodies(body)
     @inbounds for ic in 1:n
-        body.velocity[1, ic] += out[1, ic]
-        body.velocity[2, ic] += out[2, ic]
-        body.velocity[3, ic] += out[3, ic]
-        if grad
+        if velocity
+            body.velocity[1, ic] += out[1, ic]
+            body.velocity[2, ic] += out[2, ic]
+            body.velocity[3, ic] += out[3, ic]
+        end
+        if velocity && grad
             for j in 1:3, i in 1:3
                 body.velocity_gradient[i, j, ic] += out[3 + (j-1)*3 + i, ic]
             end
+        end
+        if scalar_potential
+            body.potential[ic] += out[grad ? 13 : 4, ic]
         end
     end
     return nothing
@@ -507,7 +582,8 @@ end
 
 # one accumulate call, host or device
 function _gpu_direct_batch!(out::Matrix{Float64}, tgt::Matrix{Float64},
-        packed::Vector{Any}, grad::Bool, device::Symbol)
+        packed::Vector{Any}, grad::Bool, scalar_potential::Bool,
+        device::Symbol)
     if device === :cuda
         CUDAmod = getglobal(FastMultipole, :CUDA)
         out_d = Base.invokelatest(CUDAmod.CuArray, out)
@@ -518,12 +594,13 @@ function _gpu_direct_batch!(out::Matrix{Float64}, tgt::Matrix{Float64},
             src_d = srcmat isa Matrix ?
                 Base.invokelatest(CUDAmod.CuArray, srcmat) : srcmat
             Base.invokelatest(FastMultipole.direct_rectangular!, out_d, tgt_d,
-                kern, src_d; gradient=grad)
+                kern, src_d; gradient=grad, scalar_potential)
         end
         copyto!(out, Base.invokelatest(Array, out_d))
     else
         for (srcmat, kern) in packed
-            FastMultipole.direct_rectangular!(out, tgt, kern, srcmat; gradient=grad)
+            FastMultipole.direct_rectangular!(out, tgt, kern, srcmat;
+                gradient=grad, scalar_potential)
         end
     end
     return out
@@ -541,9 +618,9 @@ recognition and fallback rules.
 function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
         scalar_potential=false, velocity=false, velocity_gradient=false,
         gradient=false, hessian=false,
-        extra_outputs=nothing, direct_conditioning=nothing, kwargs...)
+        extra_outputs=nothing, direct_conditioning=nothing,
+        production_route=nothing, kwargs...)
     gpu_influence_enabled() || return false
-    scalar_potential === false || return false
 
     # probe pass (task 052): FastMultipole.ProbeSystem targets request the
     # potential gradient (= velocity) via `gradient`, and the velocity
@@ -557,32 +634,53 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
         velocity = true
         velocity_gradient = hessian
     end
-    velocity === true || return false
-    _gpu_all_zero(extra_outputs) || begin
-        _gpu_info_once(:extra_outputs, "FLOWPanel gpu influence: pass requests " *
-            "extra outputs (induced vorticity); falling back to fmm!")
-        return false
-    end
+    want_potential = scalar_potential === true
+    want_velocity = velocity === true
+    (want_velocity || want_potential) || return false
 
     # pass recognition
     pass1 = any(_gpu_is_wake_source, sources)
-    pass3 = !pass1 && all(s -> s isa AbstractBody, sources) &&
-        direct_conditioning !== nothing
-    (pass1 || pass3 || probe_pass) || return false
+    body_sources = !pass1 && all(s -> s isa AbstractBody, sources)
+    pass3 = body_sources && direct_conditioning !== nothing
+    block_cross = body_sources && !isempty(sources) &&
+        all(t -> t isa AbstractBody &&
+            all(s -> s !== t, sources), targets)
+    panel_wake_potential = pass1 && want_potential &&
+        all(s -> !(s isa FLOWVPM.ParticleField), sources)
+    production_call = production_route !== nothing
+    (pass1 || pass3 || probe_pass || block_cross || production_call) || return false
+    route = production_call ? Symbol(production_route) :
+        panel_wake_potential ? :wake_panel_potential :
+        block_cross && want_potential ? :block_cross_potential :
+        block_cross ? :block_cross_velocity :
+        probe_pass ? :probe :
+        pass1 ? :wake_velocity : :conditioned_body_velocity
+
+    _gpu_all_zero(extra_outputs) || begin
+        _gpu_info_once(:extra_outputs, "FLOWPanel gpu influence: pass requests " *
+            "extra outputs (induced vorticity); falling back to fmm!")
+        return _gpu_route_fallback!(route, "extra outputs requested")
+    end
+    want_potential && !all(s -> s isa AbstractBody || s isa PanelWake ||
+        s isa FilamentWrapper{<:PanelWake}, sources) &&
+        return _gpu_route_fallback!(route,
+            "scalar potential requested from a vector-potential source")
 
     # eligibility
     for s in sources
         if !_gpu_source_supported(s)
             _gpu_info_once(:source, "FLOWPanel gpu influence: unsupported source " *
                 "$(typeof(s)); falling back to fmm!")
-            return false
+            return _gpu_route_fallback!(route,
+                "unsupported source $(typeof(s))")
         end
     end
     for t in targets
         if !_gpu_target_supported(t)
             _gpu_info_once(:target, "FLOWPanel gpu influence: unsupported target " *
                 "$(typeof(t)); falling back to fmm!")
-            return false
+            return _gpu_route_fallback!(route,
+                "unsupported target $(typeof(t))")
         end
     end
     # a self-paired SFS-enabled HOST particle field needs fmm! outputs for
@@ -594,7 +692,8 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
             _gpu_info_once(:sfs, "FLOWPanel gpu influence: SFS-enabled particle " *
                 "self-influence needs fmm! Estr outputs; falling back to fmm! " *
                 "(Estr stays on the FLOWVPM radix path)")
-            return false
+            return _gpu_route_fallback!(route,
+                "host SFS particle self-influence requires FMM")
         end
     end
 
@@ -623,6 +722,8 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
         n_t == 0 && continue
 
         if tsys isa FLOWVPM.ParticleField && !(tsys.particles isa Array)
+            want_potential && return _gpu_route_fallback!(route,
+                "device particle targets do not store scalar potential")
             # device-resident particle target (task 052): radix self
             # influence + device rectangular for everything else
             _gpu_device_pfield_target!(tsys, sources, grad)
@@ -631,11 +732,30 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
 
         tgt = _gpu_workmat!(tsys, :targets, 3, n_t)
         _gpu_fill_targets!(tgt, tsys)
-        out = _gpu_workmat!(tsys, grad ? :out12 : :out3, grad ? 12 : 3, n_t)
+        nout = (grad ? 12 : 3) + want_potential
+        outrole = want_potential ? (grad ? :out13 : :out4) :
+            (grad ? :out12 : :out3)
+        out = _gpu_workmat!(tsys, outrole, nout, n_t)
         fill!(out, 0.0)
+        # 052d Phase 1 (host-target mirror of the device route below): body
+        # sources of a ParticleField target go through the host tree-FMM in
+        # one call; U-only or U+J, never the scalar potential. Small fixed
+        # targets (bodies, probes) stay dense per the I3 split.
+        fmm_bodies = (!pass1 && !want_potential &&
+                tsys isa FLOWVPM.ParticleField &&
+                panel_influence_fmm_enabled()) ?
+            Tuple(s for s in sources if s isa AbstractBody &&
+                _gpu_source_columns(s) > 0) : ()
+        if !isempty(fmm_bodies)
+            _step_timer_measure(:rotor_panels_to_particles_fmm; nested=true) do
+                _panel_fmm_evaluate!(out, tgt, fmm_bodies, grad)
+            end
+            _panel_fmm_maybe_dump(out, tgt, fmm_bodies, n_t)
+        end
         packed = Any[]
         for ssys in sources
             _gpu_source_columns(ssys) == 0 && continue
+            any(b -> b === ssys, fmm_bodies) && continue
             # self-pair core_size conditioning (pass 3): evaluate a body's
             # own influence at core_size_panel, everything else at the
             # active (targets) offset — the rectangular analogue of
@@ -644,7 +764,7 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
                     ssys isa AbstractBody) ? ssys.core_size_panel : nothing
             push!(packed, _gpu_pack_source!(ssys, koff))
         end
-        isempty(packed) && continue
+        isempty(packed) && isempty(fmm_bodies) && continue
         detail_label = if pass1
             tsys isa RigidWakeBody ? :wake_to_rotor_panels :
             tsys isa NonLiftingBody ? :wake_to_ground_panels : :wake_to_probes
@@ -654,10 +774,16 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
             tsys isa FLOWVPM.ParticleField ? :rotor_panels_to_particles :
                 :panel_cross_targets
         end
-        _step_timer_measure(detail_label; nested=true) do
-            _gpu_direct_batch!(out, tgt, packed, grad, device)
+        isempty(packed) || _step_timer_measure(detail_label; nested=true) do
+            _gpu_direct_batch!(out, tgt, packed, grad, want_potential, device)
         end
-        _gpu_add_result!(tsys, out, grad)
+        if tsys isa AbstractBody
+            _gpu_add_result!(tsys, out, grad, want_velocity, want_potential)
+        else
+            want_potential && return _gpu_route_fallback!(route,
+                "target $(typeof(tsys)) has no scalar-potential storage")
+            _gpu_add_result!(tsys, out, grad)
+        end
     end
 
     if gpu_timers_enabled()
@@ -667,7 +793,7 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
         _gpu_timer_log(label, time() - t_start)
     end
 
-    GPU_INFLUENCE_HITS[] += 1
+    _gpu_route_hit!(route, device)
     return true
 end
 
@@ -675,6 +801,563 @@ end
 function _gpu_cuda_sync()
     CUDAmod = getglobal(FastMultipole, :CUDA)
     Base.invokelatest(CUDAmod.synchronize)
+    return nothing
+end
+
+################################################################################
+# 052d PHASE 1: HOST-FMM ROUTE FOR PANELS -> PARTICLES
+################################################################################
+
+# Default-off routing of the panels->particles legs (`rotor_panels_to_particles`
+# / `ground_panels_to_particles`) through the host tree-FMM instead of the
+# dense rectangular kernels. AbstractBody sources of a ParticleField target
+# are gathered into ONE `FastMultipole.fmm!` call (one target tree over the
+# particles, one combined multi-system source forest); every other
+# source/target combination is untouched, so small fixed targets (probes,
+# other bodies' control points) stay dense per the I3 split. Armed by the
+# PANEL_INFLUENCE_FMM env var or `set_panel_influence_fmm!`.
+
+"052d route state: :unset (read env on first query), :off, :on."
+const PANEL_FMM = Ref{Symbol}(:unset)
+
+"Whether the 052d panels->particles host-FMM route is armed (default off)."
+function panel_influence_fmm_enabled()
+    if PANEL_FMM[] === :unset
+        val = lowercase(get(ENV, "PANEL_INFLUENCE_FMM", "0"))
+        PANEL_FMM[] = val in ("1", "true", "on", "yes") ? :on : :off
+    end
+    return PANEL_FMM[] === :on
+end
+
+"Set the 052d panels->particles host-FMM route programmatically (:off, :on)."
+function set_panel_influence_fmm!(mode::Symbol)
+    mode in (:off, :on) || throw(ArgumentError(
+        "panel influence fmm mode must be :off or :on (got $(repr(mode)))"))
+    PANEL_FMM[] = mode
+    return mode
+end
+
+# tunables, read live so probe jobs can sweep them between calls without a
+# restart; defaults follow the 052d review response (p=8 starting point)
+_panel_fmm_p() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_P", "8"))
+_panel_fmm_theta() = parse(Float64, get(ENV, "PANEL_INFLUENCE_FMM_THETA", "0.4"))
+_panel_fmm_leaf() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_LEAF", "50"))
+
+################################################################################
+# 052d STAGE F: DEVICE CROSS-PASS ROUTE (panels -> particles)
+################################################################################
+#
+# When PANEL_INFLUENCE_FMM is armed AND the CUDA radix lifecycle is up, the
+# panels->particles leg runs the fully device-resident cross pass
+# (FastMultipole src/cross_stencil_cuda.jl: Stage A producers -> Stage B panel
+# B2M/M2M with the TE-wake dipole arm -> Stage C M2L -> Stage D L2L/L2B ->
+# Stage E block-sparse near field), accumulating velocity into U on device.
+# The host-fmm! route (_panel_fmm_evaluate!) remains the fallback for grad
+# requests (the cross pass is U-only by ruling), semi-infinite wakes, missing
+# CUDA, or PANEL_INFLUENCE_FMM_DEVICE=0.
+#
+# Parity note (certified host-FMM semantics): NO wake_strength_shift on this
+# leg — the host FMM's near field (_induced_wake buffer variant) and far
+# field (RigidWakeBody B2M overload) both read the plain buffer dipole
+# strength. The dense pack_panels! path's shifted wake columns are a
+# pre-existing dense-vs-FMM asymmetry, not replicated here.
+#
+# Tunables (certified operating point p32g): PANEL_INFLUENCE_FMM_XQ=12,
+# _XELL=5, _XP=6, _XRG=0.006. PANEL_INFLUENCE_FMM_XVERIFY=1 additionally runs
+# the host-fmm! route each step and prints the device-vs-host relU (D3).
+
+_panel_fmm_device() =
+    lowercase(get(ENV, "PANEL_INFLUENCE_FMM_DEVICE", "1")) in
+        ("1", "true", "on", "yes")
+_panel_fmm_xverify() =
+    lowercase(get(ENV, "PANEL_INFLUENCE_FMM_XVERIFY", "0")) in
+        ("1", "true", "on", "yes")
+_panel_fmm_xq() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_XQ", "12"))
+_panel_fmm_xell() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_XELL", "5"))
+_panel_fmm_xp() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_XP", "6"))
+_panel_fmm_xrg() = parse(Float64, get(ENV, "PANEL_INFLUENCE_FMM_XRG", "0.006"))
+
+# All cross-pass tunables parsed at once into an immutable, validated config.
+# The cached-entry key includes it (_cross_entry!), so changing any tunable
+# mid-run rebuilds the whole entry instead of silently mixing old tables with
+# new parameters — and the multipole/local expansion orders can never skew.
+const _CROSS_CFG_LOGGED = Ref(false)
+function _cross_config()
+    q = _panel_fmm_xq()
+    ell_x = _panel_fmm_xell()
+    P = _panel_fmm_xp()
+    R_guard = _panel_fmm_xrg()
+    q >= 0 || throw(ArgumentError(
+        "PANEL_INFLUENCE_FMM_XQ must be >= 0 (got $q)"))
+    2 <= ell_x <= 8 || throw(ArgumentError(
+        "PANEL_INFLUENCE_FMM_XELL must be in 2:8 (got $ell_x)"))
+    # upper bound = FastMultipole._CROSS_B2M_MAX_P (device B2M scratch size)
+    1 <= P <= 8 || throw(ArgumentError(
+        "PANEL_INFLUENCE_FMM_XP must be in 1:8 (got $P)"))
+    isfinite(R_guard) && R_guard >= 0 || throw(ArgumentError(
+        "PANEL_INFLUENCE_FMM_XRG must be finite and >= 0 (got $R_guard)"))
+    return (; q, ell_x, P, R_guard)
+end
+
+# per-body persistent device state: objectid(body) => mutable holder.
+# `x_min`/`h0` are FROZEN at first build (padded union box) so the cached M2L
+# probe tables AND the h0-keyed stencil demotion masks stay valid across
+# steps; if bodies escape the box, refresh_cross_producers! signals
+# `needs_rebuild` and _cross_run_body! reconstructs the WHOLE entry.
+mutable struct _CrossPassEntry
+    ns::Int
+    np::Int
+    x_min::Any
+    h0::Float64
+    ct::Any            # CrossStencilTables
+    ctx::Any           # DeviceCrossProducerContext
+    xs::Any            # DeviceCrossExpansionState
+    ls::Any            # DeviceCrossLocalState
+    m2l_tables::Any    # host (ops, class_slot) for the CURRENT h0
+    l2l_table::Any     # host L2L array for the CURRENT h0
+    srcmat::Matrix{Float64}
+    wakemat::Union{Nothing,Matrix{Float64}}
+    cent::Matrix{Float64}
+    cfg::Any           # validated tunable NamedTuple this entry was built with
+    # persistent device mirrors of the per-step host inputs (uploaded with
+    # copyto! each step; reallocated only on a full entry rebuild)
+    d_srcmat::Any
+    d_cent::Any
+    d_wakemat::Any
+end
+
+const _CROSS_STATE = Dict{UInt,_CrossPassEntry}()
+
+# 052 leak fix: persistent padded device particle-position mirror (3 x np_cap
+# Float64) plus its grow-only capacity. See _gpu_panels_to_particles_cross for
+# why the pass runs on a padded capacity rather than the live np.
+const _CROSS_POS = Ref{Any}(nothing)
+const _CROSS_NP_CAP = Ref(0)
+
+"Drop all cached cross-pass device states (e.g. after geometry rebuilds)."
+clear_cross_pass_state!() = (empty!(_CROSS_STATE); _CROSS_POS[] = nothing;
+    _CROSS_NP_CAP[] = 0; nothing)
+
+# Refresh (and grow, ~6% geometric headroom) the padded position mirror: the
+# live prefix converts the particle field's storage eltype to Float64 on
+# device; the tail wrap-fills with copies of REAL particle positions so the
+# padded set occupies exactly the same cells as the live set (identical
+# node/route/block lists, no artificial hot node).
+function _cross_padded_positions!(Pd, np::Int, CUDAmod)
+    if np > _CROSS_NP_CAP[] || _CROSS_POS[] === nothing
+        _CROSS_NP_CAP[] = np + max(np >> 4, 1024)
+        _CROSS_POS[] = Base.invokelatest(CUDAmod.CuArray{Float64}, undef, 3,
+            _CROSS_NP_CAP[])
+    end
+    np_cap = _CROSS_NP_CAP[]
+    pos = _CROSS_POS[]
+    view(pos, :, 1:np) .= view(Pd, 1:3, 1:np)
+    i = np
+    while i < np_cap
+        k = min(np, np_cap - i)
+        view(pos, :, (i + 1):(i + k)) .= view(pos, :, 1:k)
+        i += k
+    end
+    return pos, np_cap
+end
+
+# fill the per-step host-side inputs for one body: 17-row body-panel columns
+# (NO appended wake columns — the cross pass carries the wake through the
+# 8-row wake matrix instead), panel centroids for keying, and the wake matrix
+# (idx1, Da, idx2, Db per panel; -1 idx when the panel does not shed)
+function _cross_fill_inputs!(e::_CrossPassEntry, body::AbstractBody{E}) where E
+    tag, nk = _gpu_panel_tag(E)
+    SV = FastMultipole.StaticArrays.SVector{3,Float64}
+    ns = body.ncells
+    @inbounds for ic in 1:ns
+        i1, i2, i3 = body.cells[1, ic], body.cells[2, ic], body.cells[3, ic]
+        v1 = SV(body.nodes[1, i1], body.nodes[2, i1], body.nodes[3, i1])
+        v2 = SV(body.nodes[1, i2], body.nodes[2, i2], body.nodes[3, i2])
+        v3 = SV(body.nodes[1, i3], body.nodes[2, i3], body.nodes[3, i3])
+        s1 = body.strength[ic, 1]
+        s2 = nk == 2 ? body.strength[ic, 2] : 0.0
+        _gpu_pack_column!(e.srcmat, ic, tag, 3, (v1, v2, v3), s1, s2,
+            body.core_size)
+        c = (v1 + v2 + v3) / 3
+        e.cent[1, ic] = c[1]; e.cent[2, ic] = c[2]; e.cent[3, ic] = c[3]
+    end
+    if e.wakemat !== nothing
+        w = e.wakemat
+        fill!(w, -1.0)
+        @inbounds for ic in 1:ns
+            idx1 = body.shedding_full[1, ic]
+            w[1, ic] = idx1
+            idx1 > 0 || continue
+            i_surf = body.shedding_full[3, ic]
+            c1 = body.shedding_full[5, ic]
+            c2 = body.shedding_full[6, ic]
+            w[2, ic] = body.Das[i_surf][1, c1]
+            w[3, ic] = body.Das[i_surf][2, c1]
+            w[4, ic] = body.Das[i_surf][3, c1]
+            w[5, ic] = body.shedding_full[2, ic]
+            w[6, ic] = body.Das[i_surf][1, c2]
+            w[7, ic] = body.Das[i_surf][2, c2]
+            w[8, ic] = body.Das[i_surf][3, c2]
+        end
+    end
+    return e
+end
+
+# 052d relU attribution (diagnostic only, 2026-08-29): with PANEL_FMM_DUMP_DIR
+# set and PANEL_FMM_DUMP_NP=np1,np2,... a comma list of particle-count
+# thresholds, the host-fmm! leg dumps — at the first step whose np reaches each
+# threshold — the cross-pass inputs (packed 17-row srcmat, 8-row wake matrix,
+# centroids), the particle positions, and the host-fmm! velocity result, as
+# flat column-major Float64 bins (snapshot472 conventions). Consumed by
+# MATRIX_OPERATOR_REFACTOR/prototypes/052d_cross_stencil/p39_relU_attribution.jl.
+# The device xverify path passes `deviceU` (3 x np device cross-pass result),
+# dumped alongside so the attribution needs no prototype re-run: the dump then
+# holds the exact per-step state plus BOTH route results from the SAME step of
+# the SAME trajectory (no replay divergence).
+const _PANEL_FMM_DUMPED = Set{Int}()
+
+# 052d step-5e (diagnostic, 2026-08-29): eval-time state capture inside
+# _cross_run_body!, same env gating as _panel_fmm_maybe_dump but a separate
+# claimed set. Dumps the entry's OWN packed inputs (what the device actually
+# uploads), the frozen box, list counters, and the far-only d_out so the
+# production-vs-dump input question is settled bitwise.
+const _PANEL_CROSS_EVAL_DUMPED = Set{Int}()
+function _panel_cross_dump_hit(np::Int)
+    dir = get(ENV, "PANEL_FMM_DUMP_DIR", "")
+    isempty(dir) && return 0, dir
+    thresholds = [parse(Int, s) for s in
+        split(get(ENV, "PANEL_FMM_DUMP_NP", ""), ","; keepempty=false)]
+    for t in thresholds
+        (np >= t && !(t in _PANEL_CROSS_EVAL_DUMPED)) && return t, dir
+    end
+    return 0, dir
+end
+function _panel_fmm_maybe_dump(out, tgt, fmm_bodies, np::Int; deviceU=nothing)
+    dir = get(ENV, "PANEL_FMM_DUMP_DIR", "")
+    isempty(dir) && return nothing
+    thresholds = [parse(Int, s) for s in
+        split(get(ENV, "PANEL_FMM_DUMP_NP", ""), ","; keepempty=false)]
+    hit = 0
+    for t in thresholds
+        if np >= t && !(t in _PANEL_FMM_DUMPED)
+            hit = t
+            break
+        end
+    end
+    hit == 0 && return nothing
+    push!(_PANEL_FMM_DUMPED, hit)
+    mkpath(dir)
+    pre = joinpath(dir, "dump_np$(np)")
+    write(pre * "_positions_3xN_f64.bin", Matrix{Float64}(tgt[1:3, 1:np]))
+    write(pre * "_hostU_3xN_f64.bin", Matrix{Float64}(out[1:3, 1:np]))
+    deviceU === nothing ||
+        write(pre * "_deviceU_3xN_f64.bin", Matrix{Float64}(deviceU[1:3, 1:np]))
+    open(pre * "_meta.txt", "w") do io
+        println(io, "np=", np)
+        println(io, "nbodies=", length(fmm_bodies))
+        println(io, "cfg=", _cross_config())
+    end
+    for (i, body) in enumerate(fmm_bodies)
+        ns = body.ncells
+        has_wake = body isa RigidWakeBody && _gpu_has_te_wake(body)
+        e = _CrossPassEntry(ns, np, nothing, 0.0, nothing, nothing, nothing,
+            nothing, nothing, nothing, zeros(17, ns),
+            has_wake ? zeros(8, ns) : nothing, zeros(3, ns), nothing,
+            nothing, nothing, nothing)
+        _cross_fill_inputs!(e, body)
+        write(pre * "_body$(i)_srcmat_17xS_f64.bin", e.srcmat)
+        e.wakemat === nothing ||
+            write(pre * "_body$(i)_wakemat_8xS_f64.bin", e.wakemat)
+        write(pre * "_body$(i)_cent_3xS_f64.bin", e.cent)
+        open(pre * "_meta.txt", "a") do io
+            println(io, "body$(i)=", typeof(body), " ns=", ns,
+                " has_wake=", has_wake, " core_size=", body.core_size)
+        end
+    end
+    println("panel_fmm_dump np=$np -> $(pre)_*")
+    flush(stdout)
+    return nothing
+end
+
+# padded cubic union root box over panel nodes + current device particle slice
+function _cross_root_box(body::AbstractBody, pos_d, CUDAmod)
+    lo = zeros(3); hi = zeros(3)
+    for a in 1:3
+        lo[a] = min(minimum(view(body.nodes, a, :)),
+            Base.invokelatest(minimum, view(pos_d, a, :)))
+        hi[a] = max(maximum(view(body.nodes, a, :)),
+            Base.invokelatest(maximum, view(pos_d, a, :)))
+    end
+    ctr = (lo .+ hi) ./ 2
+    h0 = 0.75 * maximum(hi .- lo) + 1e-9   # 1.5x padding on the half-width
+    x_min = FastMultipole.StaticArrays.SVector{3,Float64}(ctr .- h0)
+    return x_min, h0
+end
+
+function _cross_entry!(body::AbstractBody, np::Int, pos_d, CUDAmod)
+    key = objectid(body)
+    ns = body.ncells
+    cfg = _cross_config()
+    e = get(_CROSS_STATE, key, nothing)
+    has_wake = body isa RigidWakeBody && _gpu_has_te_wake(body)
+    if e === nothing || e.ns != ns || (e.wakemat !== nothing) != has_wake ||
+            e.cfg != cfg
+        x_min, h0 = _cross_root_box(body, pos_d, CUDAmod)
+        ct = FastMultipole.CrossStencilTables(cfg.q, cfg.ell_x, h0, cfg.R_guard)
+        e = _CrossPassEntry(ns, 0, x_min, h0, ct, nothing, nothing, nothing,
+            nothing, nothing, zeros(17, ns),
+            has_wake ? zeros(8, ns) : nothing, zeros(3, ns), cfg,
+            nothing, nothing, nothing)
+        e.ctx = FastMultipole.device_cross_producer_context(ct, x_min, h0, ns, np)
+        e.np = np
+        e.xs = FastMultipole.device_cross_expansion_state(e.ctx, cfg.P)
+        e.m2l_tables = FastMultipole.cross_m2l_operators(cfg.P, h0, ct)
+        e.l2l_table = FastMultipole.cross_l2l_operators(cfg.P, h0, ct.ell_x)
+        e.ls = FastMultipole.device_cross_local_state(e.ctx, cfg.P;
+            m2l_tables=e.m2l_tables, l2l_table=e.l2l_table)
+        # persistent device input mirrors, refreshed with copyto! each step
+        e.d_srcmat = Base.invokelatest(CUDAmod.CuArray, e.srcmat)
+        e.d_cent = Base.invokelatest(CUDAmod.CuArray, e.cent)
+        e.d_wakemat = has_wake ?
+            Base.invokelatest(CUDAmod.CuArray, e.wakemat) : nothing
+        _CROSS_STATE[key] = e
+        if !_CROSS_CFG_LOGGED[]
+            _CROSS_CFG_LOGGED[] = true
+            println("panel_cross config: q=$(cfg.q) ell_x=$(cfg.ell_x) " *
+                "P=$(cfg.P) R_guard=$(cfg.R_guard)")
+            flush(stdout)
+        end
+    elseif e.np != np
+        # particle CAPACITY changed (np here is the padded np_cap, which grows
+        # only when the live count outgrows it — every ~6% of growth, not every
+        # shedding step): rebuild the two-occupancy context and the
+        # particle-sized local state; panel-side expansion state, the frozen
+        # root box (=> cached operator tables), and the config carry over —
+        # cfg equality above guarantees e.xs was built with e.cfg.P, so the
+        # multipole/local expansion orders stay consistent
+        e.ctx = FastMultipole.device_cross_producer_context(e.ct, e.x_min, e.h0,
+            ns, np)
+        e.np = np
+        e.ls = FastMultipole.device_cross_local_state(e.ctx, e.cfg.P;
+            m2l_tables=e.m2l_tables, l2l_table=e.l2l_table)
+        # 052 leak fix: the replaced ctx+ls (~10^2 MB of device arrays) lived
+        # many steps, so they are old-generation garbage the host GC will
+        # never collect on its own (device bytes don't pressure its
+        # heuristics). Rebuilds are rare now — collect eagerly.
+        GC.gc(true)
+    end
+    return e
+end
+
+# One body's Stages A–E. ALL fallible work (uploads, producer refresh, box
+# rebuild, expansion passes, near field) runs BEFORE the single `.+=` into the
+# particle field, so a throw anywhere earlier leaves U untouched for this body.
+function _cross_run_body!(e::_CrossPassEntry, body::AbstractBody, np::Int,
+        pos_d, Pd, xver, CUDAmod)
+    _cross_fill_inputs!(e, body)
+    copyto!(e.d_srcmat, e.srcmat)
+    copyto!(e.d_cent, e.cent)
+    e.wakemat === nothing || copyto!(e.d_wakemat, e.wakemat)
+    FastMultipole.refresh_cross_producers!(e.ctx, e.d_cent, pos_d)
+    if e.ctx.needs_rebuild
+        # box escape: the stencil demotion masks and cached operator tables
+        # are keyed on h0, so patching x_min/h0 into live state would misroute
+        # far/near work. Rebuild the ENTIRE entry around a fresh padded union
+        # box (new tables, masks, contexts, operators) and rerun the producers.
+        # (rebuild at the PADDED count — pos_d carries np_cap columns)
+        delete!(_CROSS_STATE, objectid(body))
+        e = _cross_entry!(body, size(pos_d, 2), pos_d, CUDAmod)
+        _cross_fill_inputs!(e, body)
+        copyto!(e.d_srcmat, e.srcmat)
+        copyto!(e.d_cent, e.cent)
+        e.wakemat === nothing || copyto!(e.d_wakemat, e.wakemat)
+        FastMultipole.refresh_cross_producers!(e.ctx, e.d_cent, pos_d)
+        e.ctx.needs_rebuild && error("cross-pass union-box rebuild failed to " *
+            "contain all bodies (freshly padded box escaped within one step)")
+    end
+    hit, dumpdir = _panel_cross_dump_hit(np)
+    if hit != 0
+        push!(_PANEL_CROSS_EVAL_DUMPED, hit)
+        mkpath(dumpdir)
+        pre = joinpath(dumpdir, "ateval_np$(np)")
+        write(pre * "_srcmat.bin", e.srcmat)
+        e.wakemat === nothing || write(pre * "_wakemat.bin", e.wakemat)
+        write(pre * "_cent.bin", e.cent)
+        write(pre * "_positions.bin", Matrix{Float64}(Array(pos_d))[:, 1:np])
+        open(pre * "_meta.txt", "w") do io
+            println(io, "np=", np, " ns=", e.ns)
+            println(io, "x_min=", e.x_min)
+            println(io, "h0=", e.h0)
+            println(io, "n_routes=", e.ctx.n_routes, " n_demoted=",
+                e.ctx.n_demoted, " n_blocks=", e.ctx.n_blocks)
+        end
+        # 052d step-5f: dump the producer route/block lists + occupancy so the
+        # production near pair set can be bit-compared against the proto shell
+        lists = FastMultipole.download_cross_lists(e.ctx)
+        open(pre * "_lists_meta.txt", "w") do io
+            wdump = (name, arr) -> begin
+                A = collect(arr)
+                write(pre * "_lists_" * name * ".bin", A)
+                println(io, name, " ", eltype(A), " ", join(size(A), "x"))
+            end
+            for grp in (:routes, :blocks, :panels, :particles)
+                sub = getproperty(lists, grp)
+                for f in propertynames(sub)
+                    v = getproperty(sub, f)
+                    v isa AbstractArray ? wdump(string(grp, "_", f), v) :
+                        println(io, grp, "_", f, " = ", v)
+                end
+            end
+            println(io, "x_min = ", lists.x_min)
+            println(io, "h0 = ", lists.h0)
+            println(io, "needs_rebuild = ", lists.needs_rebuild)
+        end
+        println("panel_cross_eval_dump np=$np -> $(pre)_*")
+        flush(stdout)
+    end
+    FastMultipole.refresh_cross_multipoles!(e.xs, e.ctx, e.d_srcmat, e.d_wakemat)
+    # Stage-B skip counter is a hard error: a skipped panel (unhandled tag or
+    # nv < 3) would silently lose its far field while Stage E still evaluates
+    # its near field — a plausible-but-wrong velocity
+    e.xs.n_skipped == 0 || error("cross-pass Stage B skipped " *
+        "$(e.xs.n_skipped) panel(s) (unhandled tag or nv < 3); refusing to " *
+        "return a partial far field")
+    FastMultipole.refresh_cross_locals!(e.ls, e.ctx, e.xs)
+    FastMultipole.finish_cross_locals!(e.ls, e.ctx, pos_d)
+    if hit != 0
+        write(joinpath(dumpdir, "ateval_np$(np)_farU.bin"),
+            Matrix{Float64}(Array(e.ls.d_out))[2:4, 1:np])
+    end
+    wake_tag = (body isa RigidWakeBody &&
+        get_wake_kernel(body) === ConstantDoublet) ? 2 : 3
+    FastMultipole.apply_cross_near!(e.ls, e.ctx, e.d_srcmat, pos_d;
+        d_wake_buffer=e.d_wakemat, wake_tag=wake_tag,
+        reg=_gpu_filament_reg(), potential=false)
+    # all fallible work done — accumulate into the particle field LAST
+    # (live prefix only: columns np+1:np_cap are padding targets)
+    view(Pd, FLOWVPM.U_INDEX, 1:np) .+= view(e.ls.d_out, 2:4, 1:np)
+    if xver !== nothing
+        xver .+= Matrix{Float64}(Array(e.ls.d_out))[2:4, 1:np]
+    end
+    return nothing
+end
+
+"""
+    _panel_cross_device!(pfield, bodies, grad) -> Bool
+
+052d Stage F: run the device cross pass for every body in `bodies`,
+accumulating velocity into the particle field's U rows on device. Returns
+false (host-fmm! fallback) without touching anything when the leg cannot run
+on device. With PANEL_INFLUENCE_FMM_XVERIFY=1, additionally evaluates the
+host-fmm! reference and prints the device-vs-host relU each call.
+"""
+function _panel_cross_device!(pfield::FLOWVPM.ParticleField, bodies::Tuple,
+        grad::Bool)
+    _panel_fmm_device() ||
+        return _gpu_route_fallback!(:panels_to_particles_cross, "device route disarmed")
+    grad &&
+        return _gpu_route_fallback!(:panels_to_particles_cross,
+            "cross pass is U-only (grad requested)")
+    FastMultipole.load_cuda_radix_lifecycle!() ||
+        return _gpu_route_fallback!(:panels_to_particles_cross,
+            "CUDA radix lifecycle unavailable")
+    for body in bodies
+        body isa AbstractBody ||
+            return _gpu_route_fallback!(:panels_to_particles_cross,
+                "unsupported source $(typeof(body))")
+        _gpu_panel_tag(_gpu_element_type(body)) === nothing &&
+            return _gpu_route_fallback!(:panels_to_particles_cross,
+                "unsupported element set $(typeof(body))")
+        body isa RigidWakeBody && body.semiinfinite_wake &&
+            return _gpu_route_fallback!(:panels_to_particles_cross,
+                "semi-infinite wake not covered by the cross pass")
+    end
+    # validate tunables up front so a misconfigured env fails loudly here
+    # rather than surfacing as a silent per-step host fallback
+    _cross_config()
+    np = pfield.np
+    CUDAmod = getglobal(FastMultipole, :CUDA)
+    Pd = pfield.particles
+    # cross-pass state is Float64; production particle fields may be Float32.
+    # 052 leak fix: np grows every shedding step, and rebuilding the
+    # particle-sized device state (producer context + local state, ~10^2 MB)
+    # each step leaks it — the replaced buffers survive a full step, get
+    # promoted, and no major GC ever runs (device bytes are invisible to the
+    # host GC heuristics; job 13508681 died at step 819 this way). Pad the
+    # particle count to a grow-only capacity instead: the tail wrap-fills with
+    # REAL particle positions, so occupancy (and thus the route/block lists)
+    # is identical and the only cost is ~6% duplicate target work; entries
+    # rebuild only when np outgrows the capacity.
+    pos_d, np_cap = _cross_padded_positions!(Pd, np, CUDAmod)
+    xver = _panel_fmm_xverify() ? zeros(3, np) : nothing
+    n_accumulated = 0
+    pass_error = nothing
+    _step_timer_measure(:rotor_panels_to_particles_cross; nested=true) do
+        try
+            for body in bodies
+                e = _cross_entry!(body, np_cap, pos_d, CUDAmod)
+                _cross_run_body!(e, body, np, pos_d, Pd, xver, CUDAmod)
+                n_accumulated += 1
+            end
+        catch err
+            pass_error = err
+        end
+    end
+    if pass_error !== nothing
+        if n_accumulated == 0
+            # U untouched: fall back to the host-fmm! route cleanly
+            return _gpu_route_fallback!(:panels_to_particles_cross,
+                "device cross pass threw before any accumulation: " *
+                sprint(showerror, pass_error))
+        end
+        # some bodies already accumulated: the field is corrupt — refuse to
+        # continue or to double-count via a fallback
+        error("device cross pass failed after accumulating $(n_accumulated) " *
+            "of $(length(bodies)) bodies into U (partial write; the particle " *
+            "field must not be trusted): " * sprint(showerror, pass_error))
+    end
+    if xver !== nothing
+        pos_h = Matrix{Float64}(Array(pos_d))[:, 1:np]
+        ref = zeros(3, np)
+        _panel_fmm_evaluate!(ref, pos_h, bodies, false)
+        relU = sqrt(sum(abs2, xver .- ref)) / max(sqrt(sum(abs2, ref)), eps())
+        println("panel_cross_xverify np=$np relU=$relU")
+        flush(stdout)
+        _panel_fmm_maybe_dump(ref, pos_h, bodies, np; deviceU=xver)
+    end
+    _gpu_route_hit!(:panels_to_particles_cross, :cuda)
+    return true
+end
+
+_gpu_element_type(::AbstractBody{E}) where E = E
+
+"""
+    _panel_fmm_evaluate!(out, positions, bodies, grad)
+
+052d Phase 1 core: evaluate `bodies`' influence at `positions` (3 x n) through
+host `FastMultipole.fmm!` and ACCUMULATE velocity into `out[1:3, :]` and, when
+`grad`, the velocity gradient into `out[4:12, :]` in `J_INDEX` linear order
+(the same column-major SMatrix order the production fmm! path writes through
+`FLOWVPM.buffer_to_target_system!`). The target view is a
+`FastMultipole.ProbeSystemArray` — positions in, gradient/hessian out — so no
+particle storage is touched here; callers own the accumulation into U/J rows.
+"""
+function _panel_fmm_evaluate!(out::AbstractMatrix{Float64},
+        positions::AbstractMatrix{Float64}, bodies::Tuple, grad::Bool)
+    n = size(positions, 2)
+    n == 0 && return nothing
+    probes = FastMultipole.ProbeSystemArray(n)
+    probes.position .= positions
+    FastMultipole.fmm!((probes,), bodies;
+        expansion_order=_panel_fmm_p(),
+        multipole_acceptance=_panel_fmm_theta(),
+        leaf_size_source=_panel_fmm_leaf(),
+        scalar_potential=false, gradient=true, hessian=grad,
+        shrink=true)
+    @views out[1:3, :] .+= probes.gradient
+    if grad
+        @views out[4:12, :] .+= reshape(probes.hessian, 9, n)
+    end
     return nothing
 end
 
@@ -703,11 +1386,75 @@ function _gpu_device_pfield_target!(pfield::FLOWVPM.ParticleField,
         end
     end
 
+    # 052d Phase 1: panels -> particles through the host tree-FMM (default
+    # off). ONE fmm! call covers ALL AbstractBody sources: positions come down
+    # once (D2H, ~6 MB at 242k), results go back up once (H2D) and accumulate
+    # on device. Non-body sources stay on the dense device path below.
+    fmm_bodies = panel_influence_fmm_enabled() ?
+        Tuple(s for s in sources if s isa AbstractBody &&
+            _gpu_source_columns(s) > 0) : ()
+    # 052d Stage F: device cross pass first; host fmm! only as fallback
+    if !isempty(fmm_bodies) && _panel_cross_device!(pfield, fmm_bodies, grad)
+        fmm_bodies_handled = fmm_bodies
+        fmm_bodies = ()
+    else
+        fmm_bodies_handled = ()
+    end
+    if !isempty(fmm_bodies)
+        out_h = Matrix{Float64}(undef, 0, 0)
+        _step_timer_measure(:rotor_panels_to_particles_fmm; nested=true) do
+            CUDAmod = getglobal(FastMultipole, :CUDA)
+            Pd = pfield.particles
+            pos_h = Matrix{Float64}(Array(Pd[1:3, 1:np]))
+            nout_f = grad ? 12 : 3
+            out_h = zeros(Float64, nout_f, np)
+            _panel_fmm_evaluate!(out_h, pos_h, fmm_bodies, grad)
+            outf_d = Base.invokelatest(CUDAmod.CuArray,
+                Matrix{eltype(Pd)}(out_h))
+            view(Pd, FLOWVPM.U_INDEX, 1:np) .+= view(outf_d, 1:3, :)
+            grad && (view(Pd, FLOWVPM.J_INDEX, 1:np) .+= view(outf_d, 4:12, :))
+        end
+        # PANEL_INFLUENCE_FMM_SNAPSHOT=1 (probe diagnostics, NOT production):
+        # additionally evaluate the same leg with the dense device kernels
+        # into a scratch buffer (NOT accumulated) and print the rel-RMS
+        # FMM-vs-dense field error at production shape. Costs one dense leg
+        # per call — probe runs only.
+        if lowercase(get(ENV, "PANEL_INFLUENCE_FMM_SNAPSHOT", "0")) in
+                ("1", "true", "on", "yes")
+            CUDAmod = getglobal(FastMultipole, :CUDA)
+            Pd = pfield.particles
+            nout_f = grad ? 12 : 3
+            ref_d = Base.invokelatest(CUDAmod.zeros, eltype(Pd), nout_f, np)
+            tgts_d = Pd[1:3, 1:np]
+            for ssys in fmm_bodies
+                srcmat, kern = _gpu_pack_source!(ssys, nothing)
+                src_d = srcmat isa Matrix ?
+                    Base.invokelatest(CUDAmod.CuArray, srcmat) : srcmat
+                Base.invokelatest(FastMultipole.direct_rectangular!, ref_d,
+                    tgts_d, kern, src_d; gradient=grad)
+            end
+            ref_h = Matrix{Float64}(Array(ref_d))
+            relU = sqrt(sum(abs2, view(ref_h, 1:3, :) .- view(out_h, 1:3, :))) /
+                max(sqrt(sum(abs2, view(ref_h, 1:3, :))), eps())
+            msg = "panel_fmm_snapshot p=$(_panel_fmm_p()) np=$np relU=$relU"
+            if grad
+                relJ = sqrt(sum(abs2, view(ref_h, 4:12, :) .- view(out_h, 4:12, :))) /
+                    max(sqrt(sum(abs2, view(ref_h, 4:12, :))), eps())
+                msg *= " relJ=$relJ"
+            end
+            println(msg); flush(stdout)
+        end
+    end
+
     packed = Any[]
+    packed_sys = Any[]
     for ssys in sources
         ssys === pfield && continue
+        any(b -> b === ssys, fmm_bodies) && continue
+        any(b -> b === ssys, fmm_bodies_handled) && continue
         _gpu_source_columns(ssys) == 0 && continue
         push!(packed, _gpu_pack_source!(ssys, nothing))
+        push!(packed_sys, ssys)
     end
     isempty(packed) && return nothing
 
@@ -716,8 +1463,7 @@ function _gpu_device_pfield_target!(pfield::FLOWVPM.ParticleField,
     tgt_d = P[1:3, 1:np]                       # device position slice
     nout = grad ? 12 : 3
     out_d = Base.invokelatest(CUDAmod.zeros, eltype(P), nout, np)
-    for ((srcmat, kern), ssys) in zip(packed,
-            Tuple(s for s in sources if s !== pfield && _gpu_source_columns(s) > 0))
+    for ((srcmat, kern), ssys) in zip(packed, packed_sys)
         label = ssys isa NonLiftingBody ?
             :ground_panels_to_particles : :rotor_panels_to_particles
         _step_timer_measure(label; nested=true) do
