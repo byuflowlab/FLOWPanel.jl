@@ -9,6 +9,67 @@
 
 ## Current status and next actions
 
+> **RESET BRIEF (g) — 2026-08-26 evening (CONTEXT-RESET HANDOFF — start
+> here).** Entry point for all detail: `phase_06_multirotor_gpu.md`
+> (task checklist + session-2 log). State:
+> 1. **Ruling 7 shared pfield is IMPLEMENTED and gate-verified,
+>    UNCOMMITTED** — src (`FLOWPanel_wake.jl` `pfield=` kwarg;
+>    `FLOWPanel_simulate.jl` identity-dedupe of probes/sources, freestream,
+>    propagate, VTK) + driver (shared N×500k field, `MAX_PARTICLES`
+>    override, damp-band/diagnostics dedupe). 1r bit-identity PASSED (a
+>    pre-change rerun matches post-change byte-for-byte; the original
+>    baseline's final-step C array has pre-existing run-order
+>    nondeterminism — do not chase). 2r: ΔCT ≤ 0.05%, np +0.1%
+>    (union-merge), single `wake1_particles` (ParaView dedupe works).
+>    4r_oge/2r_ige post-change smokes NOT yet run.
+> 2. **A PARALLEL SESSION is implementing 052b Phase A.1 warm-start in the
+>    same working tree** (its edits sit on top of the shared-pfield work:
+>    `FLOWPanel_warmstart.jl` Ruling-7 dedup, driver NROTORS>1 unlock;
+>    ground warm-start still blocked ~driver:1630). COORDINATE COMMITS —
+>    do not commit/stash/revert these files blind; diff against the other
+>    session's state first. The 7 p022m launcher scripts are also still
+>    uncommitted.
+> 3. **Four CPU p022m arms RUNNING since 2026-08-26 ~04:30** (28-rev
+>    schedule, 1007 steps): 13484022 2r_oge (~39 s/step, ~11 h), 13484023
+>    2r_ige (~149, ~42 h/72 h), 13484024 4r_oge (~71, ~20 h), 13484025
+>    4r_ige (~286 s/step, ~80 h vs 72 h wall). **Ryan ruling: RIDE
+>    13484025 + WARM-START RESCUE — do NOT cancel**; ground warm-start
+>    validation must land within ~3 days to continue its tail from the
+>    per-step restart sets. IGE arms run `GROUND_DAMP_BAND_R=0.1`
+>    (breach ruling; Phase-3 verdict VOID — 13246557/58 both overflowed
+>    500k ~rev 15–18 and blew up, no CSVs). Harvest = per-rotor
+>    `*_CT_vs_rev.csv` columns; watch below_ground_count and np overflow
+>    (500k per-rotor caps on these committed-driver runs).
+> 4. **GPU adaptation NOT started** (this session's scope was pfield + CPU
+>    launch). Rulings recorded in the phase-06 checklist: GH200 primary
+>    (`mgh`/`--constraint=arm`), pick GPU per submission via
+>    slurm-availability (shortest wait among H200/H100/GH200/B200, low
+>    preempt; H200 prefer `qos=eng` unless `qos=gpu` predicts shorter);
+>    IGE h/R=1.5; gaussian reg; no GPU-S (multi-body unproven). Design
+>    plan: `~/.claude/plans/work-on-brainstorm-022-multi-rotor-gentle-frog.md`.
+> 5. Gotchas: cluster `~/projects/FLOWPanel.jl` src was reconciled to local
+>    HEAD pre-submission — do NOT push the (post-submission) shared-pfield
+>    src edits onto that tree while the CPU arms could restart from it;
+>    GPU tree goes to a separate checkout (`deploy_022g.sh`, unwritten).
+>    `deploy_022m.sh`'s remote-verify block has an ssh-quoting bug (runs
+>    in `$HOME`) — verify md5s manually. Julia GPU runs pin 1.11.7.
+>    Notebook entry for 2026-08-26 session 2 NOT yet offered/approved.
+
+> **RESET BRIEF (f) — 2026-08-25 (Phase 6 staged; campaign status still in
+> (e) below — start there for the live IGE campaign).** Ryan directed a new
+> phase: **Phase 6 — multi-rotor GPU acceptance** (10 revs each for 1/2/4
+> rotors, OGE + IGE, ≤2 h walltime per case, major cost steps on GPU). See
+> `phase_06_multirotor_gpu.md`. The GPU engineering is tracked in
+> FastMultipole as item **052b**
+> (`../FastMultipole/MATRIX_OPERATOR_REFACTOR/052b-impl-multirotor-ige-gpu.md`),
+> extending 052/052a; Phase 6 is blocked on 052b technical completion and on
+> the Phase-3 particle-policy verdict (the `p022m_*` launchers carry a
+> placeholder `GROUND_DAMP_BAND_R=0`). New ruling 7 (Ryan 2026-08-25): the
+> whole simulation uses a **single particle field object** shared by all
+> rotors — the current per-rotor `PanelParticleWake` construction
+> (`examples/rotor_hover_ground_effect.jl:815`, wakes tuple at :1258/:1262)
+> must be updated (expected minimal change) before Phase 6 runs.
+
 > **RESET BRIEF (b) — 2026-08-18 (submitted).** Phase 0 PASS (both smokes
 > clean; GS gate decisive: 6–7 outer iters of 50, zero non-converged, wake
 > direction +x confirmed by below-ground census). Four Phase 1/2 jobs
@@ -158,6 +219,13 @@ experiment shows the effect is gone by ≈1.004 at h/R = 2.0).
    at the ground** (`GROUND_PARTICLE_POLICY=truncate`, cylinder floor raised
    to the plane). Phases 3 and 4 swapped so this lands before the ground
    convergence ladders.
+7. **(Ryan 2026-08-25)** Multi-rotor simulations use a **single particle
+   field object for the entire simulation** — all rotors shed into one
+   shared pfield (one FMM tree over all wake particles). The current
+   per-rotor `PanelParticleWake` construction
+   (`examples/rotor_hover_ground_effect.jl:815`) does not satisfy this and
+   must be updated; Ryan expects a minimal code change. Binding on Phase 6
+   and on the FastMultipole 052b GPU extension.
 
 ## Fixed operating point and unit conversions
 
@@ -192,6 +260,7 @@ experiment shows the effect is gone by ≈1.004 at h/R = 2.0).
 | 3 | Below-ground particle policy: velocity cutoff + truncation-at-ground (order swapped with 4, Ryan 2026-08-20) | executing | `022_rotor_hover_ground_effect/phase_03_particle_policy.md` |
 | 4 | Ground convergence ladders (disc radius, panel length, truncation radius) | staged (blocked on 3) | `022_rotor_hover_ground_effect/phase_04_ground_convergence.md` |
 | 5 | h/R sweep (0.5, 1.5, 2.0) vs experiment + CB theory | staged (gated on Phase 2 verify) | `022_rotor_hover_ground_effect/phase_05_hr_sweep.md` |
+| 6 | Multi-rotor GPU acceptance: 10 revs for 1/2/4 rotors, OGE + IGE, ≤2 h walltime each, major cost steps on GPU (via FastMultipole 052b) | staged (blocked on 052b + Phase 3 verdict) | `022_rotor_hover_ground_effect/phase_06_multirotor_gpu.md` |
 
 Cross-cutting: `ledger.md` (single running results table),
 `decision_rules.md` (M1 metric + acceptance thresholds),

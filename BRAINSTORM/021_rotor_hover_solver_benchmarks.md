@@ -8,8 +8,10 @@
 
 ## Current status
 
-> **STALE BELOW — last revised 2026-08-13.** As of 2026-08-22 the campaign is in
-> Phase 2, not "Phase 1 starting". Read
+> **STALE BELOW — last revised 2026-08-13.** Fresh agent: start from
+> [`phase_20_context_reset_prompt.md`](021_rotor_hover_solver_benchmarks/phase_20_context_reset_prompt.md)
+> (2026-08-25), which chains to `phase_18` for cluster state. As of 2026-08-22
+> the campaign is in Phase 2, not "Phase 1 starting". Read
 > `021_rotor_hover_solver_benchmarks/log.md` (newest first) for true state; the
 > narrative below is kept for Phase-0 provenance only. Live summary: Phase 1
 > ladder frozen and tuned through R6 (R7 tune + R6 table failed, causes
@@ -170,9 +172,9 @@ The paper's comparison roster is rulings 1a–1f below. What exists today:
 | Phase | Deliverable | Status | Approval |
 | --- | --- | --- | --- |
 | [0](021_rotor_hover_solver_benchmarks/phase_00_availability.md) | All roster configs runnable in the rotor pipeline + instrumentation layer + **sparse near-field ILU preconditioner (W6, added 2026-08-12)** | TECHNICALLY COMPLETE 2026-08-13 (W1–W6; W6 smoke PASS both modes) | clear-context APPROVED 2026-08-13 (2nd review, after remediating the 1st's 6 findings); Ryan re-approval [ ] (Ryan 2026-08-13: proceed to Phase 1 meanwhile) |
-| [1](021_rotor_hover_solver_benchmarks/phase_01_consistency.md) | No-wake agreement across the ladder + frozen per-solver settings achieving matched residual levels | IN PROGRESS (ladder FROZEN R1–R7 8,016→419,276 panels; R1–R6 tuned; R7 tune + R6 table failed 2026-08-18, causes found 08-22, resubmission pending) | [ ] |
-| [2](021_rotor_hover_solver_benchmarks/phase_02_single_step_benchmarks.md) | Setup vs per-step cost benchmarks, bottleneck attribution, tuning + authorized source speedups, re-benchmark | IN PROGRESS since 2026-08-17 (near-field matrix cache, rigid-motion tree reuse + FGS staleness fix, cached-economics tune); 2b HPC campaign relaunch pending | [ ] |
-| [3](021_rotor_hover_solver_benchmarks/phase_03_warmstart.md) | Warmstart matrix (none / previous / Taylor-extrapolated) × (Krylov, FGS) in unsteady hover | NOT STARTED | [ ] |
+| [1](021_rotor_hover_solver_benchmarks/phase_01_consistency.md) | **DESCOPED 2026-08-24 (Ryan): solve the ladder up to R7 and verify the solvers agree on the SOLUTION.** Tuning and per-solver settings moved to Phase 2 | IN PROGRESS (ladder FROZEN R1–R7 8,016→419,276 panels; driver = `rotor_hover_solver_phase1_agreement.jl`, ladder extended to R7, optional `NFCACHE`; **BLOCKER: a dense `backslash_ref` is 335 GiB at R6 / 1.31 TiB at R7 — the R6/R7 reference config needs Ryan**) | [ ] |
+| [2](021_rotor_hover_solver_benchmarks/phase_02_single_step_benchmarks.md) | Setup vs per-step cost benchmarks, bottleneck attribution, tuning + authorized source speedups, re-benchmark. **Now OWNS tuning** | IN PROGRESS since 2026-08-17. 2026-08-24: caching wired into tuning AND benchmarks per Ryan's ruling; objective is now a REAL SOLVE (`tune_fmm_perturb cost=`) for R1–R5; **memory budget is a swept AXIS** (`rotor_hover_solver_phase2_tune.jl`), cache build reported in its own column, never in `t_solve`. Nothing has run on the cluster yet; R6–R7 objective needs Ryan | [ ] |
+| [3](021_rotor_hover_solver_benchmarks/phase_03_warmstart.md) | Warmstart matrix (none / previous / Taylor-extrapolated) × (Krylov, FGS) in unsteady hover. **Validity guard = per-step BC satisfaction** (Ryan 2026-08-25) | NOT STARTED (gated on Phase 2 Step A; approval unticked). Instrumentation READY: FGS per-step iteration capture CLOSED (the `phase_03_launch_prompt.md` "pending callback plumbing" blocker was superseded 2026-08-23, corrected in place 2026-08-25). Guard rebuilt 2026-08-25 after the 08-23 extrap "divergence" was traced to the TEST, not the solver — the old bar read a residual tolerance as a solution tolerance. Ryan then ruled the whole solution-comparison approach out: measure the BC instead. Verified live at R1/fgs (cold+prev): all steps certified, max\|φ\|/tol 1.007 / 0.994, ΔCT 1.3e-5 %. Costs ~62% of `t_solve` in wall time (excluded from `t_solve`; Ryan: acceptable) | [ ] |
 | [4](021_rotor_hover_solver_benchmarks/phase_04_blown_wing.md) | Rotor + NACA 0015 wing multi-body benchmarks; coupled-vs-iterative refactorization asymmetry | NOT STARTED | [ ] |
 
 Completing a phase does not authorize the next phase.
@@ -238,6 +240,34 @@ Completing a phase does not authorize the next phase.
   priority candidate**, theory doc written). Warmstart benefit elevated to a **headline
   deliverable** as **ruling 12** (cold Phase 2 baselines, Phase 3 warmstart matrix at frozen
   settings, break-even metric added).
+
+- 2026-08-25 — Ryan: **Phase 3 validity guard = BC satisfaction, not solution
+  agreement.** The 08-23 report of the extrapolated arm as DIVERGED was a test
+  defect: the guard compared `sum(abs, strength)` between arms against a hard
+  `1e-8`, which (a) read a *residual* tolerance as a *solution* tolerance —
+  implicitly $\|A^{-1}\|=1$, where Phase 1 measures $\kappa_{\rm eff}\approx12$ at R1,
+  putting the observed 2.4e-7 about three decades *inside* the solver's own
+  ambiguity — and (b) used an L1 aggregate that cancels equal-and-opposite
+  changes. An intermediate relative-L2-between-arms design was built and then
+  **discarded on Ryan's ruling**: *"there is no need to measure the divergence of
+  the solution itself... it's easier to show that we're satisfying the boundary
+  conditions."* Each arm is now checked per step against the tolerance **it**
+  promised, via one `bc_error!` pass (021 ruling 3) — for this Dirichlet body the
+  control-point potential *is* the BC residual, so no reference solution, no
+  dense $G$ and no conditioning argument is needed at any rung. Accuracy is
+  *requested and certified* (absolute FMM error $=0.1\times$ the arm's tolerance)
+  rather than guessed via expansion order. **Identity is reported, not asserted**
+  — CT is the identity signal, per-step `n_particles` is shown for gross
+  divergence, and `n_particles_end` is no longer an assertion: the wake is
+  chaotic and small differences compound. Ryan accepted the ~1.4× wall-time
+  inflation ("run it twice, or use the replay function"). Full rules in
+  `decision_rules.md` → *BC satisfaction guard*.
+- 2026-08-25 — Sentinel cleanup: `phase1_agreement.jl` and `phase1_solvetime.jl`
+  were the last two drivers hard-coding `niter = -1` for non-Krylov solvers; both
+  now mirror `unsteady.jl`. Takes effect on future re-runs only (R1–R7 were
+  spooled under the old driver). Amendment recorded that the `niter` **column is
+  not homogeneous** — Krylov iterations, FGS sweeps and outer FGMRES iterations
+  share it.
 
 ## Logging provision
 

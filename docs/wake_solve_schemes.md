@@ -2,6 +2,17 @@
 
 ## Purpose and current verdict
 
+> **2026-08-27 production ruling (supersedes 2026-08-26).**
+> `VelocityThroughSources` is the 052b/Phase-6 production formulation. The
+> corrected tuple solve still passes other Dirichlet bodies through scalar
+> potential and Neumann targets such as ground through velocity.
+> `HybridWakePotential` is preserved as an experimental 052e comparison: it
+> evaluates retained `PanelWake` potential directly and Green-reconstructs the
+> particle-induced trace, but its current small-fixture characterization
+> (about 10% trace error and roughly 60% velocity error) is not production
+> accuracy proof. `TraceCorrected` remains deprecated, and
+> `DirectWakePotential` remains panel-wake-only.
+
 FLOWPanel has two wake representations that can be compared in a nominally steady
 calculation:
 
@@ -9,7 +20,7 @@ calculation:
   doublets; and
 - a finite attached wake followed by a time-marched free wake.
 
-The marched calculation transfers the free wake's velocity to the body and therefore
+The VTS marched calculation transfers the free wake's velocity to the body and therefore
 changes the body source strengths. It does not transfer the free wake's scalar
 potential. The two routes can be mathematically equivalent, but that conclusion has
 three separate parts: a continuum Green representation, its finite-panel realization,

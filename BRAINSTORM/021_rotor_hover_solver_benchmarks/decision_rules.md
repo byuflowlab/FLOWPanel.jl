@@ -109,6 +109,23 @@ mean the same thing for every solver.
   the step, the one that actually consumes the step-to-step initial guess — as
   the warmstart headline metric, and keeps `niter` only as a legacy diagnostic
   for continuity with Phase 1/2 rows.
+- **The `niter` COLUMN is not homogeneous (amendment 2026-08-25).** Three
+  different units share it, and a reader comparing them as "cost" will be
+  wrong:
+  1. `krylov_*` rows — Krylov iterations;
+  2. `fgs` rows — Gauss-Seidel **sweeps**;
+  3. `fgmres_fgs` rows — the **outer FGMRES** iteration count. Its
+     `FGSPreconditioner` holds its own `FGSSolver` with `sweeps` FIXED and
+     `tolerance=0` (`src/FLOWPanel_solver.jl:1772-1787`), so the inner sweep
+     count is a configured constant and is surfaced nowhere.
+
+  Sentinel cleanup, same date: `phase1_agreement.jl:439` and
+  `phase1_solvetime.jl:175` were the last two drivers hard-coding `niter = -1`
+  for non-Krylov solvers; both now mirror `unsteady.jl:241`. Every other driver
+  in `benchmark/` already read `solver.niter` unconditionally. **The fix reaches
+  only future re-runs** — R1–R7 were spooled by Slurm under the old driver and
+  stay uniformly `-1` for FGS.
+
 - **`nsolves` and step-level `solved`.** `step_nsolves(solver)` reports how many
   per-body solves the completed step took, and `step_solved(solver)` is the AND
   of those solves' inner convergence flags (it is *not* a multibody outer
@@ -129,6 +146,72 @@ mean the same thing for every solver.
   Multibody outer counts are deferred to Phase 4 (blown wing), for which
   `solve!(bodies::Tuple, solvers::Tuple)` accepts `solver_optargs` to reach the
   inner per-body solve.
+
+## BC satisfaction guard (Phase 3, Ryan's ruling 2026-08-25)
+
+Supersedes the `sum(abs, strength)` vs `1e-8` check, the same-day `1e-8 -> 1e-7`
+ruling (withdrawn before implementation), and an intermediate relative-L2
+between-arms design (built, then discarded in favour of this).
+
+**Ryan's ruling.** "There is no need to measure the divergence of the solution
+itself between warm and cold solves; rather, the residual should be measured...
+it's easier to show that we're satisfying the boundary conditions."
+
+- **Why the old guard was invalid.** The solver's acceptance test is
+  $\max_i |b - Ax|_i \le \texttt{tol\_abs}$ — absolute and independent of the
+  initial guess (`FastMultipole/src/solve.jl:1222`; `residual!` returns max-abs
+  despite the `mse` label). Cold and warm call the identical
+  `FastMultipole.solve!`; the only difference is `project_solution!`. They land
+  at **different points of the same residual ball**, of solution-space diameter
+  $\|A^{-1}\| \cdot 2\,\texttt{tol\_abs}$. The old bound assumed
+  $\|A^{-1}\| = 1$ — it read a *residual* tolerance as a *solution* tolerance.
+  Phase 1 measures $\kappa_{\rm eff} \approx 12$ at R1, so the expected spread is
+  near $2\times10^{-4}$ and the observed $2.4\times10^{-7}$ sat ~3 decades
+  *inside* the solver's own ambiguity. **extrap was never diverging.** Second
+  defect: `sum(abs, x)` is one aggregate and cancels equal-and-opposite changes.
+- **What replaced it.** Each arm is checked against the tolerance **it**
+  promised, per step, by one `bc_error!` pass (`benchmark/common.jl`, 021 ruling
+  3). For this Dirichlet body the control-point potential IS the BC residual
+  $\varphi_\sigma + G_\mu x$, so no reference solution, no dense $G$, and no
+  conditioning argument is needed at any rung. Recorded per step:
+  `bcerr_{max,min,q1,med,q3,rms,tol,eps,certified}`, `t_bcerr`.
+- **Accuracy by construction, not by guess.** `bc_error!` *requests* an absolute
+  FMM error target and reports whether every M2L pair certified it. The driver
+  requests `BCERR_SAFETY` (default 0.1) $\times$ the arm's own stopping
+  tolerance, making the instrument ~10x sharper than the acceptance level;
+  `bcerr_certified=false` says loudly when it was not.
+- **Pass band is $1 + \varepsilon/\texttt{tol}$, not 1.** The arm stopped on its
+  own leaf-local estimate at its tuned expansion order; `bc_error!` re-evaluates
+  the same quantity independently and more sharply, so the two legitimately
+  differ by about the error requested of the measurement. Ratios inside that
+  band report as **marginal** rather than OK, so drift toward the bar stays
+  visible. Above it: **BC VIOLATED**.
+- **Identity is REPORTED, never asserted.** The wake is chaotic — tiny
+  differences compound over many steps, so demanding identical particle counts
+  or trajectories would flag correct runs. **CT** is the physical identity
+  signal and carries no threshold; `n_particles` is emitted every step so gross
+  divergence is visible. `n_particles_end` is no longer an assertion.
+- **Cost, and what it does and does not contaminate.** The pass measured ~62% of
+  `t_solve` at R1 (cold-start smoke), inflating wall time ~1.4x. **Ryan ruled the
+  extra wall time acceptable** (run twice, or recover it through replay), so the
+  measurement runs INLINE in the same run — `BCERR_EVERY` defaults to 1 (every
+  step) and exists only as an escape hatch. Skipped steps write EMPTY cells,
+  never a fabricated value or verdict.
+  - `t_solve` — the headline warmstart metric — is **clean**: its timer closes
+    before the BC pass begins.
+  - `t_step_total` is **not** clean: the pass lies inside the
+    `maneuver!`-to-`maneuver!` window. Since full-timestep share is a campaign
+    deliverable (Ryan 2026-08-06), the driver emits **`t_step_net =
+    t_step_total - t_bcerr`** and reports its end-of-run solve share against net
+    wall, quoting the raw figure and the measurement total alongside. Measured
+    R1 impact: per-step share 35% raw vs 45% net — a ~10-point error if the raw
+    column is used unwittingly. **Use `t_step_net` for any timestep-share claim.**
+- **Verified on a live R1/fgs run (cold + prev, 5 steps each) 2026-08-25:** all
+  steps certified; `max|φ|/tol` = 1.007 (cold) and 0.994 (prev), i.e. both arms
+  sit right at the bar they promised; $\Delta$CT between arms = $1.3\times10^{-5}$ %.
+- **Neumann bodies are not covered.** `bc_error!` implements the Dirichlet
+  metric and errors on a Neumann body; the driver asserts Dirichlet up front. A
+  Neumann rotor would need `true_residual!` and a re-derived tolerance.
 
 ## Solve-step lifecycle and warm-start history (2026-08-23)
 
@@ -162,22 +245,34 @@ rejects on.
 `KrylovSolver` — 56 bytes per solver, negligible against `solver_state_bytes`
 (MB–GB scale) but recorded here because solver memory is a reported metric.
 
-## Phase 3 unsteady CSV schema (2026-08-22)
+## Phase 3 unsteady CSV schema (2026-08-22; widened 2026-08-25)
 
 `unsteady.csv` uses a bespoke per-step schema, NOT `RUNS_CSV_COLUMNS`, and is
 not covered by `validate_runs_csv`. Phase 3 extends it with:
 `niter_first, nsolves, solved, warmstart, warmstart_order, restart_step,
 skip_steps, strength_checksum`, alongside the existing per-step columns.
+The 2026-08-25 BC-satisfaction guard added:
+`bcerr_max, bcerr_min, bcerr_q1, bcerr_med, bcerr_q3, bcerr_rms, bcerr_tol,
+bcerr_eps, bcerr_certified, t_bcerr, t_step_net, n_particles, CT`.
 
-- `niter_first` (added 2026-08-23) is the iteration count of the FIRST inner
-  solve of the step and **is the warmstart comparison metric**. Legacy `niter`
-  is the LAST inner solve and is retained as a diagnostic only.
-- `nsolves` (added 2026-08-23) is the per-body solve count of the step. For the
-  one-body rotor runs it must be `1` on every wake-developed row; anything else
-  means the timestep re-solved and the row set is an invalid warmstart
-  comparison. `-1` means unavailable (direct/generic solver), not a pass. The
-  check is deliberately *not* generalized to multibody, where genuine block-GS
-  outer counts vary per timestep.
+- `bcerr_*` (2026-08-25) are order statistics of the per-panel Dirichlet BC
+  residual from one `bc_error!` pass per step. `bcerr_tol` is **that arm's own**
+  effective absolute acceptance level (FGS: `solver.tolerance`; Krylov:
+  `atol + rtol*||b||`; Backslash: NaN), so `bcerr_max <= bcerr_tol` is the arm's
+  promise checked independently. `bcerr_eps` is the absolute FMM error
+  *requested* of the measurement (`BCERR_SAFETY * bcerr_tol`) and
+  `bcerr_certified` whether every M2L pair proved it. `t_bcerr` is the
+  measurement's own wall time, excluded from `t_solve` but NOT from
+  `t_step_total`; `t_step_net = t_step_total - t_bcerr` is the corrected
+  full-timestep figure and is what any timestep-share claim must use.
+  `BCERR_EVERY > 1`
+  subsamples: skipped steps write EMPTY cells, never a fabricated value.
+- `n_particles` and `CT` (2026-08-25) are per-step identity **reporting**, not
+  assertions — see the BC satisfaction guard section for why the chaotic wake
+  makes exact identity the wrong demand. `CT` needs `RUN_MONITORS=true`, which
+  the driver defaults on under `PHASE=phase3*` (Bernoulli-only); Phase 2 rows
+  are unaffected.
+
 - The driver refuses to append to an `unsteady.csv` whose first line is not the
   current header, so pre-Phase-3 (narrower) rows can never be mixed under one
   header; `benchmark/phase3_analysis.jl` likewise errors on inputs missing
@@ -193,11 +288,14 @@ skip_steps, strength_checksum`, alongside the existing per-step columns.
   single-step RHS, and the unsteady RHS moves every step, so reusing that column
   would misreport it. The guard is instead (a) the per-step `solved` flag, which
   catches a warm guess that lets a step stop short of tolerance, and (b) a
-  trajectory-identity check — cold and warm arms of the same config solve to the
-  same tolerance and so must agree on `n_particles_end` and
-  `strength_checksum`. Divergence means the guess changed the answer rather than
-  just reaching it faster. (This is the discriminator that resolved the
-  filament-family question at 328 vs 329 particles.)
+  trajectory-identity check. **Amended 2026-08-25 (Ryan):** that check is
+  replaced by the per-step BC-satisfaction check — each arm against the
+  tolerance it promised — see *BC satisfaction guard* above for why the
+  checksum form was invalid and why solution-space comparison was dropped.
+  `n_particles_end` is no longer an assertion: the wake is chaotic and small
+  differences compound. (It remains the discriminator that resolved the
+  filament-family question at 328 vs 329 particles, where the difference was
+  structural rather than accumulated.)
 
 ## Historical agreement stage (COMPLETE 2026-08-14; thresholds retired)
 

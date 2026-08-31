@@ -2833,3 +2833,345 @@ After submission: verify banners (vatistas + 8/0.4/20 + 4/0.4/50, settle:22,
 restart line), re-arm the ≥100 G disk watchdog (8 VTK writers), and at
 analysis time stitch on `step` with the ≤0.05% seam gate. Score s2 segments
 from `monitor02_force` (driver summary zero-fills restored steps).
+
+**2026-08-24 addendum 2 — _s2 chains LAUNCHED after three failed rounds
+(env/sync forensics).** All 8 arms now RUNNING as jobs **13400132–39**
+(nt72 l2p4/l3p4/l4p8/n0 = 13400132/33/34/35; nt144 l2p4/l3p4/l4p8/n0 =
+13400136/37/38/39), submitted 2026-08-24 ~02:5x with the staged pins
+(vatistas + FMM 8/0.4/20 & 4/0.4/50, 96G, settle:22) and verified at 15 min:
+resumed from the exact staged restart steps (1453/1459/1518/1449;
+1648/1682/1663/1648), banners correct, .err all empty, stepping.
+
+Three failed rounds first, all repo-sync/environment, zero physics impact
+(every round died pre-output; restart sets untouched):
+
+1. **13395136–43** (Ryan's submission of the staged script): the 2026-08-22
+   env sync had put a julia **1.12.6** Manifest.toml on the cluster, but the
+   slurm launcher's non-interactive fallback still exported spack
+   julia-1.11.7 → OpenSSL_jll/HDF5_jll precompile failure in ~4 min × 8.
+   Fix: launcher fallback now points at the site spack julia-1.12.6
+   (patched identically local + cluster; md5-verified), env
+   Pkg.instantiate()d clean.
+2. **13396725–32**: cluster ~/projects/FLOWVPM.jl was at Jun-30 a950790
+   against the Aug-24 FLOWPanel src (021's session had synced FLOWPanel
+   src/+examples/ but not FLOWVPM) → `ParticleField` rejected the new
+   `arraytype` kwarg at wake construction (~90 s × 8). Fix: synced local
+   FLOWVPM (9b5b7cd + worktree) Project.toml+src/+ext/ to the cluster after
+   verifying every cluster-dirty file was an exact blob from local git
+   history (nothing cluster-only lost); per-file md5 parity confirmed.
+3. **13398379 + 13398851–57**: cluster FastMultipole was a week behind
+   (a9b734a-dirty, the 021-pinned state) and the new FLOWPanel src references
+   9 symbols absent from it (NEARFIELD_CACHE_DEFAULT_MAX_BYTES, FmmPlan,
+   NearfieldInfluenceCache, transform_plan!/transform_solver!, + 4
+   GPU/rect-kernel names) → UndefVarError at warmstart in
+   `_sa_wake_influence!`. **Ryan authorized moving FastMultipole forward**
+   (comparability note sent to the 021 session). The pinned dirty state was
+   archived first as
+   `~/projects/FastMultipole/fm_a9b734a_dirty_021pinned_20260824.patch`
+   (applies onto a9b734a to reproduce fm_commit=a9b734ad-dirty). Cluster
+   FastMultipole now = local **d8258a7d** clean src+Project.toml; all 72
+   FastMultipole symbols referenced by FLOWPanel src verified defined;
+   precompile clean.
+
+**Chain code-generation note for scoring:** the _s2 segments run Aug-24 code
+(FLOWPanel 5272a5f-era src, FLOWVPM 9b5b7cd, FastMultipole d8258a7d) while
+the parent arms ran the pre-08-21 stack — physics is env-pinned
+(vatistas + FMM knobs) but the ≤0.05 % CT seam gate at stitch time is the
+authoritative check on the s1→s2 boundary; treat a seam FAIL as a
+code-generation break, not a restart artifact. Score s2 from
+monitor02_force as before. Disk watchdog re-check dispatched at launch
+(was 104 G/200 G, 8 VTK writers live). NT144 s2 still reaches only ~rev 22
+in 72 h — plan the s3 chain from s2's last snapshots.
+
+2026-08-24: disk watchdog cycle — 103.9G → 104.1G of 200G cap, freed 0G
+(nothing sweepable: all non-protected runs at/under 36-step retention floor;
+8 new p018_csarc_*_s2 chains NO-RESTART-SET, untouched). Verified 8/8
+csarc_s2 jobs RUNNING (13400132-39). Headroom 95.9G; re-check before writers
+accumulate multi-day restart sets.
+
+---
+
+2026-08-25: **_s2 chains cancelled by Ryan at ~24 h; NT72 ladder HARVESTED and
+settled, NT144 ladder needs _s3.**
+
+All 8 jobs (13400132-39) CANCELLED by user 2026-08-25 T03:04-03:05 at
+1-00:11:46 to 1-00:12:35 elapsed, exit 0:0 (clean — checkpoints intact), against
+their 48 h/72 h walls. Progress at kill (rev = time*5400/60, verified
+self-consistent against step/NT):
+
+| arm | restart step | final step | rev reached | vs settle target 22 | s/step |
+|---|---|---|---|---|---|
+| nt72_l2p4_s2 | 1453 | 1850 | 25.69 | PASS +3.7 | 219 |
+| nt72_l3p4_s2 | 1459 | 1810 | 25.14 | PASS +3.1 | 248 |
+| nt72_l4p8_s2 | 1518 | 1910 | 26.53 | PASS +4.5 | 222 |
+| n0_nt72_l4p8_s2 | 1449 | 1805 | 25.07 | PASS +3.1 | 245 |
+| nt144_l2p4_s2 | 1648 | 1908 | 13.25 | FAIL -8.75 | 335 |
+| nt144_l3p4_s2 | 1682 | 1989 | 13.81 | FAIL -8.19 | 284 |
+| nt144_l4p8_s2 | 1663 | 1957 | 13.59 | FAIL -8.41 | 296 |
+| n0_nt144_l4p8_s2 | 1648 | 1946 | 13.51 | FAIL -8.49 | 292 |
+
+**M1 (CT), NT72, scored rev 20-25 from monitor02_force (no CT_vs_rev.csv —
+mid-loop cancellation, expected fallback path):**
+
+| lambda | N | CT_bar | sigma | delta to next rung |
+|---|---|---|---|---|
+| 2.4 | 1 | 0.072386 | 0.00036 | — |
+| 3.4 | 1 | 0.072900 | 0.00011 | +0.710% |
+| 4.8 | 1 | 0.074415 | 0.00037 | +1.958% |
+| 4.8 | 0 | 0.075921 | 0.00010 | +2.024% vs N=1 |
+
+CT_bar stable to <0.15% between the rev 20-25 and last-5-rev windows for every
+arm. **N=0 effect HELD at +2.02% through settlement** (was +2.04% unsettled) —
+it is not a settling artifact. 024 adoption still parked pending NT144.
+
+**M2 FAILS the 1% gate at every rung:** eps_Gamma,max = 2.631% (lambda
+2.4->3.4) and 3.529% (lambda 3.4->4.8). Per decision_rules.md both M1 and M2
+must pass, so **the lambda ladder is NOT converged at NT72 even when properly
+settled** — CT convergence is masking spatial non-monotonicity in the
+circulation distribution. This is the headline finding of the harvest.
+
+**Seam gate: nt72_l3p4_s2 FAILS at 0.1415%** (2.8x the 0.05% limit); the other
+three pass at 0.0062% / 0.0347% / 0.0012%. Per the 08-24 addendum this
+signature = code-generation/env-pin break in that arm's launch window, not
+restart corruption. **The lambda=3.4 rung is therefore suspect and the +0.710%
+2.4->3.4 delta should not be used until this is explained.**
+
+Sweep cycle at keep=288 (normal tier): 251G/500G, TOTAL_FREED_MB=0, nothing
+reclaimable. 189 run dirs (124 SWEEP / 57 NO-RESTART-SET / 8 PROTECTED), 12
+live 021 runs skipped. **Policy note: at keep=288 the sweeper is a no-op —
+no run's restartable-step count exceeds 288, so repeated normal-tier sweeps
+cannot reclaim anything. Disk growth toward the cap will need either the 72-step
+escalation tier or new capacity, not more sweeps.**
+
+**Verified 4-piece warmstart sets intact for the four NT144 _s3-bound runs:**
+csarc_nt144_l2p4_s2@1908, l3p4_s2@1989, l4p8_s2@1957, n0_nt144_l4p8_s2@1946.
+
+**_s3 sizing (measured ~300 s/step at 64 threads, from rev ~13.6):**
+rev 22 = 1210 steps = 4.2 d; rev 25 = 1642 steps = 5.7 d; rev 30 = 2362 steps
+= 8.2 d. The 3-day cap on every `normal`-QOS partition that fits a 64-core job
+means **NT144-to-rev-30 is unreachable in a single non-preemptible job.**
+
+**Cluster resource survey for the relaunch decision (2026-08-25).** Job spec is
+64 cores / 96 G / 1 node (`run_dji9443_hover_ct_hpc.slurm.sh:4`, `--ntasks=64`;
+the _s2 submitter overrides only --time and --mem). Slots with >=64 free cores
+*right now*: `normal` QOS = 25 (m12 x21, m11-2 x2, m14 x2), all capped at 3 d.
+`standby` adds 28 more, including dw/cs at 7 d and m12pws at 28 d. So 018 is
+NOT blocked on priority or hardware — it is blocked on **wall time only**.
+Preemptible does not raise priority (standby QOS priority=0 vs normal=100, and
+PriorityWeightQOS=1e6 vs PriorityWeightFairShare=1e4); its value here is the
+7 d / 28 d wall. Fairshare cost of heavy usage is negligible: within account
+sn72 the entire spread between rander39 (480 M core-s, 41% of account usage)
+and a zero-usage member is ~180 priority points against a 100,000-point QOS
+base, and standby accrues at UsageFactor 0.30 vs 1.00.
+Smaller nodes do NOT help: m9 holds 6550 idle cores but is 28 c/node and this
+driver is single-process threaded (`--nodes=1`), so it cannot span nodes.
+knlg+knlp (17 slots, 72 c, 192 G, 7 d wall, ~95% idle) are the only genuinely
+underused >=64-core resource, but KNL per-core throughput is unbenchmarked for
+this workload — probe before committing an arm.
+
+**HAZARD for any preemptible relaunch:** cluster `PreemptMode=REQUEUE` with
+`GraceTime=30 s`, and `p018_submit_nt_chains_s2.sh:24` exports a *fixed*
+`RESTART_STEP`. On preemption Slurm re-runs the script verbatim, restarting
+from the original step and silently discarding all progress since launch, with
+no error. Submit `--no-requeue`, or teach the driver to auto-detect the newest
+complete 4-piece snapshot in its own output dir.
+
+Open for Ryan: (a) explain/re-run the lambda=3.4 seam FAIL; (b) M2 fails the
+gate at NT72 — decide whether the ladder needs tightening or deeper diagnosis
+before more NT144 wall-time is spent; (c) approve _s3 target rev and QOS route.
+
+2026-08-25 (later, CORRECTION + convergence figures):
+
+**CORRECTION to the M2 numbers recorded earlier today.** The 2.631% and
+3.529% eps_Gamma values above are ARTIFACTS and should not be used. Root
+cause: `p018_analyze.py m2` takes a SINGLE `--restart-step` (:275) and applies
+it to BOTH runs via `--stitch-a`/`--stitch-b`, but the four NT72 arms restarted
+at DIFFERENT steps (1453/1459/1518/1449). Passing arm A's boundary for arm B
+makes `stitch()` keep B's parent rows only up to A's step while B's segment
+begins later, punching a hole in B's history — 6 steps for the l2p4/l3p4 pair
+(shared 1453), 59 steps for l3p4/l4p8 (shared 1459). Reproduced exactly:
+shared 1453 -> 2.631%, shared 1459 -> 2.654%; shared 1459 -> 3.529%,
+shared 1518 -> 3.397%. Using `chain()` (no hole — it keeps parent rows strictly
+below the segment's own first step) the correct consecutive-rung values over
+revs 20-25 are **2.620%** and **3.429%**. The M2 verdict is unchanged: both
+still FAIL the 1% gate by ~3x. **`p018_analyze.py m2` needs a per-run restart
+step before it is used again on arms with unequal restart boundaries.**
+
+**Convergence figures built** (Ryan asked to see trends before deciding on
+_s3). New emitter `scripts/p018_nt_convergence_figs.py` with a `check`
+subcommand that reproduces every published anchor and writes nothing; `emit`
+writes the backing CSVs. Figures live in
+`~/Dropbox/research/notebooks/img/20260825_p018_nt_convergence/`:
+fig_ct_history, fig_ct_rungs, fig_gamma_span, fig_gamma_nt (+ p018_nt_common.tex,
+build.sh). NT144 `_s2` monitors were scp'd from the cluster to make this
+possible. All anchors reproduce; CSVs are NaN-free; all four PDFs are 1 page.
+
+**FINDING 1 — the timestep ladder is not converging.** CTbar over each arm's
+best-available window:
+
+| lambda | N | NT36 | NT72 | NT144 | 36->72 | 72->144 |
+|---|---|---|---|---|---|---|
+| 2.4 | 1 | 0.070614 | 0.072471 | 0.074408 | +2.63% | +2.67% |
+| 3.4 | 1 | 0.071003 | 0.072912 | 0.074722 | +2.69% | +2.48% |
+| 4.8 | 1 | 0.070593 | 0.074480 | 0.073803 | +5.51% | -0.91% |
+| 4.8 | 0 | 0.071619 | 0.075954 | 0.073734 | +6.05% | -2.92% |
+
+There is **no asymptotic flattening at any arm**. lambda 2.4 and 3.4 keep
+climbing at essentially undiminished rate (+2.67%, +2.48% on the 72->144 leg,
+as large as the 36->72 leg); lambda 4.8 and N=0 turn over. The 72->144 leg is
+computed from UNSETTLED NT144 points (revs 8-12), so its sign is not yet
+trustworthy — which is exactly the case for the _s3 chain.
+
+**FINDING 2 — there is currently no window in which the three NT rungs can be
+fairly compared.** revs 8-12 is the only window every arm reaches, but it is
+deep in the NT36/NT72 transient: CTbar moves -3.6% (nt36_l3p4: 0.068428 matched
+vs 0.071003 settled) to +4.7% (nt72_l2p4: 0.075846 vs 0.072471) between the
+matched and settled windows. Both window definitions are emitted side by side
+in fig_ct_rungs so this is visible rather than hidden by a window choice.
+
+**FINDING 3 — the M2 failure is REAL, not a TE force-reconstruction artifact.**
+Over the settled NT72 window (revs 20-24), vs the lambda=2.4 reference,
+eps_Gamma,max is te 2.52 / 6.06 / 9.10% and slice 2.34 / 4.84 / 5.46% for
+lambda 3.4 / 4.8 / 4.8-N0. The two circulation columns broadly AGREE, so the
+circulation difference is genuine. (Over the transient matched window they
+disagree wildly — te 7.89% vs slice 1.58% for lambda 3.4 — which is itself a
+symptom of comparing unsettled states.) All pairs FAIL the 1% gate in both
+columns. Worst r/R is 0.313 for nearly every pair, i.e. the inboard edge of the
+0.30-0.95 evaluation band.
+
+**FINDING 4 — seam failures are not unique to l3p4.** 6 of 11 restart seams in
+the campaign exceed the 0.05% gate: nt72_l3p4 0.1415% (2.8x, the worst),
+nt144_l3p4 0.0756%, nt144_l2p4 0.0699%, prior b0 0.0656%, and both legacy
+nt144 seams (0.0515%, 0.0575%). Passing: nt72_l2p4 0.0062%, nt72_n0 0.0012%,
+nt72_l4p8 0.0347%, nt144_l4p8 0.0282%, nt144_n0 0.0223%. This reframes the gate
+as a tripwire rather than a verdict — l3p4 is the outlier in MAGNITUDE, not in
+kind, and a systematic ~0.05-0.08% restart discontinuity looks structural.
+
+**Legacy arms** (p018_nt144/_s2/_s3, upin_nt72, upin_nt144) are plotted greyed
+and are NEVER joined to the csarc rungs: metadata confirms they ran the naive
+linear rate rlxf = 0.3*36/NT (0.15 @NT72, 0.075 @NT144) rather than the
+exact-rate 0.16334/0.08539 — 8.9% and 12.2% lower, on a rate that sits near the
+ignition boundary. p018_upin_nt72 diverged at rev 18.68 and is truncated there.
+
+Disk after the scp: unchanged at 251G/500G (monitors only, ~8 MB total).
+
+2026-08-25 (spanwise loading figures added):
+
+Two loading figures added, one per circulation figure: `fig_loading_span`
+(companion to fig_gamma_span, lambda ladder at NT72, settled revs 20-24) and
+`fig_loading_nt` (companion to fig_gamma_nt, NT ladder at lambda=3.4, matched
+revs 8-12).
+
+**No sectional-force data exists on disk.** `SpanwiseLoadingMonitor` is
+implemented (`src/FLOWPanel_simulate_monitors.jl:1675`) but was never enabled
+for any csarc arm — only monitors 02/03/04/05 were written. Loading is
+therefore DERIVED from bound circulation by Kutta-Joukowski, not measured. In
+hover the section-relative velocity is Omega*r to within the inflow angle, so
+dT/dr = rho*Gamma(r)*Omega*r per blade and, with CT = T/(rho n^2 D^4), B blades,
+x = r/R, D = 2R, Omega = 2*pi*n:
+
+    dCT/dx = [pi*B / (8*n*R^2)] * Gamma(x) * x = 0.6162 * Gamma(x) * x
+
+for B=2, n=90 rev/s, R=0.119 m (metadata). rho cancels.
+
+**VALIDATED against the measured force.** Integrating that expression
+reproduces each arm's measured CTbar to **0.3-0.8%** on the four settled NT72
+arms (ratio 1.0047 / 1.0083 / 1.0059 / 1.0027 for lambda 2.4 / 3.4 / 4.8 /
+4.8-N0). This is an independent check that (a) the KJ derivation is right and
+(b) `circulation_te` really is the bound circulation. The area under each
+loading curve therefore genuinely IS that arm's CT.
+
+**`circulation_slice` does NOT share that normalization** — its raw KJ integral
+lands at ratio ~0.47, i.e. ~2.12x small. An absolute loading built from the
+slice column would be wrong by a factor of two. The slice panels are rescaled
+by the reference arm's te/slice integral ratio (x2.124 span, x2.062 NT, written
+to loading_scale.csv) and are labelled SHAPE ONLY on the figure. **Do not use
+circulation_slice for any absolute loading or force recovery without
+re-deriving its normalization.**
+
+**Spanwise attribution of the CT spread** (area under the Delta-loading curve =
+that arm's Delta-CT):
+
+| pair | KJ Delta-CT | measured Delta-CT | agree? |
+|---|---|---|---|
+| NT72 lambda 2.4 -> 3.4 | +0.00070 | +0.00044 | overstates ~60% |
+| NT72 lambda 2.4 -> 4.8 | +0.00206 | +0.00196 | yes, ~5% |
+| NT72 lambda 2.4 -> N0 | +0.00335 | +0.00348 | yes, ~4% |
+
+The lambda=3.4 arm is the one that overstates — and it is also the arm whose
+restart seam FAILED at 0.1415%. Two independent diagnostics now point at that
+same arm.
+
+Shape findings: the lambda ladder redistributes load mostly INBOARD
+(r/R 0.15-0.75 gains, with a compensating dip near r/R 0.80-0.85), whereas the
+NT ladder adds load essentially EVERYWHERE (both Delta curves positive across
+the whole span, peaking around r/R 0.3-0.5). Refining the timestep does not
+merely redistribute circulation, it raises it globally — consistent with CT
+climbing monotonically with NT and not flattening.
+
+Also note the KJ/measured ratio drifts with NT on the lambda=3.4 arm:
+1.0221 (NT36) -> 1.0126 (NT72) -> 1.0050 (NT144). The coarser the timestep, the
+worse KJ-from-circulation agrees with the pressure-integrated force.
+
+Figure dir now holds 6 figures + p018_nt_common.tex + build.sh, 3.0 MB, all
+1-page, all CSVs NaN-free. Regenerate with
+`python3 scripts/p018_nt_convergence_figs.py check && ... emit`.
+2026-08-26 — VTK sweep (keep=288, normal tier): du 245390→247553 MB (239.6G→241.8G) of 400G cap; sweep itself freed 8 MB (dwarfed by ~2.1G growth from 4 new live p022m writers starting mid-cycle); restart-set integrity confirmed (p022m_2r_oge advanced 20→46 particle steps, p022m_4r_oge 2→13, no orphaned .vtm stubs); all 4 new jobs (13484022-25) RUNNING; p022m_2r_ige_hr15 not yet restartable, p022m_4r_ige_hr15 dir still empty — both expected for freshly-started jobs; no jobs completed/failed this cycle.
+
+## 2026-08-26 — Phase 17 staged + launched: N ∝ NT ladder at fixed λ (extent-preserving temporal refinement)
+
+Ryan directive (2026-08-26): stage and launch a ladder that decreases/varies N
+with NT such that the total near-wake extent is dt-independent. Design settled
+as N−1 ∝ NT at fixed λ (NOT the λ-compensated variant, which would launder the
+known λ- and row-count sensitivity into the NT axis): free-row extent
+(N−1)·travel held at one NT36 travel, Das = λσ untouched. Full spec:
+`phase_17_nprop_nt_ladder.md`.
+
+- Verified pre-launch: under DAS_SIGMA_LAMBDA, `nwakerows` does not perturb Das
+  (curvature cap requires DAS_CURVATURE_BETA, unset on csarc; remaining
+  nwakerows_extent uses are diagnostics/metadata). Zero code change — three new
+  launcher case blocks only (`run_dji9443_hover_ct_hpc.slurm.sh`, mirrored to
+  cluster, md5 aae9723f87524dbe31e6b863aa1ff923 both sides).
+- Arms (cold, P018_SETTLE_REVS=22, --mem=96G, 64c,
+  `-p m11-2,m12,m14 --qos=normal` per slurm-availability probe; normal QOS =
+  non-preemptible; Ryan chose 64c over a 28c m9 option):
+  - `p018_csarc_n2_l2p4`       NT36  N=2 pps12 rlxf0.3     — job **13490698**, 48 h
+  - `p018_csarc_n3_nt72_l2p4`  NT72  N=3 pps6  rlxf0.16334 — job **13490699**, 72 h
+  - `p018_csarc_n5_nt144_l2p4` NT144 N=5 pps3  rlxf0.08539 — job **13490700**, 72 h
+- Each rung pairs with the existing N=1 csarc l2p4 rung at the same NT → free
+  N-effect cross at every NT. NT144 will need _s2 chains (rev 22 ≈ 4+ days).
+- Shed-clock/integration-clock decoupling ("gold standard") deliberately NOT
+  staged — Ryan hold, 2026-08-26.
+- Note: 7 user jobs in queue post-submit (4× 022 arms + these 3); the
+  six-study-job directive in the launcher header is satisfied within this
+  launcher (3 active).
+- Storage (hpc-storage cycle post-launch): normal-tier sweep (keep=288) across
+  10 live jobs (3 new p018 csarc + 4 p022m + 3 p021 tuners); freed 1670 MB
+  (1.63G) trimming p022m_2r_oge 399→288 restartable steps (+ index cleanup on
+  2r_ige_hr15/4r_ige_hr15); 293.2G→294.7G of 400G cap (net rise from continued
+  live writes); restart-integrity PASS on all 3 swept runs; all 10 jobs still
+  RUNNING, incl. 13490698-700.
+- CORRECTION (2026-08-26, prompted by Ryan's ParaView check): the Phase 17
+  staging text mislabeled PanelWake row 1 as "the rigid Das row". Ground truth
+  (src/FLOWPanel_wake.jl + save() in FLOWPanel_liftingbody.jl): the rigid Das
+  row is BODY-owned (the *_tw.vtu quads, TE extended by Das); ALL N PanelWake
+  rows are free sheet (node row 1 pinned on the TE+Das line, rows convect one
+  travel apart, particles convert from the oldest row). N=1 therefore has
+  rigid Das + one free row, as Ryan observed. The launched N={2,3,5} settings
+  are UNCHANGED and remain correct: they hold the audited clearance
+  d_front = |Das| + (N-1)*travel invariant (= Das + t36 at every rung); only
+  the O(dt) converting-row width varies, as any dt ladder requires. Fixed:
+  phase_17 doc, launcher Phase-17 comment (re-mirrored, md5 verified), and the
+  driver's misleading "Row 1 is rigidly pinned" handoff comment (LOCAL only —
+  cluster driver has diverged, deliberately not overwritten mid-campaign).
+
+2026-08-27 20:1x MDT — hpc-storage archive cycle: --all-checkouts across 10 FLOWPanel
+clones; archived 30 finished FLOWPanel-052* runs (35.9G tarballs, verified byte-for-byte
+before delete, 0 verify-fail, 0 stale), freed 34.05 GiB from /home. Home 566.6G→543.2G
+of 400G cap (net freed 23.5G; live 3r GPU arms grew ~10G during the run). Archive
+123.7G→158.7G, 93,007→93,048 files (of 20T/1M). RECENT approval queue: 29 runs,
+~238.3 GiB, awaiting Ryan sign-off (largest: p018_csarc_n2_nt72_l3p0 55.8G,
+p018_csarc_l4p0 24.8G, p018_csarc_l3p0 24.7G, n5_nt144_l2p4_s2gpu 32.2G,
+n3_nt72_l2p4_s2gpu 30.7G). Live campaigns (022m_4r_oge, 018gpu-*-3r ladder,
+scr_p019/p020 screen jobs) confirmed untouched. Cap still breached by ~143G;
+next lever is Ryan's RECENT approvals, not a sweep (sweep math shows little to reclaim).

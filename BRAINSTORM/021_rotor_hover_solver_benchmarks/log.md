@@ -4,6 +4,279 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
+### 2026-08-24 (latest) — campaign ladder set to machine classes; HPC launch handoff written
+
+Ryan set the memory ladder in terms of machines people actually have rather
+than an arbitrary sweep: *"16G for a laptop, 128 for a workstation, and 500 for
+a supercomputer."* Final campaign setting is `MEM_BUDGETS = 0:16:128:500` GiB of
+TOTAL memory, where **0 is a forced-uncached sentinel** (cache forbidden,
+memory unconstrained) rather than a machine. Budget 0 is REQUIRED and must run
+first: it is what tunes the uncached configs, and at R1-R5 every real machine
+can afford a cache, so no positive budget ever returns an uncached winner.
+
+Why this beats the geometric ladder it replaced: a flat `4:8:...:500` sweep was
+checked against the W0 map first and yields only **13 distinct operating points
+out of 56 descents** (R1-R2 saturate at every budget; R7 is uncached at five of
+eight). The machine ladder is 4 x 7 = 28 descents and its duplicates ARE the
+result. Per-rung meaning: R1-R3 all three classes saturate; R4-R5 laptop
+constrained; R6-R7 laptop cannot cache at all. R6/R7 saturate at 158 and 428
+GiB, both under the 500 GiB node, so the whole axis is reachable on pinned
+hardware — no need for the 1 TB (`cs`) or 2 TB (`m11-2`, zen2) partitions,
+which would confound the axis with a hardware change.
+
+**CORRECTION to the same-day floor claim** (detail + table in `ledger.md`): I
+had read the W0 map's smallest sampled leaf as a floor and written that cache
+bytes "never fall below the small-leaf value". That was extrapolation past the
+sampled range. Measured: bytes keep falling below leaf 9 — R6 23.8 -> 19.3 GiB
+(-19%), R7 78.2 -> 67.0 GiB (-14%) at leaf 2 — while clearly asymptoting toward
+a real MAC-set minimum. The R6/R7 conclusion survives (a 16 GiB laptop still
+cannot cache) but the R6 margin is 23%, not the ~50% the quoted 24 GiB implied.
+The substantive consequence is a code fix: total memory has an INTERIOR
+minimum, because the FMM plan grows as the leaf shrinks while the cache
+shrinks, so pricing a floor at any single leaf is wrong in both directions. The
+tuner's floor check now SCANS `FLOOR_LEAVES` (2:4:9:21) and minimises the
+actual total, reporting cheapest-uncached and cheapest-cached separately.
+
+**Confirmed to Ryan, from code and measurement, that the cache build is NOT in
+the tuning objective**: structurally the warm-up solve that builds the cache is
+not wrapped in `@elapsed` (only the min-of-reps loop is, with `reset_cold!`
+outside the timer), and empirically at R1 the build is 11.7-14.2 s while
+`t_warm` is 4.8 s — impossible if the build were included.
+
+**Launched nothing.** Wrote two Slurm wrappers reusing `p1_tune.sh`'s pinned
+hardware preamble verbatim — `benchmark/slurm/p2_tune.sh` (one job per rung x
+budget) and `benchmark/slurm/p1_agreement.sh` — and a self-contained launch
+handoff at `phase_16_hpc_launch_prompt.md`. Everything is implemented and
+locally smoke-tested; nothing has ever run on the cluster. `sbatch` remains
+Ryan's call.
+
+### 2026-08-24 (latest) — error metric is the BC, not a reference; memory budgets are TOTAL memory
+
+Two Ryan corrections to the same-day work below, both of which simplify things.
+
+**1. Measure error against the boundary condition, not a reference.** Ryan:
+*"we should be measuring error based on the boundary condition - not a
+reference. That way, it doesn't matter."* Correct, and the instrument was
+already in the driver: `true_residual!` evaluates `||Ax-b||` through the
+DirectBackend on each config's OWN solution, so `rel_rms_direct = rms_d/rms_b`
+is an exact, reference-free correctness metric, identically defined at R1 and
+R7.
+
+This **dissolves the R6/R7 blocker** raised in the entry below — a dense
+`backslash_ref` would be 335 GiB at R6 and 1.31 TiB at R7, and now nothing
+requires it. `rotor_hover_solver_phase1_agreement.jl` changes:
+- the BC residual is the primary exit criterion; reference-relative columns
+  (`x_relL2_vs_ref`, `dCT_*_pct`) are now OPTIONAL and blank unless
+  `REFERENCE=<config>` is nominated. The dense-reference guard is gone, and
+  **config order no longer matters** (previously `backslash_ref` had to run
+  first or the script errored).
+- cross-config CONSISTENCY is now measured against the ENSEMBLE, also
+  reference-free: every config persists its solution
+  (`agreement_x_<rung>_<config>.bin`) and a summary pass reports each config's
+  deviation from the ensemble mean plus the **max pairwise** relative-L2
+  difference → `agreement_spread.csv`. Works across separate processes and
+  across arbitrary config subsets.
+- Backslash is still worth running where it FITS (25 GiB at R4) as an
+  independent non-iterative cross-check — just not required and not
+  privileged.
+
+**BC metric is evaluated through the FMM, not DirectBackend** (Ryan, same
+session): the direct evaluation is O(N^2) — 1.8e11 pair evaluations at R7,
+prohibitive. `bc_error!` (already the campaign's BC evaluator, validated by
+`rotor_hover_solver_phase1_bcerror.jl`) evaluates it through the FMM under an
+EXPLICIT `PowerAbsolutePotential(safety * target_rel * rms_b)` with
+`safety=0.1` — an order of magnitude tighter than the 1e-6 criterion under
+test — and returns `error_success`, the FMM's own certification that it met
+that tolerance. The driver records `bc_certified` per row and warns when it is
+false, so an uncertified evaluation is visible rather than silently reported
+as an error. `RESIDUAL_BACKEND=direct` restores the exact O(N^2) evaluation,
+worth running at R1-R2 as a cross-check that the FMM metric matches the exact
+one. The Phase 2 tuner already used `bc_error!` on this contract, so no change
+was needed there.
+
+Also hardened while in the file: `agreement.csv` gains a header guard and all
+rows now go through `emit_row!`, which asserts the row width matches the
+header — the FAILED-path row had been hand-counted blanks, which is exactly
+the kind of thing that silently shifts every column when a schema changes.
+
+Caveat recorded in the driver: at matched BC residual the solution difference
+is bounded only up to `cond(A)`, so the residual demonstrates CORRECTNESS and
+the spread table demonstrates CONSISTENCY. Both are needed; neither needs a
+reference.
+
+**2. Memory budgets are TOTAL memory, and rungs that admit no cache get tuned
+uncached.** Ryan: *"if memory bandwidths prohibit a cache, then that particular
+run will need to run without a cache... we'll need to tune those rungs that
+don't admit a cache just so - without a cache"* and *"memory rungs should
+correspond to the total memory available - not just that used by the cache."*
+
+Both landed in `rotor_hover_solver_phase2_tune.jl`:
+- a budget now covers **body + solver state + FMM plan + cache**, using
+  `solver_state_bytes` (the ruling-8 comparable metric, which excludes the body
+  by construction — hence the separate term). This puts `backslash_ldiv`'s
+  dense 8N² on the SAME axis and turns the question into "which solver is
+  fastest on a node with X GB". It also matters mechanically: **the plan grows
+  as the leaf shrinks**, partly offsetting the cache's growth, so pricing the
+  cache alone would misrank small-leaf candidates.
+- **whether a candidate is cached is now an OUTCOME, not an input**: the cache
+  is used iff the whole configuration still fits. A rung or budget admitting no
+  cache is therefore tuned uncached automatically — no separate code path, no
+  separate driver. R6/R7 need exactly this (cache floors 24 and 78 GiB).
+- budgets below a rung's floor (even uncached) are reported as the infeasible
+  end of the axis; budgets whose winner duplicates the previous budget's are
+  flagged `DUPLICATE` so the curve is not read as having independent evidence
+  at every point.
+- schema gains `mem_total_predicted` / `mem_total_measured`. The budget is
+  enforced against the PREDICTED total because the plan is live during a solve
+  even when `cache_tree=false` drops it afterwards, so a post-hoc measurement
+  would under-report.
+
+`rotor_hover_solver_phase2.jl` follows the tuned row's `cached` flag rather
+than assuming a `*_nfcache` config is cached, and records
+`mem_total_measured`.
+
+**Ladder top = 500 GiB.** Node inventory (read from the Slurm config, NOT live
+`sinfo` — verify before relying on it): the campaign's pinned physics2 nodes
+`phys-1-[1-10]` are zen3 / 128 cores / **512 GB**, which is what `--mem=500G`
+targets. Larger exists — `cs` (zen3, 1 TB) and `m11-2` (zen2, 2 TB) — but
+reaching either means changing hardware, which folds a CPU change into the
+memory axis and destroys timing comparability across the ladder. Extending past
+500 GiB needs Ryan's go plus an overlapping-budget cross-check on the new
+nodes; m11-2 is zen2 and would confound the axis outright.
+
+### 2026-08-24 (latest) — caching wired into Phase 2 tuning AND benchmarks; memory budget becomes an AXIS; Phase 1 descoped
+
+Executes Ryan's caching ruling (`phase_15_caching_and_objective_prompt.md` §1)
+plus two decisions taken in the same session.
+
+**Audit of what actually existed** (verified against code, not docs):
+
+| Where | Cached? | Defect found |
+| --- | --- | --- |
+| Phase 2 tuning (`rotor_hover_solver_phase2b_nearfield_cache.jl:195`) | yes | ran on stock `tune_fmm` — the accuracy-only cost-model objective, i.e. the very defect fixed for the uncached path on 2026-08-24. Build cost was already excluded and recorded, so that half of the ruling was already policy. |
+| Phase 2 benchmarks (`rotor_hover_solver_phase2.jl`) | yes | cache build folded INTO `t_solve_min`, violating the ruling's second half. Its justifying comment ("per-SOLVE state, a rotating rotor invalidates it every step") was STALE — `persistent_plan` landed afterwards with rigid-motion support, and the Dirichlet operator + cache blocks are exactly invariant under rigid motion. |
+| Phase 1 | no, nothing | by design |
+
+**The finding that reshaped the work.** An uncapped cached tune walks to a
+DENSE operator. At R1 the cached optimum sat at leaf 275–342 / 687–862 MB
+against a dense 8N² of 514 MB (1.3–1.7× dense) with `cache_capped=false` — the
+caps never bound, the cost optimum genuinely wanted it. That is structural: if
+assembly is free (and Ryan's ruling makes it free for tuning), matrix-ful always
+beats matrix-free wherever memory allows. So `max_bytes` does not guard the
+answer, it DETERMINES it. **Ryan's ruling: sweep the memory budget as an axis**,
+publishing per-step cost vs memory with `backslash_ldiv` (8N²) and matrix-free
+Krylov as the two endpoints of one curve. Budget 0 is how the uncached configs
+get tuned — same code path, no second driver.
+
+**W0 — feasibility map** (`benchmark/nfcache_feasibility.jl`, new). Sweeps
+`estimate_nearfield_cache` over R1–R7 × a leaf ladder without building or
+solving; `bytes` is exact size-pass arithmetic, hardware-independent, so it is
+valid locally. Anchor check: leaf 340 → 0.803 GiB reproduces the recorded
+862104272 B at leaf 342 exactly. Full map in
+`benchmark/results/phase2/multi/nfcache_feasibility.csv`; the headline numbers
+are in `ledger.md`. Two results matter:
+- cache/dense at the kernel leaf FALLS with N — 0.53 (R1), 0.34 (R2), 0.26
+  (R3), 0.157 (R4), 0.114 (R5), 0.082 (R6), 0.068 (R7) — so the dense
+  degeneracy is an R1–R2 artifact and matrix-free character genuinely returns
+  at scale;
+- but the ABSOLUTE floor is brutal. A cache has a floor (shrinking the leaf
+  raises block count without shrinking total near-field area): the cheapest
+  cache on the ladder is 0.20 GiB at R1 but **78 GiB at R7** and 24 GiB at R6.
+  The handoff's "naive R7 ≈ 32 GiB" underestimated by **2.4-2.8×** (78 GiB at
+  the smallest leaf, 89 GiB at the kernel leaf 21). A budget below a
+  rung's floor admits NO cached configuration at all, and the drivers now
+  report that as the infeasible end of the memory axis rather than as a
+  descent failure.
+- The cache asymptotes at ~2× dense, not 1×: the direct list holds both (i,j)
+  and (j,i), so symmetric blocks are stored twice. A dense solver is strictly
+  more memory-efficient at the dense end — a publishable point on the memory
+  axis.
+
+**W1 — `tune_fmm_perturb` gains `cost=`** (FastMultipole `src/autotune.jl`). A
+caller-supplied objective, called as `cost(; expansion_order,
+multipole_acceptance, leaf_size_source)` returning a time / `(t, success)` /
+`(; t, success)`. The closure owns the ENTIRE cost model, so
+`tree_amortization`, `error_tolerance` and `fmm!` kwargs are REFUSED alongside
+it rather than silently ignored. Everything else — min-of-reps, abandonment,
+memoization, the descent — is unchanged. This is Ryan's option (a) for the
+objective blocker, and it also subsumes `tree_amortization` (a real solve
+builds one plan and reuses it, which IS the correct amortization) and makes
+cached-vs-uncached tuning fall out for free with zero cache plumbing in the
+tuner. Verified by a synthetic-surface smoke: descent reaches the analytic
+minimum, memoization evaluates nothing twice, infeasible start is rejected
+loudly, all three mutually-exclusive knobs throw, abandonment still fires, all
+three return shapes work, a bad return type throws.
+
+**W2 — `benchmark/rotor_hover_solver_phase2_tune.jl`** (new). Per rung × memory
+budget: estimate bytes first (an over-budget candidate costs one tree build,
+not one solve); build a `KrylovSolver` at the candidate knobs with
+`cache_nearfield`+`persistent_plan`; run ONE UNTIMED warm-up solve, which is
+what lazily builds the plan and its blocks; then min-of-reps timed solves from
+a cold SOLUTION (`reset_cold!`, warmstart off, so `niter` is honest) against a
+WARM cache. **The build is excluded from the objective by construction, not by
+subtraction.** Success is the certified BC verdict on the converged solution —
+strictly stronger than the per-apply tolerance the proxy used. Writes
+`tune_phase2.csv` (new filename on purpose: the old `tune_cached.csv` holds
+accuracy-only rows and must not be mixed).
+
+R1 local smoke, both arms green: budget 0 (uncached) → 113.2 s, niter 59, BC
+9.67e-7 certified; budget 2 GiB → warm 4.2–5.6 s at leaf 21, cache 0.254 GiB,
+**build 12.14 s**. The build alone is ~2× a warm solve, so the old driver's
+folding it into `t_solve` inflated the reported per-step cost roughly 3× —
+Ryan's ruling made concrete. (Local timings are indicative ONLY; the 4.219 vs
+5.591 s spread between the descent and the re-measure at identical knobs is
+the documented 22–39% Mac scatter.)
+
+**W3 — `rotor_hover_solver_phase2.jl` reworked.** `*_nfcache` configs now run
+`persistent_plan=true` with the plan+cache built in the SETUP region, so
+`t_solve` is the warm per-step cost and the build is its own column. Schema
+gains `mem_budget_gib, nfcache_build_time, nfcache_bytes, nfcache_capped`
+(header-guarded); resume identity gains the budget, since a cached config now
+emits one row per budget. Apply knobs now come from `tune_phase2.csv` (Phase 2
+owns tuning), falling back to `TUNED` with a loud warning. Added a D4
+additivity check (R1 only, `row_kind="additivity"`): verifies
+`t_cold ≈ t_build + t_warm` once so every other rung can rely on it instead of
+paying for a second timed pass — Ryan: "a cold solve would merely add the cache
+build time, right?" **VERIFIED at R1 (2026-08-24):** `t_cold = 16.059 s` vs
+`t_build + t_warm = 11.800 + 4.223 = 16.024 s`, a **0.22% discrepancy**. The
+warm test alone therefore recovers both quantities, and no rung needs a second
+timed pass. The published warm row reads `t_solve_min = 4.22 s` with
+`nfcache_build_time = 12.27 s` in its own column — under the old convention
+that same row would have read ~17 s, i.e. the build was inflating the reported
+per-step cost by ~2.9x.
+
+**W4 — Phase 1 descoped** (Ryan): its remaining purpose is to solve the ladder
+up to R7 and verify that every solver agrees on the SOLUTION. Tuning moved to
+Phase 2. `rotor_hover_solver_phase1_agreement.jl` gains the full R1–R7 ladder
+(was R1–R3), a knob fallback (accuracy matters here, speed does not), and
+`NFCACHE=<GiB>` opportunistic caching that is skipped with a notice when it
+does not fit. **Blocker surfaced:** the default reference `backslash_ref`
+assembles a DENSE G — 25 GiB at R4, 87 GiB at R5, 335 GiB at R6, **1.31 TiB at
+R7** — so an exact reference is impossible above ~R5. Added `REFERENCE=<config>`
+plus a guard that refuses a dense reference rather than OOM-ing hours in. Which
+config becomes the reference at R6/R7 is **Ryan's call** (see phase_15 §Open).
+
+**W5 — two measurement biases fixed.**
+- `rotor_hover_solver_phase2b_nearfield_cache.jl`: the end-to-end A/B had no
+  warm-up rep, so the first arm absorbed all the JIT — and the first arm is the
+  UNCACHED one, biasing the A/B in favour of the feature under test. The
+  previously reported **5.5× cold-solve speedup is therefore an upper bound**.
+- `fm_leaf_ab.jl`: corrected diagnosis. Its `bc_rel_l2` column was invalid not
+  because of `bc_error!` arguments but because its local `reset!` omitted the
+  frozen-potential restore that `reset_cold!` does; the Dirichlet rhs is
+  `-rotor.potential` and a solve clobbers it, so every solve after the first
+  ran against a stale b. Now uses `reset_cold!`. Timings were unaffected (same
+  operator, niter stable to ±1), so the R2 2.18× leaf result stands.
+
+Also: `phase1_case.jl` gains `SKIP_B=1` for geometry-only consumers (the O(N²)
+assembly is tens of minutes at R7 and the feasibility map never solves); it
+sets `rms_b=NaN` so anything that tries to solve fails loudly.
+
+**Not done / next:** nothing has run on the cluster. Every timing above is
+local and therefore indicative only. Next is the R1–R5 real-solve tune on an
+exclusive node, then Phase 1 R7 verification, then the Phase 2 tables. R6–R7
+objective and the R6/R7 reference config both still need Ryan.
+
 ### 2026-08-24 (latest) — the tuner's stall was BIAS, not noise: tree build was charged to every apply
 
 **Revises the "reps is the fix" diagnosis in the entry below**, which is now

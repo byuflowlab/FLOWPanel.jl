@@ -37,9 +37,11 @@ coarse probe), and an ambient-strain estimate Z̄ (see P1).
 1. **Initialize** σ₀ = max( c_eq·σ_eq, σ_stab ) with
    $$\sigma_{eq} = \sqrt{\nu_{eff}/\bar Z}, \qquad
      \sigma_{stab} = \sqrt{\Gamma_v\,\Delta t/2\pi},$$
-   c_eq ≈ 2 (viscous-fidelity margin). σ_stab derives from ΔtZ ≲ 1 with
-   Z ~ Γ_v/(2πσ²); status HYPOTHESIS — single-case validation (predicts
-   0.031R vs measured 0.029–0.030R ignition boundary on this rotor).
+   c_eq ≈ 2 (viscous-fidelity margin). σ_stab uses the heuristic order-one
+   normalization ΔtZ = 1 with Z ~ Γ_v/(2πσ²); it is not the exact linear-
+   stability boundary of the coupled Euler map. Status HYPOTHESIS —
+   single-case validation (predicts 0.031R vs measured 0.029–0.030R ignition
+   boundary on this rotor).
 2. **Probe**: short instrumented run at σ_k (screen-class, ~8 revs,
    WakeHealthMonitor on; viscous whenever σ_k < 3σ_eq). Measure the margin
    $$M_k = \max_{\text{steps, particles}} \Delta t\,Z
@@ -81,12 +83,125 @@ $$\sigma_{eq} = \sqrt{\nu_{eff}/\bar Z}, \qquad
   \sigma_{stab} = \sqrt{\Gamma_v\,\Delta t/2\pi}.$$
 σ_eq is the Burgers strain–diffusion equilibrium core size: cores below it
 have no viscous equilibrium and contract toward the per-step floor
-$\sqrt{2\nu\Delta t}$. σ_stab is the explicit-update stability scale: a
-filament of circulation Γ_v at core scale σ self-strains at
-$Z \sim \Gamma_v/(2\pi\sigma^2)$, and the discrete map $\sigma \leftarrow
-\sigma(1-\Delta t Z)$, $\Gamma \leftarrow \Gamma(1 - 3\Delta t Z)$ is
-unstable for $\Delta t Z > 2$ (and produces negative σ inviscidly for
-$\Delta t Z > 1$), so require $\Delta t Z \lesssim 1$ at $\sigma$.
+$\sqrt{2\nu\Delta t}$. σ_stab is an order-one explicit-update initializer.
+Model the positive projected strain from unresolved curved or neighboring
+filament-scale structure as $Z_+ \sim \Gamma_v/(2\pi\sigma^2)$. (An exactly
+straight isolated filament does not axially self-stretch, so the $1/(2\pi)$
+coefficient is a model prefactor, not a universal strain coefficient.) With
+$x=\Delta tZ_+$, the discrete multipliers are $1-x$ for $\sigma$ and $1-3x$
+for $\Gamma$: the Γ multiplier changes sign at $x=1/3$ and amplifies for
+$x>2/3$, while the σ multiplier changes sign at $x=1$ and amplifies for
+$x>2$. Thus the coupled frozen-$Z$ Euler map is amplitude-stable only for
+$x\le2/3$. The definition $\Delta tZ_+=1$ used in σ_stab is the heuristic
+order-one/σ-positivity normalization, not that exact joint-stability limit;
+the latter would give $\sigma\ge\sqrt{3/2}\,\sigma_{stab}$ under the same
+filament estimate. The measured probe margin $M\le\varepsilon=0.2$, rather
+than σ_stab alone, supplies the actual acceptance test.
+
+### 2026-08-29 kernel-level prefactor audit
+
+The choice $r=\sigma$ in the dimensional estimate above is not a maximizing
+radius. More importantly, the core update depends on projected symmetric
+strain, not velocity: with $S=(\nabla\mathbf u+\nabla\mathbf u^T)/2$,
+
+$$
+Z=\frac{1}{5}\,\widehat{\boldsymbol\Gamma}^{\,T}
+S\widehat{\boldsymbol\Gamma}
+$$
+
+for the live $f=0$, $g=1/5$ rVPM formulation. Therefore a kernel-derived
+prefactor must maximize the relevant projection of $S$, not $|\mathbf u|$ or
+$|\nabla\mathbf u|$.
+
+**Single FLOWVPM Gaussian-erf particle.** For particle strength
+$\boldsymbol\Gamma_p$ (units $\mathrm{m^3/s}$), $\rho=r/\sigma$, and
+
+$$
+g(\rho)=\operatorname{erf}\!\left(\frac{\rho}{\sqrt2}\right)
+-\sqrt{\frac{2}{\pi}}\,\rho e^{-\rho^2/2},
+$$
+
+the velocity magnitude is proportional to $g(\rho)/\rho^2$. It peaks at
+$\rho=1.3687567$, giving
+
+$$
+\max|\mathbf u|=0.01702951\,
+\frac{|\boldsymbol\Gamma_p|}{\sigma^2}.
+$$
+
+Maximizing the projected strain over radius, polar angle, and target direction
+instead gives $\rho=1.7751319$ and
+
+$$
+\max_{r,\widehat{\boldsymbol\Gamma}}
+\left|\widehat{\boldsymbol\Gamma}^{T}S
+\widehat{\boldsymbol\Gamma}\right|
+=0.006899045\,\frac{|\boldsymbol\Gamma_p|}{\sigma^3},
+\qquad
+\max|Z|=0.001379809\,
+\frac{|\boldsymbol\Gamma_p|}{\sigma^3}.
+$$
+
+The velocity and strain maxima are thus different optimization problems. The
+full-gradient maximum used in `scripts/illus_fig_velocity_blowup.py` also
+cannot substitute for the strain maximum: at the particle center its leading
+term is solid-body rotation, so $S=0$ even though $|\nabla\mathbf u|$ is
+maximal.
+
+**Continuous Gaussian-core filament.** The circulation-scale quantity
+$\Gamma_v$ in σ_stab has units $\mathrm{m^2/s}$, so the dimensionally matched
+idealization is an infinite Gaussian filament, not one particle. Integrating
+the Gaussian core along its axis gives
+
+$$
+u_\theta(r)=\frac{\Gamma_v}{2\pi r}
+\left(1-e^{-r^2/(2\sigma^2)}\right).
+$$
+
+Writing $\rho=r/\sigma$, the velocity maximum satisfies
+$e^{\rho^2/2}=1+\rho^2$ and occurs at $\rho=1.5852011$. The nonzero symmetric
+strain component is
+
+$$
+S_{r\theta}=\frac12\left(\frac{\partial u_\theta}{\partial r}
+-\frac{u_\theta}{r}\right)
+=\frac{\Gamma_v}{4\pi\sigma^2}
+\left[e^{-\rho^2/2}
+-\frac{2(1-e^{-\rho^2/2})}{\rho^2}\right].
+$$
+
+Its maximum magnitude satisfies
+$e^{-\rho^2/2}(\rho^4+2\rho^2+4)=4$ and occurs at
+$\rho=1.8938227$, yielding
+
+$$
+\max|S_{r\theta}|=0.02374796\,\frac{\Gamma_v}{\sigma^2},
+\qquad
+\max|Z|=0.004749591\,\frac{\Gamma_v}{\sigma^2}
+$$
+
+for an optimally oriented target under the live $1/5$ convention. A target
+vortex aligned with an exactly straight source filament has $Z=0$; the maximum
+assumes alignment with the local principal extensional direction.
+
+**Interpretation.** The σ_stab estimate uses $1/(2\pi)=0.159155$ as its
+coefficient, which is $6.70$ times the isolated filament's maximum raw strain
+and $33.5$ times its maximum live-rVPM $Z$. Thus the coefficient cannot be
+derived by evaluating the regularized filament at its velocity or strain
+maximum. A discrete curved wake also introduces particle spacing, segment
+length, neighbor superposition, and orientation; $\Gamma_v$ alone does not
+fix those quantities. The defensible general form is
+
+$$
+Z_{\max}=C_{wake}\frac{\Gamma_v}{\sigma^2},
+\qquad
+\sigma_{init}=\sqrt{C_{wake}\Gamma_v\Delta t},
+$$
+
+with $C_{wake}$ measured from, or derived for, a specified wake geometry. The
+existing choice $C_{wake}=1/(2\pi)$ remains an empirical same-$\Delta t$
+initializer supported by the measured crossing bracket; it is not a
+single-filament kernel result.
 
 1. **Initialize** $\sigma_0 = \max(c_{eq}\,\sigma_{eq},\; \sigma_{stab})$
    with $c_{eq} = 2$ (viscous-fidelity margin: keeps the strained-core
@@ -116,9 +231,10 @@ $\Delta t Z > 1$), so require $\Delta t Z \lesssim 1$ at $\sigma$.
 
 ### Pre-registered choices (fixed before the demonstration)
 
-- **ε = 0.2.** Justification: the hard failure thresholds are ΔtZ = 1
-  (inviscid, σ sign flip) and ΔtZ = 2 (unconditional); ε = 0.2 leaves 5–10×
-  headroom. The measured boundary is sharp in σ (0.0299R survives a screen
+- **ε = 0.2.** Justification: the frozen-$Z$ Euler thresholds are ΔtZ = 2/3
+  (Γ amplification), 1 (σ sign flip), and 2 (σ amplification); ε = 0.2
+  leaves factors 3.3, 5, and 10 of headroom, respectively. The measured
+  boundary is sharp in σ (0.0299R survives a screen
   while 0.0291R ignites — ~3% apart) but time-to-ignition shifts strongly
   with startup class and run length (screen step 284 vs production ~501 at
   matched σ), so ε must absorb probe-vs-production duration bias; 5–10×
@@ -247,8 +363,8 @@ absorbs: production boundary (0.0349, 0.0381]R ≈ 1.15–1.25× the screen
 One flow family (small hover rotor, explicit Euler VPM with CoreSpreading).
 σ_stab carries a flow-dependent prefactor (filament model); what would
 falsify it elsewhere: a flow whose measured ignition boundary departs from
-$\sqrt{\Gamma_v \Delta t/2\pi}$ by more than the prefactor band this
-demonstration measures, at matched probe protocol.
+$\sqrt{\Gamma_v \Delta t/2\pi}$ outside the resolution bracket of a matched
+probe protocol.
 
 ## P4b — viscous-fidelity discriminator at NT=144 (added 2026-08-06, Ryan)
 
@@ -322,7 +438,7 @@ approval checkboxes; (3) the drift-arrest v1.1 amendment (P6 §
 reconciliation item 4); (4) optional checkpoint commit (~150 modified/
 untracked files); (5) item 020 start decision. Headline conclusions:
 see the "cliff notes" ordering in the 2026-08-11 P6/P3/P4b sections —
-σ_stab validated at the screen ε-crossing (~2%); σ₀ failed production
+σ_stab fell inside the measured screen ε-crossing bracket; σ₀ failed production
 certification via cumulative contraction drift (not per-step margin) ⇒
 σ\* = 0.0381R via the bisect-upward branch onto L1's certification;
 in-band failure mode is tail-driven ignition (bulk static); proxy
@@ -441,8 +557,9 @@ OPEN QUESTION for the demonstration: the clean-dt screen family
 nt72 (σ_stab ≈ 0.022R) and nt144 (≈ 0.0155R) rungs sat **on the stable side
 of the σ_stab criterion and blew up anyway**. Investigate why the criterion
 fails there — Ryan's suggested lead: **the second stability criterion**
-(the σ_eq strain–diffusion side of the initializer / the ΔtZ<2 map bound, as
-distinct from the ΔtZ<1 σ-flip) may be the operative one; the constant-revs
+(the σ_eq strain–diffusion side of the initializer / the ΔtZ<2 σ-amplitude
+bound, distinct from Γ amplification at ΔtZ>2/3 and the σ flip at ΔtZ>1)
+may be the operative one; the constant-revs
 result (dσ/dt = −Zσ is Δt-independent, so the flow grinds σ into the runaway
 in fixed physical time) is the candidate mechanism to reconcile. This bears
 directly on P1's framing: σ_stab is an instantaneous threshold, not a static
@@ -604,8 +721,8 @@ cross-validation — the one that bears on P3's k=0 PASS — lands when
 addendum pre-registered "fit M(σ) ∝ σ^(−p) across the probe ladder"
 without restricting to survivors. Fitting the two ignited viscous points
 gives p = −2.8 (M *increasing* with σ) with Γ_implied 0.81 and 3.24 m²/s
-(≫ Γ_v = 0.278): pre-onset M of an ignited run (12.6, 28.2 ≫ the ΔtZ = 2
-unconditional threshold) is a divergence transient, not the stationary
+(≫ Γ_v = 0.278): pre-onset M of an ignited run (12.6, 28.2 ≫ even the
+ΔtZ = 2 σ-amplification threshold) is a divergence transient, not the stationary
 margin the scaling law is about. Ruling (recorded here, not silently
 patched into P1): the fit uses survivor points only; ignited direct-M
 points are reported alongside, unfitted. Fit currently skipped (0 fittable
@@ -660,11 +777,10 @@ steps, current max_dtZ ~0.04, healthy) and the P3 gate 13058988 (step
 M_direct = 0.134 ≤ ε = 0.2 → PASS.** σ = σ_stab + 0.4% (0.0312R,
 viscous) is stable *with margin headroom* by direct measurement.
 Combined with s030v (0.0299R, M_direct = 0.295 > ε): **the ε = 0.2
-acceptance boundary falls in (0.0299, 0.0312]R — σ_stab = 0.0311R lands
-almost exactly on the measured ε-crossing.** The σ_stab initializer arm
-is thereby validated far more tightly than the pre-registration hoped
-(the prefactor band the P6 scope statement needs is ~±2%, not the
-~2–3× resolution-price band ε was sized for).
+acceptance boundary falls in (0.0299, 0.0312]R — σ_stab = 0.0311R lies
+inside that measured bracket.** The σ_stab initializer arm is therefore
+supported at this probe resolution; the bracket does not identify an exact
+crossing or justify a ±2% prefactor uncertainty.
 
 **Survivor margin ladder (viscous, direct M):** 0.0299R → 0.295;
 0.0312R → 0.134; 0.0381R → 0.112. Inviscid: 0.0381R → 0.141.
@@ -833,8 +949,8 @@ open survivor); edge weight = M estimator (bold direct / thin proxy).
 Draft captions (self-contained, per the polish contract):
 
 - **fig_margin_curve** — Stability margin $M=\max\Delta tZ$ vs core size
-  $\sigma/R$ (log–log), all probes and production runs, with the failure
-  thresholds $\Delta tZ{=}1,2$, the pre-registered target
+  $\sigma/R$ (log–log), all probes and production runs, with the plotted σ-map
+  thresholds $\Delta tZ{=}1,2$ (the Γ-amplification threshold is $2/3$), the pre-registered target
   $\varepsilon=0.2$, the initializer scales $\sigma_{eq}$,
   $\sigma_{stab}$, $\sigma_0=2\sigma_{eq}$, and the survivor-only fit
   $M\propto\sigma^{-3.0}$ (viscous, NT=36). Ignited runs plot their
@@ -903,15 +1019,17 @@ at the time, none silently patched):
 
 One flow family: small hover rotor (DJI 9443 class), explicit-Euler VPM
 with CoreSpreading viscosity, NT = 36–144, screen and production startup
-classes. Validated: σ_stab = √(Γ_vΔt/2π) predicts the *screen-class,
-same-Δt* ε-crossing to ~2% (0.0311R vs measured (0.0299, 0.0312]R).
+classes. Supported: σ_stab = √(Γ_vΔt/2π) lies inside the measured
+*screen-class, same-Δt* ε-crossing bracket (0.0311R vs
+(0.0299, 0.0312]R). This brackets the heuristic initializer but does not
+measure an exact crossing or a ±2% prefactor uncertainty.
 NOT validated / bounded: σ_stab does not extrapolate across Δt as a
 long-horizon boundary (NT=144 at 1.35·σ_stab(Δt/4) ignited at 6 revs —
 constant-revs contraction governs, Δt is not a mitigation lever); the
 bulk-fidelity reading of the c_eq·σ_eq arm (in-band failure is
 tail-driven ignition, bulk stays at shed scale). Falsifier elsewhere: a
 flow whose screen-class ignition boundary departs from √(Γ_vΔt/2π) by
-more than the ~±5% prefactor band measured here at matched protocol.
+outside the measured crossing bracket at a matched probe protocol.
 
 ### Acceptance criteria status
 
@@ -932,6 +1050,15 @@ Item-level approvals (header checkboxes) await Ryan.
 
 ## Log
 
+- 2026-08-29 — corrected the σ_stab derivation: the stated coupled Euler
+  map first amplifies Γ at ΔtZ > 2/3, not ΔtZ > 2; ΔtZ = 1 is the heuristic
+  order-one/σ-positivity normalization defining σ_stab, not the exact joint-
+  stability boundary. Recast filament "self-strain" as a positive projected-
+  strain model and replaced the unjustified ~±2% point-accuracy claim with
+  the measured crossing bracket (0.0299, 0.0312]R. Formula and measured
+  probe results are unchanged. Added the kernel-level prefactor audit: the
+  velocity- and strain-maximizing radii, particle/filament distinction, live
+  rVPM $1/5$ factor, and the resulting empirical status of $1/(2\pi)$.
 - 2026-08-12 — sign-off session (Ryan, interactive): notebook entry
   written (journals/20260803.md § 20260812, "σ-Selection Procedure
   Demonstrated (019)" — context + verdict table + margin-curve and P4b
@@ -958,7 +1085,7 @@ Item-level approvals (header checkboxes) await Ryan.
   = ignition windows, protected). Pipeline + figures regenerated.
 - 2026-08-06 ~22:35 — wave-2 harvest (see dated section above): NT36 grid
   complete; sstab PASS (M 0.134) ⇒ ε-crossing measured in
-  (0.0299, 0.0312]R, σ_stab validated at ~±2%; survivor proxy/direct
+  (0.0299, 0.0312]R, with σ_stab inside that bracket; survivor proxy/direct
   0.21–0.36; viscous p-fit 3.0 (small-range caveat). Remaining: fid144
   (~01:00–03:00), P3 gate (Aug 7 afternoon).
 - 2026-08-06 ~18:20 — wave-1 harvest (see dated section above): s030v

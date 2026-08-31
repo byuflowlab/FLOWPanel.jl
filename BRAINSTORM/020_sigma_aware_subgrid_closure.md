@@ -403,6 +403,33 @@ enough of the gap for current purposes, implementation may be re-scoped).
 Gate: all consistency tests pass at pre-registered tolerances; deviations
 from theory recorded, not patched silently.
 
+### Phase 3a — MINIMAL ν_sgs PROTOTYPE (staged 2026-08-29; Ryan approved STAGING only)
+
+Staged from the σ/VPM illustration campaign (plans/sigma_vpm_illustrations_20260827/),
+where the Act-II data made the gap concrete: at σ_shed=0.0249R the viscous run
+`scr_p019_s025v_rr` ignites at rev 8.11 (vs 7.83 inviscid) — viscosity arrests σ at
+the equilibrium but nothing damps Γ. Research question (Ryan): can an SFS closure
+with a viscous interaction term allow a SMALLER stable σ_shed?
+
+- Prototype: implement the candidate closure σ̇_p = −h_σ s σ_p + (ν+ν_sgs)/σ_p with
+  ν_t = ν + (κσ₀)²|S|, κ=1/√5 (κ per the Phase-1 downgrade: a resolution-cutoff
+  modeling choice), in FLOWVPM; default-off env knob, off-state bit-identical
+  (Phase-3 contract). Scope: the σ channel only — this is a stability probe, not
+  the full Phase-3 implementation+test battery.
+- Success criterion (pre-registered): stabilizes the `scr_p019_s025v` screen arm
+  past rev 8.1 (its measured ignition on the post-08-24 stack; wake-health CSV in
+  FLOWPanel plans/sigma_vpm_illustrations_20260827/wake_health_csvs/). One FLOWVPM
+  edit + one ~2 h 64c screen run. Secondary readout: min σ/σ_shed drift rate vs
+  the stock −0.154/rev.
+- NOT run within the illustration campaign; Phase-2 gate rulings still stand —
+  this stages a bounded experiment, it does not open Phase 3.
+- Future-work note (recorded, explicitly NOT prototyped): stable small-σ operation
+  likely requires particle refinement in two regimes — (a) diffusion regime:
+  ~isotropic splitting driven by ν+ν_sgs spreading (anisotropy near walls TBD);
+  (b) stretching regime: splitting along the time-averaged vortex-stretching
+  direction. Ryan 2026-08-29.
+
+
 ### Phase 4 — VALIDATION (real simulation + comparison)
 
 - Primary harness: re-run the 019 regime map (or its decisive subset) with
@@ -482,3 +509,5 @@ of 020 (symptom-level robustness).
   subfilter viscous model is worth building (strain ceiling measured
   against physics target; stiff-integration threshold test; SFS
   viscous-null); phases renumbered (implementation → 3, validation → 4).
+- 2026-08-29 — Phase 3a (minimal ν_sgs prototype) STAGED per Ryan during the
+  σ/VPM illustration session; staging only, no code, no run. See Phase 3a section.

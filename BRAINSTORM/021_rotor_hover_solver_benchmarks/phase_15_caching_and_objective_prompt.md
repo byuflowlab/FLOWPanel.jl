@@ -1,5 +1,29 @@
 # Handoff — BRAINSTORM 021: near-field caching in Phase 2, and the tuner's objective
 
+> **STATUS 2026-08-24 (later): §1 and §3 are now EXECUTED in code — see
+> `log.md`'s newest entry.** The caching ruling is implemented for both Phase 2
+> tuning and Phase 2 benchmarks; the objective blocker (§3) was resolved by
+> Ryan choosing option **(a)**, a real-solve cost function, for **R1–R5**, with
+> R6–R7 deferred until the smaller rungs land. Two further rulings were taken
+> in the same session and are NOT in the text below:
+>
+> 1. **The memory budget is a swept AXIS**, not a constant. An uncapped cached
+>    tune provably walks to a dense operator, so `max_bytes` determines the
+>    published knob rather than guarding it.
+> 2. **Phase 1 is descoped to verification only** — solve the ladder to R7 and
+>    confirm the solvers agree on the SOLUTION. Tuning moved to Phase 2.
+>    Caching there is opportunistic (speed only).
+>
+> Also superseded below: §1's "naive R7 ≈ 32 GiB" — MEASURED at **78 GiB even
+> at the smallest leaf** (`ledger.md`, W0 map). §4's claim that `fm_leaf_ab.jl`
+> passed "wrong args to `bc_error!`" — the real cause was an incomplete reset
+> (see `ledger.md`).
+>
+> **Still needs Ryan:** the R6–R7 objective, and which config becomes the
+> agreement REFERENCE at R6/R7 (a dense `backslash_ref` is 335 GiB / 1.31 TiB
+> there, i.e. impossible).
+
+
 Written 2026-08-24 at a context reset, superseding
 `phase_14_cost_tuner_relaunch_prompt.md` (still accurate on environment, traps
 and walltimes — read it for those; its *diagnosis* is revised below).

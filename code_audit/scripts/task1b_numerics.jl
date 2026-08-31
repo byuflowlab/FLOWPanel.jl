@@ -113,9 +113,9 @@ n = wing.ncells
 mu_star    = copy(wing.strength[:, 2])
 sigma_star = copy(wing.strength[:, 1])
 
-# freeze kerneloffset regime at the solve value (production uses kerneloffset_panel)
-wing.kerneloffset = wing.kerneloffset_panel
-@assert wing.kerneloffset_panel == wing.kerneloffset_targets  # single-knob body here
+# freeze core_size regime at the solve value (production uses core_size_panel)
+wing.core_size = wing.core_size_panel
+@assert wing.core_size_panel == wing.core_size_targets  # single-knob body here
 
 # TE pair bookkeeping (upper = shedding row 1, lower = row 4)
 shed = wing.shedding[1]
@@ -159,7 +159,7 @@ function body_phi_direct(x::SVector{3,Float64})
     ds = FastMultipole.DerivativesSwitch(true, false, false)
     phi = 0.0
     for i in 1:n
-        p, _, _ = pnl.induced(x, wing, i, ds; kerneloffset=wing.kerneloffset_panel)
+        p, _, _ = pnl.induced(x, wing, i, ds; core_size=wing.core_size_panel)
         phi += p
     end
     return phi
@@ -185,25 +185,25 @@ Cphi = [phi_tr[upper[i]] - phi_tr[lower[i]] for i in 1:nst]   # C * phi_tr per s
 # ----------------------------------------------------- [3] assemble the systems
 println("\n[3] Assembling influence matrices (direct _G!)...")
 GB = zeros(n, n)
-t1 = @elapsed pnl._G!(GB, wing, wing; kerneloffset=wing.kerneloffset_panel)
+t1 = @elapsed pnl._G!(GB, wing, wing; core_size=wing.core_size_panel)
 
 # K_int: same nodes/cells, no shedding (ensure_winding=false — cells already wound)
 clone = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}, 2, Float64, true}(
     copy(wing.nodes), copy(wing.cells), zeros(Int, 6, 0);
-    kerneloffset=wing.kerneloffset_panel,
+    core_size=wing.core_size_panel,
     kernelcutoff=wing.kernelcutoff,
     semiinfinite_wake=false, watertight=true,
     ensure_winding=false, check_mesh=false)
 pnl.calc_normals!(clone); pnl.calc_controlpoints!(clone)
 @assert maximum(abs.(clone.controlpoints .- wing.controlpoints)) < 1e-12
 Kint = zeros(n, n)
-t2 = @elapsed pnl._G!(Kint, wing, clone; kerneloffset=wing.kerneloffset_panel)
+t2 = @elapsed pnl._G!(Kint, wing, clone; core_size=wing.core_size_panel)
 
 # G_A: semi-infinite attached wake on the frozen geometry, unit Das
 wing.semiinfinite_wake = true
 set_unit_Das!()
 GA = zeros(n, n)
-t3 = @elapsed pnl._G!(GA, wing, wing; kerneloffset=wing.kerneloffset_panel)
+t3 = @elapsed pnl._G!(GA, wing, wing; core_size=wing.core_size_panel)
 wing.semiinfinite_wake = false
 restore_Das!()
 @logf("  G_B %.1f s, K_int %.1f s, G_A %.1f s (n=%d)\n", t1, t2, t3, n)

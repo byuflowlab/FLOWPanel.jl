@@ -98,11 +98,21 @@ already established:
 - **Phase 3's numeric prerequisites are safe.** Frozen knobs come from
   `results/phase1/multi/*` and the cold single-step baselines from
   `phase2.csv` — all wake-free, hence family-invariant.
-- **Known blocker to design around**: FGS per-step iteration capture is not
-  plumbed — `unsteady.csv` records `niter=-1` for Backslash and FGS, flagged in
-  the driver header as "pending callback plumbing (Phase 3)". Phase 3's headline
-  metric is *iterations*-to-target per step, so this must be solved. Krylov
-  already reports `solver.niter`.
+- **~~Known blocker to design around~~ — SUPERSEDED 2026-08-23, corrected in
+  place 2026-08-25.** This blocker is **CLOSED**: `FGSSolver.niter` /`.solved`
+  and the per-step lifecycle (`step_niter_first`, `step_nsolves`,
+  `step_solved`) all exist and are unit-tested; `unsteady.jl` records FGS
+  counts alongside Krylov. The phrase "pending callback plumbing" no longer
+  appears anywhere in `src/` or `benchmark/`. **Do not re-implement it.** See
+  `phase_19_fgs_niter_followups.md` and the 2026-08-23 log entry. Only
+  `Backslash` still records `niter = -1`, which is a deliberate null result,
+  not a gap.
+
+  ~~Original text: FGS per-step iteration capture is not plumbed —
+  `unsteady.csv` records `niter=-1` for Backslash and FGS, flagged in the driver
+  header as "pending callback plumbing (Phase 3)". Phase 3's headline metric is
+  *iterations*-to-target per step, so this must be solved. Krylov already
+  reports `solver.niter`.~~
 - Phase 0 delivered the `x0` / `warmstart` plumbing (`warmstart` field, `x_prev`,
   positional-x0, `KrylovCoupled` persistent `x`), landed and unit-tested. FGS
   already owns history/extrapolation (`project_solution!` / `save_solution!`,
