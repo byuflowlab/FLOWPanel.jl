@@ -46,14 +46,46 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------ locking
-# Two concurrent --apply runs would race on the same tree; a watchdog cron can
-# fire while the previous cycle is still sweeping.  Re-exec under flock so only
-# one sweeper touches data/ at a time.  Guarded on flock(1) being present so the
-# script stays runnable on macOS for syntax and fixture testing.
-LOCK="${TMPDIR:-/tmp}/.p018_vtk_sweeper.$(id -u).lock"
-if command -v flock >/dev/null 2>&1 && [[ -z "${SWEEPER_LOCK_HELD:-}" ]]; then
-    export SWEEPER_LOCK_HELD=1
-    exec flock -n -E 6 "$LOCK" "$0" "$@"
+# Cross-NODE mutual exclusion on the SHARED filesystem (the old flock lived in
+# node-local ${TMPDIR:-/tmp}, so two login nodes shared no lock at all).  The
+# primitive is mkdir(2) -- atomic over NFS and Lustre, where flock can be
+# silently node-local.  Scheme, mirrored in scripts/run_archiver.sh:
+#   * the sweeper takes sweeper.excl EXCLUSIVELY, then re-checks that no
+#     archiver reader exists and backs off if one does.  A sweep deleting VTK
+#     from a run that has no verified tarball yet is a permanent, unarchived
+#     loss, so a sweep and an archive must never overlap;
+#   * archivers publish readers/<marker> and back off if sweeper.excl exists.
+# Publish-then-check on both sides makes the race safe.  NO lock auto-expires:
+# after a SIGKILL or node crash a HUMAN removes the stale lock named below.
+LOCKROOT="${LOCKROOT:-$HOME/.cache/flowpanel/locks}"
+SWEEP_EXCL="$LOCKROOT/sweeper.excl"
+SWEEP_EXCL_HELD=false
+manifest=""
+sweeper_cleanup() {
+    $SWEEP_EXCL_HELD && rm -rf "$SWEEP_EXCL"
+    [[ -n "$manifest" ]] && rm -f "$manifest"
+    return 0
+}
+trap sweeper_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$LOCKROOT/readers"
+if ! mkdir "$SWEEP_EXCL" 2>/dev/null; then
+    echo "another sweeper holds $SWEEP_EXCL -- refusing to run" >&2
+    sed 's/^/    holder: /' "$SWEEP_EXCL/owner" >&2 2>/dev/null || true
+    echo "    if it is dead (host/pid gone), a human may: rm -rf $SWEEP_EXCL" >&2
+    exit 6
+fi
+SWEEP_EXCL_HELD=true
+printf 'host %s\npid %s\nstarted_utc %s\n' \
+    "$(hostname -s 2>/dev/null || echo unknown)" "$$" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SWEEP_EXCL/owner" 2>/dev/null || true
+if [[ -n "$(ls -A "$LOCKROOT/readers" 2>/dev/null)" ]]; then
+    echo "archiver reader(s) present under $LOCKROOT/readers -- a sweep must not overlap an archive" >&2
+    ls "$LOCKROOT/readers" 2>/dev/null | sed 's/^/    reader: /' >&2 || true
+    echo "    if a reader is dead (the host/pid in its name is gone), a human may remove it" >&2
+    exit 6
 fi
 
 KEEP_STEPS="${KEEP_STEPS:-288}"     # restartable steps retained per run (10->36 Ryan 2026-08-20; 36->288 Ryan 2026-08-24)
@@ -156,8 +188,7 @@ is_live() {
 # ---------------------------------------------------------------------- sweep
 NOW="$(date +%s)"
 total_freed=0
-manifest="$(mktemp)"
-trap 'rm -f "$manifest"' EXIT
+manifest="$(mktemp)"   # removed by sweeper_cleanup on exit
 
 echo "# p018_vtk_sweeper  keep=$KEEP_STEPS steps  apply=$APPLY  skip_live=$SKIP_LIVE"
 echo "# protect list: $PROTECT_FILE"

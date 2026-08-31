@@ -240,12 +240,20 @@ lamb_only = parse(Bool, get(ENV, "LAMB_ONLY", "false"))
 bernoulli_only = parse(Bool, get(ENV, "BERNOULLI_ONLY", "false"))
 run_monitors = parse(Bool, get(ENV, "RUN_MONITORS", "true"))
 # Wake->body solve formulation (src/FLOWPanel_formulation.jl).
-#   velocity : VelocityThroughSources() -- production default
+#   velocity : VelocityThroughSources() -- 052b production formulation
+#   hybrid   : HybridWakePotential() -- experimental comparison (052e)
 #   green    : GreenReconstruction(...) -- reconstructs the wake body-trace from
-#              sampled wake velocities; valid for a particle wake under FMM.
+#              sampled wake velocities; single-body diagnostic only.
 formulation_name = lowercase(get(ENV, "RHPC_FORMULATION", "velocity"))
 green_recompute_interval = parse(Int, get(ENV, "GREEN_RECOMPUTE_INTERVAL", "1"))
 green_gauge = Symbol(lowercase(get(ENV, "GREEN_GAUGE", "area_mean")))
+overlap_action = Symbol(lowercase(get(ENV, "PARTICLE_BODY_OVERLAP_ACTION",
+    formulation_name == "hybrid" ? "error" : "off")))
+overlap_core_ratio = parse(Float64,
+    get(ENV, "PARTICLE_BODY_OVERLAP_CORE_RATIO", "1.0"))
+overlap_every = parse(Int, get(ENV, "PARTICLE_BODY_OVERLAP_EVERY", "1"))
+particle_body_overlap_policy = pnl.ParticleBodyOverlapPolicy(
+    action=overlap_action, core_ratio=overlap_core_ratio, every=overlap_every)
 
 read_path = joinpath(pnl.examples_path, "data")
 
@@ -349,7 +357,8 @@ if nrotors > 1
     isnan(das_chord_fraction) || error("NROTORS>1 does not support DAS_CHORD_FRACTION")
     das_arc_placed && error("NROTORS>1 does not support DAS_ARC_PLACED")
     conversion_mode == "legacy" || error("NROTORS>1 requires CONVERSION=legacy")
-    formulation_name == "velocity" || error("NROTORS>1 requires RHPC_FORMULATION=velocity")
+    formulation_name in ("velocity", "hybrid") || error(
+        "NROTORS>1 requires RHPC_FORMULATION=velocity or hybrid")
 end
 # -----------------------------------------------------------------------------
 
@@ -812,25 +821,87 @@ if ground_enable && ground_particle_policy == "cull"
 end
 # -----------------------------------------------------------------------------
 
-wakes_rotor = [pnl.PanelParticleWake(r;
-    nwakerows, max_particles=500_000, core_size=wake_core_size,
+# Ruling 7 (BRAINSTORM/022 Phase 6, Ryan 2026-08-25/26): all rotors shed into
+# ONE shared particle field. The first wake owns the allocation, sized N x the
+# single-rotor cap; rotors 2..N reference it via the `pfield` kwarg. The
+# simulate! loop deduplicates shared fields by identity, so the field is
+# convected/maintained/written once per step. NROTORS=1 is the exact legacy
+# path (same allocation size, same construction arguments).
+max_particles = parse(Int, get(ENV, "MAX_PARTICLES", string(nrotors * 500_000)))
+# Task 052/052b: an acceptance GPU run must keep the shared particle field on
+# device and route every touching influence pass through the CUDA seam. A
+# diagnostic may explicitly request host fallback; the production launcher
+# never does so.
+vpm_arraytype_name = lowercase(get(ENV, "VPM_ARRAYTYPE", "array"))
+gpu_allow_fallback = parse(Bool, get(ENV, "GPU_ALLOW_FALLBACK", "false"))
+wake_pfield_kwargs = if vpm_arraytype_name in ("cuarray", "cuda", "gpu")
+    gpu_mode = lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0"))
+    eligible = gpu_mode in ("cuda", "gpu")
+    radix_status = "not attempted"
+    if eligible
+        eligible = try
+            ok = pnl.FastMultipole.load_cuda_radix_lifecycle!()
+            radix_status = pnl.FastMultipole.cuda_radix_status()
+            ok
+        catch err
+            radix_status = sprint(showerror, err)
+            false
+        end
+    end
+    if !eligible
+        gpu_allow_fallback || error(
+            "VPM_ARRAYTYPE=cuarray requires FLOWPANEL_GPU_INFLUENCE=cuda " *
+            "and a functional CUDA radix lifecycle (mode=$(repr(gpu_mode)), " *
+            "status=$(radix_status)); refusing CPU fallback. Set " *
+            "GPU_ALLOW_FALLBACK=1 only for a diagnostic run.")
+        @warn "GPU eligibility failed; using the explicit diagnostic host fallback" gpu_mode radix_status
+        (pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4,
+            autotune_p=false, autotune_ncrit=false,
+            autotune_reg_error=false),)
+    else
+        println("Wake particle field: device-resident CuArray ($(radix_status))")
+        (arraytype = getglobal(pnl.FastMultipole, :CUDA).CuArray,
+         pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4,
+             autotune_p=false, autotune_ncrit=false,
+             autotune_reg_error=false))
+    end
+elseif vpm_arraytype_name in ("array", "matrix")
+    (pfield_fmm = FV.FMM(; p=4, ncrit=50, theta=0.4,
+        autotune_p=false, autotune_ncrit=false,
+        autotune_reg_error=false),)
+else
+    error("Unknown VPM_ARRAYTYPE=$(repr(vpm_arraytype_name)); use array or cuarray")
+end
+_wake_kwargs = (;
+    nwakerows, core_size=wake_core_size,
+    wake_pfield_kwargs...,
     particle_core_size=core_size_targets,
     viscous=viscous_scheme,
     SFS=sfs_choice,
     relaxation=relaxation_scheme,
     expint=wake_expint,
     conversion_kwargs...,
-    shed_with_induced_velocity,
-    particle_maintenance=pnl.ParticleMaintenance((
-            trim_policies...,
-            pnl.MergeParticles(;
-                every=merge_particles ? 1 : 0,
-                r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
-                r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
-                sigma_relative=merge_sigma_relative),
-        ))
-    ) for r in rotors]
+    shed_with_induced_velocity)
+_wake_maintenance() = pnl.ParticleMaintenance((
+        trim_policies...,
+        pnl.MergeParticles(;
+            every=merge_particles ? 1 : 0,
+            r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
+            r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
+            sigma_relative=merge_sigma_relative),
+    ))
+wakes_rotor = Vector{Any}(undef, nrotors)
+wakes_rotor[1] = pnl.PanelParticleWake(rotors[1];
+    max_particles, particle_maintenance=_wake_maintenance(), _wake_kwargs...)
+for i in 2:nrotors
+    wakes_rotor[i] = pnl.PanelParticleWake(rotors[i];
+        max_particles, pfield=wakes_rotor[1].pfield,
+        particle_maintenance=_wake_maintenance(), _wake_kwargs...)
+end
+wakes_rotor = [w for w in wakes_rotor]   # narrow eltype
 wake_rotor = wakes_rotor[1]   # legacy alias
+nrotors > 1 && println("Shared particle field (Ruling 7): nrotors=$(nrotors) " *
+    "max_particles=$(max_particles) owner=wake1")
 
 smoothstep(x) = x <= 0 ? zero(x) : x >= 1 ? one(x) : x * x * (3 - 2 * x)
 
@@ -1198,8 +1269,72 @@ let sigma_handoff = tip_sigma_default, dt_handoff = t_range[2] - t_range[1]
 end
 parse(Bool, get(ENV, "RHPC_HANDOFF_PROFILE_ONLY", "false")) && exit(0)
 
-solvers_rotor = [pnl.Backslash(r) for r in rotors]
+rotor_operator_owners_env = strip(get(ENV, "ROTOR_OPERATOR_OWNERS", ""))
+rotor_operator_owners = isempty(rotor_operator_owners_env) ? collect(1:nrotors) :
+    parse.(Int, split(rotor_operator_owners_env, ','))
+length(rotor_operator_owners) == nrotors || error("ROTOR_OPERATOR_OWNERS must " *
+    "contain one owner index per rotor (got $(length(rotor_operator_owners)); " *
+    "NROTORS=$nrotors)")
+operator_classes_validated = parse(Bool,
+    get(ENV, "ROTOR_OPERATOR_CLASSES_VALIDATED", "false"))
+operator_parity_audit = parse(Bool,
+    get(ENV, "ROTOR_OPERATOR_PARITY_AUDIT", "false"))
+operator_parity_rtol = parse(Float64,
+    get(ENV, "ROTOR_OPERATOR_PARITY_RTOL", "1e-11"))
+operator_parity_atol = parse(Float64,
+    get(ENV, "ROTOR_OPERATOR_PARITY_ATOL", "1e-12"))
+for i in eachindex(rotor_operator_owners)
+    owner = rotor_operator_owners[i]
+    1 <= owner <= i || error("ROTOR_OPERATOR_OWNERS[$i]=$owner must name an " *
+        "already-constructed owner in 1:$i")
+    rotor_operator_owners[owner] == owner || error(
+        "ROTOR_OPERATOR_OWNERS[$i]=$owner names a non-owner rotor")
+    rotor_directions[i] == rotor_directions[owner] || error(
+        "rotor $i cannot share operator owner $owner across handedness classes")
+    if owner != i && !operator_classes_validated && !operator_parity_audit
+        error("ROTOR_OPERATOR_OWNERS requests shared handedness classes, but " *
+            "ROTOR_OPERATOR_CLASSES_VALIDATED is false; run and record direct " *
+            "matrix parity before enabling sharing")
+    end
+end
+if operator_parity_audit
+    owner_matrices = Dict{Int,Matrix{Float64}}()
+    for i in eachindex(rotors)
+        Gfresh = zeros(Float64, rotors[i].ncells, rotors[i].ncells)
+        pnl._G!(Gfresh, rotors[i], rotors[i];
+            core_size=rotors[i].core_size_panel, update_geometry=false)
+        owner = rotor_operator_owners[i]
+        if owner == i
+            owner_matrices[i] = Gfresh
+        else
+            Gowner = owner_matrices[owner]
+            max_abs = maximum(abs, Gfresh .- Gowner)
+            scale = max(maximum(abs, Gfresh), maximum(abs, Gowner), eps())
+            relative = max_abs / scale
+            println("Rotor operator parity: rotor=$i owner=$owner " *
+                "direction=$(rotor_directions[i]) max_abs=$max_abs relative=$relative")
+            isapprox(Gfresh, Gowner; rtol=operator_parity_rtol,
+                atol=operator_parity_atol) || error(
+                "direct operator parity failed for rotor $i and owner $owner")
+        end
+    end
+    operator_classes_validated = true
+    parse(Bool, get(ENV, "ROTOR_OPERATOR_PARITY_ONLY", "false")) && exit(0)
+end
+solvers_rotor = Vector{Any}(undef, nrotors)
+for i in 1:nrotors
+    owner = rotor_operator_owners[i]
+    solvers_rotor[i] = owner == i ? pnl.Backslash(rotors[i]) :
+        pnl.Backslash(rotors[i]; shared_operator=solvers_rotor[owner],
+            direct_matrix_parity_validated=operator_classes_validated)
+end
+solvers_rotor = [s for s in solvers_rotor]
 solver_rotor = solvers_rotor[1]   # legacy alias
+solver_construction = [pnl._backslash_construction_timings(s) for s in solvers_rotor]
+println("Backslash rotor construction: operator_owners=$(rotor_operator_owners) " *
+    "classes_validated=$(operator_classes_validated) " *
+    join(("r$(i){total=$(round(t.total_s,digits=3))s,G=$(round(t.g_assembly_s,digits=3))s," *
+          "LU=$(round(t.lu_s,digits=3))s}" for (i, t) in enumerate(solver_construction)), " "))
 # RHPC_BACKEND=direct is the BRAINSTORM/018 Phase-2 discriminator for the FMM
 # |Das|-panel-radius coupling (src/FLOWPanel_liftingbody.jl); fmm is production.
 rhpc_backend = get(ENV, "RHPC_BACKEND", "fmm")
@@ -1230,13 +1365,26 @@ kj_backend = pnl.FastMultipoleBackend(;
     multipole_acceptance=parse(Float64, get(ENV, "KJ_FMM_ACCEPTANCE", "0.4")),
     leaf_size=parse(Int, get(ENV, "KJ_FMM_LEAF_SIZE", "1000")),
 )
+velocity_residual_scale = ω_full * R
+potential_residual_scale = ω_full * R^2
 formulation = if formulation_name == "velocity"
-    pnl.VelocityThroughSources()
+    pnl.VelocityThroughSources(max_outer_iterations=gs_max_outer,
+        outer_tolerance=gs_tol,
+        dirichlet_residual_scale=potential_residual_scale,
+        neumann_residual_scale=velocity_residual_scale,
+        require_outer_convergence=true)
+elseif formulation_name == "hybrid"
+    pnl.HybridWakePotential(; gauge=green_gauge,
+        recompute_interval=green_recompute_interval,
+        max_outer_iterations=gs_max_outer, outer_tolerance=gs_tol,
+        dirichlet_residual_scale=potential_residual_scale,
+        neumann_residual_scale=velocity_residual_scale,
+        require_outer_convergence=true)
 elseif formulation_name == "green"
     pnl.GreenReconstruction(; gauge=green_gauge,
         recompute_interval=green_recompute_interval, green_solver=nothing)
 else
-    error("Unknown RHPC_FORMULATION=$(repr(formulation_name)); use velocity or green")
+    error("Unknown RHPC_FORMULATION=$(repr(formulation_name)); use velocity, hybrid, or green")
 end
 
 function maneuver!(frames, systems, wakes, t)
@@ -1263,37 +1411,129 @@ else
     body_solvers = Tuple(solvers_rotor)
 end
 
-# --- GS outer-loop instrumentation (022 Phase 0 requirement) ------------------
-# solve_formulation!(::VelocityThroughSources) is a one-liner that forwards to
-# solve! WITHOUT the verbose/history kwargs, and solve!'s non-convergence is
-# silent unless verbose (src/FLOWPanel_solver.jl). Overwrite that one method
-# here (driver-local; src untouched) to pass a driver-owned ConvergenceHistory
-# into the EXISTING outer loop and log per-step iteration counts. No new
-# iteration logic. Julia prints a method-overwrite warning; expected.
-gs_iters = Int[]
-gs_final_delta = Float64[]
-if (ground_enable || nrotors > 1) && gs_log
-    formulation_name == "velocity" || error(
-        "GS logging (and the 022 ground path generally) assumes " *
-        "RHPC_FORMULATION=velocity; got $(repr(formulation_name)). " *
-        "GreenReconstruction with a ground body is untested — do not combine.")
-    gs_history = pnl.ConvergenceHistory(:blockgs_maxdelta)
-    function pnl.solve_formulation!(::pnl.VelocityThroughSources, state, systems,
-            systems_tuple, wakes_tuple, body_solvers;
-            backend_solve, backend_wake, i_step::Int=0)
-        pnl.solve!(systems, body_solvers; backend=backend_solve,
-            max_outer_iterations=gs_max_outer, outer_tolerance=gs_tol,
-            verbose=gs_verbose, history=gs_history)
-        n = length(gs_history.iter)
-        final = n == 0 ? NaN : gs_history.residual_internal[end]
-        push!(gs_iters, n)
-        push!(gs_final_delta, final)
-        if n >= gs_max_outer && !(final < gs_tol)
-            @warn "Block Gauss-Seidel outer loop hit max_outer_iterations " *
-                "without converging" i_step n final gs_tol
+# --- Production solve/route/overlap telemetry (052b Phase C) -----------------
+# `_steady_aerodynamics!` invokes this callback after all three major influence
+# passes. The callback observes existing state only; it never performs a second
+# influence or solve. CSVs are incremental so a failed/walled run keeps every
+# completed step. `block_gs_status` fields retain their exact solver semantics.
+block_gs_status_history = NamedTuple[]
+hybrid_diagnostic_history = NamedTuple[]
+overlap_report_history = NamedTuple[]
+route_snapshot_history = NamedTuple[]
+route_counter_baseline = Ref(pnl.gpu_influence_route_snapshot())
+telemetry_files_started = Set{Symbol}()
+
+function production_step_telemetry(event)
+    status = pnl.block_gs_status(body_solvers)
+    status_row = (; step=event.i_step, status...)
+    push!(block_gs_status_history, status_row)
+
+    hybrid_rows = NamedTuple[]
+    if event.formulation_state isa pnl.HybridWakePotentialState
+        for (bs, body_index) in zip(event.formulation_state.bodies,
+                                    event.formulation_state.body_indices)
+            row = (; step=event.i_step, body_index,
+                green_residual=bs.green_residual[],
+                gauge_defect=bs.gauge_defect[],
+                green_hodge_mismatch=bs.green_hodge_mismatch[],
+                tangential_projection_defect=bs.tangential_projection_defect[])
+            push!(hybrid_diagnostic_history, row)
+            push!(hybrid_rows, row)
         end
-        return nothing
     end
+
+    overlap_row = if isnothing(event.overlap_report)
+        nothing
+    else
+        r = event.overlap_report
+        (; step=event.i_step, checked_particles=r.checked_particles,
+         checked_fields=r.checked_fields,
+         triangle_evaluations=r.triangle_evaluations,
+         overlap_count=r.overlap_count, min_distance=r.min_distance,
+         min_distance_over_sigma=r.min_distance_over_sigma,
+         body_index=r.body_index, wake_index=r.wake_index,
+         particle_index=r.particle_index, particle_x=r.particle_position[1],
+         particle_y=r.particle_position[2], particle_z=r.particle_position[3],
+         particle_sigma=r.particle_sigma,
+         threshold_ratio=r.threshold_ratio)
+    end
+    isnothing(overlap_row) || push!(overlap_report_history, overlap_row)
+
+    routes = pnl.gpu_influence_route_snapshot(; since=route_counter_baseline[])
+    route_counter_baseline[] = routes
+    route_row = (; step=event.i_step, requested_mode=routes.requested_mode,
+        device=routes.device, total_hits=routes.total_hits,
+        hits=routes.hits, fallbacks=routes.fallbacks,
+        cumulative_total_hits=routes.cumulative_total_hits,
+        cumulative_hits=routes.cumulative_hits,
+        cumulative_fallbacks=routes.cumulative_fallbacks)
+    push!(route_snapshot_history, route_row)
+
+    if save_path !== nothing
+        isdir(save_path) || mkpath(save_path)
+        block_started = :block_gs in telemetry_files_started
+        mode = block_started ? "a" : "w"
+        open(joinpath(save_path, "$(run_name)_block_gs_status.csv"), mode) do io
+            if !block_started
+                println(io, "step,iterations,final_max_delta,dirichlet_residual," *
+                    "neumann_residual,normalized_residual,dirichlet_residual_scale," *
+                    "neumann_residual_scale,converged,tolerance,cap,failure")
+            end
+            println(io, join((status_row.step, status_row.iterations,
+                status_row.final_max_delta, status_row.dirichlet_residual,
+                status_row.neumann_residual, status_row.normalized_residual,
+                status_row.dirichlet_residual_scale,
+                status_row.neumann_residual_scale, status_row.converged,
+                status_row.tolerance, status_row.cap,
+                something(status_row.failure, "")), ','))
+        end
+        push!(telemetry_files_started, :block_gs)
+        if !isempty(hybrid_rows)
+            path = joinpath(save_path, "$(run_name)_hybrid_diagnostics.csv")
+            started = :hybrid in telemetry_files_started
+            open(path, started ? "a" : "w") do io
+                !started && println(io,
+                    "step,body_index,green_residual,gauge_defect," *
+                    "green_hodge_mismatch,tangential_projection_defect")
+                for row in hybrid_rows
+                    println(io, join(values(row), ','))
+                end
+            end
+            push!(telemetry_files_started, :hybrid)
+        end
+        if !isnothing(overlap_row)
+            path = joinpath(save_path, "$(run_name)_particle_body_overlap.csv")
+            started = :overlap in telemetry_files_started
+            open(path, started ? "a" : "w") do io
+                !started && println(io, join(keys(overlap_row), ','))
+                println(io, join(values(overlap_row), ','))
+            end
+            push!(telemetry_files_started, :overlap)
+        end
+        path = joinpath(save_path, "$(run_name)_gpu_routes.csv")
+        routes_started = :routes in telemetry_files_started
+        open(path, routes_started ? "a" : "w") do io
+            !routes_started && println(io,
+                "step,kind,route,count,requested_mode,device,step_total_hits,cumulative_total_hits")
+            route_pairs = (("hit", k, v) for (k, v) in sort!(collect(routes.hits)))
+            fallback_pairs = (("fallback", k, v) for (k, v) in
+                              sort!(collect(routes.fallbacks)))
+            rows = (route_pairs..., fallback_pairs...)
+            if isempty(rows)
+                println(io, "$(event.i_step),snapshot,none,0," *
+                    "$(routes.requested_mode),$(routes.device),$(routes.total_hits)," *
+                    "$(routes.cumulative_total_hits)")
+            else
+                for (kind, route, count) in rows
+                    println(io, "$(event.i_step),$kind,$route,$count," *
+                        "$(routes.requested_mode),$(routes.device),$(routes.total_hits)," *
+                        "$(routes.cumulative_total_hits)")
+                end
+            end
+        end
+        push!(telemetry_files_started, :routes)
+    end
+    return nothing
 end
 # -----------------------------------------------------------------------------
 
@@ -1315,10 +1555,15 @@ if ground_enable && ground_damp_band_r > 0
     damp_band = ground_damp_band_r * R
     function pnl.propagate!(w::pnl.PanelParticleWake, dt; relax=true, step=0,
             frames=nothing, diagnose_particle_gamma::Bool=false,
-            diagnostic_vertical=(0.0, 0.0, 1.0))
+            diagnostic_vertical=(0.0, 0.0, 1.0),
+            propagate_pfield::Bool=true)   # Ruling 7 dedupe (see src propagate!)
 
         # panel wake
         pnl.propagate!(w.panel_wake, dt)
+
+        # Ruling 7: with a shared pfield only the owning wake's call convects,
+        # damps, and maintains the field.
+        propagate_pfield || return nothing
 
         gamma_before = diagnose_particle_gamma && w.pfield.np > 0 ?
             copy(view(w.pfield.particles, pnl.FLOWVPM.GAMMA_INDEX, 1:w.pfield.np)) : nothing
@@ -1353,10 +1598,12 @@ if ground_enable && ground_damp_band_r > 0
 
         # convect particles (`pfield.integration` is the single source of truth:
         # stock forward Euler unless the wake was built with `expint=true`)
-        if w.pfield.integration === pnl.FLOWVPM.euler_exp
-            pnl.FLOWVPM._euler_exp(w.pfield, dt; relax)
-        else
-            pnl.FLOWVPM._euler(w.pfield, dt; relax)
+        pnl._step_timer_measure(:wake_convection; nested=true) do
+            if w.pfield.integration === pnl.FLOWVPM.euler_exp
+                pnl.FLOWVPM._euler_exp(w.pfield, dt; relax)
+            else
+                pnl.FLOWVPM._euler(w.pfield, dt; relax)
+            end
         end
 
         if diagnose_particle_gamma
@@ -1366,8 +1613,10 @@ if ground_enable && ground_damp_band_r > 0
         end
 
         # particle maintenance
-        pnl.apply_particle_maintenance!(w.pfield, w.particle_maintenance,
-            pnl.ParticleMaintenanceContext(frames, step, dt))
+        pnl._step_timer_measure(:wake_maintenance; nested=true) do
+            pnl.apply_particle_maintenance!(w.pfield, w.particle_maintenance,
+                pnl.ParticleMaintenanceContext(frames, step, dt))
+        end
     end
 end
 # -----------------------------------------------------------------------------
@@ -1409,10 +1658,10 @@ kj_monitor = run_kj ? pnl.KuttaJoukowskiForce(rotor, length(t_range), 1;
         i_frame=1,
         normalization=pnl.RotorNormalization(rho, 2 * R, 1),
         verbose=true) : nothing
-bound_circulation = pnl.BoundCirculationMonitor(rotor, length(t_range), 1;
-    i_frame=1,
-    radial_dimension,
-    R)
+bound_circulation_monitors = [pnl.BoundCirculationMonitor(rotors[i],
+    length(t_range), i; i_frame=rotor_frame_index(i), radial_dimension, R,
+    backend=backend_wake) for i in 1:nrotors]
+bound_circulation = bound_circulation_monitors[1] # legacy alias
 
 monitors = !run_monitors ? () : run_kj ? (
         pressure_laplace_matderiv,
@@ -1441,10 +1690,15 @@ monitors = !run_monitors ? () : run_kj ? (
         bound_circulation,
     )
 else
-# NROTORS>1: bernoulli_only is enforced above; the Laplace/KJ family and the
-# BoundCirculationMonitor (whose radius bookkeeping assumes an on-axis rotor)
-# are not constructed. Order matters: pressure before the force monitors.
-monitors = !run_monitors ? () : (pressure_bernoulli, force_monitors_bernoulli...)
+# NROTORS>1: bernoulli_only is enforced above; the Laplace/KJ family is not
+# constructed. Each rotor has its own frame-aware circulation monitor. Order
+# matters: pressure before force monitors; circulation follows the force data.
+bound_circulation_monitors = [pnl.BoundCirculationMonitor(rotors[i],
+    length(t_range), i; i_frame=rotor_frame_index(i), radial_dimension, R,
+    backend=backend_wake) for i in 1:nrotors]
+bound_circulation = bound_circulation_monitors[1]
+monitors = !run_monitors ? () : (pressure_bernoulli,
+    force_monitors_bernoulli..., bound_circulation_monitors...)
 end
 
 # Wake tripwire (BRAINSTORM/018 S0a). Appended LAST so existing monitor indices
@@ -1498,8 +1752,12 @@ function ground_diagnostics_monitor(systems, wakes, frames, uinf, i_step, dt)
     maxerr = maximum(abs.(Udotn))
     nbelow = 0
     gbelow = 0.0
+    # Ruling 7: rotor wakes may share one pfield — count each field once.
+    unique_pfields = Any[]
     for w in wakes[1:nrotors]
-        pfield = w.pfield
+        any(p -> p === w.pfield, unique_pfields) || push!(unique_pfields, w.pfield)
+    end
+    for pfield in unique_pfields
         for i in 1:pfield.np
             x = pnl.FLOWVPM.get_X(pfield, i)
             if x[axial_dimension] > ground_x
@@ -1533,21 +1791,9 @@ function ground_diagnostics_monitor(systems, wakes, frames, uinf, i_step, dt)
             println(io, "$i_step,$rms,$maxerr,$nbelow,$gbelow," *
                 "$(ground_damp_last_n[]),$(ground_damp_last_inband[])")
         end
-        if gs_log
-            gs_csv = joinpath(save_path, "$(run_name)_gs_convergence.csv")
-            gs_header = !isfile(gs_csv) || gs_csv_written[] == 0
-            open(gs_csv, gs_header ? "w" : "a") do io
-                gs_header && println(io, "solve_index,outer_iterations,final_max_delta")
-                for k in (gs_csv_written[] + 1):length(gs_iters)
-                    println(io, "$k,$(gs_iters[k]),$(gs_final_delta[k])")
-                end
-            end
-            gs_csv_written[] = length(gs_iters)
-        end
     end
     return nothing
 end
-gs_csv_written = Ref(0)
 if run_monitors && ground_enable
     monitors = (monitors..., ground_diagnostics_monitor)
 end
@@ -1587,6 +1833,14 @@ name = run_name
 # Allow other scripts to `include` this file purely for setup (geometry,
 # frames, wake, monitors) without executing the time-marching call.
 rhpc_setup_only = parse(Bool, get(ENV, "RHPC_SETUP_ONLY", "false"))
+if rhpc_setup_only
+    require_outer = hasproperty(formulation, :require_outer_convergence) ?
+        getproperty(formulation, :require_outer_convergence) : false
+    println("RHPC_SETUP_OK formulation=$(formulation_name) " *
+        "formulation_type=$(nameof(typeof(formulation))) nrotors=$(nrotors) " *
+        "ground=$(ground_enable) require_outer_convergence=$(require_outer) " *
+        "circulation_monitors=$(length(bound_circulation_monitors))")
+end
 
 if !rhpc_setup_only
 
@@ -1598,15 +1852,16 @@ if !rhpc_setup_only
 # CORE_SIZE_*, ...) and simulate!-kwarg knobs (BODY_HESSIAN_TO_PARTICLES,
 # ...) both take effect in the continuation.
 restart_step = parse(Int, get(ENV, "RESTART_STEP", "-1"))
-restart_step >= 0 && nrotors > 1 && error(
-    "Warm-start with NROTORS>1 is UNTESTED (multi-body restart state); run cold")
-restart_step >= 0 && ground_enable && error(
-    "Warm-start with the ground body is UNTESTED (multi-body restart state); " *
-    "run cold or set GROUND_ENABLE=false")
+# NROTORS>1 and ground-body warm-start are supported (052b Phase A.1: the
+# shared particle field is written/loaded once per field and the end-of-step
+# replay convects it once — see simulate_warmstart!'s Ruling-7 dedup guards
+# and its section-5.0 pre-replay staging; both configurations are covered by
+# the multi-rotor IGE warm-start testset in test/runtests_unit_warmstart.jl).
 restart_name = get(ENV, "RESTART_NAME", "rotor_hover_ground_effect")
 restart_path = get(ENV, "RESTART_PATH", joinpath("data", restart_name))
 
 sim_wall_start = time()
+pnl.reset_gpu_influence_routes!()
 
 if restart_step >= 0
 
@@ -1618,6 +1873,8 @@ if restart_step >= 0
     set_Das_refresh,
     monitors,
     formulation,
+    step_telemetry_callback=production_step_telemetry,
+    particle_body_overlap_policy,
     body_solvers, backend, backend_wake,
     wakerow_no_hessian_to_particles,
     body_hessian_to_particles,
@@ -1643,6 +1900,8 @@ else
     set_Das_refresh,
     monitors,
     formulation,
+    step_telemetry_callback=production_step_telemetry,
+    particle_body_overlap_policy,
     body_solvers, backend, backend_wake,
     wakerow_no_hessian_to_particles,
     body_hessian_to_particles,
@@ -1665,29 +1924,18 @@ sim_wall_seconds = time() - sim_wall_start
 println("\nTime marching wall time: $(round(sim_wall_seconds, digits=1)) s")
 
 # --- BRAINSTORM/022 post-run diagnostics --------------------------------------
-gs_iters_max = isempty(gs_iters) ? 0 : maximum(gs_iters)
-gs_iters_mean = isempty(gs_iters) ? NaN : sum(gs_iters) / length(gs_iters)
-gs_nonconverged = count(i -> gs_iters[i] >= gs_max_outer &&
-    !(gs_final_delta[i] < gs_tol), eachindex(gs_iters))
+gs_iters_max = isempty(block_gs_status_history) ? 0 :
+    maximum(s.iterations for s in block_gs_status_history)
+gs_iters_mean = isempty(block_gs_status_history) ? NaN :
+    sum(s.iterations for s in block_gs_status_history) /
+        length(block_gs_status_history)
+gs_nonconverged = count(s -> !s.converged, block_gs_status_history)
 if (ground_enable || nrotors > 1) && gs_log
-    println("\nBlock Gauss-Seidel outer-loop summary ($(length(gs_iters)) solves):")
+    println("\nBlock Gauss-Seidel outer-loop summary " *
+        "($(length(block_gs_status_history)) solves):")
     println("  iterations: max=$(gs_iters_max) mean=$(round(gs_iters_mean, digits=2)) " *
         "cap=$(gs_max_outer)")
     println("  non-converged solves: $(gs_nonconverged)")
-    # CSVs are written incrementally by the ground diagnostics monitor
-    # (walled-run lesson, 2026-08-20); top up any GS entries logged after the
-    # final monitor call.
-    if save_path !== nothing && gs_csv_written[] < length(gs_iters)
-        gs_csv = joinpath(save_path, "$(run_name)_gs_convergence.csv")
-        open(gs_csv, gs_csv_written[] == 0 ? "w" : "a") do io
-            gs_csv_written[] == 0 &&
-                println(io, "solve_index,outer_iterations,final_max_delta")
-            for k in (gs_csv_written[] + 1):length(gs_iters)
-                println(io, "$k,$(gs_iters[k]),$(gs_final_delta[k])")
-            end
-        end
-        gs_csv_written[] = length(gs_iters)
-    end
 end
 if ground_enable && ground_damp_band_r > 0
     println("Ground damping summary: band=$(ground_damp_band_r)R, cumulative " *
@@ -1738,6 +1986,8 @@ CT_laplace_md  = fill(NaN, length(t_range))
 CT_laplace_lv  = fill(NaN, length(t_range))
 CT_kj          = fill(NaN, length(t_range))
 end
+CQ_bernoulli_by_rotor = [m.moment[axial_dimension, :]
+    for m in force_monitors_bernoulli]
 
 function relative_difference(a, b)
     denom = max(abs(b), eps())
@@ -1800,6 +2050,17 @@ if save_path !== nothing
         end
     end
     println("\nWrote CT vs revolution CSV: $csv_path")
+
+    loads_path = joinpath(save_path, "$(run_name)_rotor_loads.csv")
+    open(loads_path, "w") do io
+        println(io, "step,revolution,rotor,CT,CQ,torque_direction")
+        for k in eachindex(t_range), i in 1:nrotors
+            rev = (k - 1) * dt * RPM / 60
+            println(io, "$k,$rev,$i,$(-CT_bernoulli_by_rotor[i][k])," *
+                "$(CQ_bernoulli_by_rotor[i][k]),$(rotor_directions[i])")
+        end
+    end
+    println("Wrote per-rotor CT/CQ histories: $loads_path")
 end
 
 # --- Phase 2e convergence metric: per-revolution blocks over the final revs ----
@@ -1907,6 +2168,10 @@ if save_path !== nothing
         println(io, "NT = $(nt)")
         println(io, "dt = $(dt)")
         println(io, "n_steps = $(nsteps_total)")
+        println(io, "acceptance_steps = $(round(Int, nt * nrevs))")
+        println(io, "spinup_steps = $(spinup_steps)")
+        println(io, "total_steps = $(nsteps_total)")
+        println(io, "requested_revs = $(nrevs)")
         println(io, "required_revs = $(required_revs)")
         println(io, "truncation_depth_R = $(cylinder_depth / R)")
         println(io, "nwakerows = $(nwakerows)")
@@ -1944,6 +2209,26 @@ if save_path !== nothing
         println(io, "backend_body_order = $(backend.expansion_order)")
         println(io, "backend_wake_order = $(backend_wake.expansion_order)")
         println(io, "julia_threads = $(Threads.nthreads())")
+        println(io, "julia_version = $(repr(string(VERSION)))")
+        println(io, "vpm_arraytype = $(repr(vpm_arraytype_name))")
+        println(io, "gpu_influence_mode = $(repr(lowercase(get(ENV, "FLOWPANEL_GPU_INFLUENCE", "0"))))")
+        println(io, "gpu_allow_fallback = $(gpu_allow_fallback)")
+        println(io, "body_hessian_to_particles = $(body_hessian_to_particles)")
+        println(io, "panel_wake_hessian_to_particles = $(panel_wake_hessian_to_particles)")
+        println(io, "panel_wake_velocity_to_particles = $(panel_wake_on_particles)")
+        println(io, "particle_hessian_self = $(particle_hessian_self)")
+        println(io, "particle_body_overlap_action = $(repr(overlap_action))")
+        println(io, "particle_body_overlap_core_ratio = $(overlap_core_ratio)")
+        println(io, "particle_body_overlap_every = $(overlap_every)")
+        println(io, "shared_pfield = $(all(w -> w.pfield === wakes_rotor[1].pfield, wakes_rotor))")
+        println(io, "shared_pfield_capacity = $(wakes_rotor[1].pfield.maxparticles)")
+        println(io, "rotor_operator_owners = $(rotor_operator_owners)")
+        println(io, "rotor_operator_classes_validated = $(operator_classes_validated)")
+        println(io, "block_gs_velocity_scale = $(velocity_residual_scale)")
+        println(io, "block_gs_potential_scale = $(potential_residual_scale)")
+        println(io, "solver_construction_total_s = $(sum(t.total_s for t in solver_construction))")
+        println(io, "solver_G_assembly_total_s = $(sum(t.g_assembly_s for t in solver_construction))")
+        println(io, "solver_LU_total_s = $(sum(t.lu_s for t in solver_construction))")
         println(io, "wall_time_s = $(sim_wall_seconds)")
         println(io, "convergence_revs = $(length(block_ranges))")
         println(io, "convergence_mean_tol = $(convergence_mean_tol)")
@@ -1996,6 +2281,15 @@ if save_path !== nothing
         println(io, "gs_iters_max = $(gs_iters_max)")
         println(io, "gs_iters_mean = $(gs_iters_mean)")
         println(io, "gs_nonconverged = $(gs_nonconverged)")
+        if !isempty(block_gs_status_history)
+            s = last(block_gs_status_history)
+            println(io, "block_gs_iterations = $(s.iterations)")
+            println(io, "block_gs_final_max_delta = $(s.final_max_delta)")
+            println(io, "block_gs_dirichlet_residual = $(s.dirichlet_residual)")
+            println(io, "block_gs_neumann_residual = $(s.neumann_residual)")
+            println(io, "block_gs_normalized_residual = $(s.normalized_residual)")
+            println(io, "block_gs_converged = $(s.converged)")
+        end
         # 022 multi-rotor keys
         println(io, "nrotors = $(nrotors)")
         println(io, "rotor_spacing_r = $(rotor_spacing_r)")
@@ -2004,19 +2298,50 @@ if save_path !== nothing
             join(("[" * join(round.(c ./ R, digits=6), ", ") * "]" for c in rotor_centers), ", ") * "]")
         println(io, "max_rotor_offset_r = $(max_rotor_offset / R)")
         println(io, "ground_radius_eff_r = $(ground_radius_eff / R)")
-        if nrotors > 1
-            for (i, ct) in enumerate(CT_bernoulli_by_rotor)
-                ct_thrust_i = -ct
-                wmean = isempty(block_ranges) ? NaN :
-                    sum(sum(ct_thrust_i[r]) / length(r) for r in block_ranges) / length(block_ranges)
-                println(io, "CT_window_mean_r$(i) = $(wmean)")
-            end
+        for (i, ct) in enumerate(CT_bernoulli_by_rotor)
+            ct_thrust_i = -ct
+            wmean = isempty(block_ranges) ? NaN :
+                sum(sum(ct_thrust_i[r]) / length(r) for r in block_ranges) / length(block_ranges)
+            println(io, "CT_window_mean_r$(i) = $(wmean)")
+            cq = CQ_bernoulli_by_rotor[i]
+            cqmean = isempty(block_ranges) ? NaN :
+                sum(sum(cq[r]) / length(r) for r in block_ranges) / length(block_ranges)
+            println(io, "CQ_window_mean_r$(i) = $(cqmean)")
         end
         if ground_enable && run_monitors && !isempty(ground_tangency_rms)
             println(io, "ground_tangency_rms_final = $(ground_tangency_rms[end])")
             println(io, "ground_tangency_rms_max = $(maximum(ground_tangency_rms))")
             println(io, "below_ground_count_final = $(ground_below_count[end])")
             println(io, "below_ground_count_max = $(maximum(ground_below_count))")
+        end
+        if !isempty(hybrid_diagnostic_history)
+            for row in filter(r -> r.step == hybrid_diagnostic_history[end].step,
+                              hybrid_diagnostic_history)
+                i = row.body_index
+                println(io, "hybrid_green_residual_body$(i) = $(row.green_residual)")
+                println(io, "hybrid_gauge_defect_body$(i) = $(row.gauge_defect)")
+                println(io, "hybrid_green_hodge_mismatch_body$(i) = $(row.green_hodge_mismatch)")
+                println(io, "hybrid_tangential_projection_defect_body$(i) = $(row.tangential_projection_defect)")
+            end
+        end
+        if !isempty(overlap_report_history)
+            r = last(overlap_report_history)
+            println(io, "particle_body_checked_particles = $(r.checked_particles)")
+            println(io, "particle_body_checked_fields = $(r.checked_fields)")
+            println(io, "particle_body_overlap_count = $(r.overlap_count)")
+            println(io, "particle_body_min_distance = $(r.min_distance)")
+            println(io, "particle_body_min_distance_over_sigma = $(r.min_distance_over_sigma)")
+        end
+        if !isempty(route_snapshot_history)
+            routes = last(route_snapshot_history)
+            println(io, "gpu_route_total_hits = $(routes.cumulative_total_hits)")
+            println(io, "gpu_route_fallback_total = $(sum(values(routes.cumulative_fallbacks); init=0))")
+            for (route, count) in sort!(collect(routes.cumulative_hits))
+                println(io, "gpu_route_hit_$(route) = $(count)")
+            end
+            for (route, count) in sort!(collect(routes.cumulative_fallbacks))
+                println(io, "gpu_route_fallback_$(route) = $(count)")
+            end
         end
     end
     # Julia prints non-finite floats as NaN/Inf/-Inf, which are invalid bare

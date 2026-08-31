@@ -72,6 +72,9 @@ t_ramp_up   = freestream_ramp_revs     * sec_per_rev
 t_hold      = freestream_hold_revs     * sec_per_rev
 t_withdraw  = freestream_withdraw_revs * sec_per_rev
 cylinder_depth = parse(Float64, get(ENV, "TRUNCATION_DEPTH_R", "4")) * R
+# Truncation cylinder radius (units of R). The legacy 1.5R was observed to
+# artificially truncate the NT144 wake (2026-08-27); widen via env.
+cylinder_radius = parse(Float64, get(ENV, "TRUNCATION_RADIUS_R", "1.5")) * R
 
 # Ensure the run is long enough to cover ramp-up + hold + withdraw + a settle
 # tail (so it never ends mid-withdrawal and the plateau ripple is observable).
@@ -687,7 +690,7 @@ else
 end
 
 wake_rotor = pnl.PanelParticleWake(rotor;
-    nwakerows, max_particles=500_000, core_size=wake_core_size,
+    nwakerows, max_particles=parse(Int, get(ENV, "MAX_PARTICLES", "500000")), core_size=wake_core_size,
     wake_pfield_kwargs...,
     particle_core_size=core_size_targets,
     viscous=viscous_scheme,
@@ -697,7 +700,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
     conversion_kwargs...,
     shed_with_induced_velocity,
     particle_maintenance=pnl.ParticleMaintenance((
-            pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], 1.5R),
+            pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], cylinder_radius),
             pnl.MergeParticles(;
                 every=merge_particles ? 1 : 0,
                 r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
@@ -1240,6 +1243,23 @@ if run_monitors && wake_inventory_active
     monitors = (monitors..., pnl.WakeInventoryMonitor(R))
 end
 
+# Sigma-collapse guards (052c trial 1): cap the per-step core contraction
+# dt*Z (prevents the Euler sign flip seen at step ~1015 of the 1080-step
+# acceptance) and floor sigma at a fraction of the shed sigma. Defaults
+# OFF (Inf / 0.0) = legacy unguarded update, bit-exact. Passed to
+# simulate! as the sigma_guard kwarg (FLOWVPM._sigma_guard_params).
+sigma_dtz_cap = parse(Float64, get(ENV, "SIGMA_DTZ_CAP", "Inf"))
+sigma_floor_frac = parse(Float64, get(ENV, "SIGMA_FLOOR_FRAC", "0.0"))
+sigma_floor_abs = sigma_floor_frac > 0 ? sigma_floor_frac * tip_sigma_default : -Inf
+# SIGMA_CEIL (meters): absolute upper clamp on sigma in the rVPM update.
+# Band-aid for compression-driven sigma growth driving the radix-FMM geometry
+# degenerate (018 NT144 cliff, 2026-08-27); superseded by particle splitting
+# (BRAINSTORM item 026). Default Inf = off.
+sigma_ceil = parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))
+sigma_guard = (isinf(sigma_dtz_cap) && sigma_floor_frac <= 0 && isinf(sigma_ceil)) ?
+    NamedTuple() :
+    (dtz_cap=sigma_dtz_cap, floor=sigma_floor_abs, ceil=sigma_ceil)
+
 if spinup_revs > 0
     println("\nRotor spin-up enabled: $(spinup_revs) nominal revs from $(spinup_start_fraction)×RPM to full RPM")
 end
@@ -1251,12 +1271,12 @@ let
         "hold [$(round(r0,digits=2)), $(round(r1,digits=2))]; " *
         "withdraw [$(round(r1,digits=2)), $(round(r2,digits=2))] -> end=$(magVinf_end); " *
         "hover/settle [$(round(r2,digits=2)), $(round(required_revs,digits=2))]")
-    println("Total run length: $(round(required_revs,digits=2)) revs ($(length(t_range)) steps), truncation depth=$(round(cylinder_depth/R,digits=2))R")
+    println("Total run length: $(round(required_revs,digits=2)) revs ($(length(t_range)) steps), truncation depth=$(round(cylinder_depth/R,digits=2))R radius=$(round(cylinder_radius/R,digits=2))R")
 end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
         "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows)$(nwakerows == 0 ? " (convert-at-shed)" : "") das_refresh=$(set_Das_refresh)")
-println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint)")
+println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on"))")
 name = run_name
 
 # Allow other scripts to `include` this file purely for setup (geometry,
@@ -1296,6 +1316,7 @@ if restart_step >= 0
     panel_wake_on_particles,
     particle_hessian_self,
     particle_relax,
+    sigma_guard,
     bound_strength_rlx,
     diagnose_particle_gamma,
     diagnose_particle_influence,
@@ -1321,6 +1342,7 @@ else
     panel_wake_on_particles,
     particle_hessian_self,
     particle_relax,
+    sigma_guard,
     bound_strength_rlx,
     diagnose_particle_gamma,
     diagnose_particle_influence,
@@ -1532,6 +1554,7 @@ if save_path !== nothing
         println(io, "n_steps = $(nsteps_total)")
         println(io, "required_revs = $(required_revs)")
         println(io, "truncation_depth_R = $(cylinder_depth / R)")
+        println(io, "truncation_radius_R = $(cylinder_radius / R)")
         println(io, "nwakerows = $(nwakerows)")
         println(io, "p_per_step = $(p_per_step)")
         println(io, "overlap = $(overlap)")

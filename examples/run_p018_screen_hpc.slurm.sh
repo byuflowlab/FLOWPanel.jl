@@ -126,6 +126,7 @@ case "$CASE" in
   scr_p019_s030v) export OVERLAP=2.4; export P_PER_STEP=14; export MERGE_R_FACTOR=0.0041;  export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
   scr_p019_s038)  export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true ;;
   scr_p019_s038v) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+  scr_p019_s038v_cpu40) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=40 ;;
 
   # ---- Campaign E addendum (019 fidelity discriminator, Ryan 2026-08-06):
   # NT=144 viscous run INSIDE the fidelity band (sigma = 0.0209R = 1.18
@@ -154,11 +155,35 @@ case "$CASE" in
   # scr_p019_s025v itself as the SFS-on member).
   scr_p020_s025v_nosfs) export OVERLAP=2.0; export P_PER_STEP=14; export MERGE_R_FACTOR=0.00343; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export SFS_OFF=true ;;
 
+  # ---- Illustration render reruns (Ryan 2026-08-27): exact clones of four
+  # earlier arms whose particle VTPs were swept, resubmitted under _rr tags so
+  # the original run dirs (and their 019/020 monitor CSVs, which figures cite)
+  # are never touched. Purpose is ParaView animation frames only — the cluster
+  # dep stack has moved since the originals (julia 1.12.6 env sync 08-24), so
+  # ignition steps may shift; do not score these against 019/020 verdicts.
+  scr_p019_s025_rr)       export OVERLAP=2.0; export P_PER_STEP=14; export MERGE_R_FACTOR=0.00343; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true ;;
+  scr_p019_s025v_rr)      export OVERLAP=2.0; export P_PER_STEP=14; export MERGE_R_FACTOR=0.00343; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+  scr_p019_s030v_rr)      export OVERLAP=2.4; export P_PER_STEP=14; export MERGE_R_FACTOR=0.0041;  export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+  scr_p020r_geom_s020v_rr) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
+
   *) echo "ERROR: unknown screen case '$CASE'" >&2; exit 2 ;;
 esac
 
 export RUN_NAME="$CASE"
-if [[ -d "data/$RUN_NAME" ]]; then
+# Restart chaining (Ryan 2026-08-29, after 13508968 hit its 12 h wall at step
+# 423/1475). With RESTART_STEP >= 0 the driver resumes from the on-disk state at
+# that step and APPENDS to the same VTK series, so the existing run dir MUST
+# survive — never wipe or rename it in this mode. RESTART_NAME/RESTART_PATH
+# default to this run's own dir; override only to chain from a different tag.
+if [[ "${RESTART_STEP:--1}" -ge 0 ]]; then
+  export RESTART_STEP
+  export RESTART_NAME="${RESTART_NAME:-$RUN_NAME}"
+  export RESTART_PATH="${RESTART_PATH:-data/$RESTART_NAME}"
+  [[ -d "$RESTART_PATH" ]] || { echo "ERROR: RESTART_STEP=$RESTART_STEP but $RESTART_PATH does not exist" >&2; exit 2; }
+  probe="$RESTART_PATH/${RESTART_NAME}_body1/${RESTART_NAME}_body1.${RESTART_STEP}.vtu"
+  [[ -f "$probe" ]] || { echo "ERROR: restart state missing: $probe" >&2; exit 2; }
+  echo "RESTART MODE: resuming $RUN_NAME from step $RESTART_STEP of $RESTART_PATH (run dir PRESERVED)"
+elif [[ -d "data/$RUN_NAME" ]]; then
   if [[ "${RHPC_KEEP_PREV:-false}" == "true" ]]; then
     rm -rf "data/$RUN_NAME.prev"; mv "data/$RUN_NAME" "data/$RUN_NAME.prev"
   else

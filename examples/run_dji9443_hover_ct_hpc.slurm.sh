@@ -35,8 +35,11 @@
 # before the script runs).
 
 set -euo pipefail
-THREADS=64
-EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+# P018_THREADS / P018_REPO / P018_JULIA / P018_PROJECT let a wrapper (the GPU
+# launcher) run this dispatcher from a silo tree with a pinned julia + shared
+# depot project; unset, everything behaves exactly as before.
+THREADS="${P018_THREADS:-64}"
+EXPECTED_REPO="${P018_REPO:-/home/rander39/projects/FLOWPanel.jl}"
 [[ "$PWD" == "$EXPECTED_REPO" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"
@@ -75,7 +78,7 @@ export FMM_WAKE_LEAF_SIZE="${FMM_WAKE_LEAF_SIZE:-38}"
 # when the old 1.11.7 fallback hit the 1.12 Manifest — OpenSSL_jll/HDF5_jll
 # precompile failure); fall back to the site spack julia-1.12.6 binary (the shared
 # /apps/juliaup launcher is broken).
-command -v julia >/dev/null 2>&1 || \
+[[ -n "${P018_JULIA:-}" ]] || command -v julia >/dev/null 2>&1 || \
   export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.12.6-dnqrzweknooxxbvvvkwvlkkveqlce3ln/juliaup/julia-1.12.6+0.x64.linux.gnu/bin:$PATH"
 
 # ---- Fixed Phase 2e configuration (identical for every case) ----------------
@@ -632,6 +635,35 @@ case "$CASE" in
       p018_csarc_nt144_l2p4) export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export NWAKEROWS=1; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
       p018_csarc_nt144_l3p4) export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export NWAKEROWS=1; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=3.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
       p018_csarc_nt144_l4p8) export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export NWAKEROWS=1; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=4.8; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      # Phase 17 N-prop-NT ladder (Ryan order 2026-08-26): extent-preserving
+      # temporal refinement at fixed lambda=2.4. N-1 scales with NT so the
+      # conversion-front clearance d_front = |Das| + (N-1)*travel is
+      # dt-independent (= Das + one NT36 travel; the rigid Das row is
+      # body-owned, all N PanelWake rows are free — only the O(dt) width of
+      # the converting row varies across rungs). Das = lambda*sigma is
+      # N-independent under DAS_SIGMA_LAMBDA (verified: curvature cap requires
+      # DAS_CURVATURE_BETA, other nwakerows uses are diagnostics). Everything
+      # else identical to the csarc l2p4 rungs.
+      # See BRAINSTORM/018_.../phase_17_nprop_nt_ladder.md.
+      p018_csarc_n2_l2p4)        export NWAKEROWS=2;                                                    export OVERLAP=2.75; export P_PER_STEP=12; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n3_nt72_l2p4)   export NWAKEROWS=3; export NT=72;  export P_PER_STEP=6; export RELAX_RLXF=0.16334; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n5_nt144_l2p4)  export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      # Phase-17b lambda=2.0 rung (Ryan order 2026-08-27): replaces lambda=2.4
+      # in the ladder; identical to the l2p4 blocks except DAS_SIGMA_LAMBDA=2.0.
+      p018_csarc_n2_l2p0)        export NWAKEROWS=2;                                                    export OVERLAP=2.75; export P_PER_STEP=12; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n3_nt72_l2p0)   export NWAKEROWS=3; export NT=72;  export P_PER_STEP=6; export RELAX_RLXF=0.16334; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n5_nt144_l2p0)  export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      # Phase 17b N-prop-NT ladders at larger lambda (Ryan order 2026-08-27,
+      # GPU launch): lambda = 3.0 and 4.0, N scaling directly with NT —
+      # 1 free row @ NT36, 2 @ NT72, 4 @ NT144 (contrast Phase 17's
+      # N-1 prop NT rule at lambda=2.4). Everything else identical to the
+      # csarc family: NT*pps=432, exact-rate rlxf, arc-placed Das.
+      p018_csarc_l3p0)          export NWAKEROWS=1;                                                     export OVERLAP=2.75; export P_PER_STEP=12; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=3.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n2_nt72_l3p0)  export NWAKEROWS=2; export NT=72;  export P_PER_STEP=6; export RELAX_RLXF=0.16334; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=3.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n4_nt144_l3p0) export NWAKEROWS=4; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=3.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_l4p0)          export NWAKEROWS=1;                                                     export OVERLAP=2.75; export P_PER_STEP=12; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=4.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n2_nt72_l4p0)  export NWAKEROWS=2; export NT=72;  export P_PER_STEP=6; export RELAX_RLXF=0.16334; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=4.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+      p018_csarc_n4_nt144_l4p0) export NWAKEROWS=4; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=4.0; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
       # BRAINSTORM 024 first cluster A/B (Ryan order 2026-08-20): N=0
       # convert-at-shed on the F1b lambda=4.8 NT=36 rung. Identical to
       # p018_csarc_l4p8 except NWAKEROWS=0. Disclosed A/B delta vs N=1:
@@ -709,6 +741,13 @@ case "$CASE" in
   *) echo "ERROR: unknown case tag '$CASE'" >&2; exit 2 ;;
 esac
 
+# RELAX_RLXF_OVERRIDE (Ryan order 2026-08-29): pin the per-step Pedrizzetti
+# rlxf regardless of the case table's exact-rate value (fixed-rlxf NT ladder:
+# does per-step relaxation frequency drive the NT climb?). The case table
+# exports RELAX_RLXF unconditionally per the ops rule, so a plain --export
+# cannot win; this hook applies after the table.
+[[ -n "${RELAX_RLXF_OVERRIDE:-}" ]] && export RELAX_RLXF="$RELAX_RLXF_OVERRIDE"
+
 export RUN_NAME="$CASE"
 # 018 restart segments write to their own directory (P018_RUN_NAME=<case>_s2
 # etc.) so the wipe below cannot destroy the restart source. See
@@ -745,7 +784,7 @@ echo "  conversion:${CONVERSION:-legacy} conv_sigma:${CONVERSION_SIGMA:-auto} co
 echo "  filament_reg:${FLOWPANEL_FILAMENT_REG} fmm_body:${FMM_BODY_EXPANSION_ORDER:-${FMM_EXPANSION_ORDER:-8}}/${FMM_BODY_ACCEPTANCE:-${FMM_ACCEPTANCE:-0.4}}/${FMM_BODY_LEAF_SIZE:-${FMM_LEAF_SIZE:-20}} fmm_wake:${FMM_WAKE_EXPANSION_ORDER:-${FMM_EXPANSION_ORDER:-4}}/${FMM_WAKE_ACCEPTANCE:-${FMM_ACCEPTANCE:-0.4}}/${FMM_WAKE_LEAF_SIZE:-${FMM_LEAF_SIZE:-50}}"
 echo "  started $(date '+%F %T')"
 
-julia --project=. -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
+"${P018_JULIA:-julia}" --project="${P018_PROJECT:-.}" -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
 
 echo "Case $CASE finished ($(date '+%F %T'))."
 echo "Artifacts: data/$RUN_NAME/${RUN_NAME}_CT_vs_rev.csv"
