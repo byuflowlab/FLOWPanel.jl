@@ -1,0 +1,95 @@
+BRAINSTORM 021 — Phase 1 + Phase 2 campaign submissions
+Prepared 2026-08-24. NOT a script: every sbatch is Ryan's call.
+
+Run from ~/flowpanel-021/FLOWPanel.jl.
+
+Never override --constraint=zen3 --exclusive --mem=500G (pinned hardware).
+Job name and --time are free. Chain with afterany, never afterok.
+
+===============================================================================
+STEP A — Phase 2 tuning.  5 jobs, one per rung, all four budgets sequential.
+===============================================================================
+One job per rung = exactly one writer per results/phase2/multi/<RUNG>/
+tune_phase2.csv. Budget 0 runs first, as rotor_hover_solver_phase2.jl requires.
+Every tuning candidate is checkpointed to tune_trace_<rung>_b<budget>.csv and
+replayed on restart, so a standby preemption costs ONE candidate, not the whole
+descent. --requeue is already in the header; long walltimes are cheap.
+
+  sbatch --job-name=p2-tune-R1 --time=12:00:00 \
+    --export=ALL,RUNG=R1,MEM_BUDGETS=0:16:128:500 benchmark/slurm/p2_tune.sh
+  sbatch --job-name=p2-tune-R2 --time=12:00:00 \
+    --export=ALL,RUNG=R2,MEM_BUDGETS=0:16:128:500 benchmark/slurm/p2_tune.sh
+  sbatch --job-name=p2-tune-R3 --time=24:00:00 \
+    --export=ALL,RUNG=R3,MEM_BUDGETS=0:16:128:500 benchmark/slurm/p2_tune.sh
+  sbatch --job-name=p2-tune-R4 --time=2-00:00:00 \
+    --export=ALL,RUNG=R4,MEM_BUDGETS=0:16:128:500 benchmark/slurm/p2_tune.sh
+  sbatch --job-name=p2-tune-R5 --time=3-00:00:00 \
+    --export=ALL,RUNG=R5,MEM_BUDGETS=0:16:128:500 benchmark/slurm/p2_tune.sh
+
+Walltime ~3x the sum of the four descents (guide per budget: R1 10-25 min,
+R2 25-55 min, R3 1-2 h, R4 2-4 h, R5 4-8 h). physics2/standby has 7 d MaxTime,
+which R5 needs.
+
+TUNE_REPS is now UNSET by default so the driver's per-rung default applies
+(5 at R1-R4, 2 at R5+). Do not set it per-rung unless you mean to: it is part
+of the trace provenance guard, so changing it between a run and its resume is
+a hard error (by design -- a memoized t is a timing).
+
+R6/R7 tuning is deliberately NOT here: R6 is 8-16 h per budget and R7 does not
+fit. Ryan's call after R1-R5 land, once the real-solve winner can be compared
+against the apply proxy.
+
+===============================================================================
+STEP B — Phase 1 agreement.  7 jobs, independent of Step A, all concurrent.
+===============================================================================
+PER_RUNG_DIR=1 is exported in the wrapper, so each rung owns its own
+agreement.csv + agreement_spread.csv.
+
+NOTE on CONFIGS: a comma inside --export=ALL,CONFIGS=a,b breaks sbatch's own
+parsing. Export it in the calling shell and let --export=ALL carry it. The
+driver now also accepts the colon form.
+
+  # R1-R4: the dense reference configs still fit
+  export CONFIGS=backslash_ref,backslash_coupled,krylov_gmres,krylov_jacobi,krylov_ilu,fgs,fgmres_fgs
+  sbatch --job-name=p1-agree-R1 --time=12:00:00 --export=ALL,RUNG=R1 benchmark/slurm/p1_agreement.sh
+  sbatch --job-name=p1-agree-R2 --time=12:00:00 --export=ALL,RUNG=R2 benchmark/slurm/p1_agreement.sh
+  sbatch --job-name=p1-agree-R3 --time=24:00:00 --export=ALL,RUNG=R3 benchmark/slurm/p1_agreement.sh
+  sbatch --job-name=p1-agree-R4 --time=24:00:00 --export=ALL,RUNG=R4 benchmark/slurm/p1_agreement.sh
+
+  # R5-R7: drop the dense configs. 8N^2 is 87 GiB at R5, 335 at R6, 1.31 TiB at R7.
+  export CONFIGS=krylov_gmres,krylov_jacobi,krylov_ilu,fgs,fgmres_fgs
+  sbatch --job-name=p1-agree-R5 --time=2-00:00:00 --export=ALL,RUNG=R5 benchmark/slurm/p1_agreement.sh
+  sbatch --job-name=p1-agree-R6 --time=2-00:00:00 --export=ALL,RUNG=R6 benchmark/slurm/p1_agreement.sh
+
+  # R7 drops krylov_jacobi as well (Ryan, 2026-08-25): it ran 9 h 20 min with no
+  # result there, while krylov_gmres solved the same rung in 7315 s / 86 iters.
+  # Colon separator is REQUIRED inside --export.
+  sbatch --job-name=p1-agree-R7 --time=3-00:00:00 \
+    --export=ALL,RUNG=R7,CONFIGS=krylov_gmres:krylov_ilu:fgs:fgmres_fgs \
+    benchmark/slurm/p1_agreement.sh
+
+  # O(N^2) cross-check of the FMM BC metric — ONCE, at R1 or R2. Never above R3.
+  sbatch --job-name=p1-agree-R1-direct --time=12:00:00 \
+    --export=ALL,RUNG=R1,RESIDUAL_BACKEND=direct benchmark/slurm/p1_agreement.sh
+
+krylov_ilu at R7 is ~23 GiB of pattern entries and may not fit. That is a
+RESULT, not a failure.
+
+===============================================================================
+STEP C — Phase 2 tables.  Only after that rung's Step A lands.
+===============================================================================
+Move the pre-W3 phase2.csv aside first; its schema guard will refuse to append.
+
+  sbatch --job-name=p2-table-R1 --time=12:00:00 \
+    --export=ALL,RUNG=R1 benchmark/slurm/p2_table.sh
+
+===============================================================================
+SYNTHESIS — after jobs land
+===============================================================================
+  julia --project benchmark/p021_merge.jl
+  RUNGS=R1:R2:R3:R4:R5 BUDGETS=0.0:16.0:128.0:500.0 STRICT=1 \
+    julia --project benchmark/p021_merge.jl
+
+Concatenates the per-rung CSVs into flat tables and asserts one row per
+(rung, budget) and per (rung, config). A missing row is reported by name, so a
+preempted or never-run job is a detectable absence rather than a silent hole.
