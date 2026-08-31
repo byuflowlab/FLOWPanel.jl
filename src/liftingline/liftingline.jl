@@ -102,9 +102,9 @@ struct LiftingLine{ R<:Number,
     Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
                                                 # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
     # Solver settings
-    kerneloffset::Float64                       # Active kernel offset to avoid singularities
-    kerneloffset_panel::Float64                 # Kernel offset for panel solves/interactions
-    kerneloffset_targets::Float64               # Kernel offset for panel influence on targets
+    core_size::Float64                       # Active regularization core radius (see AbstractBody docs)
+    core_size_panel::Float64                 # Core radius for panel solves/interactions
+    core_size_targets::Float64               # Core radius for panel influence on targets
     kernelcutoff::Float64                       # Kernel cutoff to avoid singularities
 
     # Stripwise element settings
@@ -124,14 +124,22 @@ struct LiftingLine{ R<:Number,
                             sigmafactor=1.0,
                             sigmaexponent=1.0,
                             initial_Uinf=[1, 0, 0],
-                            kerneloffset=1e-8,
-                            kerneloffset_panel=kerneloffset,
-                            kerneloffset_targets=kerneloffset,
+                            core_size=nothing,
+                            core_size_panel=nothing,
+                            core_size_targets=nothing,
+                            # deprecated aliases for the pre-2026-08-22 names
+                            kerneloffset=nothing,
+                            kerneloffset_panel=nothing,
+                            kerneloffset_targets=nothing,
                             kernelcutoff=1e-14,
                             arraytype::Type=Array,
                             plots=nothing,
                             optargs...
                             ) where {R<:Number}
+
+        core_size, core_size_panel, core_size_targets =
+            _resolve_core_sizes(core_size, core_size_panel, core_size_targets,
+                                kerneloffset, kerneloffset_panel, kerneloffset_targets)
 
         # Define concrete array types
         VectorType = arraytype{R, 1}
@@ -252,7 +260,7 @@ struct LiftingLine{ R<:Number,
                     midpoints,
                     swepttangents, lines, sweptnormals,
                     nelements;
-                    offset=kerneloffset_panel, cutoff=kernelcutoff)
+                    offset=core_size_panel, cutoff=kernelcutoff)
 
         new{R,
             S, _count(S), DBC,
@@ -271,7 +279,7 @@ struct LiftingLine{ R<:Number,
                                 aoas, claeros, Gammas, sigmas, Cps, Us, chords,
                                 G, RHS, 
                                 residuals, Geff,
-                                kerneloffset_panel, Float64(kerneloffset_panel), Float64(kerneloffset_targets), kernelcutoff,
+                                core_size_panel, Float64(core_size_panel), Float64(core_size_targets), kernelcutoff,
                                 elements_settings
                                 )
 
@@ -1210,7 +1218,7 @@ function calc_Geff!(self::LiftingLine; optargs...)
                 self.midpoints,
                 self.swepttangents, self.lines, self.sweptnormals, 
                 self.nelements; 
-                offset=self.kerneloffset, 
+                offset=self.core_size, 
                 cutoff=self.kernelcutoff,
                 optargs...)
 end
@@ -1405,7 +1413,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                                 Gammas[ei],                        # Horseshoe circulation
                                 targets,                           # Targets
                                 out;                               # Outputs
-                                offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                                offset=self.core_size,          # Offset of kernel to avoid singularities
                                 cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                                 optargs...
                             )
@@ -1433,7 +1441,7 @@ function Uind!(self::LiftingLine, Gammas::AbstractVector,
                           Gammas[ei],                        # Filament circulation
                           targets,                           # Targets
                           out;                               # Outputs
-                          offset=self.kerneloffset,          # Offset of kernel to avoid singularities
+                          offset=self.core_size,          # Offset of kernel to avoid singularities
                           cutoff=self.kernelcutoff,          # Kernel cutoff to avoid singularities
                           optargs...
                          )

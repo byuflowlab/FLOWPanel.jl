@@ -203,6 +203,9 @@ function make_bound_circulation_side_body()
         check_mesh=false,
         watertight=false,
         ensure_winding=false)
+    for Das in body.Das
+        Das .= repeat([1.0, 0.0, 0.0], 1, size(Das, 2))
+    end
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= [2.0, 100.0]
@@ -215,6 +218,9 @@ function rotated_bound_body(body, R)
         check_mesh=false,
         watertight=false,
         ensure_winding=false)
+    for (Das_new, Das_old) in zip(new_body.Das, body.Das)
+        Das_new .= R * Das_old
+    end
     pnl.calc_normals!(new_body)
     pnl.calc_controlpoints!(new_body)
     new_body.strength .= body.strength
@@ -924,12 +930,12 @@ end
     @testset "KuttaJoukowskiForce preserves kernel offsets" begin
         body = make_plate_vortex_body()
         other = make_octa_source_body()
-        body.kerneloffset_panel = 1e-9
-        body.kerneloffset_targets = 2e-3
-        body.kerneloffset = 7e-4
-        other.kerneloffset_panel = 3e-9
-        other.kerneloffset_targets = 4e-3
-        other.kerneloffset = 9e-4
+        body.core_size_panel = 1e-9
+        body.core_size_targets = 2e-3
+        body.core_size = 7e-4
+        other.core_size_panel = 3e-9
+        other.core_size_targets = 4e-3
+        other.core_size = 9e-4
         frames = pnl.ReferenceFrame(body)
 
         monitor = pnl.KuttaJoukowskiForce(body, 1, 1;
@@ -937,8 +943,8 @@ end
             normalization=pnl.NoNormalization())
         monitor((body, other), (nothing, nothing), frames, zeros(3), 0, 0.1)
 
-        @test body.kerneloffset == 7e-4
-        @test other.kerneloffset == 9e-4
+        @test body.core_size == 7e-4
+        @test other.core_size == 9e-4
     end
 
     @testset "BoundCirculationMonitor constructor and TE jump" begin
@@ -964,27 +970,55 @@ end
         @test isapprox(monitor.circulation_te[1, 1, 1], 0.8; atol=1e-12)
     end
 
-    @testset "BoundCirculationMonitor rotor-frame slicing" begin
-        body = make_bound_circulation_side_body()
-        monitor = pnl.BoundCirculationMonitor(body, 1, 1;
-            i_frame=1,
-            radial_dimension=2,
-            R=1.0,
-            section_tol=0.1)
-        monitor((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.1)
+    @testset "BoundCirculationMonitor Kelvin slice on solved wing" begin
+        body = build_pressure_comparison_wing(; n_span=4, n_airfoil=21,
+            n_endcap=3)
+        Vinf = 56.0 .* [cosd(5.88), 0.0, sind(5.88)]
+        set_pressure_comparison_wake!(body, Vinf)
+        solver = pnl.Backslash(body)
+        pnl.steady!(body, pnl.ReferenceFrame(body), Vinf;
+            body_solvers=solver, backend=pnl.DirectBackend(),
+            path=nothing, verbose=false)
 
-        @test isapprox(monitor.r_over_R[1, 1], 0.5; atol=1e-12)
-        @test isapprox(monitor.circulation_te[1, 1, 1], 2.0; atol=1e-12)
-        @test isapprox(monitor.circulation_slice[1, 1, 1], 2.0; atol=1e-12)
+        nt = 3
+        monitor = pnl.BoundCirculationMonitor(body, nt, 1;
+            i_frame=1, radial_dimension=2, R=2.0, slice_stride=2, nloop=64)
+        frames = pnl.ReferenceFrame(body)
+        for step in 0:nt-1
+            monitor((body,), (nothing,), frames, Vinf, step, 0.1)
+        end
 
-        narrow = pnl.BoundCirculationMonitor(body, 1, 1;
-            i_frame=1,
-            radial_dimension=2,
-            R=1.0,
-            section_tol=0.01)
-        body.controlpoints[2, 1] = 0.55
-        narrow((body,), (nothing,), pnl.ReferenceFrame(body), zeros(3), 0, 0.1)
-        @test isapprox(narrow.circulation_slice[1, 1, 1], 0.0; atol=1e-12)
+        n_sections = size(body.shedding[1], 2)
+        @test n_sections == 4
+
+        # (a) Kelvin slice values are nonzero and finite at every station on
+        # a computed step.
+        for sec in 1:n_sections
+            @test isfinite(monitor.circulation_slice[sec, 1, 1])
+            @test abs(monitor.circulation_slice[sec, 1, 1]) > 0
+        end
+
+        # (b) The loop integral independently recovers the TE jump (sign and
+        # magnitude) at the clean interior mid-span stations.
+        for sec in 2:3
+            te = monitor.circulation_te[sec, 1, 1]
+            slice = monitor.circulation_slice[sec, 1, 1]
+            @test sign(slice) == sign(te)
+            @test isapprox(slice, te; rtol=0.15)
+        end
+
+        # (c) Skipped strides keep NaN in the slice while the TE jump is
+        # still recorded; the next stride multiple recomputes the slice.
+        @test all(isnan, monitor.circulation_slice[:, :, 2])
+        @test all(isfinite, monitor.circulation_te[1:n_sections, 1, 2])
+        @test all(isfinite, monitor.circulation_slice[1:n_sections, 1, 3])
+        @test isapprox(monitor.circulation_slice[2, 1, 3],
+                       monitor.circulation_slice[2, 1, 1]; rtol=1e-10)
+
+        @test_throws ArgumentError pnl.BoundCirculationMonitor(body, 1, 1;
+            i_frame=1, radial_dimension=2, R=2.0, slice_stride=0)
+        @test_throws ArgumentError pnl.BoundCirculationMonitor(body, 1, 1;
+            i_frame=1, radial_dimension=2, R=2.0, nloop=3)
     end
 
     @testset "BoundCirculationMonitor shedding local-node indices" begin
@@ -996,7 +1030,11 @@ end
         body = pnl.RigidWakeBody{pnl.VortexRing}(
             nodes, final_cells, shedding;
             check_mesh=false, watertight=false, ensure_winding=false)
+        for Das in body.Das
+            Das .= repeat([1.0, 0.0, 0.0], 1, size(Das, 2))
+        end
         body.strength[:, 1] .= 1.0
+        pnl.calc_normals!(body)
         pnl.calc_controlpoints!(body)
 
         monitor = pnl.BoundCirculationMonitor(body, 1, 1;
@@ -1707,10 +1745,17 @@ end
             ensure_winding=false)
         pnl.calc_normals!(one_body)
         pnl.calc_controlpoints!(one_body)
-        @test_throws ArgumentError pnl.compute_mu_gradient!(zeros(3, one_body.ncells),
+        # An isolated agglomerate (here: a one-cell body) has an empty stencil
+        # at every growth depth; it degrades to a zero gradient with a warning
+        # instead of aborting (degenerate-sliver tolerance, 2026-07-31).
+        # compute_mu_gradient! accumulates, so a finite sentinel distinguishes
+        # a zero increment from garbage.
+        one_grad = fill(7.0, 3, one_body.ncells)
+        @test_logs (:warn, r"isolated agglomerate") pnl.compute_mu_gradient!(one_grad,
             one_body.controlpoints, one_body.normals, one_body.cells,
             one_body.neighbor, [1.0], zeros(Int, 2, one_body.ncells);
             scale=1.0, nodes=one_body.nodes, grad_mu_options=(; basis=:quad))
+        @test all(==(7.0), one_grad)
     end
 
     @testset "compute_surface_velocity_gradient! interior recovery" begin

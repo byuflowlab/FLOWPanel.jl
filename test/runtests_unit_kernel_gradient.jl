@@ -30,7 +30,7 @@ end
 
 function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where {K}
     body = pnl.NonLiftingBody{K}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                DBC=dbc, kerneloffset=1e-8)
+                                DBC=dbc, core_size=1e-8)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[1, :] .= 1.0
@@ -49,9 +49,9 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
 
     switch = kernel_switch(true, true, false)
     potential_self, velocity_self, _ =
-        pnl.induced(control_point, body, 1, switch; kerneloffset=body.kerneloffset)
+        pnl.induced(control_point, body, 1, switch; core_size=body.core_size)
     _, velocity_outward, _ =
-        pnl.induced(outward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+        pnl.induced(outward_target, body, 1, switch; core_size=body.core_size)
 
     @test isapprox(velocity_self, velocity_outward; atol=1e-10, rtol=1e-10)
 
@@ -66,20 +66,20 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
         velocity_continuous = zero(velocity_self)
         if K == Union{pnl.ConstantSource, pnl.ConstantDoublet}
             doublet_body = pnl.NonLiftingBody{pnl.ConstantDoublet}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                                  DBC=dbc, kerneloffset=1e-8)
+                                                                  DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(doublet_body)
             pnl.calc_controlpoints!(doublet_body)
             doublet_body.strength[:, 1] .= 1.0
             _, velocity_continuous, _ =
-                pnl.induced(control_point, doublet_body, 1, switch; kerneloffset=doublet_body.kerneloffset)
+                pnl.induced(control_point, doublet_body, 1, switch; core_size=doublet_body.core_size)
         elseif K == Union{pnl.ConstantSource, pnl.VortexRing}
             vortex_body = pnl.NonLiftingBody{pnl.VortexRing}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                            DBC=dbc, kerneloffset=1e-8)
+                                                            DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(vortex_body)
             pnl.calc_controlpoints!(vortex_body)
             vortex_body.strength[:, 1] .= 1.0
             _, velocity_continuous, _ =
-                pnl.induced(control_point, vortex_body, 1, switch; kerneloffset=vortex_body.kerneloffset)
+                pnl.induced(control_point, vortex_body, 1, switch; core_size=vortex_body.core_size)
         end
         @test isapprox(dot(velocity_self - velocity_continuous, normal),
                        0.5; atol=1e-12, rtol=0)
@@ -87,17 +87,17 @@ function assert_self_limit_uses_fixed_surface_limits(::Type{K}, dbc::Bool) where
 
     if has_jump_potential
         potential_inward, _, _ =
-            pnl.induced(inward_target, body, 1, switch; kerneloffset=body.kerneloffset)
+            pnl.induced(inward_target, body, 1, switch; core_size=body.core_size)
         source_potential = zero(potential_self)
         if K == Union{pnl.ConstantSource, pnl.ConstantDoublet} ||
                 K == Union{pnl.ConstantSource, pnl.VortexRing}
             source_body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_1TRI), copy(CELLS_1TRI);
-                                                                DBC=dbc, kerneloffset=1e-8)
+                                                                DBC=dbc, core_size=1e-8)
             pnl.calc_normals!(source_body)
             pnl.calc_controlpoints!(source_body)
             source_body.strength[:, 1] .= 1.0
             source_potential, _, _ =
-                pnl.induced(control_point, source_body, 1, switch; kerneloffset=source_body.kerneloffset)
+                pnl.induced(control_point, source_body, 1, switch; core_size=source_body.core_size)
         end
         @test isapprox(potential_self - source_potential, 0.5;
                        atol=1e-10, rtol=1e-10)
@@ -170,7 +170,7 @@ end
         strength = SVector{1,Float64}(1.0)
         target = control_point
         core_sizes = (1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4, 3e-5, 1e-5)
-        errors = map(core_sizes) do core_size
+        ring_error(core_size) = begin
             _, velocity, _ = pnl._induced(target, vertices, control_point, strength,
                                           pnl.VortexRing, core_size, R,
                                           kernel_switch(false, true, false))
@@ -183,22 +183,27 @@ end
             norm(velocity - grad_phi) / max(norm(grad_phi), eps())
         end
 
-        @test errors[1] > 1e-3
-        @test errors[5] < 1e-9
-        @test errors[end] < 1e-12
-        @test all(errors[i+1] <= 0.02 * errors[i] for i in 1:6)
+        # the gradual algebraic convergence below is a property of the legacy
+        # Vatistas family (error ~ (rc/h)^4 at all h); pin it explicitly
+        # (BRAINSTORM 025 made the family selectable, default compact-support)
+        old_family = pnl.FILAMENT_REGULARIZATION[]
+        try
+            pnl.set_filament_regularization!(pnl.VatistasRegularization)
+            errors = map(ring_error, core_sizes)
 
-        core_size = 1e-5
-        _, velocity, _ = pnl._induced(target, vertices, control_point, strength,
-                                      pnl.VortexRing, core_size, R,
-                                      kernel_switch(false, true, false))
-        grad_phi = FD.gradient(
-            t -> pnl._induced(t, vertices, control_point, strength,
-                              pnl.VortexRing, core_size, R,
-                              kernel_switch(true, false, false))[1],
-            target,
-        )
-        @test isapprox(velocity, grad_phi; atol=1e-12, rtol=1e-12)
+            @test errors[1] > 1e-3
+            @test errors[5] < 1e-9
+            @test errors[end] < 1e-12
+            @test all(errors[i+1] <= 0.02 * errors[i] for i in 1:6)
+            @test errors[end] < 1e-12
+
+            # compact-support (default) is EXACT once the core lies inside the
+            # centroid-to-edge distance (~0.236 here) — no gradual limit needed
+            pnl.set_filament_regularization!(pnl.CompactRegularization)
+            @test all(ring_error(core_size) < 1e-12 for core_size in core_sizes)
+        finally
+            pnl.FILAMENT_REGULARIZATION[] = old_family
+        end
     end
 
     @testset "Self limit uses exterior velocity and interior potential" begin
@@ -289,7 +294,7 @@ end
         )
         eval_kernel(x, ps, vs, gs) =
             pnl.induced_semiinfinite(x, pnl.ConstantDoublet, geom...,
-                                     kernel_switch(ps, vs, gs); kerneloffset=1e-8)
+                                     kernel_switch(ps, vs, gs); core_size=1e-8)
 
         assert_velocity_is_potential_gradient(eval_kernel, targets)
         assert_velocity_gradient_is_velocity_jacobian(eval_kernel, targets)
@@ -306,7 +311,7 @@ end
         )
         eval_kernel(x, ps, vs, gs) =
             pnl.induced_semiinfinite(x, pnl.VortexRing, geom...,
-                                     kernel_switch(ps, vs, gs); kerneloffset=1e-8)
+                                     kernel_switch(ps, vs, gs); core_size=1e-8)
 
         assert_velocity_gradient_is_velocity_jacobian(eval_kernel, targets)
     end

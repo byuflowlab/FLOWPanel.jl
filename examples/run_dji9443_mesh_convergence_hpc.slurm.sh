@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=64
 #SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --time=02:30:00
 #SBATCH --output=slurm-%x-%j.out
 #SBATCH --error=slurm-%x-%j.err
 

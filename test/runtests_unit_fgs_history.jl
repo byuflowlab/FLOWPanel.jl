@@ -134,4 +134,18 @@ include("test_helpers.jl")
         @test (@allocated pnl.save_solution!(body, solver)) == 0
     end
 
+    @testset "save_step_solution! is the step-boundary writer (021 Phase 3)" begin
+        # `_solve!` no longer writes the history; the commit happens once per
+        # completed top-level step, through this delegation.
+        body = make_octa_source_body()
+        solver = pnl.FGSSolver(body; solution_history_length=3)
+        body.strength .= 5.0
+        pnl.save_step_solution!(body, solver)
+        @test solver.solution_history_nsaved == 1
+        @test all(solver.solution_history[:, :, 1] .== 5.0)
+
+        # solvers without a history are no-ops rather than errors
+        @test pnl.save_step_solution!(body, pnl.Backslash(make_octa_source_body())) === nothing
+    end
+
 end

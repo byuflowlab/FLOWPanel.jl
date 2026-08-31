@@ -16,7 +16,6 @@ import GeometricTools as gt
 using FLOWPanel.FastMultipole.StaticArrays
 import LinearAlgebra: norm, I
 import Meshes
-import GeoIO
 
 run_name = "flat_ground"
 save_path = joinpath("data", run_name)
@@ -38,7 +37,7 @@ b               = AR * chord                    # (m) span
 read_path       = joinpath(pnl.examples_path, "data")
 meshfile        = joinpath(read_path, "wing_ar4_naca0016_5.msh")
 
-msh = GeoIO.load(meshfile).geometry
+msh = pnl.read_gmsh(meshfile)
 msh = msh |> Meshes.Scale(1.0)
 grid = gt.GridTriangleSurface(msh)
 
@@ -52,14 +51,14 @@ trailingedge[3, :] .= 0.0
 kernel = Union{pnl.ConstantSource, pnl.VortexRing}
 wing = pnl.RigidWakeBody{kernel}(grid;
             cp_outer=true,
-            kerneloffset=1e-2,
+            core_size=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true)
 shedding = pnl.calc_shedding(wing.nodes, wing.cells, trailingedge; tolerance=0.001 * b)
 wing = pnl.RigidWakeBody{kernel}(wing.nodes, wing.cells, shedding;
             cp_outer=true,
-            kerneloffset=1e-2,
+            core_size=1e-2,
             kernelcutoff=1e-14,
             semiinfinite_wake=false,
             watertight=true,

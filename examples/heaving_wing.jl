@@ -197,7 +197,7 @@ function prepare_heaving_wing(;
     bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
     bodyoptargs = (;
         cp_outer=true,
-        kerneloffset=1e-6 * c,
+        core_size=1e-6 * c,
         kernelcutoff=1e-12 * c,
         semiinfinite_wake=false,
         watertight=false,

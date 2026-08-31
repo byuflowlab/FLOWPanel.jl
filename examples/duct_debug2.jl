@@ -47,7 +47,7 @@ function make_body()
     ys .+= d / 2
     points = hcat(xs, ys)
     return generate_revolution_liftbody(bodytype, points, NDIVS_theta;
-                bodyoptargs=(cp_outer=true, kerneloffset=1e-2,
+                bodyoptargs=(cp_outer=true, core_size=1e-2,
                              kernelcutoff=1e-14,
                              characteristiclength=(args...)->d*aspectratio,
                              semiinfinite_wake=false))

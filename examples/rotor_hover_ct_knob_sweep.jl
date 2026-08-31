@@ -9,7 +9,7 @@
 # Knobs under test (see plans/20260702_convergence.md):
 #   1. BODY_HESSIAN_TO_PARTICLES / PANEL_WAKE_HESSIAN_TO_PARTICLES — restore
 #      surface-induced strain on particles (suspect: instability).
-#   2. KERNELOFFSET_TARGETS — surface->particle smoothing radius (WAKE_CORE_SIZE
+#   2. CORE_SIZE_TARGETS — surface->particle smoothing radius (WAKE_CORE_SIZE
 #      pinned to the baseline 1e-3 so shed-particle cores are NOT co-swept).
 #   3. RELAX_RLXF halving ladder + RELAX_FILTER_DOWNSTREAM_R — relaxation as a
 #      rate λ=rlxf/dt, extrapolated to λ→0 (artificial-dissipation treatment).
@@ -66,15 +66,15 @@ base_env() = Dict(
 const SCENARIO_DEFS = [
     "control"          => Dict{String,String}(),
     "bodyhess"         => Dict("BODY_HESSIAN_TO_PARTICLES" => "true"),
-    # split regularization: body->particle velocity at KERNELOFFSET_TARGETS
+    # split regularization: body->particle velocity at CORE_SIZE_TARGETS
     # (1e-3), but its GRADIENT at a 4x larger offset — smooths the constant-
     # doublet-panel |∇U| bumpiness felt by near-blade particles (not strictly
     # physical; stability aid for bodyhess)
     "bodyhess_gradoff" => Dict("BODY_HESSIAN_TO_PARTICLES" => "true",
-                               "BODY_GRADIENT_KERNELOFFSET" => "4e-3"),
+                               "BODY_GRADIENT_CORE_SIZE" => "4e-3"),
     "wakerowhess"      => Dict("PANEL_WAKE_HESSIAN_TO_PARTICLES" => "true"),
-    "koff_5e-4"        => Dict("KERNELOFFSET_TARGETS" => "5e-4", "WAKE_CORE_SIZE" => "1e-3"),
-    "koff_2p5e-4"      => Dict("KERNELOFFSET_TARGETS" => "2.5e-4", "WAKE_CORE_SIZE" => "1e-3"),
+    "koff_5e-4"        => Dict("CORE_SIZE_TARGETS" => "5e-4", "WAKE_CORE_SIZE" => "1e-3"),
+    "koff_2p5e-4"      => Dict("CORE_SIZE_TARGETS" => "2.5e-4", "WAKE_CORE_SIZE" => "1e-3"),
     "rlxf_0p15"        => Dict("RELAX_RLXF" => "0.15"),
     "rlxf_0p075"       => Dict("RELAX_RLXF" => "0.075"),
     "relaxfilter_0p5R" => Dict("RELAX_FILTER_DOWNSTREAM_R" => "0.5"),

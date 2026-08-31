@@ -7,6 +7,7 @@ surface models, wake models, solver backends, and post-processing utilities.
 module FLOWPanel
 
 export  solve, save, influence!,
+        ILUPreconditioner,
         get_ndivscells, get_ndivsnodes,
         get_cart2lin_cells, get_cart2lin_nodes,
         get_field, get_fieldval, add_field,
@@ -18,7 +19,7 @@ export  solve, save, influence!,
         calc_controlpoints!, calc_controlpoints,
         calc_areas!, calc_areas,
         calc_shedding, calc_shedding_from_seed, trace_trailing_edge,
-        meshes2nodes_cells,
+        meshes2nodes_cells, read_gmsh,
         PressureBernoulli, PressureLaplace,
         JacobiPressurePreconditioner, NoPressurePreconditioner,
         IncompleteCholeskyPressurePreconditioner, AMGPressurePreconditioner,
@@ -29,8 +30,16 @@ export  solve, save, influence!,
         RotorSectionalNormalization,
         steady!, simulate_warmstart!, initialize_Das!,
         AbstractSolveFormulation, VelocityThroughSources,
-        GreenReconstruction, TraceCorrected, DirectWakePotential,
+        GreenReconstruction, HybridWakePotential, TraceCorrected,
+        DirectWakePotential,
+        ParticleBodyOverlapPolicy, ParticleBodyOverlapReport,
+        ParticleBodyOverlapError, particle_body_overlap,
+        check_particle_body_overlap!,
         set_wake_correction!, clear_wake_correction!,
+        AbstractWakeAttachment, RigidTransitionAttachment, TEAnchoredAttachment,
+        AbstractKuttaClosure, JumpKutta, PressureContinuityKutta,
+        AbstractKuttaPressureProvider, SteadyBernoulliProvider,
+        kutta_diagnostics, KuttaDiagnostics, KuttaConvergenceError,
         replay, ReplayResult, migrate_metadata_toml
 
 # ------------ GENERIC MODULES -------------------------------------------------
@@ -42,6 +51,7 @@ import SparseArrays
 import Requires: @require
 # import SimpleNonlinearSolve
 import FastMultipole
+import ILUZero
 using FastMultipole.StaticArrays: @SVector, SVector, SMatrix
 import ReadVTK
 using WriteVTK
@@ -80,11 +90,12 @@ SEMIINFINITE_LENGTH[] = 10.0
 for header_name in ["elements", "fmm",
                     "abstractbody", "nonliftingbody",
                     "abstractliftingbody", "liftingbody",
-                    "solver",
+                    "instrumentation", "solver",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "formulation", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
+                    "wake", "gpu_influence", "gpu_wake", "particle_body_overlap",
+                    "formulation", "kutta", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
                     "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")
@@ -115,6 +126,18 @@ function __init__()
 
     catch e
         @warn "PythonPlot is not available; monitors will not be loaded"
+    end
+
+    # BRAINSTORM 025: pin the filament regularization family from the
+    # environment so frozen drivers can select it without code changes
+    # (compact/gaussian/vatistas; default compact).
+    if haskey(ENV, "FLOWPANEL_FILAMENT_REG")
+        set_filament_regularization!(Symbol(lowercase(ENV["FLOWPANEL_FILAMENT_REG"])))
+        # Log provenance: nothing else in a job log identifies the family, and
+        # the two families are only distinguishable after the fact by the FMM
+        # radius-inflation warning (37.6*rc vs 5.9*rc).
+        println("FLOWPanel: filament regularization = $(FILAMENT_REGULARIZATION[]) ",
+                "(pinned by FLOWPANEL_FILAMENT_REG)")
     end
 
 end

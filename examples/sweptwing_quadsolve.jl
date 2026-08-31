@@ -9,7 +9,7 @@
 #   the SOLVE itself: one vortex-ring element per quad (4 edges), one Neumann
 #   BC collocation per quad centroid, semi-infinite rigid-wake legs on the TE
 #   rows — exactly mirroring the conventions of the triangle Backslash solver
-#   (G[i,j] = u_j(cp_i)·n̂_i at unit γ, rhs = -U∞·n̂, kerneloffset 1e-10).
+#   (G[i,j] = u_j(cp_i)·n̂_i at unit γ, rhs = -U∞·n̂, core_size 1e-10).
 #
 #   Everything here is direct N-body (no FastMultipole.fmm!), so the script is
 #   safe and intended to run threaded:  julia -t 4 --project examples/sweptwing_quadsolve.jl
@@ -26,7 +26,7 @@ import StaticArrays: SVector
 import Statistics: mean
 
 const SWITCH = pnl.FastMultipole.DerivativesSwitch(false, true, false)
-const CORE = kerneloffset                  # 1e-10, matches the triangle study
+const CORE = core_size                  # 1e-10, matches the triangle study
 
 # ----------------- QUAD VORTEX-RING KERNEL ------------------------------------
 """
@@ -48,7 +48,7 @@ end
                                core::Float64)
     _, v, _ = pnl.induced_semiinfinite(target, pnl.VortexRing,
         te1[1], te1[2], te1[3], te2[1], te2[2], te2[3],
-        Da[1], Da[2], Da[3], 1.0, SWITCH; kerneloffset=core)
+        Da[1], Da[2], Da[3], 1.0, SWITCH; core_size=core)
     return v
 end
 

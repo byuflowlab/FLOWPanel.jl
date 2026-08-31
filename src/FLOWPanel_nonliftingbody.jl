@@ -48,9 +48,9 @@ mutable struct NonLiftingBody{E, N, TF, DBC} <: AbstractBody{E, N, TF, DBC}
     angular_velocity::Vector{TF}        # Net angular velocity (global frame), sum over ancestor frames; populated by kinematic_velocity!
     controlpoints::Matrix{TF}           # 3xncells control points
     normals::Matrix{TF}                 # 3xncells panel normals
-    kerneloffset::Float64               # Active kernel offset to avoid singularities
-    kerneloffset_panel::Float64         # Kernel offset for panel solves/interactions
-    kerneloffset_targets::Float64       # Kernel offset for panel influence on targets
+    core_size::Float64               # Active regularization core radius (see AbstractBody docs)
+    core_size_panel::Float64         # Core radius for panel solves/interactions
+    core_size_targets::Float64       # Core radius for panel influence on targets
     kernelcutoff::Float64               # Kernel cutoff to avoid singularities
     characteristiclength::Function      # Characteristic length of each panel
     watertight::Bool                     # Whether the body is watertight or not
@@ -73,9 +73,13 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity=zeros(TF, 3),
                 controlpoints=zeros(3, size(cells, 2)),
                 normals=zeros(3, size(cells, 2)),
-                kerneloffset=1e-8,
-                kerneloffset_panel=kerneloffset,
-                kerneloffset_targets=kerneloffset,
+                core_size=nothing,
+                core_size_panel=nothing,
+                core_size_targets=nothing,
+                # deprecated aliases for the pre-2026-08-22 names
+                kerneloffset=nothing,
+                kerneloffset_panel=nothing,
+                kerneloffset_targets=nothing,
                 kernelcutoff=1e-14,
                 characteristiclength=characteristiclength_sqrtarea,
                 watertight=false,
@@ -84,7 +88,10 @@ function NonLiftingBody{E, N, TF, DBC}(
                 ensure_winding::Bool=true,
                 flip_normals::Bool=false
               ) where {E, N, TF, DBC}
-    if ensure_winding 
+    core_size, core_size_panel, core_size_targets =
+        _resolve_core_sizes(core_size, core_size_panel, core_size_targets,
+                            kerneloffset, kerneloffset_panel, kerneloffset_targets)
+    if ensure_winding
         ensure_consistent_winding!(cells, nodes; watertight, flip_normals)
     end
     neighbor = neighbor === nothing || ensure_winding ? calc_neighbors(cells) : neighbor
@@ -106,9 +113,9 @@ function NonLiftingBody{E, N, TF, DBC}(
                 angular_velocity,
                 controlpoints,
                 normals,
-                kerneloffset_panel,
-                Float64(kerneloffset_panel),
-                Float64(kerneloffset_targets),
+                core_size_panel,
+                Float64(core_size_panel),
+                Float64(core_size_targets),
                 kernelcutoff,
                 characteristiclength,
                 watertight,

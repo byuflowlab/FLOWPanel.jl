@@ -16,7 +16,6 @@ import GeometricTools as gt
 import FLOWPanel: norm, dot, cross
 
 import Meshes
-import GeoIO
 import Rotations: RotX, RotY, RotZ
 
 # import CUDA                               # Uncomment this to use GPU (if available)
@@ -71,8 +70,7 @@ bodytype        = pnl.RigidWakeBody{pnl.VortexRing, 2} # Wake model and element 
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Read Gmsh mesh
-msh = GeoIO.load(meshfile)
-msh = msh.geometry
+msh = pnl.read_gmsh(meshfile)
 
 # Transform the original mesh: Translate, rotate, and scale
 msh = msh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)
@@ -87,8 +85,7 @@ sheddings = []
 for (trailingedgefile, spandir) in trailingedges
 
     # Read Gmsh line of trailing edge
-    TEmsh = GeoIO.load(joinpath(read_path, trailingedgefile))
-    TEmsh = TEmsh.geometry
+    TEmsh = pnl.read_gmsh(joinpath(read_path, trailingedgefile))
 
     # Apply the same transformations of the mesh to the trailing edge
     TEmsh = TEmsh |> Meshes.Translate(offset...) |> Meshes.Rotate(rotation) |> Meshes.Scale(scaling)

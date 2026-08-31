@@ -110,3 +110,25 @@ before overwriting and offer to move the old directory aside.
 
 See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
 [script generator](https://rc.byu.edu/documentation/slurm/script-generator) if you are having trouble.
+
+## Unified project location (2026-08-31)
+
+All future orc jobs launch from `~/projects_unified` — NOT from the legacy
+per-task silo copies:
+
+- Code: `~/projects_unified/{FastMultipole,FLOWVPM.jl,FLOWPanel.jl}` — real git
+  clones, branch `unified-052`. Pin a run by COMMITTING (local-only) to a
+  branch before launching; use `git worktree add` for concurrent experiments
+  that need different code states.
+- Julia envs: `~/projects_unified/envs/{x86_64,aarch64}` — Manifests dev-point
+  at the unified trees. Pick by node arch (`$(uname -m)`).
+- Depots: x86 uses the default `~/.julia`; ARM (gh200 / mgh nodes) uses
+  `~/fm052depot-gh200` (holds ARM CUDA artifacts — do not delete or rename).
+- Launch: from `~/projects_unified/FLOWPanel.jl` via
+  `examples/run_p018_screen_gpu052.slurm.sh <arch> <case>`; it defaults to the
+  unified repo/env, and `P018_REPO_OVERRIDE` / `P018_PROJECT_OVERRIDE` exist
+  for special cases.
+
+Legacy `~/<pkg>-<era>` silos and `~/fm052env-*` are DEPRECATED: kept only until
+their in-flight jobs finish, then removed by Ryan. Do not launch new jobs from
+them.

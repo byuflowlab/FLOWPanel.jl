@@ -1,6 +1,9 @@
 import FLOWPanel as pnl
 import GeometricTools as gt
 
+isdefined(@__MODULE__, :add_flat_tip_caps) ||
+    include(joinpath(@__DIR__, "mesh_cap_helpers.jl"))
+
 function gt.Grid(P_min, P_max, NDIVS, loop_dim::Integer)
     return gt.Grid(P_min, P_max, NDIVS; loop_dim=loop_dim)
 end
@@ -261,6 +264,7 @@ function simplewing_mirrored(b::Number, ar::Number, tr::Number, twist_root::Numb
                              verify_rflspline::Bool=true,
                              mirror_tol::Real=100eps(Float64),
                              bodyoptargs=(;),
+                             caps::Symbol=:none,
                              opt_args...)
     c_tip = b/ar
     c_root = c_tip/tr
@@ -329,6 +333,15 @@ function simplewing_mirrored(b::Number, ar::Number, tr::Number, twist_root::Numb
     for ci in pos_order
         out_ci += 1
         cells[:, out_ci] .= half_cells[:, ci]
+    end
+
+    if caps === :flat
+        # Close the two open tips before anything reads the connectivity: the
+        # interior-Dirichlet Green identity assumes a closed surface. Caps are
+        # appended, so `half_cells`-derived TE node indices stay valid.
+        nodes, cells, _, _ = add_flat_tip_caps(nodes, cells)
+    elseif caps !== :none
+        throw(ArgumentError("caps must be :none or :flat; got $caps"))
     end
 
     watertight, _ = pnl.iswatertight(nodes, cells)

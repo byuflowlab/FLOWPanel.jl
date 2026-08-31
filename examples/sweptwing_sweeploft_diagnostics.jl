@@ -265,11 +265,11 @@ function manual_velocity!(body)
     pnl.reset!(body)                      # zeroes velocity/potential, not strength
     body.strength[:, Gi] .= gamma
     pnl.apply_freestream!(body, Vinf)
-    pnl._set_kerneloffsets!((body,), :kerneloffset_targets)
+    pnl._set_core_sizes!((body,), :core_size_targets)
     pnl.influence!((body,), (body,), pnl.FastMultipoleBackend();
         precalc=false, scalar_potential=false, velocity=true,
         velocity_gradient=(false,),
-        direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+        direct_conditioning=pnl._self_panel_core_size_conditioning())
     U0 = copy(body.velocity)              # U∞ + PV
 
     Jtri = zeros(3, body.ncells)

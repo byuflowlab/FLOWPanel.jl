@@ -4,7 +4,6 @@ import GeometricTools as gt
 import FLOWPanel: norm, dot, cross
 
 import Meshes
-import GeoIO
 
 # import CUDA                               # Uncomment this to use GPU (if available)
 
@@ -59,7 +58,7 @@ clip_Cp         = 1 - 342.0/magVinf         # Clip pressure coefficients that ar
 
 # ----------------- GENERATE BODY ----------------------------------------------
 # Read Gmsh mesh
-msh = GeoIO.load(meshfile).geometry
+msh = pnl.read_gmsh(meshfile)
 
 # Transform the original mesh: Translate, rotate, and scale
 msh = msh |> Meshes.Scale(scaling)

@@ -203,19 +203,28 @@ function _load_panel_wake_vtk!(wake::PanelWake, path::String, wake_name::String,
             wake.velocity[i_surf][:, 1:dim1, :] .= vel_flat
         end
 
-        # strength (cell data) — shape (dim_strength, dim1-1, dim2-1)
-        cell_data = ReadVTK.get_cell_data(vtk)
-        if "strength" in keys(cell_data)
-            str_arr = ReadVTK.get_data(cell_data["strength"])
-            dim_strength = size(wake.strength[i_surf], 1)
-            str_flat = reshape(str_arr, dim_strength, dim1-1, dim2-1)
-            wake.strength[i_surf][:, 1:dim1-1, :] .= str_flat
+        # strength (cell data) — shape (dim_strength, dim1-1, dim2-1). A
+        # convert-at-shed wake (BRAINSTORM 024) writes a single-node-row grid
+        # with no cells, hence no CellData section at all: skip the lookup
+        # (the row-1 strength is restored from metadata terminal_strength).
+        if dim1 > 1
+            cell_data = ReadVTK.get_cell_data(vtk)
+            if "strength" in keys(cell_data)
+                str_arr = ReadVTK.get_data(cell_data["strength"])
+                dim_strength = size(wake.strength[i_surf], 1)
+                str_flat = reshape(str_arr, dim_strength, dim1-1, dim2-1)
+                wake.strength[i_surf][:, 1:dim1-1, :] .= str_flat
+            end
         end
     end
 
     wake.nwakes[] = max(nwakes_loaded, 0)
     n_rows_max = size(wake.nodes[1], 2)
-    wake.overflowed[] = (wake.nwakes[] >= n_rows_max - 1)
+    # Convert-at-shed: overflowed[] means "at least one shed has happened",
+    # which is true for any saved step >= 1 (the continuation metadata restore
+    # remains authoritative where present).
+    wake.overflowed[] = wake.convert_at_shed ? (idx >= 1) :
+        (wake.nwakes[] >= n_rows_max - 1)
     return wake
 end
 
@@ -225,14 +234,37 @@ end
 Load `PanelParticleWake` state at step `idx`. First loads the panel-wake
 component, then loads the particle field from
 `{path}/{wake_name}_particles/{wake_name}_particles.{idx}.vtp`.
+
+`include_pfield=false` loads only the panel-wake component (Ruling 7: wakes
+sharing one particle field write/load it once, under the first referencing
+wake's name; a repeat load would clear and reload the already-restored field).
 """
-function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, wake_name::String, idx::Int)
+function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, wake_name::String, idx::Int;
+        include_pfield::Bool=true)
     _load_panel_wake_vtk!(wake.panel_wake, path, wake_name, idx)
 
+    include_pfield || return wake
+
+    # Current runs write ONE particle series (FLOWPANEL_PARTICLE_PRECISION,
+    # f64 default). The fp64 sidecar preference is kept read-only for runs
+    # written during the brief dual-write era (052c, 2026-08-26); restoring
+    # from a Float32 series warns that the continuation is not replay-exact.
+    fp64_path = joinpath(path, wake_name * "_particles_fp64",
+        "$(wake_name)_particles_fp64.$(idx).vtp")
     vtp_dir  = joinpath(path, wake_name * "_particles")
     vtp_path = joinpath(vtp_dir, "$(wake_name)_particles.$(idx).vtp")
-    isfile(vtp_path) || error("Particles VTP not found: $(vtp_path)")
+    if isfile(fp64_path)
+        vtp_path = fp64_path
+    else
+        isfile(vtp_path) || error("Particles VTP not found: $(vtp_path) " *
+            "(no fp64 checkpoint at $(fp64_path) either)")
+    end
     vtk = ReadVTK.VTKFile(vtp_path)
+    if vtp_path !== fp64_path && eltype(ReadVTK.get_points(vtk)) === Float32
+        @warn "Warm start restoring particles from a Float32 VTP " *
+            "(FLOWPANEL_PARTICLE_PRECISION=f32 run, or pre-052c F32 series); " *
+            "the continuation will not be replay-exact." maxlog=1
+    end
 
     # number of particles
     np = vtk.n_points
@@ -253,19 +285,39 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     missing = filter(field -> !(field in keys(point_data)), required_fields)
     isempty(missing) || throw(ArgumentError("Loaded particle VTK is missing required field(s): $(join(missing, ", "))."))
 
+    # Stage all fields in a host matrix, then push the contiguous column
+    # prefix with one linear 5-arg copyto!: broadcasting ReadVTK's lazy
+    # reinterpreted arrays into device row-views tries to compile a GPU
+    # kernel capturing a host array (and 2-arg SubArray copies fall back to
+    # scalar indexing), both disallowed on GPU-backed particle storage.
+    staging = zeros(eltype(pf.particles), size(pf.particles, 1), np)
     points = ReadVTK.get_points(vtk)  # 3 × np
-    pf.particles[FLOWVPM.X_INDEX, 1:np] .= points
-    pf.particles[FLOWVPM.GAMMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["gamma"])
-    pf.particles[FLOWVPM.SIGMA_INDEX, 1:np] .= ReadVTK.get_data(point_data["sigma"])
-    pf.particles[FLOWVPM.VOL_INDEX, 1:np] .= ReadVTK.get_data(point_data["vol"])
-    pf.particles[FLOWVPM.CIRCULATION_INDEX, 1:np] .= ReadVTK.get_data(point_data["circulation"])
-    pf.particles[FLOWVPM.U_INDEX, 1:np] .= ReadVTK.get_data(point_data["velocity"])
-    pf.particles[FLOWVPM.VORTICITY_INDEX, 1:np] .= ReadVTK.get_data(point_data["vorticity"])
-    pf.particles[FLOWVPM.C_INDEX, 1:np] .= ReadVTK.get_data(point_data["C"])
-    pf.particles[FLOWVPM.SFS_INDEX, 1:np] .= ReadVTK.get_data(point_data["SFS"])
+    staging[FLOWVPM.X_INDEX, :] .= points
+    staging[FLOWVPM.GAMMA_INDEX, :] .= ReadVTK.get_data(point_data["gamma"])
+    staging[FLOWVPM.SIGMA_INDEX, :] .= ReadVTK.get_data(point_data["sigma"])
+    # SIGMA_CEIL band-aid (BRAINSTORM item 026): also clamp RESTORED core
+    # sizes — the FMM cache is built at the continuation's first evaluation,
+    # before any euler-step clamp runs, and a snapshot carrying an overgrown
+    # outlier would seed a degenerate shallow radix geometry that no later
+    # trigger deepens.
+    sigma_ceil = parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))
+    if isfinite(sigma_ceil)
+        sig_row = view(staging, FLOWVPM.SIGMA_INDEX, :)
+        n_over = count(>(sigma_ceil), sig_row)
+        n_over > 0 && println("Warm start: clamping $(n_over) restored particle " *
+            "core size(s) to SIGMA_CEIL=$(sigma_ceil) m")
+        sig_row .= min.(sig_row, sigma_ceil)
+    end
+    staging[FLOWVPM.VOL_INDEX, :] .= ReadVTK.get_data(point_data["vol"])
+    staging[FLOWVPM.CIRCULATION_INDEX, :] .= ReadVTK.get_data(point_data["circulation"])
+    staging[FLOWVPM.U_INDEX, :] .= ReadVTK.get_data(point_data["velocity"])
+    staging[FLOWVPM.VORTICITY_INDEX, :] .= ReadVTK.get_data(point_data["vorticity"])
+    staging[FLOWVPM.C_INDEX, :] .= ReadVTK.get_data(point_data["C"])
+    staging[FLOWVPM.SFS_INDEX, :] .= ReadVTK.get_data(point_data["SFS"])
     J_arr = ReadVTK.get_data(point_data["velocity_gradient"])
     # written as reshape(view(..., J_INDEX, 1:np), 3, 3, np); ReadVTK gives back as 9 × np or similar.
-    pf.particles[FLOWVPM.J_INDEX, 1:np] .= reshape(J_arr, 9, np)
+    staging[FLOWVPM.J_INDEX, :] .= reshape(J_arr, 9, np)
+    copyto!(pf.particles, 1, staging, 1, length(staging))
 
     pf.np = np
     return wake
@@ -306,6 +358,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_eta_kinematic=NaN,
         set_Das_eta_freestream=NaN,
         set_Das_min_kinematic_displacement=0.0,
+        set_Das_kinematic_arc::Bool=true,
+        wake_attachment::AbstractWakeAttachment=RigidTransitionAttachment(),
+        kutta_closure::AbstractKuttaClosure=JumpKutta(),
         verbose=false,
         optargs...,
     )
@@ -316,6 +371,22 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     _validate_influence_backend(:backend_system, backend_system)
     _validate_solve_backend(systems, body_solvers, backend_solve)
     audit_monitors(monitors)
+
+    # BRAINSTORM 015: validate a non-default attachment/closure configuration
+    # up front, before any state is mutated — the Kutta restore in section 4.5
+    # below writes body and wake state, so without this early check an
+    # unsupported configuration (or a non-PanelWake wake) would fail only
+    # after mutation and with a raw field error instead of an ArgumentError.
+    if !_is_legacy_kutta(wake_attachment, kutta_closure)
+        _validate_kutta_configuration(:simulate, systems_tuple, wakes_tuple,
+            body_solvers,
+            get(optargs, :formulation, VelocityThroughSources()),
+            backend_system, wake_attachment, kutta_closure;
+            bound_strength_rlx=get(optargs, :bound_strength_rlx, 1.0),
+            set_Das_eta_kinematic, set_Das_eta_freestream,
+            set_Das_min_kinematic_displacement, set_Das_kinematic_arc,
+            set_Das_refresh=get(optargs, :set_Das_refresh, false))
+    end
 
     rpath = isnothing(restart_path) ? path : restart_path
     rname = isnothing(restart_name) ? name : restart_name
@@ -362,10 +433,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
                 extra_reset!(sys)
             end
             kinematic_velocity!(systems_tuple, frames)
-            for sys in systems_tuple
-                _accumulate_Das!(sys, dt0 * set_Das_eta_kinematic;
-                    min_displacement=set_Das_min_kinematic_displacement)
-            end
+            _accumulate_Das_kinematic!(systems_tuple, frames, dt0 * set_Das_eta_kinematic;
+                min_displacement=set_Das_min_kinematic_displacement,
+                arc=set_Das_kinematic_arc)
         end
         for sys in systems_tuple
             reset!(sys)
@@ -418,17 +488,29 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         _load_body_vtk!(sys, rpath, body_name, restart_step)
     end
 
+    seen_load_pfields = ()  # Ruling 7: a shared pfield is written once (under
+                            # the first referencing wake's name), so load its
+                            # particles once; panel-wake state is per-wake.
     for (i, w) in enumerate(wakes_tuple)
         isnothing(w) && continue
         wake_name = rname * "_wake$(i)"
         if w isa PanelParticleWake
-            _load_panel_particle_wake_vtk!(w, rpath, wake_name, restart_step)
+            repeat = any(p -> p === w.pfield, seen_load_pfields)
+            _load_panel_particle_wake_vtk!(w, rpath, wake_name, restart_step;
+                include_pfield=!repeat)
+            repeat || (seen_load_pfields = (seen_load_pfields..., w.pfield))
         elseif w isa PanelWake
             _load_panel_wake_vtk!(w, rpath, wake_name, restart_step)
         else
             error("simulate_warmstart! does not yet support wake type $(typeof(w))")
         end
     end
+
+    # Restore non-VTK row/handoff/conversion state before replaying this saved
+    # step's skipped end-of-step shedding. Smooth conversion is never allowed
+    # to infer this state from particle count or buffer fullness.
+    metadata = _read_metadata_toml(rpath, rname)
+    _restore_wake_continuation!(wakes_tuple, metadata, restart_step)
 
     # (frame state was restored/reconstructed in section 2.5 above)
 
@@ -438,13 +520,61 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         calc_controlpoints!(sys)
     end
 
+    # 4.5 Kutta warm-start restoration (BRAINSTORM 015): validate the saved
+    # attachment/closure configuration and reinstall the committed correction
+    # BEFORE the end-of-step replay below, so the replayed shed_wake! deposits
+    # γ = Cμ − c. Route B live-block metadata is restored here and its
+    # physical-step identifier advanced after the replayed shed.
+    _kutta_warmstart_restore!(systems_tuple, wakes_tuple, metadata,
+        restart_step, wake_attachment, kutta_closure)
+
     # 5. Replay the end-of-step-`restart_step` actions that simulate! skipped
     #    because that step was the final step of the previous run. Use the dt
     #    that simulate! itself would use at that step.
-    dt_end = t_range[restart_step + 2] - t_range[restart_step + 1]
-
+    #
+    # 5.0 The replayed propagate!/shed_wake! consume per-step runtime staging
+    # that simulate! had applied during step `restart_step`'s aerodynamics
+    # stage (_sa_reset_freestream_kinematic!) and that is NOT persisted to
+    # disk: `wake.freestream` (the freestream_convection propagate! branch
+    # convects rows by dt*freestream — zero on a freshly constructed wake, so
+    # the un-convected old row-1 ends up coincident with the freshly shed
+    # row-1, and the singular filament NaNs the first continued solve) and the
+    # bodies' `velocity_te` (shed row placement/Das direction). Restore them
+    # exactly: vte = 0 + uinf + kinematic, matching the uninterrupted run.
+    # Deliberately do NOT reset/re-apply wake node velocities or particle U:
+    # both were saved at io time (post-solve, induced contributions included)
+    # and restored by the VTK loaders — they are exactly what the
+    # shed_with_induced_velocity propagate! branch must consume.
+    uinf_replay = Uinf(t_range[restart_step + 1])
+    for sys in systems_tuple
+        reset!(sys)
+    end
+    apply_freestream!(systems_tuple, uinf_replay)
+    kinematic_velocity!(systems_tuple, frames)
     for w in wakes_tuple
-        !isnothing(w) && propagate!(w, dt_end; step=restart_step, frames)
+        isnothing(w) && continue
+        pw = w isa PanelParticleWake ? w.panel_wake : w
+        pw.freestream .= uinf_replay
+    end
+
+    dt_end = t_range[restart_step + 2] - t_range[restart_step + 1]
+    particle_relax = get(optargs, :particle_relax, true)
+    diagnose_particle_gamma = get(optargs, :diagnose_particle_gamma, false)
+    diagnostic_vertical = get(optargs, :diagnostic_vertical, (0.0, 0.0, 1.0))
+    sigma_guard = get(optargs, :sigma_guard, NamedTuple())
+
+    seen_prop_pfields = ()  # Ruling 7: convect a shared pfield exactly once
+    for w in wakes_tuple
+        if w isa PanelParticleWake
+            repeat = any(p -> p === w.pfield, seen_prop_pfields)
+            propagate!(w, dt_end; relax=particle_relax,
+                step=restart_step, frames, diagnose_particle_gamma,
+                diagnostic_vertical,
+                propagate_pfield=!repeat, sigma_guard)
+            repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
+        elseif !isnothing(w)
+            propagate!(w, dt_end; step=restart_step, frames)
+        end
     end
     propagate_kinematics!(systems_tuple, frames, dt_end)
     for sys in systems_tuple
@@ -453,6 +583,15 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     end
     for (sys, w) in zip(systems_tuple, wakes_tuple)
         !isnothing(w) && shed_wake!(w, sys)
+    end
+
+    # Route B topology advancement bookkeeping for the replayed shed (mirrors
+    # simulate!'s end-of-step hook); complete restored state resumes directly
+    # and never repeats :startup_jump.
+    if wake_attachment isa TEAnchoredAttachment
+        wake = wakes_tuple[1]
+        wake.live_rows[] = 1
+        wake.live_step_id[] = restart_step + 1
     end
 
     # 6. Forward to simulate! with start_step pointing at the next step.
@@ -467,6 +606,9 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
         set_Das_eta_kinematic=set_Das_eta_kinematic,
         set_Das_eta_freestream=set_Das_eta_freestream,
         set_Das_min_kinematic_displacement=set_Das_min_kinematic_displacement,
+        set_Das_kinematic_arc=set_Das_kinematic_arc,
+        wake_attachment=wake_attachment,
+        kutta_closure=kutta_closure,
         start_step=restart_step + 1,
         verbose=verbose,
         optargs...,

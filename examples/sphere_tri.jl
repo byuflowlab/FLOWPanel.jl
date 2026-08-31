@@ -17,7 +17,6 @@ import GeometricTools as gt
 import CSV
 import DataFrames: DataFrame
 import GeometricTools: plt, @L_str
-import GeoIO
 
 save_path       = joinpath("data", file_name) # Where to save results
 file_name       = "sphere00"                # Prefix of output files
@@ -38,7 +37,7 @@ kernel = Union{pnl.ConstantSource, pnl.ConstantDoublet}
 # -------- Generate Geometry ---------------------------------------------------
 # meshfile = "mysphere.msh"
 meshfile = "sphere_r1.msh"
-msh = GeoIO.load(meshfile).geometry
+msh = pnl.read_gmsh(meshfile)
 
 # Generates grid
 grid = gt.GridTriangleSurface(msh)

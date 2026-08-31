@@ -200,6 +200,13 @@ end
 # Relative tolerance for self-pair detection: ||target - centroid|| < ε_rel * √A.
 const SELF_PAIR_EPS_REL = 1.0e-12
 
+# On-plane snap for the solid-angle PV branch (see _induced): plain floats
+# snap so the ±2π branch side is deterministic across host/device/exact
+# arithmetic; AD duals pass through unchanged so their partials survive.
+@inline _onplane_snap(tRz::T, L2) where {T<:Union{Float32,Float64}} =
+    ifelse(tRz*tRz <= 1e-24 * L2, zero(T), tRz)
+@inline _onplane_snap(tRz, L2) = tRz
+
 @inline function _is_self_pair(target, control_point, vertices)
     v1, v2, v3 = vertices
     e1 = v2 - v1
@@ -227,13 +234,14 @@ end
 end
 
 """
-    induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
-    induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); kerneloffset=1.0e-3)
+    induced(target, source_system, source_buffer, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); core_size=1.0e-3)
+    induced(target, source_system, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false, true, false); core_size=1.0e-3)
 
 Evaluate the panel-induced potential, velocity, and optional gradient at
 `target` for source panel `i_source`.
 """
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix
     R, v1, v2, v3 = rotate_to_panel(source_system, source_buffer, i_source)
@@ -244,7 +252,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # evaluate influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, core_size, R, derivatives_switch, fam)
 
     # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
@@ -258,7 +266,8 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,TK,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,TK,NK}
 
     # get vertices, rotation matrix
     R, v1, v2, v3 = rotate_to_panel(source_system, i_source)
@@ -268,7 +277,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
     # evaluate influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, kerneloffset, R, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), control_point, strength, TK, core_size, R, derivatives_switch, fam)
 
     # self-pair short-circuit: exterior velocity limit and interior potential limit.
     if _is_self_pair(target, control_point, (v1, v2, v3))
@@ -279,13 +288,14 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{TK,NK,<
     # check for wake (if any)
     p, v, vg = _induced_wake(target, (v1, v2, v3), source_system, i_source, derivatives_switch)
 
-    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, kerneloffset $kerneloffset and strength $strength")
+    # isnan(p) && println("Warning: NaN wake-induced potential at target $(target) from source panel $i_source with vertices $v1, $v2, $v3, core_size $core_size and strength $strength")
 
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
 "Overload for non-rotated kernels"
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, source_buffer::Matrix, i_source, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,NK}
 
     # get vertices
     v1, v2, v3 = get_vertices(source_system, source_buffer, i_source)
@@ -294,7 +304,7 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_buffer, 5:4+NK, i_source))
 
     # influence
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, core_size, derivatives_switch, fam)
 
     # self-pair short-circuit
     control_point = (v1 + v2 + v3) * 0.3333333333333333
@@ -309,14 +319,15 @@ function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexR
     return potential+p, velocity+v, velocity_gradient+vg
 end
 
-function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false); kerneloffset=1.0e-3) where {TF,NK}
+function induced(target::AbstractVector{TF}, source_system::AbstractBody{VortexRing,NK,<:Any}, i_source::Int, derivatives_switch=FastMultipole.DerivativesSwitch(false,true,false),
+        fam::Val=Val(FILAMENT_REGULARIZATION[]); core_size=1.0e-3) where {TF,NK}
 
     # get vertices
     v1, v2, v3 = get_vertices(source_system, i_source)
 
     strength = FastMultipole.StaticArrays.SVector{NK,TF}(view(source_system.strength, i_source, :))
 
-    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, kerneloffset, derivatives_switch)
+    potential, velocity, velocity_gradient = _induced(target, (v1, v2, v3), strength, VortexRing, core_size, derivatives_switch, fam)
 
     # self-pair short-circuit
     control_point = (v1 + v2 + v3) * 0.3333333333333333
@@ -431,6 +442,14 @@ end
 
 #------- constant source, normal doublet, source + normal doublet -------#
 
+# fam-discarding forwarder: the generic `induced` passes the filament
+# regularization Val unconditionally; source/doublet kernels ignore it
+_induced(target, vertices::NTuple, centroid::AbstractVector, strength,
+    kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}},
+    core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch, ::Val) =
+    _induced(target, vertices, centroid, strength, kernel, core_radius, R, derivatives_switch)
+
+
 function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_Rx, target_Ry, target_Rz, vx_i, vy_i, vx_ip1, vy_ip1, eip1, hip1, rip1, ei, hi, ri, ds, mi, dx, dy, strength::AbstractVector{TF}, ::Type{ConstantSource}, R_dot_s, reg_term) where {PS,VS,GS,NO,NM,TF}
 
     #--- compute values ---#
@@ -443,8 +462,13 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -512,8 +536,13 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # remove the singularity as much as possible
@@ -590,8 +619,13 @@ function compute_source_dipole(::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}
     # (tan_term = 0) when the target is on the panel plane (target_Rz == 0).
     # Self-pair (target == centroid in panel-local coords) ⇒ PV of solid-angle
     # integral is 0. Also force tan_term = 0 on the panel-side extension singularity.
-    if (target_Rx == zero(target_Rx) && target_Ry == zero(target_Ry) && target_Rz == zero(target_Rz)) ||
-       abs(abs(R_dot_s) - ri * ds) < 1e-12
+    if target_Rz == zero(target_Rz) ||   # tRz snapped to an exact zero at roundoff scale in _induced (on-plane PV; keeps host/device/exact on the same ±2π side)
+       abs(abs(R_dot_s) - ri * ds) <= 1e-12 * ri * ds  # (<=: ri*ds==0, target on a vertex, must trigger)
+       # RELATIVE tol: R_dot_s and ri*ds carry units of length², so an
+       # absolute window is geometry-dependent — it zeroed the tan_term of far targets within ~√(1e-12/(ri·ds)) rad of a
+       # side extension, breaking the per-edge solid-angle cancellation for near-plane sliver pairs (spurious potential
+       # ~3600× the truth on the DJI TE strip; found 2026-08-14 as the "p-saturated FMM floor", which was really this
+       # direct-kernel defect — the multipole expansion was correct). On the extension line itself the limit IS zero.
         tan_term = zero(target_Rz)
     else
         # println("NOT HERE")
@@ -695,12 +729,25 @@ end
 function _induced(target, vertices::NTuple{NS}, centroid::AbstractVector{TFP}, strength, kernel::Union{Type{ConstantSource}, Type{ConstantDoublet}, Type{Union{ConstantSource, ConstantDoublet}}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {TFP,NS,PS,VS,GS,NO,NM}
     #--- prelimilary computations ---#
 
-    # note that target_Rz is ensured to be nonzero in the source_dipole_preliminaries function
     TFT = eltype(target)
     potential, velocity, velocity_gradient, target_Rx, target_Ry, target_Rz = source_dipole_preliminaries(TFT, TFP, target, centroid, R)
     # No on-centroid nudge: when target_Rz == 0 the kernel returns the principal
     # value (compute_source_dipole forces tan_term = 0 at target_Rz == 0), and
     # `_self_limit` applies the fixed exterior velocity and interior potential limits at self pairs.
+    # On-plane snap: roundoff-scale target_Rz means the target IS on the panel
+    # plane; snapping to an exact zero makes every edge take the PV branch of
+    # the solid-angle tan_term, so the ±2π side cannot follow the sign of
+    # arithmetic junk (host/device FMA divergence, job 13309929, 2026-08-22).
+    # Mirrored in FastMultipole _rect_tri_source_doublet with the same 1e-24
+    # relative-tolerance-squared vs the panel scale L² = Σᵢ|vᵢ - centroid|².
+    # Plain-float types only: an AD dual must keep flowing through the smooth
+    # atan branch or zero(target_Rz) erases its partials (∇φ ≡ 0 at on-plane
+    # evaluation points, e.g. the control-point convergence tests).
+    L2 = zero(promote_type(TFT, TFP))
+    for v in vertices
+        L2 += (v[1]-centroid[1])^2 + (v[2]-centroid[2])^2 + (v[3]-centroid[3])^2
+    end
+    target_Rz = _onplane_snap(target_Rz, L2)
 
     #--- first recursive quantities ---#
 
@@ -793,7 +840,8 @@ end
 
 #------- vortex ring panel -------#
 
-function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {NS,PS,VS,GS,NO,NM}
+function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM},
+        fam::Val=Val(FILAMENT_REGULARIZATION[])) where {NS,PS,VS,GS,NO,NM}
     TFT = eltype(target)
     TFP = eltype(strength)
     TF = promote_type(TFT,TFP)
@@ -831,12 +879,12 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
                     DEBUG[] = true
                     @show vertices[i], vertices[ip1], target
                 end
-                v = _bound_vortex_velocity(r1, r2, finite_core, core_size)
+                v = _bound_vortex_velocity(r1, r2, finite_core, core_size, fam)
                 velocity += v
             end
             if GS
                 # velocity gradient
-                g = _bound_vortex_gradient(r1, r2, finite_core, core_size)
+                g = _bound_vortex_gradient(r1, r2, finite_core, core_size, fam)
                 gradient += g
             end
         end
@@ -845,12 +893,281 @@ function _induced(target, vertices::NTuple{NS}, strength, ::Type{VortexRing}, co
     return potential, velocity * strength[1], gradient * strength[1]
 end
 
-_induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch) =
-    _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
+_induced(target, vertices, centroid, strength, kernel::Type{VortexRing}, core_size, R, derivatives_switch,
+    fam::Val=Val(FILAMENT_REGULARIZATION[])) =
+    _induced(target, vertices, strength, kernel, core_size, derivatives_switch, fam)
 
 
-function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_core, core_size) where TF
-    # Vatistas n=2 core model: 1/h^2 → 1/sqrt(h^4 + rc^4)
+"""
+    FilamentRegularization
+
+Selectable regularization family for the bound-vortex filament kernel
+(BRAINSTORM 025). The three point-blob-profile families share the numerator
+`c*q` and differ only in the scalar denominator `D` (velocity) and
+`∇D = κ ∇A` (gradient); derivations in
+`BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`.
+`LineGaussRegularization` is instead the exact line-convolved kernel — its
+gradient does not fit the `(D, κ∇A)` shape and uses a dedicated cylindrical
+assembly (052d DERIVATION.md §5).
+
+- `GaussianRegularization` (Ryan ruling 2026-08-20, matched-CORE-
+  SIZE convention): Lamb–Oseen transverse profile (`σ ≡ core_size`) — lowest
+  peak velocity AND gradient at fixed core size. Radius inflation is
+  GRADIENT-AWARE: `Δr = core_size·√(2z*)` with `z*` solving
+  `e^(-z)(1+2z) = tol` (≈ `5.90·core_size` at tol 1e-6); the velocity-only
+  radius `√(2 ln(1/tol))` would leave gradient error `tol·(1+2 ln(1/tol))`.
+- `CompactRegularization`: the same compact-support family the
+  doublet-velocity kernel uses (`regularize`) transplanted to the filament
+  transverse profile — exactly singular (velocity AND gradient) beyond
+  `core_size`, so `Δr = core_size`, tolerance-independent.
+- `VatistasRegularization`: the legacy Vatistas n=2 core
+  (`1/h² → 1/√(h⁴ + rc⁴)`); `Δr = core_size·(2/tol)^(1/4)` (velocity-derived,
+  legacy-pinned; leaves gradient error ≤ 1.25·tol at that radius — see
+  `radius_inflation`).
+- `LineGaussRegularization` (default; Ryan ruling 2026-08-29, task 052d):
+  exact closed form of the singular segment kernel
+  convolved with the FLOWVPM Gaussian blob (`σ ≡ core_size`; FastMultipole
+  `MATRIX_OPERATOR_REFACTOR/prototypes/052d_compact_kernel/DERIVATION.md`,
+  2026-08-28). `GaussianRegularization` is exactly its infinite-line limit;
+  the deviation from the singular kernel decays as `poly·e^(−d²/2σ²)` in the
+  distance `d` to the SEGMENT — the Gaussian family's open along-line error
+  channel closes by construction, so the radius inflation truly bounds the
+  direct/expansion mismatch in the geometry the MAC measures. Inflation is
+  the Gaussian gradient-aware fixed point plus a measured `0.35σ` pad
+  (`≈ 6.25σ` at tol 1e-6). Costs 4 erf + 1 exp per edge (vs 1 expm1).
+
+Select via [`set_filament_regularization!`](@ref) or the
+`FLOWPANEL_FILAMENT_REG` environment variable (`compact`/`gaussian`/
+`vatistas`/`linegauss`, read at package load) — the env hook exists so frozen drivers can
+pin a family without code changes. The FMM stays aligned with the direct
+kernel by construction: [`radius_inflation`](@ref) for `VortexRing` reads the
+same global.
+"""
+@enum FilamentRegularization begin
+    VatistasRegularization
+    CompactRegularization
+    GaussianRegularization
+    LineGaussRegularization
+end
+
+"Active filament regularization family (see [`FilamentRegularization`](@ref))."
+# Default: LineGauss (Ryan ruling 2026-08-29, task 052d). It keeps the
+# Gaussian family's velocity/gradient profile advantages (the 2026-08-20
+# matched-core-size ruling, BRAINSTORM/025 phase_00) while closing the
+# Gaussian's open along-line error channel: its deviation from the singular
+# kernel decays with distance to the SEGMENT, not the infinite line, so
+# radius_inflation genuinely bounds the direct/expansion mismatch (the
+# Gaussian default cost 9e-4 relU on far-field just-shed wake particles;
+# 052d handoff 2026-08-29m). Override with FLOWPANEL_FILAMENT_REG
+# (e.g. =gaussian to reproduce pre-2026-08-29 ladder runs).
+const FILAMENT_REGULARIZATION = Ref(LineGaussRegularization)
+
+"Set the active filament regularization family (type or Symbol
+`:compact`/`:gaussian`/`:vatistas`/`:linegauss`)."
+set_filament_regularization!(family::FilamentRegularization) =
+    (FILAMENT_REGULARIZATION[] = family)
+function set_filament_regularization!(family::Symbol)
+    family === :compact && return set_filament_regularization!(CompactRegularization)
+    family === :gaussian && return set_filament_regularization!(GaussianRegularization)
+    family === :vatistas && return set_filament_regularization!(VatistasRegularization)
+    family === :linegauss && return set_filament_regularization!(LineGaussRegularization)
+    throw(ArgumentError("unknown filament regularization $(repr(family)); " *
+        "use :compact, :gaussian, :vatistas, or :linegauss"))
+end
+
+#------- LineGauss closed-form kernel (052d, 2026-08-28) -------#
+# Exact blob-line convolution of the segment Biot–Savart kernel with the
+# FLOWVPM Gaussian core g(t) = erf(t/√2) − √(2/π)·t·e^(−t²/2). Derivation and
+# validation live in FastMultipole `MATRIX_OPERATOR_REFACTOR/prototypes/
+# 052d_compact_kernel/` (DERIVATION.md; k01/k03 harnesses). All lengths in
+# the helpers are σ-scaled (σ ≡ core_size). Guard thresholds and series
+# truncations are Float64-derived; a Float32 device port needs re-derivation.
+
+const _LG_SQ2OPI = sqrt(2 / pi)
+const _lg_erf = FLOWVPM.erf   # SpecialFunctions.erf via the FLOWVPM dep
+
+# blob velocity function g(t) (odd in t), series-guarded as t → 0
+@inline function _lg_gfun(t)
+    at = abs(t)
+    at >= 9.3 && return copysign(one(t), t)   # deviation < 2e-18
+    if at < 0.125
+        t2 = t * t
+        term = t * t2 / 3
+        s = term
+        for m in 1:12
+            term *= -t2 * (2m + 1) / (2m * (2m + 3))
+            s += term
+        end
+        return _LG_SQ2OPI * s
+    end
+    return _lg_erf(t / sqrt(2)) - _LG_SQ2OPI * t * exp(-t * t / 2)
+end
+
+# on-axis antiderivative ψ (odd, ψ(0) = 0): M_axis = ψ(ẑ1) − ψ(ẑ2)
+@inline function _lg_psi(z)
+    z == 0 && return zero(z)
+    if abs(z) < 0.125
+        z2 = z * z
+        return _LG_SQ2OPI * z * (1 / 3 - z2 / 30 + z2^2 / 280 -
+                                 z2^3 / 3024 + z2^4 / 38016 - z2^5 / 549120)
+    end
+    return _LG_SQ2OPI * (z / 2) * exp(-z * z / 2) -
+           _lg_gfun(z) / (2 * z * z) + _lg_gfun(z) / 2
+end
+
+# g(R)/R³ including its finite R = 0 limit (gradient axial factor)
+@inline function _lg_kfun(R)
+    if R < 0.125
+        r2 = R * R
+        return _LG_SQ2OPI * (1 / 3 - r2 / 10 + r2^2 / 56 -
+                             r2^3 / 432 + r2^4 / 4224 - r2^5 / 49920)
+    end
+    return _lg_gfun(R) / R^3
+end
+
+# Fixed threshold at the error crossover: the axis limit truncates O(ĥ²)
+# terms (rel err ≈ 0.25·ĥ² for a long mid-span segment) while the general
+# branch loses ~eps/ĥ² to cancellation in N = ĥ²·M — both ≤ ~2.5e-8 at
+# ĥ² = 1e-7. Scaling the threshold by min ẑ² (pre-2026-08-28 form) let the
+# guard fire at physically large ĥ for long segments (ẑ ~ 4·10³ ⇒ ĥ² < 0.16),
+# silently dropping the 1% O(ĥ²) correction at ĥ = 0.2.
+@inline _lg_axis_guard(ĥ2, ẑ1, ẑ2) =
+    ĥ2 < 1e-7 && ẑ1 != 0 && ẑ2 != 0
+
+# wholly-small configuration: term-by-term integral of the convolution;
+# returns M and the radial-gradient factor D = M + 2ĥ²·∂M/∂ĥ²
+function _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+    M = zero(ĥ2)
+    dM = zero(ĥ2)
+    coeff = 1 / 3
+    for m in 0:12
+        Im = zero(ĥ2)
+        dIm = zero(ĥ2)
+        for k in 0:m
+            p = m - k
+            dzpow = (ẑ1^(2k + 1) - ẑ2^(2k + 1)) / (2k + 1)
+            bc = binomial(m, k)
+            Im += bc * ĥ2^p * dzpow
+            p > 0 && (dIm += bc * p * ĥ2^(p - 1) * dzpow)
+        end
+        M += coeff * Im
+        dM += coeff * dIm
+        coeff *= -(2m + 3) / (2 * (m + 1) * (2m + 5))
+    end
+    M *= _LG_SQ2OPI
+    return M, M + 2ĥ2 * _LG_SQ2OPI * dM
+end
+
+# one endpoint in the small-radius region: split the integral at |ẑ| = SMALL_R
+const _LG_SMALL_R = 0.125
+@inline _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2) =
+    ĥ2 < 1e-8 * _LG_SMALL_R^2 && min(abs(ẑ1), abs(ẑ2)) < _LG_SMALL_R &&
+    max(R̂1, R̂2) >= _LG_SMALL_R
+
+function _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+    if abs(ẑ1) < _LG_SMALL_R
+        split = -_LG_SMALL_R
+        Mc, Dc = _lg_small_radius_MD(ẑ1, split, ĥ2)
+        Mf = _lg_psi(split) - _lg_psi(ẑ2)
+    else
+        split = _LG_SMALL_R
+        Mc, Dc = _lg_small_radius_MD(split, ẑ2, ĥ2)
+        Mf = _lg_psi(ẑ1) - _lg_psi(split)
+    end
+    return Mf + Mc, Mf + Dc
+end
+
+# M = N/ĥ² with u = c·M/(4π σ² L); guarded near the axis and endpoints
+function _lg_M(ẑ1, ẑ2, ĥ2, R̂1, R̂2)
+    if ĥ2 == 0
+        return _lg_psi(ẑ1) - _lg_psi(ẑ2)
+    elseif max(R̂1, R̂2) < _LG_SMALL_R
+        M, _ = _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+        return M
+    elseif _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2)
+        M, _ = _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+        return M
+    elseif _lg_axis_guard(ĥ2, ẑ1, ẑ2)
+        return _lg_psi(ẑ1) - _lg_psi(ẑ2)
+    end
+    # cancellation-reduced closed form: the endpoint Gaussians inside the
+    # four g functions cancel exactly — 4 erf + 1 exp per edge
+    G = exp(-ĥ2 / 2)
+    N = ẑ1 * _lg_erf(R̂1 / sqrt(2)) / R̂1 -
+        ẑ2 * _lg_erf(R̂2 / sqrt(2)) / R̂2 -
+        G * (_lg_erf(ẑ1 / sqrt(2)) - _lg_erf(ẑ2 / sqrt(2)))
+    return N / ĥ2
+end
+
+@inline _lg_skewmat(t::SVector{3,TF}) where TF = SMatrix{3,3,TF,9}(
+    zero(TF), t[3], -t[2],
+    -t[3], zero(TF), t[1],
+    t[2], -t[1], zero(TF))
+
+# LineGauss ∂u_i/∂x_j per unit Γ (cylindrical assembly, DERIVATION.md §5);
+# same index convention as _bound_vortex_gradient (pinned by k01 T3c)
+function _linegauss_gradient(r1::AbstractVector{TF}, r2, σ) where TF
+    Z = zero(SMatrix{3,3,TF,9})
+    s = r1 - r2
+    B = dot(s, s)
+    L = sqrt(B)
+    L < 5 * eps(TF) && return Z
+    that = -s / L
+    ẑ1 = -dot(that, r1) / σ
+    ẑ2 = ẑ1 - L / σ
+    c = cross(r1, r2)
+    ĥ2 = dot(c, c) / (B * σ * σ)
+    R̂1 = norm(r1) / σ
+    R̂2 = norm(r2) / σ
+    M = _lg_M(ẑ1, ẑ2, ĥ2, R̂1, R̂2)
+    C = 1 / (4 * pi * σ * σ)
+    if ĥ2 == 0
+        # on the segment axis: the regularized transverse derivative is finite
+        return (C * M) * _lg_skewmat(that)
+    end
+    ĥ = sqrt(ĥ2)
+    hvec = -r1 - (σ * ẑ1) * that      # h n̂ = (x − P1) − z1 t̂
+    nh = norm(hvec)
+    if nh <= 1e-10 * σ * max(R̂1, R̂2)
+        # transverse direction lost to projection roundoff (can be exactly
+        # zero → NaN): collapse to the deterministic axis-limit skew form
+        return (C * M) * _lg_skewmat(that)
+    end
+    n̂ = hvec / nh
+    b̂ = cross(that, n̂)
+    k1 = _lg_kfun(R̂1)
+    k2 = _lg_kfun(R̂2)
+    duθdz = C * ĥ * (k1 - k2)
+    if max(R̂1, R̂2) < _LG_SMALL_R
+        _, radial = _lg_small_radius_MD(ẑ1, ẑ2, ĥ2)
+        duθdh = C * radial
+    elseif _lg_endpoint_split_guard(ĥ2, ẑ1, ẑ2, R̂1, R̂2)
+        _, radial = _lg_endpoint_split_MD(ẑ1, ẑ2, ĥ2)
+        duθdh = C * radial
+    elseif _lg_axis_guard(ĥ2, ẑ1, ẑ2)
+        duθdh = C * M          # bracket → 2M on the axis, so brk − M → M
+    else
+        G = exp(-ĥ2 / 2)
+        brk = -ẑ1 * k1 + ẑ2 * k2 +
+              G * (_lg_erf(ẑ1 / sqrt(2)) - _lg_erf(ẑ2 / sqrt(2)))
+        duθdh = C * (brk - M)
+    end
+    uθ_h = C * M
+    return duθdh * (b̂ * n̂') + duθdz * (b̂ * that') - uθ_h * (n̂ * b̂')
+end
+
+# Performance contract (BRAINSTORM 025 regression fix, 2026-08-20): the hot
+# direct! loops must NEVER read FILAMENT_REGULARIZATION[] per edge — the
+# non-const Ref load + 3-way branch inside the innermost kernels measured
+# +34-49% on the production body influence pass (65.0 s vs 43.5-48.5 s,
+# cluster A/B). The family is read ONCE per direct!-level call and crossed
+# through a function barrier as `Val(family)`, so these `::Val{F}` methods
+# compile with zero runtime family branches. The Val-less methods below are
+# thin Ref-reading fallbacks for cold call sites (tests, probes) only.
+@inline function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_core, core_size,
+        ::Val{F}) where {TF, F}
+    # regularized filament kernel u = c*q/(4π D); D per the active
+    # FilamentRegularization family (phase_01_theory.md)
     nr1 = norm(r1)
     nr2 = norm(r2)
 
@@ -861,28 +1178,50 @@ function _bound_vortex_velocity(r1::SVector{3,TF}, r2::SVector{3,TF}, finite_cor
 
     num = cross(r1, r2)
     r0 = r1 - r2
-    dotrixrj = dot(num, num)        # |r1×r2|^2
-    r0sqr = dot(r0, r0)             # |r0|^2
+    dotrixrj = dot(num, num)        # A = |r1×r2|^2
+    r0sqr = dot(r0, r0)             # B = |r0|^2
     rijdothat = dot(r0, r1/nr1 - r2/nr2)
 
-    if finite_core
-        V = num * rijdothat / sqrt(dotrixrj*dotrixrj + core_size*core_size*core_size*core_size * r0sqr*r0sqr) / (4*pi)
-    else
+    if !finite_core
         # singular kernel (no regularization)
-        V = num * rijdothat / dotrixrj / (4*pi)
+        return num * rijdothat / dotrixrj / (4*pi)
     end
 
-    # if norm(V) > 500.0 && DEBUG[]
-    #     @warn "V large!"
-    #     @show V, nr1, nr2, finite_core, core_size
-    #     stop
-    #     println("============================================================================")
-    # end
+    if F === VatistasRegularization
+        # 1/h^2 → 1/sqrt(h^4 + rc^4)
+        V = num * rijdothat / sqrt(dotrixrj*dotrixrj + core_size*core_size*core_size*core_size * r0sqr*r0sqr) / (4*pi)
+    elseif F === CompactRegularization
+        # 1/h^2 → 1/(h^2 + δ(h)), δ = (h-rc)^2 inside the support, 0 beyond;
+        # D = A + δB is exactly A for h ≥ rc and Brc² > 0 at h = 0 (no guard needed)
+        h = sqrt(dotrixrj / r0sqr)
+        D = h < core_size ? dotrixrj + (h - core_size)*(h - core_size) * r0sqr : dotrixrj
+        V = num * rijdothat / D / (4*pi)
+    elseif F === LineGaussRegularization
+        # u = c·M/(4π σ² L): exact blob-line convolution (LineGauss section
+        # above); matches the singular kernel to tol beyond ~6σ of the SEGMENT
+        L = sqrt(r0sqr)
+        σ = core_size
+        ẑ1 = dot(r0, r1) / (L * σ)
+        M = _lg_M(ẑ1, ẑ1 - L / σ, dotrixrj / (r0sqr * σ * σ), nr1 / σ, nr2 / σ)
+        V = num * (M / (4*pi * σ * σ * L))
+    else # GaussianRegularization
+        # u = c*q*g(h)/(4π A), g = 1 - exp(-h²/2rc²); evaluated as
+        # g/A = (g/x²)/(B rc²) with x² = (h/rc)² so the h → 0 limit is exact
+        x2 = dotrixrj / (r0sqr * core_size * core_size)
+        gscaled = x2 < 1e-12 ? TF(0.5) : TF(-expm1(-x2/2) / x2)
+        V = num * rijdothat * gscaled / (r0sqr * core_size * core_size) / (4*pi)
+    end
 
     return V
 end
 
-function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size) where TF
+# cold-path fallback: one Ref read + one dynamic dispatch per CALL (not per
+# edge inside a hot loop) — hot paths pass Val explicitly via the barriers
+_bound_vortex_velocity(r1::SVector{3,<:Any}, r2::SVector{3,<:Any}, finite_core, core_size) =
+    _bound_vortex_velocity(r1, r2, finite_core, core_size, Val(FILAMENT_REGULARIZATION[]))
+
+@inline function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_size,
+        ::Val{F}) where {TF, F}
     nr1 = norm(r1)
     nr2 = norm(r2)
 
@@ -891,17 +1230,52 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
         return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     end
 
+    # LineGauss does not fit the (D, κ∇A) shape — dedicated cylindrical assembly
+    if finite_core && F === LineGaussRegularization
+        return _linegauss_gradient(r1, r2, core_size)
+    end
+
     c = cross(r1, r2)
     s = r1 - r2
     A = dot(c, c)
     B = dot(s, s)
     q = dot(s, r1/nr1 - r2/nr2)
 
+    # per-family D and ∇D = κ ∇A with ∇A = 2 s×c (B is target-independent);
+    # see phase_01_theory.md for the κ derivations
     if finite_core
-        rc4 = core_size * core_size * core_size * core_size
-        D = sqrt(A*A + rc4 * B*B)
-        D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
-        dD_coeff = (A / D) * (2 * cross(s, c))
+        if F === VatistasRegularization
+            rc4 = core_size * core_size * core_size * core_size
+            D = sqrt(A*A + rc4 * B*B)
+            D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            κ = A / D
+        elseif F === CompactRegularization
+            B == zero(B) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            h = sqrt(A / B)
+            if h < core_size
+                D = A + (h - core_size)*(h - core_size) * B
+                # κ = 2 - rc/h; the h → 0 clamp keeps κ finite where ∇A → 0
+                # anyway (κ∇A has a finite limit; measure-zero perturbation)
+                κ = 2 - core_size / max(h, eps(TF)*core_size)
+            else
+                D = A
+                κ = one(TF)
+            end
+            D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+        else # GaussianRegularization
+            B == zero(B) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
+            x2 = A / (B * core_size * core_size)     # (h/rc)^2
+            if x2 < 1e-12
+                # series limits: D → 2 B rc², κ → 1/2
+                D = 2 * B * core_size * core_size
+                κ = TF(0.5)
+            else
+                g = -expm1(-x2/2)
+                D = A / g
+                κ = (1 - x2 * exp(-x2/2) / (2*g)) / g
+            end
+        end
+        dD_coeff = κ * (2 * cross(s, c))
     else
         D = A
         D == zero(D) && return zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
@@ -923,13 +1297,18 @@ function _bound_vortex_gradient(r1::AbstractVector{TF}, r2, finite_core, core_si
     return ONE_OVER_4PI * (dc_dx * (q / D) + c * transpose(df_coeff))
 end
 
-function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch)
+# cold-path fallback (see _bound_vortex_velocity note)
+_bound_vortex_gradient(r1::AbstractVector, r2, finite_core, core_size) =
+    _bound_vortex_gradient(r1, r2, finite_core, core_size, Val(FILAMENT_REGULARIZATION[]))
+
+function _induced(target, vertices::NTuple, centroid::AbstractVector, strength, kernel::Type{Union{ConstantSource, VortexRing}}, core_radius, R, derivatives_switch::FastMultipole.DerivativesSwitch,
+        fam::Val=Val(FILAMENT_REGULARIZATION[]))
 
     # source influence
     p, v, vg = _induced(target, vertices, centroid, SVector{1}(strength[1]), ConstantSource, core_radius, R, derivatives_switch)
 
     # vortex ring
-    p_vr, v_vr, vg_vr = _induced(target, vertices, SVector{1}(strength[2]), VortexRing, core_radius, derivatives_switch)
+    p_vr, v_vr, vg_vr = _induced(target, vertices, SVector{1}(strength[2]), VortexRing, core_radius, derivatives_switch, fam)
 
     return p + p_vr, v + v_vr, vg + vg_vr
 end
@@ -941,6 +1320,80 @@ end
 
     return δ
 end
+
+"""
+    radius_inflation(kernel, core_size, tol)
+
+Distance beyond which the offset-regularized kernel matches the singular kernel
+within relative tolerance `tol`. Added to the geometric panel radius written
+into the FastMultipole source buffer (`source_system_to_buffer!`), so the
+multipole-acceptance criterion only admits expansions — which represent the
+*unregularized* kernel — where they agree with the regularized direct kernel to
+`tol`. Without this term the direct/FMM operator mismatch saturates with
+expansion order (021 Phase 1 finding, 2026-08-13).
+
+- Source/doublet kernels: [`regularize`](@ref) is compactly supported — the
+  regularized kernel is exactly singular beyond `core_size` — so the
+  inflation is `core_size`, independent of `tol`.
+- `VortexRing`: per the active [`FilamentRegularization`](@ref) family
+  (BRAINSTORM 025; derivations in
+  `BRAINSTORM/025_kernel_regularization_update/phase_01_theory.md`):
+  - Gaussian (default): GRADIENT-AWARE radius. The velocity relative error is
+    `e^(-z)` with `z = h²/2rc²`, but the gradient relative error is
+    `e^(-z)(1+2z)`, so the velocity-derived radius `rc·√(2 ln(1/tol))` leaves
+    gradient error `tol·(1+2 ln(1/tol))` (28.6× at 1e-6). The inflation
+    solves `e^(-z*)(1+2z*) = tol` by the fixed point `z ← ln((1+2z)/tol)`
+    (contraction rate `2/(1+2z)` ≈ 0.06; 5 iterations from `z₀ = ln(1/tol)`)
+    ⇒ `Δr = rc·√(2z*)` ≈ `4.99rc / 5.47rc / 5.90rc` at tol `1e-4/1e-5/1e-6`.
+  - compact-support: exactly singular — velocity AND gradient — beyond `rc`
+    ⇒ inflation `rc`, independent of `tol` (matches the source/doublet rule).
+  - LineGauss: the Gaussian fixed-point radius plus a `0.35rc` pad, calibrated
+    against the measured segment-distance matching radii `5.25/5.75/6.25rc`
+    at tol `1e-4/1e-5/1e-6` (052d k01 T7/T7b dense L/direction scans; the
+    bare fixed point `4.99/5.47/5.90rc` is slightly non-conservative for the
+    finite segment's polynomial prefactor). Semantic upgrade: for LineGauss
+    the deviation from the singular kernel is bounded by distance to the
+    SEGMENT — exactly the geometry the multipole-acceptance sphere measures —
+    so the inflated radius is a true bound (the Gaussian family's line-
+    distance `h` caveat does not apply).
+  - Vatistas n=2 (`1/h² → 1/√(h⁴+rc⁴)`, legacy): velocity relative error
+    ≈ ½(rc/h)⁴ ⇒ `rc·(2/tol)^(1/4)`. This shipped rule is velocity-derived
+    and pinned by legacy-reproduction tests — the gradient relative error
+    coefficient is 2.5(rc/h)⁴, so at the shipped radius the gradient error is
+    ≤ 2.5·(tol/2) = 1.25·tol, absorbed by the multipole-acceptance margin
+    (clearance ≥ Δ(1/MAC − 1) beyond the summed radii; thin for MAC > 0.5).
+
+`tol = Inf` disables the inflation (pre-2026-08-13 behavior, for A/B runs).
+"""
+@inline radius_inflation(::Type{ConstantSource}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline radius_inflation(::Type{ConstantDoublet}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline radius_inflation(::Type{Union{ConstantSource, ConstantDoublet}}, core_size, tol) =
+    isinf(tol) ? zero(core_size) : core_size
+@inline function radius_inflation(::Type{VortexRing}, core_size, tol)
+    isinf(tol) && return zero(core_size)
+    family = FILAMENT_REGULARIZATION[]
+    family == CompactRegularization && return core_size * one(tol)
+    if family == GaussianRegularization || family == LineGaussRegularization
+        # gradient-aware: solve e^(-z)(1+2z) = tol (see docstring)
+        z = log(1 / tol)
+        for _ in 1:5
+            z = log((1 + 2z) / tol)
+        end
+        # LineGauss: +0.35rc pad calibrated against the measured SEGMENT-
+        # distance matching radii 5.25/5.75/6.25rc at tol 1e-4/1e-5/1e-6
+        # (052d k01 T7/T7b dense scans) vs the bare fixed point
+        # 4.99/5.47/5.90rc; unlike the Gaussian family the bound is by
+        # segment distance — exactly what the MAC sphere geometry measures
+        family == LineGaussRegularization &&
+            return core_size * (sqrt(2z) + oftype(sqrt(2z), 0.35))
+        return core_size * sqrt(2z)
+    end
+    return core_size * (2 / tol)^0.25    # Vatistas (legacy, velocity-derived)
+end
+@inline radius_inflation(::Type{Union{ConstantSource, VortexRing}}, core_size, tol) =
+    radius_inflation(VortexRing, core_size, tol)
 
 #------- semi-infinite panels -------#
 
@@ -1041,7 +1494,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
 
         # evaluate potential
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; core_size=source_system.core_size)
         else
             # wake node connected to the first vertex (TE1)
             v1w_x = v1x + Dax
@@ -1053,7 +1506,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             control_point = (v1 + v2 + vw1) * 0.333333333333333
             strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
             R, _ = rotate_to_panel(v1x, v1y, v1z, v2x, v2y, v2z, v1w_x, v1w_y, v1w_z)
-            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
+            p, v, g = _induced(target, (v1, v2, vw1), control_point, strength_vec, TK, source_system.core_size, R, derivatives_switch)
 
             # wake node connected to the second vertex (TE2)
             Dbx, Dby, Dbz = source_system.Das[i_surf][1, das_col_2], source_system.Das[i_surf][2, das_col_2], source_system.Das[i_surf][3, das_col_2]
@@ -1065,7 +1518,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             # influence of the second triangle
             control_point = (vw1 + v2 + vw2) * 0.333333333333333
             R, _ = rotate_to_panel(v1w_x, v1w_y, v1w_z, v2x, v2y, v2z, v2w_x, v2w_y, v2w_z)
-            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, source_system.kerneloffset, R, derivatives_switch)
+            dp, dv, dg = _induced(target, (vw1, v2, vw2), control_point, strength_vec, TK, source_system.core_size, R, derivatives_switch)
             if PS
                 p += dp
             end
@@ -1127,7 +1580,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
         TK = get_wake_kernel(source_system)
 
         if source_system.semiinfinite_wake
-            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; kerneloffset=source_system.kerneloffset)
+            return induced_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, Dax, Day, Daz, strength, derivatives_switch; core_size=source_system.core_size)
         else
             # wake node connected to the first vertex
             v1w_x = v1x + Dax
@@ -1148,7 +1601,7 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
             strength_vec = FastMultipole.StaticArrays.SVector{1,TF}(strength)
 
             # induced influence due to the quad
-            return _induced_quad(target, (v1, v2, vw2, vw1), strength_vec, TK, source_system.kerneloffset, derivatives_switch)
+            return _induced_quad(target, (v1, v2, vw2, vw1), strength_vec, TK, source_system.core_size, derivatives_switch)
 
         end
     else
@@ -1156,25 +1609,25 @@ function _induced_wake(target::AbstractVector{TF}, vertices::Tuple, source_syste
     end
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}, kerneloffset, derivatives_switch)
+function _induced_quad(target, vertices, strength, kernel::Type{ConstantDoublet}, core_size, derivatives_switch)
     # influence of first triangle
     v1 = vertices[1]
     v2 = vertices[2]
     vw1 = vertices[4]
     control_point = (v1 + v2 + vw1) * 0.333333333333333
     R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
-    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+    p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, core_size, R, derivatives_switch)
 
     # influence of the second triangle
     vw2 = vertices[3]
     control_point = (vw1 + v2 + vw2) * 0.333333333333333
     R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
-    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+    dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, core_size, R, derivatives_switch)
     
     return p+dp, vel+dvel, g+dg
 end
 
-function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, kerneloffset, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
+function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, core_size, derivatives_switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}) where {PS,VS,GS,NO,NM}
     if PS
         # influence of first triangle
         v1 = vertices[1]
@@ -1182,42 +1635,42 @@ function _induced_quad(target, vertices, strength, kernel::Type{VortexRing}, ker
         vw1 = vertices[4]
         control_point = (v1 + v2 + vw1) * 0.333333333333333
         R, _ = rotate_to_panel(v1[1], v1[2], v1[3], v2[1], v2[2], v2[3], vw1[1], vw1[2], vw1[3])
-        p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+        p, vel, g = _induced(target, (v1, v2, vw1), control_point, strength, kernel, core_size, R, derivatives_switch)
 
         # influence of the second triangle
         vw2 = vertices[3]
         control_point = (vw1 + v2 + vw2) * 0.333333333333333
         R, _ = rotate_to_panel(vw1[1], vw1[2], vw1[3], v2[1], v2[2], v2[3], vw2[1], vw2[2], vw2[3])
-        dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, kerneloffset, R, derivatives_switch)
+        dp, dvel, dg = _induced(target, (vw1, v2, vw2), control_point, strength, kernel, core_size, R, derivatives_switch)
 
         return p+dp, vel+dvel, g+dg
     else
-        return _induced(target, vertices, strength, kernel, kerneloffset, derivatives_switch)
+        return _induced(target, vertices, strength, kernel, core_size, derivatives_switch)
     end
 end
 
-function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args...; kerneloffset)
-    return induced_semiinfinite(target, ConstantDoublet, args...; kerneloffset)
+function induced_semiinfinite(target::AbstractVector, TK::Type{VortexRing}, args...; core_size)
+    return induced_semiinfinite(target, ConstantDoublet, args...; core_size)
 end
 
-function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; kerneloffset) where {TF,PS,VS,GS,NO,NM}
+function induced_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength, ::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}; core_size) where {TF,PS,VS,GS,NO,NM}
     potential = zero(TF)
     velocity = zero(FastMultipole.StaticArrays.SVector{3,TF})
     gradient = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
     if PS
-        potential += _phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        potential += _phi_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
     if VS
-        velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        velocity += _U_semiinfinite(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
     if GS
-        gradient += _U_semiinfinite_gradient(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; kerneloffset)
+        gradient += _U_semiinfinite_gradient(target, TK, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength; core_size)
     end
 
     return potential, velocity, gradient
 end
 
-function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
 
     # initialize result
     phi = zero(TF)
@@ -1277,7 +1730,7 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
         derivatives_switch = FastMultipole.DerivativesSwitch(true, false, false)
 
         # compute potential
-        potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, kerneloffset, R, derivatives_switch)
+        potential, _ = _induced(target, (v1, v2, v3), control_point, this_strength, TK, core_size, R, derivatives_switch)
         phi += potential
 
     end
@@ -1304,27 +1757,27 @@ function _phi_semiinfinite(target::AbstractVector{TF}, TK::Type{ConstantDoublet}
     return phi
 end
 
-function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
     Ux1, Uy1, Uz1 = _U_semiinfinite_vortex(v1x, v1y, v1z,
                                     d1, d2, d3,
                                     -strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     Ux2, Uy2, Uz2 = _U_semiinfinite_vortex(v2x, v2y, v2z,
                                     d1, d2, d3,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     Uxb, Uyb, Uzb = _U_boundvortex(v1x, v1y, v1z,
                                     v2x, v2y, v2z,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     # Uxb, Uyb, Uzb = _bound_vortex_velocity(
     #                     FastMultipole.StaticArrays.SVector{3,TF}(v1x, v1y, v1z),
     #                     FastMultipole.StaticArrays.SVector{3,TF}(v2x, v2y, v2z),
     #                     true,
-    #                     kerneloffset
+    #                     core_size
     #                 ) .* strength
     
     # combine contributions
@@ -1335,21 +1788,21 @@ function _U_semiinfinite(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1
     return FastMultipole.StaticArrays.SVector{3,TF}(-Ux, -Uy, -Uz)
 end
 
-function _U_semiinfinite_gradient(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; kerneloffset=1e-8) where TF
+function _U_semiinfinite_gradient(target::AbstractVector{TF}, ::Type{ConstantDoublet}, v1x, v1y, v1z, v2x, v2y, v2z, d1, d2, d3, strength::Number; core_size=1e-8) where TF
     g1 = _U_semiinfinite_vortex_gradient(v1x, v1y, v1z,
                                     d1, d2, d3,
                                     -strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
     
     g2 = _U_semiinfinite_vortex_gradient(v2x, v2y, v2z,
                                     d1, d2, d3,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     gb = _U_boundvortex_gradient(v1x, v1y, v1z,
                                     v2x, v2y, v2z,
                                     strength,
-                                    target; offset=kerneloffset)
+                                    target; offset=core_size)
 
     return -(g1 + g2 + gb)
 end

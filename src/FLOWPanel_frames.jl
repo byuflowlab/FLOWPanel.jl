@@ -46,6 +46,13 @@ struct BackRightUp end
 
 Advance all dependent bodies by one timestep `dt` according to the frame tree.
 Accepts either a single body or a tuple of bodies.
+
+Returns the per-system RIGID affine deltas applied this step, as a vector of
+`(R, t)` with `x_new = R*x_old + t` (identity entries for unmoved bodies),
+so callers can mirror the motion into persistent solver state
+([`transform_body_solvers!`](@ref)). Every `rotate_translate!` call is
+`x -> Rω*(x - o) + o + dx`, i.e. `(Rω, o + dx - Rω*o)`; multiple frame
+contributions to one body compose in application order.
 """
 function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:ReferenceFrame}, dt::Real)
 
@@ -55,11 +62,28 @@ function propagate_kinematics!(system::Union{AbstractBody}, frames::Vector{<:Ref
     # global rotation matrix from parent to global frame
     R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
 
+    # per-system rigid deltas applied this step
+    transforms = _identity_transforms(1)
+
     # begin recursion
-    propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
+    propagate_kinematics!(system, 1, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
+
+    return transforms
 end
 
-function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+_identity_transforms(n) = [(FastMultipole.SMatrix{3,3,Float64,9}(1.0,0,0,0,1.0,0,0,0,1.0),
+                            FastMultipole.SVector{3,Float64}(0.0, 0.0, 0.0)) for _ in 1:n]
+
+# compose this frame's rigid delta (x -> Rω*(x-o) + o + dx) onto what the
+# body has already received this step
+function _compose_transform!(transforms, i, Rω, origin, dx)
+    R_old, t_old = transforms[i]
+    t_step = origin + dx - Rω * origin
+    transforms[i] = (Rω * R_old, Rω * t_old + t_step)
+    return nothing
+end
+
+function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real, transforms=nothing)
     # get frame
     frame = frames[i_frame]
 
@@ -80,6 +104,8 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
         body = system
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
+        transforms === nothing ||
+            _compose_transform!(transforms, 1, Rω_global, origin_global, dx_global)
     end
 
     # Update the frame
@@ -95,7 +121,7 @@ function propagate_kinematics!(system::AbstractBody, i_frame::Int, frames::Vecto
 
     # Recursively propagate to child frames
     for i in frame.child_index
-        propagate_kinematics!(system, i, frames, dx_parent_to_global, R_parent_to_global, dt)
+        propagate_kinematics!(system, i, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
     end
 end
 
@@ -109,11 +135,16 @@ function propagate_kinematics!(systems::Tuple, frames::Vector{<:ReferenceFrame},
     # global rotation matrix from parent to global frame
     R_parent_to_global = FastMultipole.SMatrix{3,3,Float64}(1.0,0,0,0,1.0,0,0,0,1.0)
 
+    # per-system rigid deltas applied this step
+    transforms = _identity_transforms(length(systems))
+
     # begin recursion
-    propagate_kinematics!(systems, 1, frames, dx_parent_to_global, R_parent_to_global, dt)
+    propagate_kinematics!(systems, 1, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
+
+    return transforms
 end
 
-function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real)
+function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:ReferenceFrame}, dx_parent_to_global, R_parent_to_global::FastMultipole.SMatrix, dt::Real, transforms=nothing)
     # get frame
     frame = frames[i_frame]
 
@@ -134,6 +165,8 @@ function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:Re
         body = systems[i]
         rotate_translate!(body, origin_global, Rω_global, dx_global)
         rotate_Das!(body, Rω_global)
+        transforms === nothing ||
+            _compose_transform!(transforms, i, Rω_global, origin_global, dx_global)
     end
 
     # Update the frame
@@ -149,7 +182,7 @@ function propagate_kinematics!(systems::Tuple, i_frame::Int, frames::Vector{<:Re
 
     # Recursively propagate to child frames
     for i in frame.child_index
-        propagate_kinematics!(systems, i, frames, dx_parent_to_global, R_parent_to_global, dt)
+        propagate_kinematics!(systems, i, frames, dx_parent_to_global, R_parent_to_global, dt, transforms)
     end
 end
 
@@ -296,6 +329,116 @@ function _kinematic_velocity_te!(body::AbstractLiftingBody, v_global, ω_global,
 end
 
 _kinematic_velocity_te!(::AbstractBody, v_global, ω_global, origin_global) = nothing
+
+#------- kinematic Das along the trailing-edge path (arc construction) -------#
+
+"""
+    _rigid_back_displacement(te, origin, v, ω, τ)
+
+Displacement from a trailing-edge node's current position to the position it
+occupied `τ` earlier under the frame's rigid-body motion:
+
+    Δ = Rot(ω̂, -|ω|τ)·(te - origin) - (te - origin) - v·τ
+
+This is the *exact* backward path of the material point, i.e. it follows the arc
+the trailing edge actually swept. It reduces to the tangent-vector form
+`-(v + ω×d)·τ` as `|ω|τ → 0`, so translating bodies are unaffected.
+
+The tangent form is only first-order accurate in `|ω|τ`. For a rotor it places
+the node at radius `r√(1+θ²)` (θ = |ω|τ) instead of `r`, flinging it radially
+outward by `≈ rθ²/2` — 0.0006R at θ = 0.035 but 0.22R at θ = 0.70.
+"""
+function _rigid_back_displacement(te, origin, v, ω, τ)
+    d = te - origin
+    ωmag = sqrt(ω[1]^2 + ω[2]^2 + ω[3]^2)
+    θ = ωmag * τ
+    if abs(θ) > eps(typeof(θ))^(1/3)
+        axis = ω / ωmag
+        drot = Rodrigues(axis, -θ) * d
+        return drot - d - v * τ
+    else
+        # tangent limit (also the ω = 0 case, where the axis is undefined)
+        return -cross(ω, d) * τ - v * τ
+    end
+end
+
+"""
+    _accumulate_Das_arc_te!(body, v_global, ω_global, origin_global, τ)
+
+Accumulate one frame's arc-following contribution to `body.Das`. Mirrors the
+node indexing of [`_kinematic_velocity_te!`](@ref) exactly.
+"""
+function _accumulate_Das_arc_te!(body::AbstractLiftingBody, v_global, ω_global, origin_global, τ)
+    for ishedding in eachindex(body.Das)
+        Das = body.Das[ishedding]
+        shedding = body.shedding[ishedding]
+
+        # nib nodes (columns 1..nshed)
+        for j in axes(shedding, 2)
+            i_panel = shedding[1, j]
+            node_idx = body.cells[shedding[3, j], i_panel]
+            te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+            Δ = _rigid_back_displacement(te, origin_global, v_global, ω_global, τ)
+            Das[1, j] += Δ[1]
+            Das[2, j] += Δ[2]
+            Das[3, j] += Δ[3]
+        end
+
+        # final nia node (column nshed+1)
+        if size(shedding, 2) > 0
+            i_panel = shedding[1, end]
+            node_idx = body.cells[shedding[2, end], i_panel]
+            te = FastMultipole.SVector{3}(body.nodes[1, node_idx], body.nodes[2, node_idx], body.nodes[3, node_idx])
+            Δ = _rigid_back_displacement(te, origin_global, v_global, ω_global, τ)
+            Das[1, end] += Δ[1]
+            Das[2, end] += Δ[2]
+            Das[3, end] += Δ[3]
+        end
+    end
+end
+
+_accumulate_Das_arc_te!(::AbstractBody, v_global, ω_global, origin_global, τ) = nothing
+
+"""
+    accumulate_Das_arc!(systems, frames, τ)
+
+Walk the frame tree exactly as [`kinematic_velocity!`](@ref) does, accumulating
+into each lifting body's `Das` the arc-following backward displacement of its
+trailing edge over time `τ`.
+
+Note: with nested frames each frame's finite displacement is summed, matching
+how `kinematic_velocity!` sums each frame's rigid velocity. That is exact when a
+single frame rotates (the rotor case) and agrees with the tangent construction
+to first order otherwise.
+"""
+function accumulate_Das_arc!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}, τ) where TF
+    accumulate_Das_arc!(systems, frames, τ, 1,
+        zero(FastMultipole.SVector{3,TF}),
+        FastMultipole.SMatrix{3,3,TF,9}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+end
+
+accumulate_Das_arc!(system::AbstractBody, frames::AbstractVector{<:ReferenceFrame}, τ) =
+    accumulate_Das_arc!((system,), frames, τ)
+
+function accumulate_Das_arc!(systems::Tuple, frames::AbstractVector{ReferenceFrame{TF}}, τ,
+        i_frame::Int, dx_parent_to_global, R_parent_to_global) where TF
+    frame = frames[i_frame]
+
+    origin_global = R_parent_to_global * frame.x + dx_parent_to_global
+    v_global = R_parent_to_global * frame.v
+    ω_global = R_parent_to_global * frame.ω_axis * frame.ω
+
+    for isurf in frame.dependent_index
+        _accumulate_Das_arc_te!(systems[isurf], v_global, ω_global, origin_global, τ)
+    end
+
+    dx_parent_to_global = origin_global
+    R_parent_to_global = R_parent_to_global * frame.R
+
+    for i in frame.child_index
+        accumulate_Das_arc!(systems, frames, τ, i, dx_parent_to_global, R_parent_to_global)
+    end
+end
 
 #------- kinematic velocity -------#
 

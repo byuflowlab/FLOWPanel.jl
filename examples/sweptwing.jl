@@ -64,7 +64,19 @@ NDIVS_rfl = [ (0.25, n_rfl,   10.0, false),
 n_span_full     = 24                            # Number of spanwise panels across full span
 NDIVS_span      = [(1.0, n_span_full, 1.0, true)]
 
-grid_tag        = "nrf$(n_rfl)_nspan$(n_span_full)"
+# ----- Boundary-condition formulation
+# The published Weber & Brebner comparison, the tracked mirrored-Cp figures, and
+# every cached VTK under data/ are Neumann vortex-ring results, so that stays the
+# default. `SWEPTWING_BODYTYPE=dirichlet` opts into the source+doublet body used
+# by the Item-015 Kutta attribution campaign; because interior Dirichlet assumes
+# a closed surface, that variant also gets flat tip caps. The formulation token
+# below is part of every output and cache path, so the two families can never mix.
+formulation     = Symbol(lowercase(get(ENV, "SWEPTWING_BODYTYPE", "neumann")))
+formulation in (:neumann, :dirichlet) ||
+    error("SWEPTWING_BODYTYPE must be neumann or dirichlet; got $formulation")
+body_caps       = formulation === :dirichlet ? :flat : :none
+
+grid_tag        = "nrf$(n_rfl)_nspan$(n_span_full)_$(formulation)"
 run_name        = "sweptwing000_" * grid_tag
 save_path       = joinpath("data", run_name)
 load_run_name   = get(ENV, "FLOWPANEL_SWEPTWING_LOAD_RUN_NAME", run_name)
@@ -73,7 +85,9 @@ load_path       = get(ENV, "FLOWPANEL_SWEPTWING_LOAD_PATH", joinpath("data", loa
 # ----------------- GENERATE BODY ----------------------------------------------
 println("Generating body...")
 
-bodytype = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
+bodytype = formulation === :dirichlet ?
+    pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.ConstantDoublet}} :
+    pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
 
 bodyoptargs = (;)
 
@@ -82,6 +96,7 @@ function simplewing_mirrored_from_negative(b, ar, tr, twist_root, twist_tip, lam
                                            airfoil_root, airfoil_tip, airfoil_path,
                                            rfl_NDIVS, span_NDIVS, delim=",",
                                            mirror_tol=100eps(Float64),
+                                           caps::Symbol=:none,
                                            reference_nodes=nothing)
     half = simplewing(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                       bodytype=bodytype, bodyoptargs=bodyoptargs,
@@ -118,6 +133,13 @@ function simplewing_mirrored_from_negative(b, ar, tr, twist_root, twist_tip, lam
     for ci in pos_order
         out_ci += 1
         cells[:, out_ci] .= reverse(mirror_index[half_cells[:, ci]])
+    end
+
+    if caps === :flat
+        # Appended, so `mirror_index` and the half-body TE indices stay valid.
+        nodes, cells, _, _ = add_flat_tip_caps(nodes, cells)
+    elseif caps !== :none
+        error("caps must be :none or :flat; got $caps")
     end
 
     te_nodes = Int[]
@@ -165,6 +187,7 @@ function simplewing_mirrored_from_negative(b, ar, tr, twist_root, twist_tip, lam
     return bodytype(nodes, cells, [shedding]; watertight, final_bodyoptargs...)
 end
 
+
 @time body = simplewing_mirrored(b, ar, tr, twist_root, twist_tip, lambda, gamma;
                                  bodytype=bodytype, bodyoptargs=bodyoptargs,
                                  airfoil_root=airfoil, airfoil_tip=airfoil,
@@ -172,6 +195,7 @@ end
                                  rfl_NDIVS=NDIVS_rfl,
                                  delim=",",
                                  span_NDIVS=NDIVS_span,
+                                 caps=body_caps,
                                 )
 wake_direction = reshape(Vinf ./ magVinf, :, 1)
 for i in eachindex(body.Das)
@@ -239,6 +263,7 @@ if load_vtk
         rfl_NDIVS=NDIVS_rfl,
         delim=",",
         span_NDIVS=NDIVS_span,
+        caps=body_caps,
         reference_nodes=body.nodes)
     for i in eachindex(body_negative_mirror.Das)
         body_negative_mirror.Das[i] .= repeat(wake_direction, 1, size(body_negative_mirror.Das[i], 2))
@@ -614,6 +639,7 @@ body_negative_mirror = simplewing_mirrored_from_negative(
     rfl_NDIVS=NDIVS_rfl,
     delim=",",
     span_NDIVS=NDIVS_span,
+    caps=body_caps,
     reference_nodes=body.nodes)
 for i in eachindex(body_negative_mirror.Das)
     body_negative_mirror.Das[i] .= repeat(wake_direction, 1, size(body_negative_mirror.Das[i], 2))

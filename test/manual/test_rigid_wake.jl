@@ -13,8 +13,8 @@ CPs = pnl._calc_controlpoints(body, normals)
 G1 = deepcopy(solver.G)
 G1 .= 0.0
 backend = pnl.FastMultipoleBackend(leaf_size=1000000)
-# pnl._G_phi!(body, pnl.ConstantSource, G1, CPs, backend; kerneloffset=1.0e-8, include_wake)
-pnl._G_phi!(body, pnl.ConstantDoublet, G1, CPs, backend; kerneloffset=1.0e-8, include_wake)
+# pnl._G_phi!(body, pnl.ConstantSource, G1, CPs, backend; core_size=1.0e-8, include_wake)
+pnl._G_phi!(body, pnl.ConstantDoublet, G1, CPs, backend; core_size=1.0e-8, include_wake)
 
 function test_rigid_wake(body, include_wake, G1, CPs; ichoose=body.ncells-1, istart=1, imax = body.ncells)
 
@@ -32,7 +32,7 @@ function test_rigid_wake(body, include_wake, G1, CPs; ichoose=body.ncells-1, ist
     #     # body.strength[:,2] .= rand(body.ncells)
     #     # body.strength[1,2] = 1.0
     #     # backend = pnl.DirectBackend()
-    #     tfmm += @elapsed pnl._phi!(body, CPs, test_rhs, backend; kerneloffset=1.0e-8, include_wake)
+    #     tfmm += @elapsed pnl._phi!(body, CPs, test_rhs, backend; core_size=1.0e-8, include_wake)
     #     tmat += @elapsed debug_rhs = G1 * body.strength[:,2]
     #     resid = maximum(abs.(test_rhs .- debug_rhs))
     #     if resid > 1e-6
@@ -44,7 +44,7 @@ function test_rigid_wake(body, include_wake, G1, CPs; ichoose=body.ncells-1, ist
 
     # body.strength[:,2] .= 0.0 #rand(body.ncells)
     body.strength[:,2] = rand(body.ncells)
-    pnl._phi!(body, CPs, test_rhs, backend; kerneloffset=1.0e-8, include_wake)
+    pnl._phi!(body, CPs, test_rhs, backend; core_size=1.0e-8, include_wake)
     debug_rhs = G1 * body.strength[:,2]
     resid = maximum(abs.(test_rhs .- debug_rhs))
     @show resid

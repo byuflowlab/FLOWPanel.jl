@@ -2,7 +2,6 @@ using Test
 using LinearAlgebra: norm, dot, I
 import FLOWPanel as pnl
 import FastMultipole
-import GeoIO
 import Meshes
 using StaticArrays: SVector
 
@@ -61,7 +60,7 @@ make_nonlifting(::Type{E}, nodes=NODES_2TRI, cells=CELLS_2TRI; kwargs...) where 
 
 function make_octa_source_body()
     body = pnl.NonLiftingBody{pnl.ConstantSource}(copy(NODES_OCT), copy(CELLS_OCT);
-                kerneloffset=1e-12)
+                core_size=1e-12)
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= 1.0
@@ -85,6 +84,50 @@ function make_plate_vortex_body()
     pnl.calc_normals!(body)
     pnl.calc_controlpoints!(body)
     body.strength[:, 1] .= 1.0
+    return body
+end
+
+"""
+    make_dirichlet_diamond_body(; nspan=1, thick=0.06, das=0.3)
+
+Small diamond-airfoil wedge (2 chordwise panels per side, `nspan` span cells,
+sharp TE with shared nodes) as a fully paired Dirichlet source+doublet
+`RigidWakeBody` with a finite attached wake. The chordwise resolution gives
+the trailing-edge circulation genuine leverage on the paired centroid
+pressures, which the BRAINSTORM-015 pressure-continuity Kutta tests require
+(a flat plate with a coplanar wake is degenerate: zero leverage).
+"""
+function make_dirichlet_diamond_body(; nspan::Int=1, thick=0.06, das=0.3)
+    ys = range(0, 1; length=nspan+1)
+    nodes = Float64[]
+    # node layout per span station: LE, mid-upper, TE, mid-lower
+    for y in ys
+        append!(nodes, [0.0, y, 0.0])
+        append!(nodes, [0.5, y, thick])
+        append!(nodes, [1.0, y, 0.0])
+        append!(nodes, [0.5, y, -thick])
+    end
+    nodes = reshape(nodes, 3, :)
+    idx(j, k) = (j-1)*4 + k
+    cells = Int[]
+    for j in 1:nspan
+        le1, up1, te1, lo1 = idx(j, 1), idx(j, 2), idx(j, 3), idx(j, 4)
+        le2, up2, te2, lo2 = idx(j+1, 1), idx(j+1, 2), idx(j+1, 3), idx(j+1, 4)
+        append!(cells, [le1, up1, up2]); append!(cells, [le1, up2, le2])
+        append!(cells, [up1, te1, te2]); append!(cells, [up1, te2, up2])
+        append!(cells, [le1, le2, lo2]); append!(cells, [le1, lo2, lo1])
+        append!(cells, [lo1, lo2, te2]); append!(cells, [lo1, te2, te1])
+    end
+    cells = reshape(cells, 3, :)
+    shedding = [pnl.calc_shedding_from_seed(nodes, cells, idx(1, 3), idx(2, 3))]
+    body = pnl.RigidWakeBody{Union{pnl.ConstantSource, pnl.VortexRing}}(
+        nodes, cells, shedding; check_mesh=false, watertight=false,
+        semiinfinite_wake=false)
+    for i in eachindex(body.Das)
+        body.Das[i] .= repeat([das, 0.0, 0.0], 1, size(body.Das[i], 2))
+    end
+    pnl.calc_normals!(body)
+    pnl.calc_controlpoints!(body)
     return body
 end
 
@@ -200,7 +243,7 @@ function generate_body(
     magVinf = norm(Vinf)
 
     # Read Gmsh mesh
-    msh = GeoIO.load(meshfile).geometry
+    msh = pnl.read_gmsh(meshfile)
 
     # Transform the mesh: scale
     msh = msh |> Meshes.Scale(scaling)
@@ -449,4 +492,66 @@ function flow_potential_residuals(bodies::Tuple; cp_off=nothing)
     end
 
     return res
+end
+
+"""
+    make_conversion_fixture(; nwakerows, wrap, max_particles=2000)
+
+Deterministic `PanelParticleWake` whose panel-wake rows are written directly,
+with **no time stepping**, so a single panel-to-particle conversion can be
+exercised in isolation (BRAINSTORM 016).
+
+The wake carries three shedding columns. `wrap=false` lays the sheet flat in
+the x-y plane with rows at constant `x`; `wrap=true` closes the chain into a
+triangular ring by making the last node column an exact copy of the first, so
+the conversion's wrap detection fires and no root/tip closure is deposited.
+Strengths vary in both the streamwise and spanwise directions, which keeps
+every trailing, unsteady, and root/tip contribution distinct and nonzero.
+
+`nwakes[]` is set to `nwakerows`, i.e. the buffer is full and the outgoing row
+is the final active row -- the state in which `shed_wake!` converts.
+
+`conversion` selects the panel-to-particle strategy, `strength_fun(irow, icol)`
+overrides the default affine strength field, and `node_fun(irow, icol)` returns
+a 3-vector overriding the default node layout (used to build stretched, warped,
+non-uniform sheets). `node_fun` is applied before the `wrap` ring closure, so a
+wrapping chain still closes exactly.
+"""
+function make_conversion_fixture(; nwakerows::Int, wrap::Bool, max_particles=2000,
+        conversion=pnl.LegacyEdgeJumpConversion(), strength_fun=nothing,
+        node_fun=nothing, optargs...)
+    body = make_dirichlet_diamond_body(; nspan=3)
+    wake = pnl.PanelParticleWake(body; nwakerows=nwakerows, max_particles=max_particles,
+        conversion=conversion, optargs...)
+    pw = wake.panel_wake
+    nodes = pw.nodes[1]
+    strength = pw.strength[1]
+    n_node_rows = size(nodes, 2)
+    n_node_cols = size(nodes, 3)
+
+    for irow in 1:n_node_rows, icol in 1:n_node_cols
+        if node_fun !== nothing
+            nodes[:, irow, icol] .= node_fun(irow, icol)
+        elseif wrap
+            theta = 2pi * (icol - 1) / (n_node_cols - 1)
+            nodes[1, irow, icol] = cos(theta)
+            nodes[2, irow, icol] = sin(theta)
+            nodes[3, irow, icol] = 0.25 * (irow - 1)
+        else
+            nodes[1, irow, icol] = 0.5 * (irow - 1)
+            nodes[2, irow, icol] = icol - 1
+            nodes[3, irow, icol] = 0.0
+        end
+    end
+    # Close the ring exactly; the 5*eps() wrap test must not depend on how
+    # accurately cos/sin round-trips at 2pi.
+    wrap && (nodes[:, :, n_node_cols] .= nodes[:, :, 1])
+
+    f = strength_fun === nothing ? (irow, icol) -> 0.1 * irow + 0.3 * icol : strength_fun
+    for irow in 1:size(strength, 2), icol in 1:size(strength, 3)
+        strength[1, irow, icol] = f(irow, icol)
+    end
+
+    pw.nwakes[] = nwakerows
+    return wake
 end

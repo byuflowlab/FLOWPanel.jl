@@ -179,7 +179,7 @@ Bound circulation at spanwise station `y0` from a closed rectangular circuit in
 the x–z plane (constant y), evaluated from the induced velocity field only
 (∮U∞·dl = 0 around a closed loop). The circuit encloses the airfoil section and
 crosses the attached wake sheet once. Probes are offset from the surface via the
-body's `kerneloffset_targets`. Returns `∮ V·dl` (positive sense: +x → +z → −x → −z).
+body's `core_size_targets`. Returns `∮ V·dl` (positive sense: +x → +z → −x → −z).
 
 `center` is the (x,z) loop center; `hw`,`hh` the half-width (x) and half-height (z);
 `nseg` the per-edge quadrature segments. Off-body induced velocity goes through
@@ -216,7 +216,7 @@ end
 """
 Induced velocity at a cloud of points `pts::Vector{SVector{3}}` from a solved
 `body`, via the FastMultipole ProbeSystem path (velocity read from
-`probes.gradient`). Uses the body's off-body `kerneloffset_targets`.
+`probes.gradient`). Uses the body's off-body `core_size_targets`.
 """
 function induced_velocity(body, pts; backend=DIRECT)
     n = length(pts)
@@ -224,11 +224,11 @@ function induced_velocity(body, pts; backend=DIRECT)
     for k in 1:n
         probes.position[k] = pts[k]
     end
-    saved = body.kerneloffset
-    body.kerneloffset = body.kerneloffset_targets
+    saved = body.core_size
+    body.core_size = body.core_size_targets
     pnl.influence!((probes,), (body,), backend;
         precalc=false, scalar_potential=false, gradient=true, hessian=false)
-    body.kerneloffset = saved
+    body.core_size = saved
     return probes.gradient
 end
 
@@ -459,7 +459,7 @@ const ORACLE_REFINEMENTS = (
 "VortexRing Neumann body (DBC=false) from a raw mesh, semi-infinite attached wake."
 function neumann_body(nodes, cells; watertight, semiinfinite_wake=true)
     bt = pnl.RigidWakeBody{pnl.VortexRing, 1, Float64, false}
-    oa = (; kerneloffset=1e-6*C_CHORD, kernelcutoff=1e-12*C_CHORD,
+    oa = (; core_size=1e-6*C_CHORD, kernelcutoff=1e-12*C_CHORD,
         semiinfinite_wake, watertight)
     base = bt(nodes, cells, zeros(Int, 6, 0); oa...)           # noshedding first
     shed = calc_pitching_wing_shedding(base.nodes, base.cells, C_CHORD)  # trace on rewound

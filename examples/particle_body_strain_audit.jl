@@ -64,15 +64,15 @@ grab_J(pf, np) = copy(pf.particles[FLOWVPM.J_INDEX, 1:np])
 grab_U(pf, np) = copy(pf.particles[FLOWVPM.U_INDEX, 1:np])
 
 # --- pass 1: body -> particles (velocity + gradient) ------------------------
-# Mirrors the body-on-wake influence in _steady_aerodynamics! (kerneloffset
-# :kerneloffset_targets, precalc=false) but with the Hessian ENABLED for the
+# Mirrors the body-on-wake influence in _steady_aerodynamics! (core_size
+# :core_size_targets, precalc=false) but with the Hessian ENABLED for the
 # particle target.
 zero_probe_state!(pf, np)
-pnl._set_kerneloffsets!((rotor,), :kerneloffset_targets)
+pnl._set_core_sizes!((rotor,), :core_size_targets)
 pnl.influence!(probes, (rotor,), backend;
     precalc=false, scalar_potential=false, velocity=true,
     velocity_gradient=Tuple(true for _ in probes),
-    direct_conditioning=pnl._self_panel_kerneloffset_conditioning())
+    direct_conditioning=pnl._self_panel_core_size_conditioning())
 J_body = grab_J(pf, np)
 U_body = grab_U(pf, np)
 

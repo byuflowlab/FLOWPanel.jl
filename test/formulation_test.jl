@@ -148,7 +148,7 @@ end
         phi = 0.0
         for j in 1:bdy.ncells
             p, _, _ = pnl.induced(probe, bdy, j, switch;
-                kerneloffset=bdy.kerneloffset_panel)
+                core_size=bdy.core_size_panel)
             phi += p
         end
         return phi
@@ -166,10 +166,10 @@ end
         up = shed[1, i]
         body.strength[up, 2] = 1.0
         p_full, _, _ = pnl.induced(probe, body, up, switch;
-            kerneloffset=body.kerneloffset_panel)
+            core_size=body.core_size_panel)
         body.suppress_attached_wake[] = true
         p_body, _, _ = pnl.induced(probe, body, up, switch;
-            kerneloffset=body.kerneloffset_panel)
+            core_size=body.core_size_panel)
         body.suppress_attached_wake[] = false
         phi_unit[e] = p_full - p_body
         body.strength[up, 2] = 0.0
@@ -180,11 +180,11 @@ end
     # operator guard: G assembly identical with correction active
     pnl.set_wake_correction!(body, c_syn)
     G_corr = zeros(N, N)
-    pnl._G!(G_corr, body, body; kerneloffset=body.kerneloffset_panel)
+    pnl._G!(G_corr, body, body; core_size=body.core_size_panel)
     @test body.wake_correction_active[]      # restored after assembly
     pnl.clear_wake_correction!(body)
     G_plain = zeros(N, N)
-    pnl._G!(G_plain, body, body; kerneloffset=body.kerneloffset_panel)
+    pnl._G!(G_plain, body, body; core_size=body.core_size_panel)
     @test G_corr == G_plain
 end
 
@@ -198,7 +198,7 @@ end
 
     # W columns == attached-wake block of G (full minus wake-suppressed)
     G_full = zeros(N, N); B_only = zeros(N, N)
-    pnl._G!(G_full, body, body; kerneloffset=body.kerneloffset_panel)
+    pnl._G!(G_full, body, body; core_size=body.core_size_panel)
     pnl._assemble_B!(B_only, body)
     dG = G_full - B_only
     for e in 1:M
@@ -360,6 +360,36 @@ end
 end
 
 # ------------------------------------------------------------------------------
+@testset "TraceCorrected step lifecycle (021 Phase 3)" begin
+    # TraceCorrected drives the raw `_solve!` kernel directly (the public
+    # single-body solve! clears preassembled external potential and so cannot be
+    # reused), so it owns its own top-level step boundary: begin -> solve ->
+    # note -> restore potential -> set_wake_correction! -> finalize.
+    #
+    # The formulation validator currently admits ONLY a Backslash solver, which
+    # carries no step statistics and no warm-start history, so today those hooks
+    # resolve to the documented no-ops. This test pins that contract (the hooks
+    # are inert, not wrong) and the ordering guarantee that the step closes only
+    # after the physical wake correction is installed. If the validator is ever
+    # widened to the stateful solvers, extend this to assert nsolves == 1 and a
+    # single history advance per solve_formulation!.
+    wake = flat_wake(body0, gamma0)
+    f = pnl.TraceCorrected(estimator=:green)
+    st = pnl.initialize_formulation(f, (deepcopy(body0),), (wake,), solver0,
+        DIRECT, DIRECT)
+    bodyB = deepcopy(body0)
+    run_aero!(bodyB, deepcopy(wake), solver0; formulation=f,
+        formulation_state=st)
+
+    @test bodyB.wake_correction_active[]          # correction installed
+    @test pnl.step_nsolves(solver0) == -1         # unavailable, not "1 success"
+    @test pnl.step_niter_first(solver0) == -1
+    @test pnl.step_solved(solver0)
+    @test pnl.begin_step_solution!(solver0) === nothing
+    @test pnl.finalize_step_solution!(bodyB, solver0) === nothing
+end
+
+# ------------------------------------------------------------------------------
 @testset "Stage 6: GreenReconstruction vs TraceCorrected(:green)" begin
     wake = flat_wake(body0, gamma0)
 
@@ -408,7 +438,7 @@ end
 
     # both linear systems satisfied
     G_full = zeros(N, N)
-    pnl._G!(G_full, body, body; kerneloffset=body.kerneloffset_panel)
+    pnl._G!(G_full, body, body; core_size=body.core_size_panel)
     Ssigma0 = zeros(N)
     pnl._source_potential!(Ssigma0, body, stG.sigma0, DIRECT)
     resE = norm(G_full*muE + Ssigma0 + q)/max(norm(Ssigma0), eps())
