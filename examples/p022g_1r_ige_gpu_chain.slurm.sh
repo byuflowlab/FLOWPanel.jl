@@ -29,7 +29,11 @@ mkdir -p logs/chain
 JOB=${SLURM_JOB_ID:-manual}
 
 run_stage() { # mode run_name
-  local mode=$1 name=$2 log=logs/chain/${CASE}_${mode}_${JOB}.log
+  local mode=$1 name=$2
+  # NOTE: must be a separate `local` line — bash expands all args of one
+  # `local` before running it, so ${mode} on the same line is unset (fatal
+  # under set -u; killed job 13549590 in 2 s).
+  local log=logs/chain/${CASE}_${mode}_${JOB}.log
   echo "=== chain stage $mode ($name) start $(date -Is)"
   P022G_MODE=$mode P022_RUN_NAME=$name bash "$CARRIER" "$CASE" 2>&1 | tee "$log"
   local rc=${PIPESTATUS[0]}
