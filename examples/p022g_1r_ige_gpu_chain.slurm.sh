@@ -18,7 +18,6 @@
 # the 7200 s budget with 10% reserve and 1.5x growth margin, and the probe
 # left >=20% device memory free.
 set -uo pipefail
-source /etc/profile 2>/dev/null || true
 
 CARRIER=examples/run_rotor_multi_ground_effect_gpu.slurm.sh
 CASE=p022g_1r_ige
