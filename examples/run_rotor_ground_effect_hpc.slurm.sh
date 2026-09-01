@@ -199,6 +199,7 @@ case "$CASE" in
   # (vatistas, CT 0.07934±0.00234, job 13207681).
   p022lg_hr05)
     export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=0.5
@@ -210,6 +211,7 @@ case "$CASE" in
     export TRUNC_RADIUS_R=3.0 ;;
   p022lg_hr10)
     export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.0
@@ -221,6 +223,7 @@ case "$CASE" in
     export TRUNC_RADIUS_R=3.0 ;;
   p022lg_hr15)
     export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.5
@@ -232,6 +235,7 @@ case "$CASE" in
     export TRUNC_RADIUS_R=3.0 ;;
   p022lg_hr20)
     export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=2.0
