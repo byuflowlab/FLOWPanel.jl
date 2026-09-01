@@ -1556,7 +1556,11 @@ if ground_enable && ground_damp_band_r > 0
     function pnl.propagate!(w::pnl.PanelParticleWake, dt; relax=true, step=0,
             frames=nothing, diagnose_particle_gamma::Bool=false,
             diagnostic_vertical=(0.0, 0.0, 1.0),
-            propagate_pfield::Bool=true)   # Ruling 7 dedupe (see src propagate!)
+            propagate_pfield::Bool=true,   # Ruling 7 dedupe (see src propagate!)
+            sigma_guard::NamedTuple=NamedTuple())  # mirror src propagate! (052c
+            # trial 1); simulate! always forwards it, so omitting it is a
+            # MethodError (killed GPU smoke 13549598 — only IGE damp-band>0
+            # arms define this override, so hr/OGE runs never tripped it)
 
         # panel wake
         pnl.propagate!(w.panel_wake, dt)
@@ -1600,9 +1604,11 @@ if ground_enable && ground_damp_band_r > 0
         # stock forward Euler unless the wake was built with `expint=true`)
         pnl._step_timer_measure(:wake_convection; nested=true) do
             if w.pfield.integration === pnl.FLOWVPM.euler_exp
+                isempty(sigma_guard) || throw(ArgumentError(
+                    "sigma_guard is not supported by the euler_exp integrator"))
                 pnl.FLOWVPM._euler_exp(w.pfield, dt; relax)
             else
-                pnl.FLOWVPM._euler(w.pfield, dt; relax)
+                pnl.FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
             end
         end
 
