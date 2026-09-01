@@ -1584,16 +1584,17 @@ if ground_enable && ground_damp_band_r > 0
         n_inband = 0
         u_ax_index = pnl.FLOWVPM.U_INDEX[axial_dimension]
         x_ax_index = pnl.FLOWVPM.X_INDEX[axial_dimension]
-        for i in 1:w.pfield.np
-            d = ground_x - w.pfield.particles[x_ax_index, i]  # height above ground
-            d < damp_band || continue
-            0 <= d && (n_inband += 1)
-            u_ax = w.pfield.particles[u_ax_index, i]
-            if u_ax > 0                       # moving toward the ground (+axial)
-                f = clamp(d / damp_band, 0.0, 1.0)
-                w.pfield.particles[u_ax_index, i] = f * u_ax
-                n_damped += 1
-            end
+        np = w.pfield.np
+        if np > 0
+            # Masked broadcasts: GPU pfields (CuArray particles) disallow
+            # scalar indexing, so the per-particle loop form cannot run there.
+            x = view(w.pfield.particles, x_ax_index, 1:np)
+            u = view(w.pfield.particles, u_ax_index, 1:np)
+            d = ground_x .- x                        # height above ground
+            damp = (d .< damp_band) .& (u .> 0)      # ground-ward, in band or below
+            n_damped = count(damp)
+            n_inband = count((0 .<= d) .& (d .< damp_band))
+            u .= ifelse.(damp, clamp.(d ./ damp_band, 0.0, 1.0) .* u, u)
         end
         ground_damp_last_n[] = n_damped
         ground_damp_last_inband[] = n_inband
@@ -1764,14 +1765,16 @@ function ground_diagnostics_monitor(systems, wakes, frames, uinf, i_step, dt)
         any(p -> p === w.pfield, unique_pfields) || push!(unique_pfields, w.pfield)
     end
     for pfield in unique_pfields
-        for i in 1:pfield.np
-            x = pnl.FLOWVPM.get_X(pfield, i)
-            if x[axial_dimension] > ground_x
-                nbelow += 1
-                G = pnl.FLOWVPM.get_Gamma(pfield, i)
-                gbelow += sqrt(G[1]^2 + G[2]^2 + G[3]^2)
-            end
-        end
+        np = pfield.np
+        np == 0 && continue
+        # Masked broadcasts: GPU pfields disallow scalar indexing.
+        xax = view(pfield.particles, pnl.FLOWVPM.X_INDEX[axial_dimension], 1:np)
+        below = xax .> ground_x
+        nbelow += count(below)
+        gx = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[1], 1:np)
+        gy = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[2], 1:np)
+        gz = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[3], 1:np)
+        gbelow += sum(below .* sqrt.(gx .^ 2 .+ gy .^ 2 .+ gz .^ 2))
     end
     push!(ground_steps, i_step)
     push!(ground_tangency_rms, rms)
