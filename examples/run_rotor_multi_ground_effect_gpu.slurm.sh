@@ -24,7 +24,10 @@ MODE="${P022G_MODE:-smoke}"
 export JULIA_NUM_THREADS="$THREADS" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 # linegauss per Ryan's 2026-08-31 sweep ruling (CPU anchors ran vatistas —
 # expect a small family-systematic; see plans/p022_hr_sweep_gpu_20260831/)
-export FLOWPANEL_FILAMENT_REG=linegauss VPM_ARRAYTYPE=cuarray
+# P022G_VPM_ARRAYTYPE=array falls back to a host-resident particle field
+# (GPU still runs panel influence): diagnostic escape hatch for the missing
+# device-resident source_to_buffer! overload (2026-08-31 smoke finding).
+export FLOWPANEL_FILAMENT_REG=linegauss VPM_ARRAYTYPE="${P022G_VPM_ARRAYTYPE:-cuarray}"
 export FASTMULTIPOLE_FORCE_CUDA_LOAD=1
 export FLOWPANEL_GPU_INFLUENCE=cuda GPU_ALLOW_FALLBACK=false
 export FLOWPANEL_STEP_TIMERS=1 FLOWPANEL_GPU_TIMERS=1
