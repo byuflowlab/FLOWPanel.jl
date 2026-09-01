@@ -200,7 +200,7 @@ case "$CASE" in
   p022lg_hr05)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=0.5
@@ -213,7 +213,7 @@ case "$CASE" in
   p022lg_hr10)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.0
@@ -226,7 +226,7 @@ case "$CASE" in
   p022lg_hr15)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.5
@@ -239,7 +239,7 @@ case "$CASE" in
   p022lg_hr20)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=2.0
