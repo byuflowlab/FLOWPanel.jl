@@ -62,5 +62,10 @@ echo "probe device memory reserve fraction: ${reserve:-unknown}"
 awk -v r="${reserve:-0}" 'BEGIN{exit !(r >= 0.20)}' \
   || { echo "CHAIN ABORT: probe device reserve ${reserve:-unknown} below 0.20"; exit 1; }
 
+if [[ "${P022G_CHAIN_STOP_AFTER:-}" == probe ]]; then
+  echo "CHAIN STOP: P022G_CHAIN_STOP_AFTER=probe (gates evaluated, accept skipped)"
+  exit 0
+fi
+
 run_stage accept "$CASE" || { echo "CHAIN FAIL: accept failed"; exit 1; }
 echo "CHAIN COMPLETE $(date -Is)"
