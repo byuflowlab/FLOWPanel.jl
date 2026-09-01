@@ -200,7 +200,7 @@ case "$CASE" in
   p022lg_hr05)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=1e-6      # linegauss floor is FMM-vs-LU kernel mismatch (radius_inflation bound, relative ~1e-7): residual re-evaluates via FMM (solver.jl:2496) while blocks solve dense LU. Stalls: 1.316e-8@step0, 1.63e-7@step1 (smokes 13547142/54/13548688). Metric pollution, not solve error; genuine divergence still trips 1e-6.
+    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=0.5
@@ -213,7 +213,7 @@ case "$CASE" in
   p022lg_hr10)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=1e-6      # linegauss floor is FMM-vs-LU kernel mismatch (radius_inflation bound, relative ~1e-7): residual re-evaluates via FMM (solver.jl:2496) while blocks solve dense LU. Stalls: 1.316e-8@step0, 1.63e-7@step1 (smokes 13547142/54/13548688). Metric pollution, not solve error; genuine divergence still trips 1e-6.
+    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.0
@@ -226,7 +226,7 @@ case "$CASE" in
   p022lg_hr15)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=1e-6      # linegauss floor is FMM-vs-LU kernel mismatch (radius_inflation bound, relative ~1e-7): residual re-evaluates via FMM (solver.jl:2496) while blocks solve dense LU. Stalls: 1.316e-8@step0, 1.63e-7@step1 (smokes 13547142/54/13548688). Metric pollution, not solve error; genuine divergence still trips 1e-6.
+    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.5
@@ -239,7 +239,7 @@ case "$CASE" in
   p022lg_hr20)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
-    export GS_TOL=1e-6      # linegauss floor is FMM-vs-LU kernel mismatch (radius_inflation bound, relative ~1e-7): residual re-evaluates via FMM (solver.jl:2496) while blocks solve dense LU. Stalls: 1.316e-8@step0, 1.63e-7@step1 (smokes 13547142/54/13548688). Metric pollution, not solve error; genuine divergence still trips 1e-6.
+    export GS_TOL=2e-6      # linegauss FMM-vs-LU metric floor: saturates ~4.2e-7 over 17-step smoke 13548765 (GS itself converges in 2-3 iters); 4.8x margin for mature-wake drift, still a genuine-divergence tripwire
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=2.0
