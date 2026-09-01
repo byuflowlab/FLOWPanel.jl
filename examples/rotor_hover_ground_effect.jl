@@ -2029,14 +2029,18 @@ let
     tail_b  = filter(isfinite, CT_bernoulli[k_start:end])
     tail_md = filter(isfinite, CT_laplace_md[k_start:end])
     tail_lv = filter(isfinite, CT_laplace_lv[k_start:end])
-    ptp(v) = isempty(v) ? NaN : maximum(v) - minimum(v)
-    mean(v) = isempty(v) ? NaN : sum(v) / length(v)
+    ptp(v) = maximum(v) - minimum(v)
+    mean(v) = sum(v) / length(v)
+    # An empty settle window (settle_window_revs == 0, the screen-probe
+    # configuration) must not print the token "NaN": the launcher NaN gate
+    # word-matches it and fails otherwise-clean runs (job 13542825).
+    fmt(v, f, sig) = isempty(v) ? "n/a (empty settle window)" : string(round(f(v), sigdigits=sig))
     residual_magVinf = magVinf_pulse(t_range[end])
     println("\nItem 005 plateau diagnostics (final $(round(settle_window_revs,digits=2)) revs, steps $(k_start):$(length(t_range))):")
     println("  residual magVinf at readout = $(residual_magVinf)  (hover requires ≈ 0)")
-    println("  CT Bernoulli   plateau mean=$(round(mean(tail_b), sigdigits=5))  peak-to-peak=$(round(ptp(tail_b), sigdigits=4))")
-    println("  CT Laplace(∇u) plateau mean=$(round(mean(tail_md),sigdigits=5))  peak-to-peak=$(round(ptp(tail_md),sigdigits=4))")
-    println("  CT Laplace(λ)  plateau mean=$(round(mean(tail_lv),sigdigits=5))  peak-to-peak=$(round(ptp(tail_lv),sigdigits=4))")
+    println("  CT Bernoulli   plateau mean=$(fmt(tail_b, mean, 5))  peak-to-peak=$(fmt(tail_b, ptp, 4))")
+    println("  CT Laplace(∇u) plateau mean=$(fmt(tail_md, mean, 5))  peak-to-peak=$(fmt(tail_md, ptp, 4))")
+    println("  CT Laplace(λ)  plateau mean=$(fmt(tail_lv, mean, 5))  peak-to-peak=$(fmt(tail_lv, ptp, 4))")
 end
 
 if save_path !== nothing
