@@ -15,7 +15,7 @@ set -euo pipefail
 
 THREADS=16
 EXPECTED_REPO=/home/rander39/projects_unified/FLOWPanel.jl
-PROJECT="${P022G_PROJECT_OVERRIDE:-/home/rander39/projects_unified/envs/x86_64}"
+PROJECT="${P022G_PROJECT_OVERRIDE:-/home/rander39/projects_unified/envs/$(uname -m)}"
 CASE="${1:-}"
 MODE="${P022G_MODE:-smoke}"
 [[ "$PWD" == "$EXPECTED_REPO" || "${P022G_SETUP_ONLY:-0}" == 1 ]] || {
@@ -120,10 +120,22 @@ echo "array=$VPM_ARRAYTYPE influence=$FLOWPANEL_GPU_INFLUENCE fallback=$GPU_ALLO
 echo "body_fmm=$FMM_BODY_EXPANSION_ORDER/$FMM_BODY_ACCEPTANCE/$FMM_BODY_LEAF_SIZE wake_fmm=$FMM_WAKE_EXPANSION_ORDER/$FMM_WAKE_ACCEPTANCE/$FMM_WAKE_LEAF_SIZE"
 [[ "${P022G_SETUP_ONLY:-0}" == 1 ]] && exit 0
 
-# Unified x86 env: julia 1.11.7 module + envs/x86_64 project (HPC.md ruling
-# 2026-08-31). gh200/ARM is out of scope for this carrier.
-module load cuda julia/1.11.7-6bmogfl
-JULIA_VERSION="$(julia --version)"
+# Unified env, arch-dispatched (2026-09-01, P018 gpu052 launcher pattern):
+# x86 uses the julia 1.11.7 module; ARM (gh200 / mgh nodes) uses the aarch64
+# tarball julia + the ARM depot, with CUDA supplied by CUDA.jl artifacts and
+# the node driver (no x86 module tree on ARM).
+case "$(uname -m)" in
+  aarch64)
+    JULIA_BIN="${P022G_JULIA_OVERRIDE:-$HOME/julia/julia-1.11.7/bin/julia}"
+    export JULIA_DEPOT_PATH="$HOME/fm052depot-gh200"
+    ;;
+  *)
+    module load cuda julia/1.11.7-6bmogfl
+    JULIA_BIN="${P022G_JULIA_OVERRIDE:-$(command -v julia)}"
+    ;;
+esac
+[[ -x "$JULIA_BIN" ]] || { echo "ERROR: julia not found at $JULIA_BIN" >&2; exit 2; }
+JULIA_VERSION="$("$JULIA_BIN" --version)"
 [[ "$JULIA_VERSION" == "julia version 1.11.7" ]] || {
   echo "ERROR: required Julia 1.11.7, got '$JULIA_VERSION'" >&2; exit 2; }
 [[ -d "$PROJECT" ]] || { echo "ERROR: project env $PROJECT missing" >&2; exit 2; }
@@ -136,7 +148,7 @@ export P022G_FASTMULTIPOLE_REV="$(git -C ../FastMultipole rev-parse HEAD 2>/dev/
 export P022G_FLOWVPM_REV="$(git -C ../FLOWVPM.jl rev-parse HEAD 2>/dev/null || echo unknown)"
 echo "revisions FLOWPanel=$P022G_FLOWPANEL_REV FastMultipole=$P022G_FASTMULTIPOLE_REV FLOWVPM=$P022G_FLOWVPM_REV"
 echo "gpu=$P022G_GPU_MODEL"
-julia --project="$PROJECT" -e 'import FastMultipole; FastMultipole.load_cuda_radix_lifecycle!() || error(FastMultipole.cuda_radix_status()); C=getglobal(FastMultipole,:CUDA); Base.invokelatest(C.functional) || error("CUDA.functional() is false")'
+"$JULIA_BIN" --project="$PROJECT" -e 'import FastMultipole; FastMultipole.load_cuda_radix_lifecycle!() || error(FastMultipole.cuda_radix_status()); C=getglobal(FastMultipole,:CUDA); Base.invokelatest(C.functional) || error("CUDA.functional() is false")'
 
 if [[ -d "data/$RUN_NAME" ]]; then
   [[ "${P022G_EXISTING_RESULT:-error}" == preserve ]] || {
@@ -162,7 +174,7 @@ cleanup_gpu_monitor() {
 trap cleanup_gpu_monitor EXIT
 
 case_start_epoch="$(date +%s)"
-/usr/bin/time -v -o "$host_memory_log" julia --project="$PROJECT" -t "$THREADS" examples/rotor_hover_ground_effect.jl
+/usr/bin/time -v -o "$host_memory_log" "$JULIA_BIN" --project="$PROJECT" -t "$THREADS" examples/rotor_hover_ground_effect.jl
 case_elapsed_s="$(( $(date +%s) - case_start_epoch ))"
 cleanup_gpu_monitor
 trap - EXIT
@@ -190,6 +202,6 @@ if [[ "$MODE" == accept ]]; then
     echo "ERROR: device memory reserve $device_reserve_fraction is below 20%" >&2; exit 1; }
 fi
 if [[ "$MODE" == accept || "$MODE" == production ]]; then
-  julia -e 'using TOML; m=TOML.parsefile(ARGS[1]); get(m,"all_finite",false) || error("nonfinite case"); get(m,"gs_nonconverged",1)==0 || error("nonconverged block solve"); get(m,"gs_iters_max",typemax(Int))<=50 || error("GS cap exceeded"); get(m,"block_gs_normalized_residual",Inf)<=1e-8 || error("final normalized residual failed"); get(m,"gpu_route_fallback_total",1)==0 || error("GPU fallback recorded"); get(m,"gpu_route_total_hits",0)>0 || error("no GPU route hits")' "$metadata"
+  "$JULIA_BIN" -e 'using TOML; m=TOML.parsefile(ARGS[1]); get(m,"all_finite",false) || error("nonfinite case"); get(m,"gs_nonconverged",1)==0 || error("nonconverged block solve"); get(m,"gs_iters_max",typemax(Int))<=50 || error("GS cap exceeded"); get(m,"block_gs_normalized_residual",Inf)<=1e-8 || error("final normalized residual failed"); get(m,"gpu_route_fallback_total",1)==0 || error("GPU fallback recorded"); get(m,"gpu_route_total_hits",0)>0 || error("no GPU route hits")' "$metadata"
 fi
 echo "Case $CASE finished; peak device ${peak_device_mib} MiB; peak host ${peak_host_kib:-unknown} KiB"
