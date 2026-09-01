@@ -200,6 +200,7 @@ case "$CASE" in
   p022lg_hr05)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
+    export GS_TOL=3e-8      # linegauss CPU-FMM seam leaves a hard GS residual floor at 1.316e-8 (stalled identically at 50 and 100 iters; smokes 13547142/13547154); tol must clear the floor
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=0.5
@@ -212,6 +213,7 @@ case "$CASE" in
   p022lg_hr10)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
+    export GS_TOL=3e-8      # linegauss CPU-FMM seam leaves a hard GS residual floor at 1.316e-8 (stalled identically at 50 and 100 iters; smokes 13547142/13547154); tol must clear the floor
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.0
@@ -224,6 +226,7 @@ case "$CASE" in
   p022lg_hr15)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
+    export GS_TOL=3e-8      # linegauss CPU-FMM seam leaves a hard GS residual floor at 1.316e-8 (stalled identically at 50 and 100 iters; smokes 13547142/13547154); tol must clear the floor
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=1.5
@@ -236,6 +239,7 @@ case "$CASE" in
   p022lg_hr20)
     export FLOWPANEL_FILAMENT_REG=linegauss
     export GS_MAX_OUTER=100   # linegauss GS converges slightly slower than vatistas: step-0 residual 1.32e-8@50 iters (smoke 13547142); tol unchanged
+    export GS_TOL=3e-8      # linegauss CPU-FMM seam leaves a hard GS residual floor at 1.316e-8 (stalled identically at 50 and 100 iters; smokes 13547142/13547154); tol must clear the floor
     export RHPC_MESH=45_185_ct4
     export GROUND_ENABLE=true
     export GROUND_H_R=2.0
