@@ -20,7 +20,10 @@
 set -uo pipefail
 
 CARRIER=examples/run_rotor_multi_ground_effect_gpu.slurm.sh
-CASE=p022g_1r_ige
+# Generalized 2026-09-01: case tag as $1 (default keeps the original 1r IGE
+# behavior). Submit other cases with e.g.
+#   sbatch -J fp-022g-2r-ige-chain -p ... p022g_1r_ige_gpu_chain.slurm.sh p022g_2r_ige
+CASE="${1:-p022g_1r_ige}"
 export P022G_REQUIRED_GPU_MODEL="${P022G_REQUIRED_GPU_MODEL:-H200}"
 export P022G_EXISTING_RESULT=preserve
 export P022G_CONFIRM_ACCEPTANCE=YES
