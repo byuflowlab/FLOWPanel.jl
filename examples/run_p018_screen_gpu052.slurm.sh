@@ -56,8 +56,8 @@ export P018_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 [[ -d "$P018_REPO" ]]  || { echo "ERROR: silo tree $P018_REPO missing" >&2; exit 2; }
 [[ -d "$P018_PROJECT" ]] || { echo "ERROR: depot project $P018_PROJECT missing" >&2; exit 2; }
 
-# GPU env: prefer the maintained 052 bundle from the sibling FLOWVPM silo.
-FM052_COMMON="$HOME/FLOWVPM-052-$ARCH/scripts/fm052_common.sh"
+# GPU env: source the maintained 052 tuning bundle from the unified tree.
+FM052_COMMON="$HOME/projects_unified/FLOWVPM.jl/scripts/fm052_common.sh"
 if [[ -f "$FM052_COMMON" ]]; then
   # shellcheck source=/dev/null
   source "$FM052_COMMON"
