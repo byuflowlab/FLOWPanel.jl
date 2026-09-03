@@ -14,8 +14,8 @@
 set -euo pipefail
 
 THREADS=16
-EXPECTED_REPO=/home/rander39/projects_unified/FLOWPanel.jl
-PROJECT="${P022G_PROJECT_OVERRIDE:-/home/rander39/projects_unified/envs/$(uname -m)}"
+EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+PROJECT="${P022G_PROJECT_OVERRIDE:-/home/rander39/projects/envs/$(uname -m)}"
 CASE="${1:-}"
 MODE="${P022G_MODE:-smoke}"
 [[ "$PWD" == "$EXPECTED_REPO" || "${P022G_SETUP_ONLY:-0}" == 1 ]] || {

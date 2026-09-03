@@ -48,8 +48,8 @@ case "$ARCH" in
   *) echo "ERROR: unknown arch '$ARCH' (gh200|h200|h100)" >&2; exit 2 ;;
 esac
 
-export P018_REPO="${P018_REPO_OVERRIDE:-$HOME/projects_unified/FLOWPanel.jl}"
-export P018_PROJECT="${P018_PROJECT_OVERRIDE:-$HOME/projects_unified/envs/$(uname -m)}"
+export P018_REPO="${P018_REPO_OVERRIDE:-$HOME/projects/FLOWPanel.jl}"
+export P018_PROJECT="${P018_PROJECT_OVERRIDE:-$HOME/projects/envs/$(uname -m)}"
 export P018_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 
 [[ -x "$P018_JULIA" ]] || { echo "ERROR: julia not found at $P018_JULIA" >&2; exit 2; }
@@ -57,7 +57,7 @@ export P018_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 [[ -d "$P018_PROJECT" ]] || { echo "ERROR: depot project $P018_PROJECT missing" >&2; exit 2; }
 
 # GPU env: source the maintained 052 tuning bundle from the unified tree.
-FM052_COMMON="$HOME/projects_unified/FLOWVPM.jl/scripts/fm052_common.sh"
+FM052_COMMON="$HOME/projects/FLOWVPM.jl/scripts/fm052_common.sh"
 if [[ -f "$FM052_COMMON" ]]; then
   # shellcheck source=/dev/null
   source "$FM052_COMMON"

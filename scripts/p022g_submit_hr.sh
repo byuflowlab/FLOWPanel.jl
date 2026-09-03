@@ -6,7 +6,7 @@
 #   [P022G_MODE=smoke|probe|production] [P022G_TIME=HH:MM:SS] \
 #   scripts/p022g_submit_hr.sh <05|10|15|20>
 #
-# Submit from /home/rander39/projects_unified/FLOWPanel.jl.
+# Submit from /home/rander39/projects/FLOWPanel.jl.
 set -euo pipefail
 HR="${1:-}"
 case "$HR" in 05|10|15|20) ;; *) echo "ERROR: usage: p022g_submit_hr.sh <05|10|15|20>" >&2; exit 2 ;; esac

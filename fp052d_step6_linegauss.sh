@@ -25,7 +25,7 @@ export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
 cd "$FPDIR"
 DUMPDIR="$FMDIR/relU_dumps_6lg_${SLURM_JOB_ID}"
 XLOG="fp052d6lg_xverify_${SLURM_JOB_ID}.log"
-source "$HOME/projects_unified/FLOWVPM.jl/scripts/fm052_common.sh" || true
+source "$HOME/projects/FLOWVPM.jl/scripts/fm052_common.sh" || true
 set +e
 timeout 25m env "${FM052_PRODUCTION_ENV[@]}" "${FM052_GPU_ENV[@]}" \
   FLOWPANEL_FILAMENT_REG=linegauss \

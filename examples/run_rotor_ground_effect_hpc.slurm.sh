@@ -42,8 +42,8 @@ set -euo pipefail
 THREADS=64
 # Unified checkout per the 2026-08-31 ruling (agent_policies/HPC.md). The
 # legacy projects/FLOWPanel.jl guard is kept only for reproducing old anchors.
-EXPECTED_REPO="${P022_EXPECTED_REPO:-/home/rander39/projects_unified/FLOWPanel.jl}"
-PROJECT="${P022_PROJECT_OVERRIDE:-/home/rander39/projects_unified/envs/x86_64}"
+EXPECTED_REPO="${P022_EXPECTED_REPO:-/home/rander39/projects/FLOWPanel.jl}"
+PROJECT="${P022_PROJECT_OVERRIDE:-/home/rander39/projects/envs/x86_64}"
 [[ "$PWD" == "$EXPECTED_REPO" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"
