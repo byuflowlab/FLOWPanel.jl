@@ -43,8 +43,8 @@ Nothing is deployed cluster-side.
 Match `--cpus`/`--mem-gb` to what the job actually requests or the `nodes_fit`
 column is meaningless: several ORC partitions have 28-core nodes, so a 32-core
 threshold silently reports them as unusable. Probe two or three points across
-the plausible ask to find the knee — the p021 500 G profile is restricted to
-zen3 512 GiB nodes, while a 96 G ask opens most of the cluster.
+the plausible ask to find the knee — a 500 G profile is restricted to zen3
+512 GiB nodes, while a 96 G ask opens most of the cluster.
 
 Before committing to a partition, confirm with `--eta`:
 
@@ -55,7 +55,7 @@ python3 $SKILL --qos-map        # which partitions each QOS reaches
 
 `--eta` runs `sbatch --test-only` (allocates nothing) and reports estimated
 start times plus rejections. It catches gates the node counts cannot: `knlg`
-looks like 11 free nodes but needs `-C knl`; `qos=test` caps walltime at 60
+looks like free nodes but needs `-C knl`; `qos=test` caps walltime at 60
 minutes; GPU partitions reject CPU-only jobs. Treat a `REJECTED` row as
 disqualifying.
 
@@ -95,6 +95,48 @@ queue is waiting on.
 If the probe comes back empty or truncated the script prints `PROBE-FAIL`, exits
 non-zero, and leaves the CSV untouched. An empty answer is never "nothing
 available" — re-open the ssh socket and retry.
+
+## Project Location on the Cluster
+
+All orc jobs launch from `~/projects/{FastMultipole,FLOWVPM.jl,FLOWPanel.jl}` —
+real git clones on branch `unified-052`. Pin a run by COMMITTING (local-only)
+before launching; use `git worktree add` for concurrent experiments needing
+different code states. Deploy local changes by scp/rsync + commit on orc (never
+launch from an uncommitted tree you can't reproduce).
+
+**Any GPU job script must set three things, all arch-keyed by `$(uname -m)`:**
+
+1. **Working dir**: `cd ~/projects/FLOWPanel.jl` (or the relevant package) so
+   `logs/slurm/`, `logs/chain/`, and `data/<case>/` conventions hold in-tree.
+2. **Project**: `--project=$HOME/projects/envs/$(uname -m)` — `x86_64` or
+   `aarch64`; the Manifests dev-point at the `~/projects` trees.
+3. **Julia + depot, by arch**:
+   - x86 (m13h / eng / CPU partitions): `module load cuda
+     julia/1.11.7-6bmogfl`; default depot `~/.julia`.
+   - ARM (mgh GH200): no x86 module tree — use
+     `$HOME/julia/julia-1.11.7/bin/julia` directly, `export
+     JULIA_DEPOT_PATH=$HOME/fm052depot-gh200` (holds the ARM CUDA artifacts —
+     do not delete or rename), and no `cuda` module: CUDA comes from CUDA.jl
+     artifacts plus the node driver.
+
+**Submission inputs by pool:**
+
+| Pool | sbatch flags |
+|---|---|
+| H200 (default) | `-p m13h --gres=gpu:h200:1` |
+| H200 (alternate) | `-p eng --qos=eng --gres=gpu:h200:1` |
+| GH200 (ARM) | `-p mgh --qos=gpu --gres=gpu:gh200:1 -C arm` |
+
+**Existing launchers** (e.g. `FLOWPanel.jl/examples/run_p018_screen_gpu052.slurm.sh
+<arch> <case>`) already implement this pattern and take `*_REPO_OVERRIDE` /
+`*_PROJECT_OVERRIDE` env vars for special cases — copy their arch-dispatch
+header rather than reinventing it. GPU tuning knobs are sourced from
+`~/projects/FLOWVPM.jl/scripts/fm052_common.sh`. One-off run wrappers live in
+`~/projects/launchers/`.
+
+After any env/depot change, re-run
+`~/projects/smoke_unified_{x86,gpu_m13h,arm}.slurm.sh` (adjust partition/gres
+as needed) and confirm `FLOWVPMCUDAExt` loads.
 
 ## Standard Single-Node Julia Launcher
 
@@ -136,10 +178,15 @@ output-log, and error-log directives. Use `set -euo pipefail` so a failed
 workflow stage stops the job. Slurm opens log paths before the script runs, so
 any requested log directory must already exist when the user submits the job.
 
-If a run does not require GPU and should not exceed 1 hour of walltime, use
-the test queue by appending a `SBATCH qos=test` line. This will dodge the waiting queue.
+If a run does not require GPU and should not exceed 1 hour of walltime, use the
+test queue by appending a `SBATCH qos=test` line. This will dodge the waiting
+queue.
 
-If a run should use Julia or Python, include the appropriate module with `module load julia python` etc. Note that Julia 1.12 is used on the HPC by default, but 1.11 can be requested during the `module load julia` command by specifying the julia version.
+If a run should use Julia or Python, include the appropriate module with
+`module load julia python` etc. Note that Julia 1.12 is the HPC default, but
+1.11 can be requested during the `module load julia` command by specifying the
+julia version. The GPU stack is pinned to 1.11.7 (1.12 segfaults in host LLVM
+JIT with the GPU stack).
 
 Set the single `THREADS=<N>` variable explicitly to the same CPU count requested
 by `#SBATCH --ntasks=<N>`, and export it consistently through
@@ -174,31 +221,30 @@ default. The I/O cost is usually small relative to the value of retaining
 ParaView-ready state. Do not set `SAVE_VTK=false` unless the user asks for a
 no-output run.
 
-To avoid filling the disk across repeated iterations, ParaView output from prior
-runs must be moved off `/home`. **Since Ryan's ruling of 2026-08-27 that is done
-by ARCHIVING, not deleting**: a finished run is tarred whole into
-`/nobackup/archive/usr/rander39/FLOWPanel_runs/`, and only then are its ParaView
-files removed from `/home` — **except the newest 5 restartable steps, which stay
-put** (Ryan, 2026-08-27). An archived run is therefore still warm-startable
-directly off `/home`: continuing it needs no tarball unpacking. The `.csv` logs,
+To avoid filling the disk across repeated iterations, ParaView output from
+prior runs must be moved off `/home` — **by ARCHIVING, not deleting**: a
+finished run is tarred whole into
+`/nobackup/archive/usr/rander39/FLOWPanel_runs/`, and only then are its
+ParaView files removed from `/home` — **except the newest 5 restartable steps,
+which stay put**. An archived run is therefore still warm-startable directly
+off `/home`: continuing it needs no tarball unpacking. The `.csv` logs,
 `*_case_metadata.toml`, `*.metadata.toml`, `*.pvd` and `monitors/` stay on
-`/home` exactly as before — they are small, they are the scientific output, and
-`/home` is backed up daily where the archive is not. Deletion without an archive copy is now the fallback
-path, not the default, and applies only to runs that are still writing.
+`/home` — they are small, they are the scientific output, and `/home` is backed
+up daily where the archive is not. Deletion without an archive copy is the
+fallback path, not the default, and applies only to runs that are still
+writing.
 
-Don't let FLOWPanel take up more than 400G at any time. The cap is measured
-across ALL of `/home/rander39` (raised from a 200G FLOWPanel-only budget by
-Ryan, 2026-08-24; lowered 500G -> 400G, with every G tier dropped 100 G, by Ryan
-2026-08-25), not just the FLOWPanel checkout.
+Don't let FLOWPanel take up more than 400 G at any time. The cap is measured
+across ALL of `/home/rander39`, not just the FLOWPanel checkout.
 
 When the user explicitly wants to preserve a previous run for comparison, ask
 before overwriting and offer to move the old directory aside.
 
-### The archive tier (Ryan, 2026-08-27)
+### The archive tier
 
-Facts from [BYU RC storage](https://rc.byu.edu/wiki/?id=Storage), measured on the
-cluster 2026-08-27. Get these wrong and the reclaim path fails in ways that are
-not obvious from an error message:
+Facts from [BYU RC storage](https://rc.byu.edu/wiki/?id=Storage). Get these
+wrong and the reclaim path fails in ways that are not obvious from an error
+message:
 
 | | `/home/rander39` | `/nobackup/archive/usr/rander39` |
 |---|---|---|
@@ -207,7 +253,6 @@ not obvious from an error message:
 | snapshots | daily | no |
 | auto-delete | no | no |
 | visible from a compute node | yes | **no — login nodes only** |
-| baseline 2026-08-27 | 383 G used | **61.64 G / 92,998 files** |
 
 Consequences that drive the design:
 
@@ -216,9 +261,7 @@ Consequences that drive the design:
   "no such directory" on `/nobackup/archive` almost always means the wrong node.
 - **The binding constraint is the file count, not the bytes** — 1 M files against
   20 TiB. Per-timestep VTK is exactly the wrong shape for that, which is why
-  runs are archived as **one tarball each** rather than copied as trees. At
-  ~900 k files free, tree-copying a few campaigns would exhaust the inode budget
-  while using a rounding error of the space.
+  runs are archived as **one tarball each** rather than copied as trees.
 - **The archive is not backed up.** Once a run's VTK is removed from `/home`, the
   tarball is the only copy. This is why the archiver verifies by reading the
   tarball back before deleting anything, and why the CSV/monitor residue is
@@ -227,7 +270,7 @@ Consequences that drive the design:
   It is cold storage: fine for a tarball you may never open, wrong for anything
   a job or an analysis touches repeatedly.
 
-### Retention ladder — the LIVE-run fallback (Ryan, 2026-08-24; tiers lowered 100 G 2026-08-25; demoted to fallback 2026-08-27)
+### Retention ladder — the LIVE-run fallback
 
 **Archive everything finished first.** The ladder below applies only to runs
 still being written, which cannot be tarred consistently and so cannot be
@@ -242,56 +285,45 @@ cap breached. 36 remains the absolute floor.
 
 The escalation tier is deliberately incremental — runs that were not needed to
 get back under 300 G keep their full 288 steps. It is driven by a **dry-run
-work-list**: one `--keep 72` dry run (~60 s) reports `delete=<n>files/<mb>MB`
-per run, and only runs with non-zero yield are swept, in oldest-first order.
-The between-run stop check uses `df -BM /home/rander39` (instant, and valid
-because home is its own dedicated VAST mount — agrees with `du` to 0.8%), not
-`du`, which takes ~14 min per call. One authoritative `du` per cycle still
-provides the reported headline. Measured 2026-08-24: 8 of 189 runs held all
-9953 MB of reclaimable VTK; the naive re-measure-everything loop would have
-cost ~27 h of inode walking to free nothing. **36 steps is the absolute
-floor**, and is a genuine last resort: it applies only if sweeping everything at
-72 still leaves the cap breached (Ryan, 2026-08-24). Dropping a run to 36 cannot
-be undone, so it is gated behind an explicit flag rather than reachable by a
-typo.
+work-list**: one `--keep 72` dry run reports `delete=<n>files/<mb>MB` per run,
+and only runs with non-zero yield are swept, in oldest-first order. The
+between-run stop check uses `df -BM /home/rander39` (instant, and valid because
+home is its own dedicated VAST mount), not `du`, which takes many minutes per
+call. One authoritative `du` per cycle still provides the reported headline.
+**36 steps is the absolute floor** and applies only if sweeping everything at
+72 still leaves the cap breached. Dropping a run to 36 cannot be undone, so it
+is gated behind an explicit flag rather than reachable by a typo.
 
 `scripts/p018_vtk_sweeper.sh` enforces the ladder: a `--keep` value that is
 non-integer, below 36, or below 72 without `--last-resort` exits 4 and deletes
 nothing. It also refuses an `--only` that matches no run directory (exit 5) and
-holds an flock so two sweeps cannot race on the same tree (exit 6). Verified
-against a synthetic fixture on the cluster, 2026-08-24 — before that guard, a
-`--keep 0` or an empty `--keep` silently deleted 100% of a run's VTK.
+holds an flock so two sweeps cannot race on the same tree (exit 6).
 
 ### Enforcing the 400 G cap
 
 #### Scope: every checkout, not just this one
 
-There are several FLOWPanel clones under `/home/rander39`, each with its own
-`data/` tree, and **all of them are in scope** (Ryan, 2026-08-27). Measured
-2026-08-27, the main checkout is only ~84 G of the ~398 G total; the bulk sits in
-`FLOWPanel-018-gpu-h200` (95.7 G), `FLOWPanel-018-gpu-gh200` (80.2 G),
-`FLOWPanel-052-h200` (64.6 G) and `FLOWPanel-052` (23.2 G). A reclaim pass that
-only looks at `projects/FLOWPanel.jl` is looking in the wrong place.
+Any FLOWPanel checkout under `/home/rander39` with its own `data/` tree is in
+scope, not just `~/projects/FLOWPanel.jl`. `run_archiver.sh --root DIR`
+(repeatable) or `--all-checkouts` covers them. `--all-checkouts` treats a
+directory as a checkout only if it has **both** `Project.toml` and `data/` —
+`Project.toml` alone would drag in unrelated Julia projects, `data/` alone
+would match scratch directories. One protect list governs all of them, since
+run names are campaign-wide rather than per-checkout.
 
-`run_archiver.sh --root DIR` (repeatable) or `--all-checkouts` covers them.
-`--all-checkouts` treats a directory as a checkout only if it has **both**
-`Project.toml` and `data/` — `Project.toml` alone would drag in unrelated Julia
-projects, `data/` alone would match scratch directories. One protect list governs
-all of them, since run names are campaign-wide rather than per-clone.
-
-#### Archive layout: which clone did this come from?
+#### Archive layout: which checkout did this come from?
 
 ```
 /nobackup/archive/usr/rander39/FLOWPanel_runs/
 ├── INDEX.tsv                                  <- one append-only row per archived run
-├── projects_FLOWPanel.jl/<run>.tar.zst
-├── FLOWPanel-018-gpu-h200/<run>.tar.zst
-└── FLOWPanel-052/<run>.tar.zst
+└── projects_FLOWPanel.jl/<run>.tar.zst
 ```
 
 The slug is the checkout path relative to `$HOME` with `/` → `_`. **Basename
-alone is not enough** — `projects/FLOWPanel.jl` and `flowpanel-021/FLOWPanel.jl`
-would collide, and so would identically-named runs inside them.
+alone is not enough** — two checkouts with the same basename would collide, and
+so would identically-named runs inside them. Runs of the same name from
+different (since-retired) checkouts are disambiguated with a `__<origin>`
+suffix on both the data directory and its tarball.
 
 Provenance is recorded three ways, so losing any one of them is survivable:
 
@@ -303,11 +335,11 @@ Provenance is recorded three ways, so losing any one of them is survivable:
    run's mtime and make it read LIVE on the next pass;
 3. **`INDEX.tsv` at the archive root** — `archived_utc, checkout_slug, run,
    tarball, src_bytes, tar_bytes, files, kept_steps, git_rev, source_checkout`.
-   "Which clone did this come from?" is one `grep`.
+   "Which checkout did this come from?" is one `grep`.
 
 `--restore` and `--resume-delete` act on exactly one checkout and **refuse to
 guess**: with several roots in play they exit 2 and ask for `--root`. Restoring
-into the wrong clone would be silent and wrong.
+into the wrong checkout would be silent and wrong.
 
 #### The two scripts
 
@@ -325,31 +357,30 @@ removes is already in a verified tarball, so the only question is how much stays
 instantly warm-startable without a `--restore`.
 
 `run_archiver.sh` runs first and does the bulk of the reclaim. It is dry-run by
-default (`--apply` acts) and honours the same protect list. Locking (since
-2026-08-28) lives on the SHARED filesystem under `$LOCKROOT` (default
-`~/.cache/flowpanel/locks`, mkdir-based, so it holds across login nodes):
-archivers publish reader markers and may run **in parallel, one worker per
-checkout** (a `checkout.<slug>` lock makes two workers on one checkout
-impossible); the sweeper takes `sweeper.excl` exclusively, so a sweep and an
-archive can never touch `data/` at once. No lock auto-expires — a stale lock
-after a crash is removed by a human, and the error message names the exact
-`rm -rf`. Its exit codes:
+default (`--apply` acts) and honours the same protect list. Locking lives on
+the SHARED filesystem under `$LOCKROOT` (default `~/.cache/flowpanel/locks`,
+mkdir-based, so it holds across login nodes): archivers publish reader markers
+and may run **in parallel, one worker per checkout** (a `checkout.<slug>` lock
+makes two workers on one checkout impossible); the sweeper takes `sweeper.excl`
+exclusively, so a sweep and an archive can never touch `data/` at once. No lock
+auto-expires — a stale lock after a crash is removed by a human, and the error
+message names the exact `rm -rf`. Its exit codes:
 `2` bad usage — including an `--only` run name that matches directories in more
 than one checkout, which must be scoped with a single `--root` (run names are
-not unique across clones), `3` no protect list, `5` unmatched
+not unique across checkouts), `3` no protect list, `5` unmatched
 `--only`/`--restore`, `6` lock conflict (the sweeper holds the shared lock,
 or a checkout was skipped because another archiver holds its lock), `7` archive
-unreachable or unwritable
-(**you are probably on a compute node**), `8` a tarball failed verification —
-*those* runs deleted nothing — or a `--restore` that left members missing or
-truncated on disk (`RESTORE-INCOMPLETE`; the tarball stays intact), `9`
-`ARCHIVED-STALE` runs found and a human decision is owed.
+unreachable or unwritable (**you are probably on a compute node**), `8` a
+tarball failed verification — *those* runs deleted nothing — or a `--restore`
+that left members missing or truncated on disk (`RESTORE-INCOMPLETE`; the
+tarball stays intact), `9` `ARCHIVED-STALE` runs found and a human decision is
+owed.
 
-**Launching workers — detached by default (Ryan, 2026-08-28).** Long archiver
-passes are launched detached on a login node so they survive a dropped ssh
-connection or a sleeping laptop; run in the foreground only for quick dry-runs.
-One worker per checkout may run in parallel — disjoint `--root`s, never two
-workers on one checkout (the lock enforces it, but launch disjoint on purpose):
+**Launching workers — detached by default.** Long archiver passes are launched
+detached on a login node so they survive a dropped ssh connection or a sleeping
+laptop; run in the foreground only for quick dry-runs. One worker per checkout
+may run in parallel — disjoint `--root`s, never two workers on one checkout
+(the lock enforces it, but launch disjoint on purpose):
 
 ```bash
 ssh orc 'bash -lc "cd /home/rander39/projects/FLOWPanel.jl && \
@@ -369,9 +400,9 @@ complains.
 
 Its contract, in order:
 
-1. **Three-way classification, not a binary** (Ryan, 2026-08-27). The two
-   liveness signals are reported separately rather than OR-ed, because measured
-   on the cluster they disagree in *both* directions:
+1. **Three-way classification, not a binary.** The two liveness signals are
+   reported separately rather than OR-ed, because they can disagree in *both*
+   directions:
 
    | class | condition | action |
    |---|---|---|
@@ -387,13 +418,10 @@ Its contract, in order:
    `--only` is refused outright — it would silently become "archive everything
    not in the queue", which is exactly the judgement the label escalates.
 
-   **Why the queue is advisory and mtime is the real signal.** Measured
-   2026-08-27: job `fp-018-csarc_n5_nt144_l2p4` normalises to a string that is a
-   substring of **seven** different run directories, six of which were not being
-   written at all — while job `fp-018gpu-n2_nt72_l3p0` normalises to
-   `018gpu_n2_nt72_l3p0`, which is **not** a substring of the directory it was
-   actively writing, `p018_csarc_n2_nt72_l3p0`. Do not "fix" this by trusting the
-   name match harder.
+   **The queue is advisory and mtime is the real signal**: Slurm job names
+   normalise to strings that can match many run directories, or fail to match
+   the one directory the job is actively writing. Do not "fix" this by
+   trusting the name match harder.
 
    **The backstop for all of it**: the newest mtime under the run is snapshotted
    before the tar, re-checked after verification, and re-checked AGAIN
@@ -409,8 +437,8 @@ Its contract, in order:
    for a complete archive.
 3. **Verify by reading the tarball back**: the member path set and the total
    content byte count must both match the source. On failure the tarball is
-   renamed `.corrupt.<host.pid.start>` (so the next pass re-archives rather than trusting
-   it) and **nothing is deleted**.
+   renamed `.corrupt.<host.pid.start>` (so the next pass re-archives rather
+   than trusting it) and **nothing is deleted**.
 4. **Only then** remove ParaView files from `/home` — but only those **outside
    the newest `--keep N` restartable steps (default 5)**. A step counts as
    restartable only if all four paths the warmstart loader reads exist, the same
@@ -430,16 +458,16 @@ Its contract, in order:
 `--restore RUN` is the inverse and is tested to be byte-identical; it refuses to
 overwrite existing files.
 
-**`ARCHIVED-STALE` means stop and ask Ryan** (Ryan, 2026-08-27). It fires when a
-tarball exists *and* ParaView files survive **outside the keep window** — i.e.
-the archive landed but the delete did not complete. VTK inside the window is
-expected and reads as `ARCHIVED-ALREADY`, which is the normal end state. Do not re-tar, do not delete, do not
-"tidy it up": report it and wait. Once Ryan authorises it,
+**`ARCHIVED-STALE` means stop and ask Ryan.** It fires when a tarball exists
+*and* ParaView files survive **outside the keep window** — i.e. the archive
+landed but the delete did not complete. VTK inside the window is expected and
+reads as `ARCHIVED-ALREADY`, which is the normal end state. Do not re-tar, do
+not delete, do not "tidy it up": report it and wait. Once Ryan authorises it,
 `--resume-delete RUN` finishes the job, but only after confirming every
 remaining ParaView file is present in the tarball **byte for byte**; any
-mismatch exits 8 and deletes nothing. A deliberate `--restore` produces the same
-on-disk state, so restore leaves a `RESTORED.txt` marker that annotates the
-alert — it never suppresses it.
+mismatch exits 8 and deletes nothing. A deliberate `--restore` produces the
+same on-disk state, so restore leaves a `RESTORED.txt` marker that annotates
+the alert — it never suppresses it.
 
 Behaviour is pinned by `scripts/tests/run_archiver_test.sh` (synthetic fixture,
 no cluster needed), which covers classification, the residue that must survive,
@@ -448,30 +476,26 @@ exit code. **Run it after any edit to the archiver and before mirroring.**
 
 **Do not hand-roll VTK deletions or archive moves.** A step is only
 restartable if all four paths the warmstart loader reads exist, and `.vtm`
-indices must be kept together with their pieces — a sweep that left index stubs
-without pieces killed job 13036477 on 2026-08-04. The sweeper encodes that rule;
-ad-hoc `rm` does not.
+indices must be kept together with their pieces — index stubs without pieces
+break restarts. The sweeper encodes that rule; ad-hoc `rm` does not.
 
 **Both scripts** must be mirrored to the cluster checkout whenever they change
 (`/home/rander39/projects/FLOWPanel.jl/scripts/`); verify with `md5sum` on both
 sides afterwards. `run_archiver.sh` is the one that matters most here — it is
 the only tool that writes outside the checkout, and a stale cluster copy would
-delete under rules the local copy no longer holds. The agent definitions in `.claude/agents/` are local-only —
-there is no `.claude/` on the cluster. **Known divergence:** the cluster's copy
-of this file (`agent_policies/HPC.md`) is an older, line-patched revision and is
-deliberately not synced (Ryan, 2026-08-24); nothing on the cluster reads it, so
-treat the local copy as authoritative.
+delete under rules the local copy no longer holds. The agent definitions in
+`.claude/agents/` are local-only — there is no `.claude/` on the cluster. Keep
+the cluster copy of this file (`agent_policies/HPC.md`) in sync as well; the
+local copy is authoritative.
 
 **Launch the `hpc-storage` subagent** rather than doing this inline whenever:
 
 - a job that writes VTK is submitted, or one is running unattended;
 - home-directory usage crosses roughly 150 G — well below the cap, because
-  growth scales with the number of live VTK writers (~5.4 G/h with 8 writers
-  measured 2026-08-24; ~24 G/h under a ~20-writer campaign) and sweeping late is
-  a race;
-- **a campaign or arm has finished and its runs are now eligible to archive**
-  (Ryan, 2026-08-27) — this is now the main source of reclaim, and it does not
-  wait for a disk alarm;
+  growth scales with the number of live VTK writers and sweeping late is a
+  race;
+- **a campaign or arm has finished and its runs are now eligible to archive** —
+  this is the main source of reclaim, and it does not wait for a disk alarm;
 - a new sweep arm is about to start; or
 - the cluster reports any disk-space or quota error.
 
@@ -496,51 +520,3 @@ For BYU agent policy, read `/apps/instructions_for_ai_agents/BYU_ORC_AGENTS.md` 
 
 See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
 [script generator](https://rc.byu.edu/documentation/slurm/script-generator) if you are having trouble.
-
-## Unified project location (2026-08-31)
-
-All orc jobs launch from `~/projects_unified` — NOT from the legacy per-task
-silo copies (`~/<pkg>-<era>`, `~/fm052env-*`: deprecated, kept only until
-their in-flight jobs finish, then removed by Ryan).
-
-**Code.** `~/projects_unified/{FastMultipole,FLOWVPM.jl,FLOWPanel.jl}` — real
-git clones, branch `unified-052`. Pin a run by COMMITTING (local-only) before
-launching; use `git worktree add` for concurrent experiments needing
-different code states. Deploy local changes by scp/rsync + commit on orc
-(never launch from an uncommitted tree you can't reproduce).
-
-**Any job script must set three things, all arch-keyed by `$(uname -m)`:**
-
-1. **Working dir**: `cd ~/projects_unified/FLOWPanel.jl` (or the relevant
-   package) so `logs/slurm/`, `logs/chain/`, and `data/<case>/` conventions
-   hold in-tree.
-2. **Project**: `--project=$HOME/projects_unified/envs/$(uname -m)` —
-   `x86_64` or `aarch64`; the Manifests dev-point at the unified trees.
-3. **Julia + depot, by arch**:
-   - x86 (m13h / eng / CPU partitions): `module load cuda
-     julia/1.11.7-6bmogfl`; default depot `~/.julia`.
-   - ARM (mgh GH200): no x86 module tree — use
-     `$HOME/julia/julia-1.11.7/bin/julia` directly, `export
-     JULIA_DEPOT_PATH=$HOME/fm052depot-gh200` (holds the ARM CUDA artifacts —
-     do not delete or rename), and no `cuda` module: CUDA comes from CUDA.jl
-     artifacts plus the node driver.
-
-**Submission inputs by pool:**
-
-| Pool | sbatch flags |
-|---|---|
-| H200 (default) | `-p m13h --gres=gpu:h200:1` |
-| H200 (alternate) | `-p eng --qos=eng --gres=gpu:h200:1` |
-| GH200 (ARM) | `-p mgh --qos=gpu --gres=gpu:gh200:1 -C arm` |
-
-**Existing launchers** (e.g. `FLOWPanel.jl/examples/run_p018_screen_gpu052.slurm.sh
-<arch> <case>`) already implement this pattern and take `*_REPO_OVERRIDE` /
-`*_PROJECT_OVERRIDE` env vars for special cases — copy their arch-dispatch
-header rather than reinventing it. CAVEAT: they still source GPU tuning knobs
-from the legacy silo path `~/FLOWVPM-052-<arch>/scripts/fm052_common.sh`;
-migrate that bundle into `~/projects_unified` before the silos are deleted.
-
-**Validation**: envs + `FLOWVPMCUDAExt` verified on all three GPU pools and
-x86 CPU (2026-09-01). After any env/depot change, re-run
-`~/projects_unified/smoke_unified_{x86,gpu_m13h,arm}.slurm.sh` (adjust
-partition/gres as needed).
