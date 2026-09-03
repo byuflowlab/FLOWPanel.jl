@@ -943,12 +943,17 @@ function solve_formulation!(f::VelocityThroughSources, state, systems,
         backend_solve, backend_wake, i_step::Int=0)
     t0 = time()   # task 052: env-gated solve timer (FLOWPANEL_GPU_TIMERS)
     if systems isa Tuple
+        # GS_VERBOSE=true prints the per-iteration normalized block residual
+        # (solve!'s own verbose path). Env-gated, default off: each verbose
+        # residual measurement costs ~one influence sweep per outer iteration.
+        gs_verbose = lowercase(get(ENV, "GS_VERBOSE", "false")) in ("true", "1")
         solve!(systems, body_solvers; backend=backend_solve,
             max_outer_iterations=f.max_outer_iterations,
             outer_tolerance=f.outer_tolerance,
             dirichlet_residual_scale=f.dirichlet_residual_scale,
             neumann_residual_scale=f.neumann_residual_scale,
-            require_outer_convergence=f.require_outer_convergence)
+            require_outer_convergence=f.require_outer_convergence,
+            verbose=gs_verbose)
     else
         # Preserve the exact historical single-body solve call. Outer-loop
         # controls apply only to tuple/block-GS orchestration.

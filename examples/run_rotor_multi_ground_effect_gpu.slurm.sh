@@ -70,7 +70,10 @@ case "$MODE" in
   *) echo "ERROR: P022G_MODE must be smoke, probe, accept, or production" >&2; exit 2 ;;
 esac
 export CONVERGENCE_REVS=10 CONVERGENCE_MEAN_TOL=0.005 CONVERGENCE_PTP_TOL=0.02
-export GS_LOG=true GS_MAX_OUTER=50 GS_TOL=1e-8 ROTOR_SPACING_R=2.7
+# GS knobs are default-guarded so sbatch --export=ALL,GS_...=... can override
+# them (they were previously hard-exported here, silently clobbering sweeps).
+export GS_LOG="${GS_LOG:-true}" GS_MAX_OUTER="${GS_MAX_OUTER:-50}" GS_TOL="${GS_TOL:-1e-8}"
+export GS_VERBOSE="${GS_VERBOSE:-false}" ROTOR_SPACING_R=2.7
 export TRUNCATION_DEPTH_R=4.5
 
 case "$CASE" in
