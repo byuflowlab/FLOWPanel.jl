@@ -1,8 +1,10 @@
 # 026 — Particle splitting to cap sigma growth (design)
 
-Status: DESIGN + implementation sketch (2026-08-27; revised 2026-09-02 after
-review — corrected §3a algebra, M[7] attribution replaced, Phase-0 blockers
-and phasing added in §10). No implementation yet.
+Status: Phase 0 COMPLETE 2026-09-03 (§11 — W1 blocker fixed, W2 accumulators,
+W3 merge guard, W4 snapshots located, W5 σ-rule decided, W6 census run; code
+on `026-phase0` branches). Design 2026-08-27, revised 2026-09-02 after review
+(corrected §3a algebra, M[7] attribution replaced, Phase-0 blockers and
+phasing added in §10). Split mechanisms A/B still unimplemented by design.
 Origin: the 018 NT144 GPU performance cliff; this item is deliberately
 standalone (the mechanism is general FLOWVPM physics, not campaign-specific).
 Companion band-aid: an absolute σ cap in the rVPM update (see §8), deployed to
@@ -21,22 +23,30 @@ unblock 018 NT144 arms while this item is designed/implemented properly.
   split-only vs floor+split, §3b purpose + §9.2); the floor only clamps σ
   from below and never gates splitting — trigger must fire on strain
   exposure / on-floor state, not realized σ/σ₀.
+- **Status 2026-09-03**: **Phase 0 COMPLETE** (§11). W1 blocker FIXED
+  (SplittingState persists in checkpoints; legacy checkpoints reconstruct
+  armed-at-ratio-1), W2 Δσ² accumulators implemented + tested, W3 merge
+  reconciliation guard landed, W4 snapshots all located (archived tarballs),
+  W5 decided rule (i) mass-per-length, W6 census run (all-rVPM on
+  p022lg_hr10). Also fixed: `accumulate_H_chi!` was dead in production
+  (FLOWPanel bypasses `nextstep`). Branches `026-phase0` in both repos.
 - **Status 2026-09-02**: design revised after review. §3a algebra corrected
   (a ≈ 1.35σ_p, child geometry OPEN pending kernel-fit study); M[7]
   attribution replaced by a to-be-built persistent Δσ² accumulator; merge
   does not reconcile split state.
-- **BLOCKER W1**: warm start neither restores nor initializes
-  `SplittingState` (`FLOWPanel_warmstart.jl:269ff` bypasses `add_particle`),
-  and `SigmaShrinkTrigger` refuses `sigma_0 ≤ 0`
-  (`FLOWVPM_splitting.jl:309`) — no §9 arm can trigger until fixed.
+- ~~**BLOCKER W1**~~ FIXED 2026-09-03 (§11): warm start neither restored nor
+  initialized `SplittingState` (`FLOWPanel_warmstart.jl:269ff` bypassed
+  `add_particle`), and `SigmaShrinkTrigger` refuses `sigma_0 ≤ 0`
+  (`FLOWVPM_splitting.jl:309`) — no §9 arm could trigger until fixed.
 - **Standing rulings**: no-split discriminator arms run FIRST (020's
   exponential/local-substep update, then `control_no_backscatter_projection`;
   never a positive-Cd floor — clip fires exactly when SFS would amplify).
   Both mechanisms OFF by default; §8 band-aid stays until this lands.
-- **Next actions**: §10 Phase 0 (W1–W6: warm-start state, Δσ² accumulator,
-  merge reconciliation, snapshot availability check, vol-consumer audit,
-  attribution census) → Phase 1 no-split arms → Phase 2 shrink-split gate →
-  Mechanism B → Mechanism A (gated).
+- **Next actions**: Phase 1 no-split discriminator arms (warm-start the
+  gpu40/LineGauss ignitions from the archived tarballs in §11-W4: 020 stable
+  integrator, safe SFS projection, combination) → Phase 2 shrink-split gate
+  with the σ-floor pairing matrix → Mechanism B → Mechanism A (gated; note
+  the W6 local census found zero viscous-dominated crossings, §11-W6).
 - **Entry points**: §10 phasing; §9 warm-start continuation gate; forensics
   in `018_.../gpu_nt144_cliff_findings_20260827.md` and
   `FastMultipole/MATRIX_OPERATOR_REFACTOR/052-handoff-prompt-2026-08-31v.md`.
@@ -465,3 +475,103 @@ Phases 1–2; §7.2 ring test + §7.3 018 NT144 A/B.
 
 **Phase 4** — Mechanism A, only if the W6 census shows viscous-dominated cap
 crossings AND the §3a kernel-fit study lands an acceptable child geometry.
+
+## 11. Phase 0 results (2026-09-03)
+
+All six W-tasks closed. Code on branches `026-phase0` of FLOWPanel
+(`fastmultipole` base) and FLOWVPM (`flowpanel` base); worktree session under
+`~/Dropbox/research/projects/worktrees/026/`.
+
+**Design-doc amendments discovered during implementation:**
+
+- `SplittingState` has exactly four fields (`sigma_0`, `H_chi`,
+  `hold_counter`, `cooldown_counter`) — the "provenance and lineage IDs"
+  assumed by §2/§4 **do not exist** in code. They are also unnecessary for
+  reproducible split orientations: `compute_split_direction`
+  (`FLOWVPM_splitting.jl`) derives the axis from Γ/U/J, all of which the
+  checkpoint already persists. `FilamentEdgeGraph` persistence remains a
+  non-goal (warm-started runs begin with an empty edge graph; affects
+  filament-edge arms only).
+- Checkpoints are VTK (`.vtp` per step) + TOML with **no version field**;
+  field-presence probing is the established back-compat idiom and is what W1
+  uses.
+- **`accumulate_H_chi!` was dead in production**: FLOWPanel drives the wake
+  via `_euler`/`_euler_exp` directly (`FLOWPanel_wake.jl`), bypassing
+  `FLOWVPM.nextstep` which hosts the H_chi hook — the same class of bug as
+  W1. Fixed: called explicitly after the integrator step.
+
+**W1 (blocker) — FIXED.** Checkpoints now carry six optional `split_*`
+point-data arrays (four state vectors + the two W2 accumulators; counters as
+Int32, reals at series precision). Loader: all six present → exact restore;
+none present (legacy campaign checkpoints, incl. fp64-sidecar era) →
+reconstruction `sigma_0 :=` restored post-SIGMA_CEIL σ (armed, ratio exactly
+1, one-shot warn); partial set → typed error. `sigma_0` is never clamped
+(creation-time reference; clamping would spuriously arm overgrown
+particles). Fallback semantics: shrink accrued pre-restart will not
+re-trigger — under-triggers only; faithful trigger continuity requires
+post-change checkpoints. Tests: exact round-trip incl. trigger-decision
+equality and a split firing on a warm-started field (the blocker
+regression); legacy fallback incl. SIGMA_CEIL cross-check; IGE warm-start
+suite 113/113. (Pre-existing, unrelated: testsets using the immutable
+`WarmstartNoopSolver` error on Julia 1.12 via a `WeakKeyDict` finalizer
+issue — fails identically on the untouched checkout.)
+
+**W2 — implemented.** `SplittingState` gains `dsigma2_visc`/`dsigma2_rvpm`
+(Δσ², accumulated as the *applied* post-guard delta at each σ-update site:
+euler CPU rVPM update, euler_exp geometric contraction, RK3 per-stage, and
+the three CoreSpreading branches). Cleared on split children, merge
+representative, and CoreSpreading RBF reset (numerical re-projection, not
+physics). Device-backed broadcast paths skip accumulation (splitting is
+CPU-only; follow-up documented in-code if GPU splitting lands). Persisted
+with W1. Invariant tested per integrator × viscous scheme:
+$$\sigma^2(t) - \sigma^2(t_0) = \Delta\sigma^2_\mathrm{visc} + \Delta\sigma^2_\mathrm{rVPM}$$
+(44 assertions, `FLOWVPM/test/runtests_dsigma2_accumulators.jl`).
+
+**W3 — ruling + guard.** Confirmed gap: `_finalize_merged_particle!` never
+touched splitting state — the representative kept a stale `sigma_0` while σ
+jumped to `cbrt(Σσ³)`. Guard landed: on merge the representative's splitting
+state is reset wholesale (`sigma_0 :=` merged σ; exposure/counters/
+accumulators zeroed) — a merged particle is a new entity. Removed members
+are handled by `remove_particle`'s existing swap-with-last lockstep.
+**Policy ordering ruling**: maintenance order inside a step is the
+`ParticleMaintenance` chain order (functional policies run in tuple order,
+then trim); when both merge and split policies are active, list
+`MergeParticles` before `SplitParticles` so a fresh child cannot be
+immediately re-absorbed by its sibling, and rely on `N_cooldown` for the
+converse (child re-splitting).
+
+**W4 — snapshots all located (gate PASS).**
+
+| snapshot | where | steps |
+|---|---|---|
+| gpu40 ~950 | `/nobackup/archive/usr/rander39/FLOWPanel_runs/projects_FLOWPanel.jl/scr_p019_s038v_gpu40__052-h200.tar.zst` | 0–1062 |
+| gpu40 ~985 | `…/scr_p019_s038v_gpu40__018-gpu-gh200.tar.zst` | 985–1475 |
+| 018 NT144 pre-cliff (cliff @2253) | `…/p018_csarc_n5_nt144_l2p4_s2gpu.tar.zst` | 1333–2278 (use 2200–2248) |
+
+No `.bson` restarts exist; all warm-start material is `.vtp` (consistent
+with W1). NT144 pre-cliff states must be extracted from the tarball at
+Phase-1 launch.
+
+**W5 — decision: rule (i), mass-per-length, σ_c ≈ 0.58 σ_p.** Full
+`vol`-consumer audit: `vol` feeds no vortex dynamics (zero reads in UJ/FMM
+kernels, SFS, relaxation, integrators). Only consumers: RBF CG *initial
+guess* (convergence, not the converged answer; tolerates vol=0), PSE
+*overwrites* vol from σ every step, merge `vol_sum` is pass-through
+bookkeeping, rest is I/O. Production FLOWPanel already sheds particles with
+vol=0. Volume conservation buys nothing physical; take the
+overlap-friendlier rule. Hygiene: any future split writes children's
+vol = (4/3)πσ_c³ (matches the edge-refinement convention).
+
+**W6 — census script + first result.**
+`scripts/p026_sigma_cap_census.jl` (FLOWPanel): offline pass over a particle
+VTP series; NN position-matching across adjacent steps; classifies σ_cap
+crossings by realized Δσ² vs the exact viscous budget 2ν·dt. Smoke run,
+p022lg_hr10 steps 300–329 (σ_cap = 7.5e-3 m ≈ p99.9, ν = 1.48e-5):
+1741 crossings, **all rVPM-dominated, zero viscous-dominated** — p99
+Δσ²/step ≈ 800× the viscous budget, max ≈ 24,600×. Known limitation: a
+fast-moving runaway particle racks up false crossings via NN mismatch
+(observed: the top-10 table is one runaway matched against successive small
+neighbors), inflating *counts*; the dominance *split* is robust since
+nothing approaches the viscous budget. Local evidence therefore keeps
+**Mechanism A gated off**; run the census on a gpu40/018 series before any
+final ruling.
