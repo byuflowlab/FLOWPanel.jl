@@ -8,38 +8,17 @@
 # one run directory name per line; '#' comments.
 #
 # Seeded 2026-08-05.
+#
+# 2026-09-02: CLEARED AT RYAN'S EXPLICIT DIRECTION (chat).  All 14 prior
+# entries were removed and released to the sweep after he was shown what they
+# protected (L1_ov3 warm-start source, the scr_ufdt_* and p018_ufront_*
+# ignition corpses, the 019 P4b scoring inputs, the Ladder-B _s2 restart
+# sources) and reaffirmed.  The pre-clear contents are quoted verbatim in the
+# 2026-09-02 storage ledger entry if the list ever needs reconstructing.
 
-# Sole surviving sigma-ladder warm-start source, step 719.  Its only backup is
-# on Ryan's Mac at ~/p018_L1_ov3_paraview/.  Permanent.
-p018_L1_ov3
-
-# 2026-08-05 spatial-rigor / Ladder-B runs.  Their restart sets are the _s2
-# chain sources if walltime cuts them short -- the 2026-08-05 sweep deleted B0's
-# restart set, which is why these four had to start cold.  Remove a line once
-# that run has completed its 22 revs or has had its _s2 launched.
-p018_h0p25
-p018_h0p125
-p018_ov1p4
-p018_ov1p0
-
-# 2026-08-06, added at Ryan's direction (chat): the clean-dt-ladder ignition
-# corpses, one per NT rung, kept for ParaView study of the ignition windows.
-# Remaining steps are the last 10 before death: nt36 275-284, nt72 481-490,
-# nt144 1097-1106 (sigma-flip at ~1104).  Earlier steps were swept before the
-# protection was requested.
-scr_ufdt_nt36
-scr_ufdt_nt72
-scr_ufdt_nt144
-
-# 2026-08-06, BRAINSTORM/019 P4b: fid144 final-step VTPs are scoring inputs
-# (sigma/sigma_shed histograms vs the s038v reference).  Protect until P4b
-# is scored and archived.
-scr_p019_fid144
-scr_p019_s038v
-
-# 2026-08-11, BRAINSTORM/019: both cancelled production runs were cancelled
-# MID-IGNITION — their retained 10-step restart sets ARE the ignition
-# windows (s035: steps 987-996 at 27.6 revs; n2_visc: 611-620).  Corpse
-# evidence, do not sweep, do not restart.
-p018_ufront_s035_visc
-p018_ufront_n2_visc
+# 2026-09-02: 022 linegauss h/R=1 re-anchor (job 13548847), FAILED at step 716
+# after a Gamma-side ignition of the below-ground population at step 710.
+# Kept on /home at Ryan's direction: steps <= 709 are the only candidate
+# pre-ignition restart state, and the run is the sole linegauss-family
+# ground-effect corpse.  Do not archive, do not strip.
+p022lg_hr10

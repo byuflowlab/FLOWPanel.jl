@@ -573,12 +573,9 @@ end
 # the crossing station — reported below, not glossed.
 station_sigmas = nothing
 if !isnan(sigma_chord_fraction)
-    particle_shedding == "sigma_overlap" || error(
+    conversion_mode == "smooth" || particle_shedding == "sigma_overlap" || error(
         "SIGMA_CHORD_FRACTION replaces the shed-sigma law and expects " *
         "PARTICLE_SHEDDING=sigma_overlap (got $(repr(particle_shedding)))")
-    conversion_mode == "smooth" && error(
-        "SIGMA_CHORD_FRACTION is incompatible with CONVERSION=smooth " *
-        "(SurfaceVorticityConversion owns shedding with a single scalar sigma)")
     band_cs = 0.02 * R  # ~ one spanwise ring spacing on the 45-ring blade
     station_sigmas = [
         max.(sigma_chord_fraction .*
@@ -586,7 +583,17 @@ if !isnan(sigma_chord_fraction)
                                band=band_cs),
              sigma_floor_r * R)
         for shed in rotor.shedding]
-    method_trailing = pnl.StationSigmaOverlap(station_sigmas, overlap)
+    # Under CONVERSION=smooth the station-sigma law drives ONLY geometric
+    # placement (the DAS_SIGMA_LAMBDA co-scaled Das lengths below);
+    # SurfaceVorticityConversion still sheds at its single scalar
+    # CONVERSION_SIGMA and method_trailing is never passed to the wake.
+    if conversion_mode == "smooth"
+        println("Sigma chord mode with CONVERSION=smooth: station sigmas " *
+            "used for Das placement only; particles shed at scalar " *
+            "CONVERSION_SIGMA")
+    else
+        method_trailing = pnl.StationSigmaOverlap(station_sigmas, overlap)
+    end
     for (k, sig) in enumerate(station_sigmas)
         n_floored = count(s -> s == sigma_floor_r * R, sig)
         println("Sigma chord mode: shedding$(k) sigma/R range " *

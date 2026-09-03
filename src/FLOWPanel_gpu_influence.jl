@@ -752,10 +752,27 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
             end
             _panel_fmm_maybe_dump(out, tgt, fmm_bodies, n_t)
         end
+        # 052h reverse leg: pass1 wake ParticleField sources of a BODY target
+        # go through the device reverse cross pass (U-only, no potential);
+        # on any fallback the sources stay in the dense pack below
+        fmm_wakes = ()
+        if pass1 && !want_potential && !grad && tsys isa AbstractBody &&
+                panel_wake_fmm_enabled()
+            cands = Tuple(s for s in sources
+                if s isa FLOWVPM.ParticleField && s.np > 0)
+            if !isempty(cands)
+                wake_ok = false
+                _step_timer_measure(:wake_to_panels_fmm; nested=true) do
+                    wake_ok = _panel_wake_reverse_device!(out, tgt, tsys, cands)
+                end
+                wake_ok && (fmm_wakes = cands)
+            end
+        end
         packed = Any[]
         for ssys in sources
             _gpu_source_columns(ssys) == 0 && continue
             any(b -> b === ssys, fmm_bodies) && continue
+            any(b -> b === ssys, fmm_wakes) && continue
             # self-pair core_size conditioning (pass 3): evaluate a body's
             # own influence at core_size_panel, everything else at the
             # active (targets) offset — the rectangular analogue of
@@ -764,7 +781,7 @@ function _gpu_rect_influence!(targets::Tuple, sources::Tuple;
                     ssys isa AbstractBody) ? ssys.core_size_panel : nothing
             push!(packed, _gpu_pack_source!(ssys, koff))
         end
-        isempty(packed) && isempty(fmm_bodies) && continue
+        isempty(packed) && isempty(fmm_bodies) && isempty(fmm_wakes) && continue
         detail_label = if pass1
             tsys isa RigidWakeBody ? :wake_to_rotor_panels :
             tsys isa NonLiftingBody ? :wake_to_ground_panels : :wake_to_probes
@@ -877,6 +894,41 @@ _panel_fmm_xell() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_XELL", "5"))
 _panel_fmm_xp() = parse(Int, get(ENV, "PANEL_INFLUENCE_FMM_XP", "6"))
 _panel_fmm_xrg() = parse(Float64, get(ENV, "PANEL_INFLUENCE_FMM_XRG", "0.006"))
 
+# ---- 052h reverse leg (particles -> panels) gates ----
+#
+# Two-tier like the forward pass: PANEL_WAKE_FMM (default off) arms the
+# route; PANEL_WAKE_FMM_DEVICE (default on within) selects the device cross
+# pass; PANEL_WAKE_FMM_XVERIFY additionally evaluates the dense reference and
+# prints the relU (debug only). The reverse leg shares the forward tunables
+# (_cross_config: XQ/XELL/XP/XRG) — one grid family, both directions.
+
+"052h route state: :unset (read env on first query), :off, :on."
+const PANEL_WAKE_FMM = Ref{Symbol}(:unset)
+
+"Whether the 052h particles->panels reverse-FMM route is armed (default off)."
+function panel_wake_fmm_enabled()
+    if PANEL_WAKE_FMM[] === :unset
+        val = lowercase(get(ENV, "PANEL_WAKE_FMM", "0"))
+        PANEL_WAKE_FMM[] = val in ("1", "true", "on", "yes") ? :on : :off
+    end
+    return PANEL_WAKE_FMM[] === :on
+end
+
+"Set the 052h particles->panels reverse-FMM route programmatically."
+function set_panel_wake_fmm!(mode::Symbol)
+    mode in (:off, :on) || throw(ArgumentError(
+        "panel wake fmm mode must be :off or :on (got $(repr(mode)))"))
+    PANEL_WAKE_FMM[] = mode
+    return mode
+end
+
+_panel_wake_fmm_device() =
+    lowercase(get(ENV, "PANEL_WAKE_FMM_DEVICE", "1")) in
+        ("1", "true", "on", "yes")
+_panel_wake_fmm_xverify() =
+    lowercase(get(ENV, "PANEL_WAKE_FMM_XVERIFY", "0")) in
+        ("1", "true", "on", "yes")
+
 # All cross-pass tunables parsed at once into an immutable, validated config.
 # The cached-entry key includes it (_cross_entry!), so changing any tunable
 # mid-run rebuilds the whole entry instead of silently mixing old tables with
@@ -936,7 +988,7 @@ const _CROSS_NP_CAP = Ref(0)
 
 "Drop all cached cross-pass device states (e.g. after geometry rebuilds)."
 clear_cross_pass_state!() = (empty!(_CROSS_STATE); _CROSS_POS[] = nothing;
-    _CROSS_NP_CAP[] = 0; nothing)
+    _CROSS_NP_CAP[] = 0; clear_reverse_wake_state!(); nothing)
 
 # Refresh (and grow, ~6% geometric headroom) the padded position mirror: the
 # live prefix converts the particle field's storage eltype to Float64 on
@@ -1326,6 +1378,180 @@ function _panel_cross_device!(pfield::FLOWVPM.ParticleField, bodies::Tuple,
         _panel_fmm_maybe_dump(ref, pos_h, bodies, np; deviceU=xver)
     end
     _gpu_route_hit!(:panels_to_particles_cross, :cuda)
+    return true
+end
+
+################################################################################
+# 052h REVERSE LEG: DEVICE CROSS-PASS ROUTE (particles -> panels)
+################################################################################
+#
+# When PANEL_WAKE_FMM is armed AND the CUDA radix lifecycle is up, the pass1
+# wake ParticleField -> body-panel legs run the device reverse cross pass
+# (FastMultipole cross_stencil_cuda.jl 052h: reverse producers -> vortex B2M +
+# LH M2M over particle nodes -> LH M2L -> LH L2L + dual-channel L2B at the
+# panel control points -> vortex near blocks), replacing the dense
+# :wake_to_rotor_panels / :wake_to_ground_panels legs. U-only (grad requests
+# keep those sources dense); probe targets stay dense in this first landing
+# (probe-system identity across steps is unresolved — a per-step entry
+# rebuild would swamp the win). Everything else about the entry pattern
+# mirrors the forward pass: frozen padded union root box, grow-only padded
+# particle buffers (padding particles carry wrapped REAL positions but ZERO
+# strength, so occupancy stays step-stable while padded sources contribute
+# nothing), rebuild-on-escape, fallback before any accumulation.
+
+mutable struct _ReverseWakeEntry
+    nt::Int
+    np::Int            # padded capacity the ctx was built with
+    x_min::Any
+    h0::Float64
+    ct::Any            # CrossStencilTables
+    ctx::Any           # DeviceCrossProducerContext (build_reverse = true)
+    rs::Any            # DeviceCrossReverseState
+    cfg::Any
+    d_tgt::Any         # 3 x nt device mirror of the target positions
+end
+
+const _REVERSE_STATE = Dict{UInt,_ReverseWakeEntry}()
+
+# grow-only padded 8-row particle SOURCE buffer (FMM layout: 1:3 position,
+# 5:7 strength, 8 sigma); shares the position padding discipline of
+# _CROSS_POS but zeroes the padded strengths
+const _REV_BUF = Ref{Any}(nothing)
+const _REV_BUF_CAP = Ref(0)
+
+"Drop all cached reverse-leg device states (e.g. after geometry rebuilds)."
+clear_reverse_wake_state!() = (empty!(_REVERSE_STATE); _REV_BUF[] = nothing;
+    _REV_BUF_CAP[] = 0; nothing)
+
+function _reverse_padded_buffer!(Pd, np::Int, np_cap::Int, pos_d, CUDAmod)
+    if np_cap > _REV_BUF_CAP[] || _REV_BUF[] === nothing
+        _REV_BUF_CAP[] = np_cap
+        _REV_BUF[] = Base.invokelatest(CUDAmod.zeros, Float64, 8, np_cap)
+    end
+    buf = _REV_BUF[]
+    # positions: reuse the padded position mirror wholesale (already wrapped)
+    view(buf, 1:3, 1:np_cap) .= view(pos_d, :, 1:np_cap)
+    # live strengths + sigma; padding stays zero-strength, sigma 1
+    view(buf, 5:7, 1:np) .= view(Pd, 4:6, 1:np)
+    view(buf, 8:8, 1:np) .= view(Pd, 7:7, 1:np)
+    if np < np_cap
+        view(buf, 5:7, (np + 1):np_cap) .= 0.0
+        view(buf, 8:8, (np + 1):np_cap) .= 1.0
+    end
+    return buf
+end
+
+function _reverse_entry!(body::AbstractBody, tgt::AbstractMatrix{Float64},
+        np_cap::Int, pos_d, CUDAmod)
+    key = objectid(body)
+    nt = size(tgt, 2)
+    cfg = _cross_config()
+    e = get(_REVERSE_STATE, key, nothing)
+    if e === nothing || e.nt != nt || e.cfg != cfg
+        x_min, h0 = _cross_root_box(body, pos_d, CUDAmod)
+        ct = FastMultipole.CrossStencilTables(cfg.q, cfg.ell_x, h0, cfg.R_guard)
+        e = _ReverseWakeEntry(nt, 0, x_min, h0, ct, nothing, nothing, cfg,
+            nothing)
+        e.ctx = FastMultipole.device_cross_producer_context(ct, x_min, h0,
+            nt, np_cap; build_reverse=true)
+        e.np = np_cap
+        e.rs = FastMultipole.device_cross_reverse_state(e.ctx, cfg.P)
+        e.d_tgt = Base.invokelatest(CUDAmod.CuArray, tgt)
+        _REVERSE_STATE[key] = e
+    elseif e.np != np_cap
+        # padded particle capacity outgrown: rebuild the two-occupancy context
+        # + reverse state around the SAME frozen box/config (mirrors
+        # _cross_entry!; the LH operator tables depend only on h0/P and are
+        # rebuilt inside device_cross_reverse_state)
+        e.ctx = FastMultipole.device_cross_producer_context(e.ct, e.x_min,
+            e.h0, nt, np_cap; build_reverse=true)
+        e.np = np_cap
+        e.rs = FastMultipole.device_cross_reverse_state(e.ctx, e.cfg.P)
+        GC.gc(true)   # 052 leak fix: eagerly collect the replaced device state
+    end
+    return e
+end
+
+# One target body's reverse Stages A-E. ALL fallible work runs before the
+# single accumulation into the host scratch.
+function _reverse_run!(e::_ReverseWakeEntry, body::AbstractBody,
+        tgt::AbstractMatrix{Float64}, np::Int, pos_d, d_pbuf, acc, CUDAmod)
+    copyto!(e.d_tgt, tgt)
+    FastMultipole.refresh_cross_producers!(e.ctx, e.d_tgt, pos_d)
+    if e.ctx.needs_rebuild
+        # box escape: same discipline as the forward pass — rebuild the WHOLE
+        # entry around a fresh padded union box and rerun the producers
+        delete!(_REVERSE_STATE, objectid(body))
+        e = _reverse_entry!(body, tgt, size(pos_d, 2), pos_d, CUDAmod)
+        copyto!(e.d_tgt, tgt)
+        FastMultipole.refresh_cross_producers!(e.ctx, e.d_tgt, pos_d)
+        e.ctx.needs_rebuild && error("reverse-leg union-box rebuild failed " *
+            "to contain all bodies (freshly padded box escaped within one step)")
+    end
+    FastMultipole.refresh_cross_reverse_multipoles!(e.rs, e.ctx, d_pbuf)
+    FastMultipole.refresh_cross_reverse_locals!(e.rs, e.ctx)
+    FastMultipole.finish_cross_reverse_locals!(e.rs, e.ctx, e.d_tgt)
+    FastMultipole.apply_cross_reverse_near!(e.rs, e.ctx, d_pbuf, e.d_tgt;
+        sigma_row=8, reg=true)
+    # all fallible work done — accumulate LAST
+    acc .+= Matrix{Float64}(Array(e.rs.d_out))[2:4, :]
+    return nothing
+end
+
+"""
+    _panel_wake_reverse_device!(out, tgt, tsys, wakes) -> Bool
+
+052h reverse leg: evaluate the wake ParticleFields' velocity at `tsys`'s
+target points `tgt` (3 x nt) through the device reverse cross pass,
+accumulating into `out[1:3, :]`. Returns false (dense fallback, nothing
+touched) when the leg cannot run. With PANEL_WAKE_FMM_XVERIFY=1 additionally
+evaluates the dense reference and prints the relU.
+"""
+function _panel_wake_reverse_device!(out::AbstractMatrix{Float64},
+        tgt::AbstractMatrix{Float64}, tsys, wakes::Tuple)
+    _panel_wake_fmm_device() ||
+        return _gpu_route_fallback!(:wake_to_panels_fmm, "device route disarmed")
+    tsys isa AbstractBody ||
+        return _gpu_route_fallback!(:wake_to_panels_fmm,
+            "reverse leg covers body targets only (got $(typeof(tsys)))")
+    FastMultipole.load_cuda_radix_lifecycle!() ||
+        return _gpu_route_fallback!(:wake_to_panels_fmm,
+            "CUDA radix lifecycle unavailable")
+    for w in wakes
+        w isa FLOWVPM.ParticleField ||
+            return _gpu_route_fallback!(:wake_to_panels_fmm,
+                "unsupported wake source $(typeof(w))")
+        w.kernel === FLOWVPM.kernel_gaussianerf ||
+            return _gpu_route_fallback!(:wake_to_panels_fmm,
+                "unsupported particle kernel")
+        w.particles isa Array &&
+            return _gpu_route_fallback!(:wake_to_panels_fmm,
+                "host-backed particle field (device leg needs CuArray particles)")
+    end
+    _cross_config()   # validate tunables loudly up front
+    CUDAmod = getglobal(FastMultipole, :CUDA)
+    nt = size(tgt, 2)
+    acc = zeros(3, nt)
+    for w in wakes
+        np = w.np
+        np == 0 && continue
+        Pd = w.particles
+        pos_d, np_cap = _cross_padded_positions!(Pd, np, CUDAmod)
+        d_pbuf = _reverse_padded_buffer!(Pd, np, np_cap, pos_d, CUDAmod)
+        e = _reverse_entry!(tsys, tgt, np_cap, pos_d, CUDAmod)
+        _reverse_run!(e, tsys, tgt, np, pos_d, d_pbuf, acc, CUDAmod)
+    end
+    if _panel_wake_fmm_xverify()
+        ref = zeros(3, nt)
+        packed = Any[_gpu_pack_source!(w, nothing) for w in wakes if w.np > 0]
+        isempty(packed) ||
+            _gpu_direct_batch!(ref, tgt, packed, false, false, _gpu_device())
+        relU = sqrt(sum(abs2, acc .- ref)) / max(sqrt(sum(abs2, ref)), eps())
+        println("panel_wake_xverify nt=$nt relU=$relU")
+        flush(stdout)
+    end
+    out[1:3, :] .+= acc
+    _gpu_route_hit!(:wake_to_panels_fmm, :cuda)
     return true
 end
 

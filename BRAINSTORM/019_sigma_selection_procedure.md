@@ -203,6 +203,97 @@ existing choice $C_{wake}=1/(2\pi)$ remains an empirical same-$\Delta t$
 initializer supported by the measured crossing bracket; it is not a
 single-filament kernel result.
 
+### 2026-08-31 conservative maximum-based stability estimate
+
+The two kernel maxima above can nevertheless give a conservative estimate of
+the minimum stable core *within the isolated-filament model* if they are
+imposed as separate worst-case conditions.  The continuous filament, rather
+than the single-particle result, is used because $\Gamma_v$ has the required
+$\mathrm{m^2/s}$ units without introducing an assumed segment length.  For
+the Gaussian-core filament,
+
+$$
+u_{\max}=C_u\frac{\Gamma_v}{\sigma},
+\qquad
+C_u=\frac{1-e^{-\rho_u^2/2}}{2\pi\rho_u}=0.07181966,
+\qquad \rho_u=1.5852011,
+$$
+
+and, under the live rVPM $f=0$, $g=1/5$ convention,
+
+$$
+Z_{\max}=C_Z\frac{\Gamma_v}{\sigma^2},
+\qquad
+C_Z=\frac{0.02374796}{5}=0.004749591.
+$$
+
+Require first that the maximum induced velocity displace a particle by no
+more than one core radius in one step.  This explicit core-CFL condition gives
+
+$$
+\Delta t\,u_{\max}\le\sigma
+\quad\Longrightarrow\quad
+\sigma_u=\sqrt{C_u\Gamma_v\Delta t}.
+$$
+
+Separately, require the maximum projected strain to remain below a chosen
+frozen-$Z$ update limit $x_{\lim}$:
+
+$$
+\Delta t Z_{\max}\le x_{\lim}
+\quad\Longrightarrow\quad
+\sigma_Z=\sqrt{\frac{C_Z}{x_{\lim}}\Gamma_v\Delta t}.
+$$
+
+Here $x_{\lim}=2/3$ is the exact joint-amplitude limit of the frozen-$Z$
+Euler map, while the procedure's $x_{\lim}=\varepsilon=0.2$ is the more
+conservative operating target.  Taking both separate maxima gives
+
+$$
+\sigma_{stab,min}^{(\mathrm{fil})}=\max(\sigma_u,\sigma_Z).
+$$
+
+For the measured loading and timestep used in P2,
+$\Gamma_v=0.27792\ \mathrm{m^2/s}$, $\Delta t=3.0864\times10^{-4}\ \mathrm{s}$,
+and $R=0.119\ \mathrm m$,
+
+| maximum-based condition | $\sigma$ (m) | $\sigma/R$ |
+| --- | ---: | ---: |
+| one-core displacement, $\sigma_u$ | 0.002482 | 0.02086 |
+| joint Euler amplitude, $\sigma_Z(x_{\lim}=2/3)$ | 0.000782 | 0.00657 |
+| operating margin, $\sigma_Z(x_{\lim}=0.2)$ | 0.001427 | 0.01199 |
+
+Thus even with the stricter $Z$ operating target, velocity controls and the
+combined estimate is $\sigma_{stab,min}^{(\mathrm{fil})}\simeq0.0209R$.
+This construction is conservative because the velocity and projected-strain
+maxima occur at different radii and need not coexist.  It is **not** a
+conservative guarantee
+for the real discrete wake: curvature, spacing, superposition, orientation,
+and cumulative contraction are absent from the isolated-filament model.  The
+older empirical initializer, $\sqrt{\Gamma_v\Delta t/(2\pi)}=0.03105R$, is
+therefore retained; it is 1.49 times this kernel-only estimate and remains
+closer to the measured same-$\Delta t$ margin.
+
+**Evidence from tried core sizes.**  The principal rungs are summarized below;
+screen and production results are kept distinct because duration changes the
+observed boundary.
+
+| $\sigma/R$ | observed evidence |
+| ---: | --- |
+| 0.01496, 0.01930/0.01995, 0.02493 | The tried inviscid and viscous screen rungs ignited; the 0.01930 viscous production case also ignited. |
+| 0.02909 | The NT36/72/144 family ignited after roughly 7--8 physical revolutions, so timestep refinement did not rescue this core size. |
+| 0.02992 | An original viscous screen survived 8 rev but failed the direct margin ($M=0.295$); production twins ignited, and the later matched-stack screen also ignited. |
+| 0.03117 | Viscous screen survived with $M=0.134\le0.2$, placing the original same-$\Delta t$ screen acceptance crossing in $(0.02992,0.03117]R$. |
+| 0.03491 | Viscous production run ignited at 27.6 rev after long monotone core contraction despite about 25 rev with per-step $M\le0.2$. |
+| 0.03808 | Inviscid and viscous screens passed ($M=0.141$ and 0.112); the original viscous production run and the newer GPU run both completed 40 rev, although the latter's CT remained strongly oscillatory. |
+| 0.04987 and 0.08727 | Inviscid screens survived. |
+
+Accordingly, the measured evidence puts the screen-class margin near
+$0.030$--$0.031R$ on the original stack and the production margin in
+$(0.03491,0.03808]R$.  These are brackets, not universal point thresholds.
+They also show why $0.0209R$ should be read only as a kernel-level minimum,
+not as the operating $\sigma$ for this wake.
+
 1. **Initialize** $\sigma_0 = \max(c_{eq}\,\sigma_{eq},\; \sigma_{stab})$
    with $c_{eq} = 2$ (viscous-fidelity margin: keeps the strained-core
    balance share $(\sigma_{eq}/\sigma)^2 \le 25\%$). If no a-priori Z̄ is

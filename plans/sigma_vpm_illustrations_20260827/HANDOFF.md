@@ -424,3 +424,364 @@ numbers off the VTPs, not off the prose.
 - When 13512297 lands, harvest per the "NEXT STEPS when 13508968 lands" recipe
   (monitor CSV `monitors/scr_p019_s038v_gpu40_monitor04_wake_health_system1.csv`,
   VTP windows, renders); judge by outputs, not sacct state.
+
+## gpu40 landing (2026-08-31, job 13518480, appended by agent)
+
+- **`scr_p019_s038v_gpu40` COMPLETE: 1475/1475 steps.** Warm restart from
+  step 1059 (after the 13513892 zero-M2L device crash at step 1060), ran
+  steps 1060–1475 in 10,953 s (~26 s/step vs 44 s/step pre-crash baseline)
+  on gh200. **052g zero-M2L fix production-validated** — 416 steps through
+  the exact geometry that killed 13513892, no `Falling back`, no CUDA
+  errors. GATE: gpu_gemv=416 cpu_gemv=0 dispatcher_rc=0; sacct FAILED is
+  the wrapper's NaN-line gate tripping on the end-of-run CT comparison
+  table's `CT KJ = NaN` column (RUN_KJ diagnostic off — expected); the run
+  itself printed `all finite = true`. Judge by outputs, not sacct state.
+- **Readout:** cycle-mean CT (headline) = 218.171 ± 4.27 (±1.96%, last 2
+  revs); per-rev mean spread 0.0138 (tol 0.005); within-rev p-p/mean 0.921
+  (tol 0.02) ⇒ `CONVERGED (Phase 2e) = false` — CT oscillates strongly
+  within a revolution. Artifacts:
+  `data/scr_p019_s038v_gpu40/scr_p019_s038v_gpu40_CT_vs_rev.csv`,
+  `..._CT_per_rev.csv`, `..._case_metadata.toml`.
+- **Monitors stitched across the crash** into
+  `data/scr_p019_s038v_gpu40/monitors_stitched/` (steps 0–1059 from the
+  crashed dir + 1060–1475 from the restart; no overlap; 1476 steps each;
+  originals untouched in both `monitors/` dirs). VTK series in the new dir
+  starts at 1060; pre-1060 VTK remains only in the `.todelete` dir below.
+- **Cleanup staged:** `scr_p019_s038v_gpu40.crashed1061` archived
+  (monitors + toml + pvd, 2.2 MB →
+  `data/scr_p019_s038v_gpu40.crashed1061.archive.tar.gz`) and renamed to
+  `scr_p019_s038v_gpu40.crashed1061.todelete` (25 G). Ryan runs the final
+  `rm -rf ~/FLOWPanel-018-gpu-gh200/data/scr_p019_s038v_gpu40.crashed1061.todelete`
+  himself (pre-1060 VTK series is inside it — confirm it is not needed for
+  renders before deleting).
+
+## Session-7 derivation audit (2026-08-31, context reset — ENTRY POINT)
+
+This session audited the derivation of $\sigma_{stab}$ in BRAINSTORM item 019;
+it did not launch jobs, render figures, alter simulation code, or touch cluster
+state.
+
+### Recorded corrections
+
+- `BRAINSTORM/019_sigma_selection_procedure.md` now distinguishes the exact
+  frozen-$Z$ Euler thresholds: the Γ multiplier changes sign at
+  $\Delta tZ=1/3$ and amplifies above $2/3$; the σ multiplier changes sign at
+  $1$ and amplifies above $2$. The old statement that the coupled map first
+  becomes unstable above $2$ was algebraically wrong.
+- The existing
+  $\sigma_{stab}=\sqrt{\Gamma_v\Delta t/(2\pi)}$ is labeled a heuristic
+  order-one/σ-positivity initializer, not the exact joint-stability boundary.
+  Under the same frozen-$Z$ model, joint amplitude stability would require
+  $\sigma\ge\sqrt{3/2}\,\sigma_{stab}$; the measured $M\le\varepsilon$ probe
+  remains the acceptance test.
+- "Filament self-strain" was replaced by a positive projected-strain model.
+  An exactly straight isolated filament does not axially self-stretch.
+- The prior ~±2% point-accuracy claim was demoted correctly: $0.0311R$ lies
+  inside the measured screen-class crossing bracket $(0.0299,0.0312]R$, which
+  does not determine a point crossing or prefactor uncertainty.
+- A self-contained subsection, `### 2026-08-29 kernel-level prefactor audit`,
+  was added immediately after the scales derivation (currently near line 101).
+  It derives the maximizing radii and coefficients for both a FLOWVPM
+  Gaussian-erf particle and a continuous Gaussian-core filament, and includes
+  the live rVPM $1/5$ factor.
+
+### Kernel-audit numbers and ruling
+
+- Single Gaussian-erf particle: $r_{u,max}/\sigma=1.3687567$ and
+  $\max|u|=0.01702951|\Gamma_p|/\sigma^2$; maximum projected raw symmetric
+  strain occurs at $r/\sigma=1.7751319$ with coefficient $0.006899045$;
+  live-$Z$ coefficient after the $1/5$ factor is $0.001379809$.
+- Continuous Gaussian-core filament:
+  $u_\theta=\Gamma_v[1-e^{-r^2/(2\sigma^2)}]/(2\pi r)$;
+  $r_{u,max}/\sigma=1.5852011$; maximum $|S_{r\theta}|$ occurs at
+  $r/\sigma=1.8938227$ with raw coefficient $0.02374796$ and live-$Z$
+  coefficient $0.004749591$ multiplying $\Gamma_v/\sigma^2$.
+- Therefore $r=\sigma$ is not a maximizing radius, and maximizing velocity,
+  full velocity gradient, and projected symmetric strain are different
+  problems. In particular, the full-gradient maximum at a particle center is
+  solid-body rotation with zero symmetric strain.
+- The item-019 coefficient $1/(2\pi)=0.159155$ is 6.70 times the isolated
+  filament's maximum raw strain and 33.5 times its maximum live-rVPM $Z$.
+  Do **not** replace it mechanically with $0.004749591$: the real wake is a
+  curved, discrete, many-particle field whose spacing, segment length,
+  superposition, and orientations are not fixed by $\Gamma_v$ alone.
+- Standing interpretation:
+  $Z_{max}=C_{wake}\Gamma_v/\sigma^2$ and
+  $\sigma_{init}=\sqrt{C_{wake}\Gamma_v\Delta t}$ are the defensible general
+  forms. Existing $C_{wake}=1/(2\pi)$ remains an empirical, same-$\Delta t$
+  initializer supported by the measured bracket, not a single-filament kernel
+  result.
+
+### Notebook and next decision
+
+- `notebooks/journals/20260821.md`, `# 20260827`, immediately after
+  `actII_runaway.gif`, contains the compact corrected derivation and corrected
+  regime-map caption. It includes the Euler-threshold and empirical-prefactor
+  caveats but **does not** duplicate the full kernel-level audit; item 019 is
+  the authoritative detailed record.
+- No follow-up is presently authorized. If Ryan wants to replace the empirical
+  prefactor, the next task is to define and measure $C_{wake}$ from the actual
+  wake's projected-strain field at a specified probe protocol—not to substitute
+  the isolated-filament coefficient.
+
+## Session-8 Act-II ignition forensics (2026-08-31 — CONTEXT-RESET ENTRY POINT)
+
+Ryan asked whether the viscous Act-II runaway begins at $\sigma_{eq}$, between
+$\sigma_{eq}$ and $\sigma_{shed}$, near $\sigma_{shed}$, or at the viscous
+floor. Read-only reduction of the retained `scr_p019_s025v_rr` VTPs
+(steps 260, 266--323) and exact Gaussian-erf per-source gradient decomposition
+resolved the question.
+
+### Ruling
+
+- The failure has different **source** and **target** core scales. It is seeded
+  by a localized sub-equilibrium, high-$|\Gamma|/\sigma^2$ pair, but the first
+  supercritical $Z$ target is still near $\sigma_{shed}$. Floor-pinned cores
+  appear much later and are a corpse signature, not the observed trigger.
+- Constants used for the illustration rerun:
+  $\sigma_{shed}=2.967$ mm, ambient $\sigma_{eq}\approx2.165$ mm, and
+  $\sigma_{floor}=0.0941$ mm $=0.0317\sigma_{shed}=0.0434\sigma_{eq}$.
+- Step 291: pair A is at $0.321\sigma_{shed}=0.440\sigma_{eq}$ with
+  $|\Gamma|=0.0329$; B is at $0.668\sigma_{shed}=0.915\sigma_{eq}$ with
+  $|\Gamma|=0.0735$. They dominate one another's projected gradients.
+- Step 292: A/B reach $|\Gamma|=0.259/0.260$ at
+  $0.417/0.885\sigma_{shed}$. B supplies 101.1% of the net projected strain
+  at target C (other sources slightly cancel). C is at
+  $0.949\sigma_{shed}=1.301\sigma_{eq}$ but sees
+  $\Delta tZ=3.531$ and $u=319$ m/s. Its next core is
+  $2.403\sigma_{shed}$, matching $|1-\Delta tZ|\sigma$, and its circulation
+  grows $7.56\times$.
+- At onset, median $\sigma\approx1.42\sigma_{eq}$; only 1.6% of particles are
+  below $\sigma_{eq}$ and 0.05% below $0.5\sigma_{eq}$, while the top 100
+  $|\Gamma|/\sigma^2$ particles have median
+  $\sigma\approx0.55\sigma_{eq}$. This is quantitatively tail-driven.
+- The rerun's max-$|\Gamma|/\sigma^2$ particle first reaches the floor scale at
+  step 317, 25 steps after onset. The old L2 VTPs likewise show the argmax at
+  $0.39\sigma_{eq}$ in steps 1032--1033 and at the floor from step 1034, but
+  those VTPs begin after ignition. Existing `ignition_core.csv` is a sequence
+  of per-step extrema, not one persistent particle.
+
+### Important equation correction
+
+The plan/notebook shorthand
+$\boldsymbol\Gamma\leftarrow(1-3\Delta tZ)\boldsymbol\Gamma$ omits the full
+stretching vector. The live update is
+
+$$
+\boldsymbol\Gamma^{n+1}=\boldsymbol\Gamma^n
++\Delta t(\mathbf S-3Z\boldsymbol\Gamma-C\boldsymbol\epsilon),
+\qquad
+\mathbf S=(\boldsymbol\Gamma\cdot\nabla)\overline{\mathbf u}.
+$$
+
+See `../FLOWVPM.jl/src/FLOWVPM_timeintegration.jl:297-307` and
+`BRAINSTORM/020_sigma_aware_subgrid_closure/phase_01_theory.md:88-142`.
+The scalar $1-3\Delta tZ$ multiplier does not describe total $\Gamma$ and
+does not explain the pair's initial growth by itself. This also means earlier
+claims that treat its sign/amplitude thresholds as the exact stability of the
+full coupled map require re-audit.
+
+### Durable artifacts and notebook action
+
+- Rerun VTPs:
+  `/private/tmp/claude-502/-Users-ryan-Dropbox-research-projects-FLOWPanel-jl/2c6862dd-d8a5-430e-a379-84e453dda661/scratchpad/vtp_s025v/`.
+- Monitor:
+  `plans/sigma_vpm_illustrations_20260827/wake_health_csvs/scr_p019_s025v_rr_monitor04_wake_health_system1.csv`.
+- Old corpse reduction:
+  `data/p018_L2_visc_forensics/`.
+- A new notebook subsection, `### Act II ignition forensics — thin source,
+  near-shed target, late floor`, was inserted immediately before
+  `### Integrator substory (not an act)` in
+  `~/Dropbox/research/notebooks/journals/20260821.md`. It records the table,
+  population statistics, late-floor caveat, full-vector equation, and corrected
+  story. It supersedes the nearby older shorthand/caption where they conflict;
+  those older passages have not yet been rewritten.
+
+### Correct Act-II message
+
+Viscosity removes the negative-$\sigma$ route, but ambient $\sigma_{eq}$ is a
+fixed point rather than a clamp. A small sub-equilibrium tail can develop a
+localized $\Gamma$/gradient feedback and drive supercritical updates on
+otherwise near-shed particles. Floor-pinned runaway comes later.
+
+## Session-9 remaining-animation mechanism audit (2026-08-31)
+
+Read-only audit completed for every GIF embedded in the notebook's
+`# 20260827` sigma/VPM section.  No simulation, cluster state, archive, or run
+output was changed.  The repository harvester reduced 115 retained VTP frames
+and the full 1,476-row gpu40 monitor into
+`forensics_remaining/` (`SUMMARY.md`, `particle_roles.csv`, `bulk_tail.csv`,
+selected-target `gradient_sources_top10.csv`, gpu40 windows/events, and the two
+reduction scripts).  Exact Gaussian-erf source sums reproduce recorded live
+$\Delta tZ$ at the selected targets; all live-$Z$ results include the rVPM
+$g=1/5$ factor.
+
+### Principal mechanism corrections
+
+- The live circulation step is
+  $\boldsymbol\Gamma^{n+1}=\boldsymbol\Gamma^n+
+  \Delta t(\mathbf S-3Z\boldsymbol\Gamma-C\boldsymbol\epsilon)$.
+  The old scalar $1-3\Delta tZ$ multiplier, its $2/3$ full-stability boundary,
+  the $e^{-3\Delta tZ}$ “exact” comparator, and the derived
+  $\sqrt{3/2}\sigma_{stab}$ joint boundary are withdrawn.  F1 panel (c) needs
+  a full-operator re-derivation.  A1 itself remains valid only as the
+  frozen-$Z$ explicit $\sigma^2$ map.
+- `actI_blowup`: step-282 source 60386
+  ($0.212\sigma_{shed}=0.290\sigma_{eq}$, $|\Gamma|=0.0298$) supplies 100.1%
+  of $\Delta tZ=4.456$ to a different $0.620\sigma_{shed}$ max-$Z$/max-$u$
+  receiver.  Max $|\Gamma|/\sigma^2$ and field-minimum $\sigma$ are other
+  particles.  The receiver becomes negative one step later; negative
+  $\sigma$ is propagation/corpse, not the trigger.
+- `actI_sidebyside`: viscosity does not arrest the population at
+  $\sigma_{eq}$.  At step 282 it raises the minimum 0.0907→0.1695 shed and p1
+  0.562→0.671 while lowering max $|\Gamma|/\sigma^2$ 16x, $u_{max}$ 15x, and
+  max $\Delta tZ$ 39x.  This is matched-window suppression/delay; the viscous
+  pane ignites at step 292.
+- `actIII_drift_death`: the bulk median remains $0.973\sigma_{shed}$, but an
+  already-active thin-source/thicker-target chain is retained.  At step 996 a
+  $0.114\sigma_{shed}$ source with $|\Gamma|=0.302$ supplies 99.7% of
+  $\Delta tZ=78.73$ to a $1.501\sigma_{shed}$, 2773-m/s target.  Floor contact
+  first appears at step 995 on a different particle.  “Slow sigma drift, not
+  a Gamma spike” is contradicted terminally; true initial onset is missing.
+- `actIII_fixed`: the 9-rev remnant is clean but proves no arrest.  The full
+  gpu40 run has a one-step $u>1000$ excursion at step 875/raw rev 24.31,
+  recovers briefly, enters persistent propagation at step 996/raw rev 27.67,
+  reaches the molecular floor by step 1000, and drops below 20k retained
+  particles at step 1068.
+  Terminal $u=2780$ m/s and max $|\Gamma|/\sigma^2=1.30\times10^9$ show it is
+  still dead.  The later rising minimum is post-trim survivor/repopulation
+  bias.  No audited animation demonstrates contraction arrest; the production
+  boundary must be re-bracketed above $0.0381R$ at long horizon.
+- `actII_fixed_geom`: positive-$\sigma$ integration removes the scalar Euler
+  sign artifact, but the rerun is not killed by the same scalar positive-$Z$
+  trigger.  At step 210 the decisive particle has projected
+  $\Delta tZ=-1.896$ while the full frozen $3\times3$ map has
+  $r=3.00\times10^{25}$ and effective $\Delta tZ=11.733$.  The exact coupled
+  update predicts its next $\sigma$ to machine precision; $|\Gamma|$ grows
+  $1.55\times10^{10}$ and it becomes the terminal gradient source.  This is
+  the same localized tail-to-target feedback class but a genuinely different,
+  nonnormal/directional full-matrix onset.
+
+### Files and notebook
+
+- `sigma_vpm_illustrations_plan.md` now begins with a binding equation/audit
+  correction; historical production-plan statements remain below it.
+- `render_all_acts.sh` now uses the exact s035 metadata denominator
+  $\sigma_{shed}=4.153883619746504$ mm instead of 4.236 mm and has corrected
+  future render titles.  Existing s035 GIF colors remain 1.98% misnormalized;
+  no rerender was performed.
+- The existing notebook `# 20260827` section now has self-contained forensic
+  subsections, corrected captions, a corrected act table/condensed mechanism,
+  and a final reconciliation.  The older Act-II forensic subsection remains.
+
+### Missing evidence / next decisions
+
+- s035 VTPs start after propagation began and its monitor has no `max_dtZ`;
+  the original seed cannot be reconstructed.
+- No gpu40 particle VTPs are local, so its source/receiver identities and
+  bulk/tail particle quantiles are unavailable.
+- Snapshot VTP indices are not guaranteed persistent IDs under merge/delete;
+  only stated adjacent transitions were checked for index continuity and exact
+  update consistency.
+- Broader work, not silently patched here: re-derive F1/full-vector stability
+  from the frozen operator; rebuild the long-horizon production bracket and
+  dependency-stack comparison; test rather than infer whether a candidate
+  closure controls the geometric nonnormal route.
+
+## Session-9 FINAL STATE (2026-08-31 — CONTEXT-RESET ENTRY POINT)
+
+The requested remaining-animation audit is complete.  Do **not** repeat the
+115-frame harvest.  Start by reading the preceding Session-9 section and
+`forensics_remaining/SUMMARY.md`.
+
+### Completed edits
+
+- Notebook `/Users/ryan/Dropbox/research/notebooks/journals/20260821.md`,
+  `# 20260827` / `## σ/VPM model illustrations (018–020)`: corrected condensed
+  equations, act table, all seven GIF captions, per-animation forensic
+  subsections, integrator narrative, gpu40 verdict, and final reconciliation.
+- `sigma_vpm_illustrations_plan.md`: binding 2026-08-31 correction block at
+  the top; historical plan retained below and explicitly superseded where it
+  conflicts.
+- `render_all_acts.sh`: future titles corrected; exact s035
+  $\sigma_{shed}=4.153883619746504$ mm substituted for the old 4.236 mm.
+  Existing GIF was **not** rerendered.
+- This HANDOFF: dated Session-9 findings and this reset checkpoint appended.
+- New reproducible harvest bundle in `forensics_remaining/`:
+  `SUMMARY.md`, `reduce_remaining.py`, `reduce_monitors.py`,
+  `particle_roles.csv`, `bulk_tail.csv`, `gradient_sources_top10.csv`,
+  `gpu40_windows.csv`, and `gpu40_events.csv`.
+
+### Verification already completed
+
+- Both reducers rerun successfully with one BLAS/OMP thread: 460 role rows,
+  115 frame rows, 250 selected-target source rows, and gpu40 window/event
+  tables reproduced.
+- Exact particle-source sums match recorded live $\Delta tZ$ at selected
+  targets (including the $g=1/5$ factor).
+- Independent scaling-and-squaring check of the geometric step agrees with
+  the eigen-based matrix exponential to $1.3\times10^{-13}$ relative; the
+  predicted next $\sigma$ agrees to $1.6\times10^{-15}$ relative and the
+  measured $\Gamma$ ratio agrees at about $10^{-12}$.
+- `bash -n render_all_acts.sh`, Python AST parsing, `git diff --check`, even
+  notebook math delimiters, all seven GIF link existence checks, and Pandoc
+  Markdown→HTML conversion pass.  Pandoc prints only pre-existing/expected
+  TeX-to-MathML warnings; it produces a nonempty HTML file.
+
+### Next-session action
+
+No further analysis is required to answer the present request.  Review the
+targeted diffs without disturbing unrelated dirty-worktree changes, then give
+Ryan the concise final report: principal corrections, file links, validation,
+and missing evidence.  Do not rerender, launch simulations, access/mutate the
+cluster, unpack archives, or revise F1/production thresholds without a new
+instruction.  If Ryan asks for follow-on work, the open scientific tasks are
+the three broader re-derivations/tests listed immediately above this block.
+
+## Session-10 gpu40 pre-ignition Act-III visual (2026-08-31)
+
+Ryan explicitly requested replacing `actIII_fixed` with gpu40 revolutions
+17--20.  The 144 particle VTPs for raw steps 612--755 (3.65 GB) were copied
+read-only from the intact ORC pre-restart directory into
+`/private/tmp/sigma_vpm_gpu40_rev17_20/`; no archive was unpacked and no remote
+state was changed.  `render_all_acts.sh` now renders this window with the full
+gpu40 wake-health monitor, exact s038 denominator, and stride 4.  The resulting
+36-frame, 6.5-MB `actIII_fixed.gif` covers raw revs 17.00--20.89 (HUD revs
+16.00--19.89) and is titled as a coherent pre-ignition window before the later
+runaway, not as an arrested survivor.  The previous GIF and frames are retained
+as `actIII_fixed_pre_gpu40_backup*`.
+
+This download narrows the earlier missing-evidence statement: gpu40 particle
+VTPs are now local only for the pre-ignition visualization window.  No particle
+VTPs cover the transient step-858 excursion or the persistent onset at step
+996, so the failure's particle-level source/receiver identities remain
+unavailable.  The notebook image link resolves to the new GIF, but its caption
+still describes the old steps-314--323 remnant and requires Ryan's notebook-edit
+approval before correction.
+
+## Session-11 concise GIF-annotation pass (2026-08-31)
+
+Ryan authorized rerendering all seven notebook GIFs with concise annotations.
+The six particle animations now use mechanism-only titles: Act-I thin source
+to different receiver with negative sigma following; Act-II viscous
+suppression/delay and thin-source/near-shed-target propagation; Act-III stable
+bulk/local Gamma spike with missing s035 onset, plus the gpu40 coherent
+pre-onset window with later runaway; and the geometric nonnormal full-matrix
+runaway.  A1 is labeled only as a frozen-$Z$ core-size map.  The s035 render
+uses the exact metadata denominator.  All seven linked GIFs were rebuilt and
+visually spot-checked; each is below 10 MB after loss-limited palette
+optimization of the 40-frame Act-I GIF.  `render_all_acts.sh` now reproduces
+the six particle assets, including the geometric coda, and
+`scripts/illus_fig_sigma_map.py` reproduces A1.
+
+## Session-12 sigma/R-only particle-GIF titles (2026-09-01)
+
+Ryan superseded the mechanism-title pass: all six particle-animation title
+lines now report only `sigma/R` (0.0249 for the s025/s025v set, 0.0356 for
+s035, 0.0381 for gpu40 s038v, and 0.0200 for the geometric rerun).  Step,
+spinup-excluded HUD revolution, and maximum velocity remain below the title.
+All six particle GIFs and the Act-I composite were rebuilt and visually
+checked; all remain below 10 MB.  A1 is analytic and has no particle
+`sigma/R`, so its concise frozen-$Z$ core-size-map title is unchanged.  The
+temporary s035 source window had disappeared and was recovered read-only from
+ORC (steps 987--996); no archive was unpacked and no remote state was changed.

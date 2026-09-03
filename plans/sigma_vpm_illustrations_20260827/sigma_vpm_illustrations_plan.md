@@ -9,6 +9,48 @@ Ryan wants a set of visuals for a technical audience illustrating four things de
 - **SFS framing:** "gap + candidate, caveated" — lead with the clean structural null; present the closure as well-motivated but unproven; the 1.9–3.3-decade gap shown only with its "conditional scenario estimate" caveat (binding 2026-08-12 audit correction).
 - Deliverable of this task: the figures/animations plan recorded as a **journal entry for today (2026-08-27)** — the entry outlines the plan; figure production itself is follow-on work the entry's checklist tracks.
 
+## 2026-08-31 mechanism-audit correction (binding)
+
+The particle-level audit in `forensics_remaining/` and the full rVPM equations
+supersede the scalar-circulation shorthand used below.  The live update is
+
+$$
+\boldsymbol\Gamma^{n+1}=\boldsymbol\Gamma^n+
+\Delta t\left(\mathbf S-3Z\boldsymbol\Gamma-C\boldsymbol\epsilon\right),
+\qquad
+\mathbf S=(\boldsymbol\Gamma\mathbin\cdot\nabla)\overline{\mathbf u}.
+$$
+
+Thus $1-3\Delta tZ$ is only one term in a vector update; it is not the
+particle's circulation multiplier, and $\Delta tZ=2/3$ is not an exact
+stability boundary of the full coupled map.  Under aligned stretching the
+live homogeneous Euler multiplier is $1+2\Delta tZ$; for a general frozen
+gradient the update depends on the full $3\times3$ operator.  The corrected
+geometric integrator likewise evolves
+$\mathbf q=e^{L\Delta t}\boldsymbol\Gamma$, then rescales by
+$r=\lVert\mathbf q\rVert/\lVert\boldsymbol\Gamma\rVert$; it is not the scalar
+map $e^{-3\Delta tZ}\boldsymbol\Gamma$.
+
+The $y=\sigma^2$ cobweb remains exact for the frozen-$Z$ explicit-Euler
+core-size step followed by molecular CoreSpreading.  It is a **sigma-only**
+map, not a unified $\sigma/\Gamma$ mechanism.  Consequently F1 panel (c), the
+old joint-stability interpretation, and the $\sqrt{3/2}\,\sigma_{stab}$ claim
+require a broader full-operator re-derivation and are withdrawn for audience
+use.  The empirical $\sigma_{stab}$ scale may remain a same-$\Delta t$
+initializer, but not an exact vector-stability boundary.
+
+The completed 40-revolution `scr_p019_s038v_gpu40` rerun also overturns the
+provisional Act-III arrest claim: it has a transient supercritical excursion
+at step 875, enters persistent propagation at step 996, and later loses most
+of the retained wake.  The existing `actIII_fixed.gif` supports only a clean
+short window through about nine revolutions.  It does not certify
+$\sigma^*/R=0.0381$ or drift arrest.  The production boundary/initializer now
+requires a new long-horizon bracket rather than a silent coefficient patch.
+
+All older mechanism bullets, act rows, and asset specifications below are the
+historical production plan; where they conflict with this block or
+`forensics_remaining/SUMMARY.md`, they are superseded.
+
 ## Source-of-truth summary (from BRAINSTORM scouts — verified against files on disk)
 
 ### Mechanism (018, feeds figures 1–2)

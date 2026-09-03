@@ -110,8 +110,7 @@ for k in range(nframes):
         reg = "regime 1 (stable)" if a < 1 else "regime 2 (blow-up)"
         ax.set_title(rf"$\Delta tZ={dtZ}$ — {reg}", fontsize=11)
         ax.spines[["top", "right"]].set_visible(False)
-    fig.suptitle("Core-size map  $y_{n+1}=(1-\\Delta tZ)^2 y_n + 2\\nu\\Delta t$"
-                 f"   —   step {min(k, n)}", fontsize=11)
+    fig.suptitle(f"Frozen-$Z$ core-size map — step {min(k, n)}", fontsize=11)
     fig.tight_layout()
     path = os.path.join(DATA, f"_a1_frame_{k:02d}.png")
     fig.savefig(path)

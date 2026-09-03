@@ -40,7 +40,10 @@
 
 set -euo pipefail
 THREADS=64
-EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+# Unified checkout per the 2026-08-31 ruling (agent_policies/HPC.md). The
+# legacy projects/FLOWPanel.jl guard is kept only for reproducing old anchors.
+EXPECTED_REPO="${P022_EXPECTED_REPO:-/home/rander39/projects/FLOWPanel.jl}"
+PROJECT="${P022_PROJECT_OVERRIDE:-/home/rander39/projects/envs/x86_64}"
 [[ "$PWD" == "$EXPECTED_REPO" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"
@@ -54,8 +57,13 @@ export JULIA_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" OPENBLAS_NUM_THRE
 # results stay comparable; override at submission via --export if intended.
 export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-vatistas}"
 # Manifest pins julia 1.11.7 (018 ops: a 1.12 re-resolve killed a whole trio).
+module load julia/1.11.7-6bmogfl 2>/dev/null || true
 command -v julia >/dev/null 2>&1 || \
   export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/bin:$PATH"
+JULIA_VERSION="$(julia --version)"
+[[ "$JULIA_VERSION" == "julia version 1.11.7" ]] || {
+  echo "ERROR: required Julia 1.11.7, got '$JULIA_VERSION'" >&2; exit 2; }
+[[ -d "$PROJECT" ]] || { echo "ERROR: project env $PROJECT missing" >&2; exit 2; }
 
 # ---- 022 fixed operating point + carrier (identical for every case) ---------
 # Operating point (Ryan 2026-08-18): RPM 6000, rho 1.16, R 0.1195. Carrier =
@@ -183,8 +191,75 @@ case "$CASE" in
     export GROUND_PARTICLE_POLICY=none
     export GROUND_DAMP_BAND_R=0   # update to Phase-3 verdict before submitting
     export TRUNC_RADIUS_R=3.0 ;;
+  # --- Phase 5 h/R sweep, FINE mesh + linegauss (Ryan ruling 2026-08-31; CPU
+  # per his 08-31 "launch it on cpu for now"). Identical to p022_ige_fine
+  # except GROUND_H_R, TRUNCATION_DEPTH_R = h/R + 3, and the reg family, which
+  # is a DEFINING knob here: linegauss, exported unconditionally per the 018
+  # ops rule. p022lg_hr10 is the linegauss re-anchor vs p022_ige_fine
+  # (vatistas, CT 0.07934±0.00234, job 13207681).
+  p022lg_hr05)
+    export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
+    export RHPC_MESH=45_185_ct4
+    export GROUND_ENABLE=true
+    export GROUND_H_R=0.5
+    export TRUNCATION_DEPTH_R=3.5
+    export GROUND_RADIUS_R=4.0
+    export GROUND_PANEL_LENGTH_R=0.15
+    export GROUND_PARTICLE_POLICY=none
+    export GROUND_DAMP_BAND_R=0
+    export TRUNC_RADIUS_R=3.0 ;;
+  p022lg_hr10)
+    export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
+    export RHPC_MESH=45_185_ct4
+    export GROUND_ENABLE=true
+    export GROUND_H_R=1.0
+    export TRUNCATION_DEPTH_R=4
+    export GROUND_RADIUS_R=4.0
+    export GROUND_PANEL_LENGTH_R=0.15
+    export GROUND_PARTICLE_POLICY=none
+    export GROUND_DAMP_BAND_R=0
+    export TRUNC_RADIUS_R=3.0 ;;
+  p022lg_hr15)
+    export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
+    export RHPC_MESH=45_185_ct4
+    export GROUND_ENABLE=true
+    export GROUND_H_R=1.5
+    export TRUNCATION_DEPTH_R=4.5
+    export GROUND_RADIUS_R=4.0
+    export GROUND_PANEL_LENGTH_R=0.15
+    export GROUND_PARTICLE_POLICY=none
+    export GROUND_DAMP_BAND_R=0
+    export TRUNC_RADIUS_R=3.0 ;;
+  p022lg_hr20)
+    export FLOWPANEL_FILAMENT_REG=linegauss
+    export GS_MAX_OUTER=100 # linegauss: GS contracts in ~3 iters; cap kept high for late-wake safety
+    export GS_TOL=1e-5      # linegauss FMM-vs-LU metric floor GROWS with bound loading: 4.2e-7 (smoke plateau) -> +2.4e-8/step steady climb through step 134 of production 13548794 (1.15e-6, would trip 2e-6 ~step 170). Floor tracks solution magnitude, saturating with thrust ~rev 8-12; 1e-5 clears any plausible plateau, still catches divergence.
+    export RHPC_MESH=45_185_ct4
+    export GROUND_ENABLE=true
+    export GROUND_H_R=2.0
+    export TRUNCATION_DEPTH_R=5.0
+    export GROUND_RADIUS_R=4.0
+    export GROUND_PANEL_LENGTH_R=0.15
+    export GROUND_PARTICLE_POLICY=none
+    export GROUND_DAMP_BAND_R=0
+    export TRUNC_RADIUS_R=3.0 ;;
   *) echo "ERROR: unknown 022 case tag '$CASE' (Phase 3/4 rungs get their own explicit arms)" >&2; exit 2 ;;
 esac
+
+# Explicit smoke mode (P022_SMOKE=1): shortened schedule for a functional
+# check of an untested case/stack combo. Never scored; pair with a distinct
+# P022_RUN_NAME so production names stay clean.
+if [[ "${P022_SMOKE:-0}" == 1 ]]; then
+  export SPINUP_REVS=0.1 FREESTREAM_RAMP_REVS=0.05 FREESTREAM_HOLD_REVS=0.05
+  export FREESTREAM_WITHDRAW_REVS=0.05 SETTLE_REVS=0.10 NREVS=0.35
+  echo "  P022_SMOKE=1: shortened schedule (~16 steps), NOT a scored run"
+fi
 
 export RUN_NAME="$CASE"
 [[ -n "${P022_RUN_NAME:-}" ]] && export RUN_NAME="$P022_RUN_NAME"
@@ -208,7 +283,8 @@ echo "  overlap:$OVERLAP pps:$P_PER_STEP merge_r:$MERGE_R_FACTOR nrows:$NWAKEROW
 echo "  gs_log:$GS_LOG gs_cap:$GS_MAX_OUTER gs_tol:$GS_TOL"
 echo "  started $(date '+%F %T')"
 
-julia --project=. -t "$THREADS" examples/rotor_hover_ground_effect.jl
+echo "  filament_reg:$FLOWPANEL_FILAMENT_REG project:$PROJECT"
+julia --project="$PROJECT" -t "$THREADS" examples/rotor_hover_ground_effect.jl
 
 echo "Case $CASE finished ($(date '+%F %T'))."
 echo "Artifacts: data/$RUN_NAME/${RUN_NAME}_CT_vs_rev.csv"
