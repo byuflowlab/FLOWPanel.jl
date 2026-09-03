@@ -45,8 +45,11 @@ unblock 018 NT144 arms while this item is designed/implemented properly.
 - **Next actions**: Phase 1 no-split discriminator arms (warm-start the
   gpu40/LineGauss ignitions from the archived tarballs in §11-W4: 020 stable
   integrator, safe SFS projection, combination) → Phase 2 shrink-split gate
-  with the σ-floor pairing matrix → Mechanism B → Mechanism A (gated; note
-  the W6 local census found zero viscous-dominated crossings, §11-W6).
+  with the σ-floor pairing matrix → W7 averaged stretching axis (§10
+  Phase-3 prerequisite: sign-invariant EMA director in `SplittingState`,
+  persisted via the W1 schema, new `STRETCH_AVG` direction) → Mechanism B →
+  Mechanism A (gated; note the W6 local census found zero viscous-dominated
+  crossings, §11-W6).
 - **Entry points**: §10 phasing; §9 warm-start continuation gate; forensics
   in `018_.../gpu_nt144_cliff_findings_20260827.md` and
   `FastMultipole/MATRIX_OPERATOR_REFACTOR/052-handoff-prompt-2026-08-31v.md`.
@@ -472,6 +475,31 @@ split through the §9 gate, with the full §7.1 diagnostics.
 
 **Phase 3** — Mechanism B, only if growth events remain relevant after
 Phases 1–2; §7.2 ring test + §7.3 018 NT144 A/B.
+
+- **W7 (Phase-3 prerequisite, added 2026-09-03)**: persistent time-averaged
+  stretching axis for the §3b split direction — closes §2 gap (c) (S and Z
+  are stack locals discarded each substep; the only axes
+  `compute_split_direction` offers today are *instantaneous* Γ/U/J). Build
+  it as the W2 pattern extended to a vector:
+  - `stretch_axis` (3 × maxparticles) in `SplittingState`, updated as an
+    exponential moving average of the applied stretching direction at the
+    same integrator sites that accumulate `dsigma2_rvpm` (euler CPU loop has
+    S = MM1–MM3 in hand; euler_exp has `L*G`).
+  - **Sign-invariant director averaging**, not a raw-S EMA: raw S cancels
+    under oscillating strain, and the §3b geometry needs only the plane
+    normal to the axis. Align each sample to the running mean before
+    accumulating (EMA of ±S with the sign that gives positive dot with the
+    current mean), or a per-particle structure tensor if that proves noisy.
+  - Same lockstep/reset semantics as W2 (add/remove swap-with-last; zero on
+    split children, merge representative, and RBF reset) and persistence
+    through the W1 VTP schema (one more optional `split_*` array) — an EMA
+    is exactly the state a warm start would otherwise silently zero.
+  - New `STRETCH_AVG` member of `SplitDirection` reading it, falling back to
+    `STRAIN1` while the EMA is unconverged (e.g. the first ~1/α steps after
+    birth/split, tracked by comparing particle age against the EMA
+    timescale or by a norm threshold on the accumulated director).
+  - Open: the EMA timescale α (relate to the §4 trigger's exposure window so
+    the axis averages over the same history that armed the trigger).
 
 **Phase 4** — Mechanism A, only if the W6 census shows viscous-dominated cap
 crossings AND the §3a kernel-fit study lands an acceptable child geometry.
