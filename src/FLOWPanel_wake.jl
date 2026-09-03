@@ -2230,6 +2230,11 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         else
             FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
         end
+        # FLOWPanel calls the integrators directly, bypassing FLOWVPM.nextstep
+        # — so the H_chi exposure hook that nextstep provides must be invoked
+        # here or split exposure triggers never accumulate in production
+        # (no-op unless pfield.track_H_chi is set by a SeparationTrigger).
+        FLOWVPM.accumulate_H_chi!(w.pfield, dt)
     end
 
     if diagnose_particle_gamma
@@ -2276,7 +2281,11 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress
     cells = [WriteVTK.MeshCell(WriteVTK.PolyData.Verts(), 1:np)]
 
     _write_particles_vtp(particles_block * ".$idx.vtp", host_particles, np,
-        cells, _particle_vtp_eltype(host_particles))
+        cells, _particle_vtp_eltype(host_particles);
+        # 026 W1: persist the splitting side-buffer so warm starts restore
+        # trigger state. Always host-resident (on GPU-backed fields the
+        # mirror sync copies it, but the live buffer is host either way).
+        split_state=w.pfield.splitting_state)
 
     vtp_relpath = joinpath(vpm_name * "_particles", vpm_name * "_particles.$idx.vtp")
     _pvd_append!(particles_pvd_name * ".pvd", t, vtp_relpath; overwrite)
@@ -2295,7 +2304,8 @@ end
 # One particle-cloud .vtp at the requested element type (see
 # FLOWPANEL_PARTICLE_PRECISION above).
 # Always uncompressed; conversion is skipped when the data already matches.
-function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T}) where T
+function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
+        split_state=nothing) where T
     _conv(a) = eltype(a) === T ? a : T.(a)
     X = _conv(view(host_particles, FLOWVPM.X_INDEX, 1:np))
     vtp = WriteVTK.vtk_grid(filename, X, cells; compress=false)
@@ -2310,6 +2320,20 @@ function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T}) wh
         vtp["C", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.C_INDEX, 1:np))
         vtp["SFS", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.SFS_INDEX, 1:np))
         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(_conv(view(host_particles, FLOWVPM.J_INDEX, 1:np)), 3, 3, np)
+
+        # 026 W1: splitting side-buffer (optional arrays; the warm-start
+        # loader probes for split_sigma_0 and falls back to reconstruction
+        # for checkpoints that predate them). Counters are written as Int32
+        # (exact under either FLOWPANEL_PARTICLE_PRECISION); reals follow the
+        # series precision T like every other real field.
+        if split_state !== nothing
+            vtp["split_sigma_0", WriteVTK.VTKPointData()] = _conv(view(split_state.sigma_0, 1:np))
+            vtp["split_H_chi", WriteVTK.VTKPointData()] = _conv(view(split_state.H_chi, 1:np))
+            vtp["split_hold", WriteVTK.VTKPointData()] = Int32.(view(split_state.hold_counter, 1:np))
+            vtp["split_cooldown", WriteVTK.VTKPointData()] = Int32.(view(split_state.cooldown_counter, 1:np))
+            vtp["split_dsigma2_visc", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_visc, 1:np))
+            vtp["split_dsigma2_rvpm", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_rvpm, 1:np))
+        end
     end
 
     WriteVTK.vtk_save(vtp)
