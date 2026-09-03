@@ -68,7 +68,7 @@ export P018_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 
 # GPU env: source the maintained 052 tuning bundle from the unified tree
 # (legacy silos are slated for deletion); fall back to inline exports.
-FM052_COMMON="$HOME/projects_unified/FLOWVPM.jl/scripts/fm052_common.sh"
+FM052_COMMON="$HOME/projects/FLOWVPM.jl/scripts/fm052_common.sh"
 if [[ -f "$FM052_COMMON" ]]; then
   # shellcheck source=/dev/null
   source "$FM052_COMMON"
