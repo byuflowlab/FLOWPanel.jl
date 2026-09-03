@@ -496,3 +496,51 @@ For BYU agent policy, read `/apps/instructions_for_ai_agents/BYU_ORC_AGENTS.md` 
 
 See BYU's [Slurm guidance](https://rc.byu.edu/wiki/?id=Slurm) and
 [script generator](https://rc.byu.edu/documentation/slurm/script-generator) if you are having trouble.
+
+## Unified project location (2026-08-31)
+
+All orc jobs launch from `~/projects_unified` — NOT from the legacy per-task
+silo copies (`~/<pkg>-<era>`, `~/fm052env-*`: deprecated, kept only until
+their in-flight jobs finish, then removed by Ryan).
+
+**Code.** `~/projects_unified/{FastMultipole,FLOWVPM.jl,FLOWPanel.jl}` — real
+git clones, branch `unified-052`. Pin a run by COMMITTING (local-only) before
+launching; use `git worktree add` for concurrent experiments needing
+different code states. Deploy local changes by scp/rsync + commit on orc
+(never launch from an uncommitted tree you can't reproduce).
+
+**Any job script must set three things, all arch-keyed by `$(uname -m)`:**
+
+1. **Working dir**: `cd ~/projects_unified/FLOWPanel.jl` (or the relevant
+   package) so `logs/slurm/`, `logs/chain/`, and `data/<case>/` conventions
+   hold in-tree.
+2. **Project**: `--project=$HOME/projects_unified/envs/$(uname -m)` —
+   `x86_64` or `aarch64`; the Manifests dev-point at the unified trees.
+3. **Julia + depot, by arch**:
+   - x86 (m13h / eng / CPU partitions): `module load cuda
+     julia/1.11.7-6bmogfl`; default depot `~/.julia`.
+   - ARM (mgh GH200): no x86 module tree — use
+     `$HOME/julia/julia-1.11.7/bin/julia` directly, `export
+     JULIA_DEPOT_PATH=$HOME/fm052depot-gh200` (holds the ARM CUDA artifacts —
+     do not delete or rename), and no `cuda` module: CUDA comes from CUDA.jl
+     artifacts plus the node driver.
+
+**Submission inputs by pool:**
+
+| Pool | sbatch flags |
+|---|---|
+| H200 (default) | `-p m13h --gres=gpu:h200:1` |
+| H200 (alternate) | `-p eng --qos=eng --gres=gpu:h200:1` |
+| GH200 (ARM) | `-p mgh --qos=gpu --gres=gpu:gh200:1 -C arm` |
+
+**Existing launchers** (e.g. `FLOWPanel.jl/examples/run_p018_screen_gpu052.slurm.sh
+<arch> <case>`) already implement this pattern and take `*_REPO_OVERRIDE` /
+`*_PROJECT_OVERRIDE` env vars for special cases — copy their arch-dispatch
+header rather than reinventing it. CAVEAT: they still source GPU tuning knobs
+from the legacy silo path `~/FLOWVPM-052-<arch>/scripts/fm052_common.sh`;
+migrate that bundle into `~/projects_unified` before the silos are deleted.
+
+**Validation**: envs + `FLOWVPMCUDAExt` verified on all three GPU pools and
+x86 CPU (2026-09-01). After any env/depot change, re-run
+`~/projects_unified/smoke_unified_{x86,gpu_m13h,arm}.slurm.sh` (adjust
+partition/gres as needed).

@@ -1556,7 +1556,11 @@ if ground_enable && ground_damp_band_r > 0
     function pnl.propagate!(w::pnl.PanelParticleWake, dt; relax=true, step=0,
             frames=nothing, diagnose_particle_gamma::Bool=false,
             diagnostic_vertical=(0.0, 0.0, 1.0),
-            propagate_pfield::Bool=true)   # Ruling 7 dedupe (see src propagate!)
+            propagate_pfield::Bool=true,   # Ruling 7 dedupe (see src propagate!)
+            sigma_guard::NamedTuple=NamedTuple())  # mirror src propagate! (052c
+            # trial 1); simulate! always forwards it, so omitting it is a
+            # MethodError (killed GPU smoke 13549598 — only IGE damp-band>0
+            # arms define this override, so hr/OGE runs never tripped it)
 
         # panel wake
         pnl.propagate!(w.panel_wake, dt)
@@ -1580,16 +1584,17 @@ if ground_enable && ground_damp_band_r > 0
         n_inband = 0
         u_ax_index = pnl.FLOWVPM.U_INDEX[axial_dimension]
         x_ax_index = pnl.FLOWVPM.X_INDEX[axial_dimension]
-        for i in 1:w.pfield.np
-            d = ground_x - w.pfield.particles[x_ax_index, i]  # height above ground
-            d < damp_band || continue
-            0 <= d && (n_inband += 1)
-            u_ax = w.pfield.particles[u_ax_index, i]
-            if u_ax > 0                       # moving toward the ground (+axial)
-                f = clamp(d / damp_band, 0.0, 1.0)
-                w.pfield.particles[u_ax_index, i] = f * u_ax
-                n_damped += 1
-            end
+        np = w.pfield.np
+        if np > 0
+            # Masked broadcasts: GPU pfields (CuArray particles) disallow
+            # scalar indexing, so the per-particle loop form cannot run there.
+            x = view(w.pfield.particles, x_ax_index, 1:np)
+            u = view(w.pfield.particles, u_ax_index, 1:np)
+            d = ground_x .- x                        # height above ground
+            damp = (d .< damp_band) .& (u .> 0)      # ground-ward, in band or below
+            n_damped = count(damp)
+            n_inband = count((0 .<= d) .& (d .< damp_band))
+            u .= ifelse.(damp, clamp.(d ./ damp_band, 0.0, 1.0) .* u, u)
         end
         ground_damp_last_n[] = n_damped
         ground_damp_last_inband[] = n_inband
@@ -1600,9 +1605,11 @@ if ground_enable && ground_damp_band_r > 0
         # stock forward Euler unless the wake was built with `expint=true`)
         pnl._step_timer_measure(:wake_convection; nested=true) do
             if w.pfield.integration === pnl.FLOWVPM.euler_exp
+                isempty(sigma_guard) || throw(ArgumentError(
+                    "sigma_guard is not supported by the euler_exp integrator"))
                 pnl.FLOWVPM._euler_exp(w.pfield, dt; relax)
             else
-                pnl.FLOWVPM._euler(w.pfield, dt; relax)
+                pnl.FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
             end
         end
 
@@ -1758,14 +1765,16 @@ function ground_diagnostics_monitor(systems, wakes, frames, uinf, i_step, dt)
         any(p -> p === w.pfield, unique_pfields) || push!(unique_pfields, w.pfield)
     end
     for pfield in unique_pfields
-        for i in 1:pfield.np
-            x = pnl.FLOWVPM.get_X(pfield, i)
-            if x[axial_dimension] > ground_x
-                nbelow += 1
-                G = pnl.FLOWVPM.get_Gamma(pfield, i)
-                gbelow += sqrt(G[1]^2 + G[2]^2 + G[3]^2)
-            end
-        end
+        np = pfield.np
+        np == 0 && continue
+        # Masked broadcasts: GPU pfields disallow scalar indexing.
+        xax = view(pfield.particles, pnl.FLOWVPM.X_INDEX[axial_dimension], 1:np)
+        below = xax .> ground_x
+        nbelow += count(below)
+        gx = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[1], 1:np)
+        gy = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[2], 1:np)
+        gz = view(pfield.particles, pnl.FLOWVPM.GAMMA_INDEX[3], 1:np)
+        gbelow += sum(below .* sqrt.(gx .^ 2 .+ gy .^ 2 .+ gz .^ 2))
     end
     push!(ground_steps, i_step)
     push!(ground_tangency_rms, rms)
@@ -2023,14 +2032,18 @@ let
     tail_b  = filter(isfinite, CT_bernoulli[k_start:end])
     tail_md = filter(isfinite, CT_laplace_md[k_start:end])
     tail_lv = filter(isfinite, CT_laplace_lv[k_start:end])
-    ptp(v) = isempty(v) ? NaN : maximum(v) - minimum(v)
-    mean(v) = isempty(v) ? NaN : sum(v) / length(v)
+    ptp(v) = maximum(v) - minimum(v)
+    mean(v) = sum(v) / length(v)
+    # An empty settle window (settle_window_revs == 0, the screen-probe
+    # configuration) must not print the token "NaN": the launcher NaN gate
+    # word-matches it and fails otherwise-clean runs (job 13542825).
+    fmt(v, f, sig) = isempty(v) ? "n/a (empty settle window)" : string(round(f(v), sigdigits=sig))
     residual_magVinf = magVinf_pulse(t_range[end])
     println("\nItem 005 plateau diagnostics (final $(round(settle_window_revs,digits=2)) revs, steps $(k_start):$(length(t_range))):")
     println("  residual magVinf at readout = $(residual_magVinf)  (hover requires ≈ 0)")
-    println("  CT Bernoulli   plateau mean=$(round(mean(tail_b), sigdigits=5))  peak-to-peak=$(round(ptp(tail_b), sigdigits=4))")
-    println("  CT Laplace(∇u) plateau mean=$(round(mean(tail_md),sigdigits=5))  peak-to-peak=$(round(ptp(tail_md),sigdigits=4))")
-    println("  CT Laplace(λ)  plateau mean=$(round(mean(tail_lv),sigdigits=5))  peak-to-peak=$(round(ptp(tail_lv),sigdigits=4))")
+    println("  CT Bernoulli   plateau mean=$(fmt(tail_b, mean, 5))  peak-to-peak=$(fmt(tail_b, ptp, 4))")
+    println("  CT Laplace(∇u) plateau mean=$(fmt(tail_md, mean, 5))  peak-to-peak=$(fmt(tail_md, ptp, 4))")
+    println("  CT Laplace(λ)  plateau mean=$(fmt(tail_lv, mean, 5))  peak-to-peak=$(fmt(tail_lv, ptp, 4))")
 end
 
 if save_path !== nothing

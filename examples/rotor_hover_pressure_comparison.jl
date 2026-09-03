@@ -464,9 +464,16 @@ sfs_off                         = parse(Bool, get(ENV, "SFS_OFF",               
 # RELAX_FILTER_DOWNSTREAM_R*R downstream (+axial) of the rotor plane, leaving the
 # near-rotor band unrelaxed. Unset/NaN => unfiltered full-wake relaxation (default).
 relax_filter_downstream_R = parse(Float64, get(ENV, "RELAX_FILTER_DOWNSTREAM_R", "NaN"))
-# Relaxation factor (rlxf) of the corrected-Pedrizzetti scheme. Defaults to the FLOWVPM
+# Relaxation scheme selection (018 ladder, Ryan order 2026-08-31): RELAX_SCHEME
+# chooses "correctedpedrizzetti" (stock, default — unset behavior unchanged) or
+# "pedrizzetti" (traditional, no /sqrt(b2) renorm).
+relax_scheme_name = lowercase(get(ENV, "RELAX_SCHEME", "correctedpedrizzetti"))
+relax_scheme_name in ("correctedpedrizzetti", "pedrizzetti") ||
+    error("RELAX_SCHEME must be correctedpedrizzetti or pedrizzetti, got $(relax_scheme_name)")
+# Relaxation factor (rlxf). Defaults to the FLOWVPM
 # stock value so unset behavior is unchanged; override with RELAX_RLXF.
-stock_relaxation = pnl.FLOWVPM.relaxation_correctedpedrizzetti
+stock_relaxation = relax_scheme_name == "pedrizzetti" ?
+    pnl.FLOWVPM.relaxation_pedrizzetti : pnl.FLOWVPM.relaxation_correctedpedrizzetti
 relax_rlxf = parse(Float64, get(ENV, "RELAX_RLXF", string(stock_relaxation.rlxf)))
 base_relaxation = pnl.FLOWVPM.Relaxation(stock_relaxation.relax,
     stock_relaxation.nsteps_relax, relax_rlxf)
@@ -1423,14 +1430,18 @@ let
     tail_b  = filter(isfinite, CT_bernoulli[k_start:end])
     tail_md = filter(isfinite, CT_laplace_md[k_start:end])
     tail_lv = filter(isfinite, CT_laplace_lv[k_start:end])
-    ptp(v) = isempty(v) ? NaN : maximum(v) - minimum(v)
-    mean(v) = isempty(v) ? NaN : sum(v) / length(v)
+    ptp(v) = maximum(v) - minimum(v)
+    mean(v) = sum(v) / length(v)
+    # An empty settle window (settle_window_revs == 0, the screen-probe
+    # configuration) must not print the token "NaN": the launcher NaN gate
+    # word-matches it and fails otherwise-clean runs (job 13542825).
+    fmt(v, f, sig) = isempty(v) ? "n/a (empty settle window)" : string(round(f(v), sigdigits=sig))
     residual_magVinf = magVinf_pulse(t_range[end])
     println("\nItem 005 plateau diagnostics (final $(round(settle_window_revs,digits=2)) revs, steps $(k_start):$(length(t_range))):")
     println("  residual magVinf at readout = $(residual_magVinf)  (hover requires ≈ 0)")
-    println("  CT Bernoulli   plateau mean=$(round(mean(tail_b), sigdigits=5))  peak-to-peak=$(round(ptp(tail_b), sigdigits=4))")
-    println("  CT Laplace(∇u) plateau mean=$(round(mean(tail_md),sigdigits=5))  peak-to-peak=$(round(ptp(tail_md),sigdigits=4))")
-    println("  CT Laplace(λ)  plateau mean=$(round(mean(tail_lv),sigdigits=5))  peak-to-peak=$(round(ptp(tail_lv),sigdigits=4))")
+    println("  CT Bernoulli   plateau mean=$(fmt(tail_b, mean, 5))  peak-to-peak=$(fmt(tail_b, ptp, 4))")
+    println("  CT Laplace(∇u) plateau mean=$(fmt(tail_md, mean, 5))  peak-to-peak=$(fmt(tail_md, ptp, 4))")
+    println("  CT Laplace(λ)  plateau mean=$(fmt(tail_lv, mean, 5))  peak-to-peak=$(fmt(tail_lv, ptp, 4))")
 end
 
 if save_path !== nothing
@@ -1575,6 +1586,7 @@ if save_path !== nothing
         println(io, "core_size_targets = $(core_size_targets)")
         println(io, "merge_particles = $(merge_particles)")
         println(io, "relax_rlxf = $(relax_rlxf)")
+        println(io, "relax_scheme = \"$(relax_scheme_name)\"")
         println(io, "relax_filter_downstream_R = $(relax_filter_downstream_R)")
         println(io, "particle_relax = $(particle_relax)")
         println(io, "spinup_revs = $(spinup_revs)")

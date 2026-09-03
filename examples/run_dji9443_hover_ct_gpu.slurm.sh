@@ -122,8 +122,11 @@ CPU_N=$(cat "$OUTFILE" "$ERRFILE" | grep -c 'source_influence_s_gemv'   || true)
 # table (" | "-separated) AND the driver's "Bernoulli vs KJ:" summary line —
 # both carry KJ columns that are NaN by design when RUN_KJ=false. (2026-08-27:
 # the summary line is not " | "-separated, so it slipped the table filter and
-# failed the gate on three otherwise-clean production runs.)
-NAN_N=$(cat "$OUTFILE" "$ERRFILE" | grep -w 'NaN' | grep -v ' | ' | grep -vc 'vs KJ:' || true)
+# failed the gate on three otherwise-clean production runs.) Also exclude the
+# "plateau mean=" diagnostics: an empty settle window (screen probes) printed
+# NaN there and failed clean run 13542825 on 2026-08-31; the drivers now print
+# "n/a" but this keeps old driver output from tripping the gate.
+NAN_N=$(cat "$OUTFILE" "$ERRFILE" | grep -w 'NaN' | grep -v ' | ' | grep -v 'vs KJ:' | grep -vc 'plateau mean=' || true)
 echo "GATE: gpu_gemv=$GPU_N cpu_gemv=$CPU_N nan_lines=$NAN_N dispatcher_rc=$RC"
 GATE_RC=0
 [[ $GPU_N -gt 0 ]] || { echo "GATE FAIL: GPU source-influence path never ran" >&2; GATE_RC=1; }
