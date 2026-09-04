@@ -25,11 +25,11 @@
 
 set -euo pipefail
 THREADS=64
-# 026 Phase 1b: P018_REPO_OVERRIDE submits from a git worktree carrying code
-# the live checkout must not receive (pair with P018_PROJECT_OVERRIDE below,
-# and give the worktree a `data` symlink to the shared data root).
-EXPECTED_REPO="${P018_REPO_OVERRIDE:-/home/rander39/projects/FLOWPanel.jl}"
-[[ "$PWD" == "$EXPECTED_REPO" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
+# 026 Phase 1b: P018_REPO submits from a git worktree carrying code the live
+# checkout must not receive (pair with P018_PROJECT/P018_JULIA below, and give
+# the worktree a `data` symlink to the shared data root).
+EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+[[ "$PWD" == "$EXPECTED_REPO" || "$PWD" == "${P018_REPO:-}" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"
 [[ -n "$CASE" ]] || { echo "ERROR: pass a case tag, e.g. scr_b0" >&2; exit 2; }
@@ -203,7 +203,7 @@ case "$CASE" in
   # record (design doc sec.14): RK3's dtZ ceiling ~0.84 vs Euler's 2/3 ->
   # expect DELAY, NOT ARREST. Submit exactly as the Phase 1 arms
   # (RESTART_STEP/RESTART_NAME/RESTART_PATH), from the Phase-1b worktree via
-  # P018_REPO_OVERRIDE/P018_PROJECT_OVERRIDE.
+  # P018_REPO/P018_PROJECT.
   scr_p026ph1_rk3_gpu40) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export WAKE_INTEGRATOR=rk3 ;;
   scr_p026ph1_rk3_lg)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_INTEGRATOR=rk3 ;;
 
@@ -239,7 +239,7 @@ echo "  das_eta:${DAS_ETA_KINEMATIC:-nan} overlap:${OVERLAP} pps:${P_PER_STEP} m
 echo "  nwakerows:${NWAKEROWS} das_chord:${DAS_CHORD_FRACTION:-nan} das_uniform:${DAS_UNIFORM_DSIGMA:-nan} visc:${CORE_SPREADING_ACTIVE:-false} expint:${WAKE_EXPINT:-false} integrator:${WAKE_INTEGRATOR:-euler-family} sfs_off:${SFS_OFF:-false}"
 echo "  started $(date '+%F %T')"
 
-julia --project="${P018_PROJECT_OVERRIDE:-.}" -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
+"${P018_JULIA:-julia}" --project="${P018_PROJECT:-.}" -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
 
 echo "Screen case $CASE finished ($(date '+%F %T'))."
 echo "Artifacts: data/$RUN_NAME/${RUN_NAME}_CT_vs_rev.csv + monitors/"
