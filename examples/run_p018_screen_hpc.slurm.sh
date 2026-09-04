@@ -207,6 +207,15 @@ case "$CASE" in
   scr_p026ph1_rk3_gpu40) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export WAKE_INTEGRATOR=rk3 ;;
   scr_p026ph1_rk3_lg)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_INTEGRATOR=rk3 ;;
 
+  # ---- 026 Phase 1b Task 1 GPU euler_exp smoke (2026-09-04): short device
+  # (CuArray) continuation of the Vatistas ignition with WAKE_EXPINT=true to
+  # exercise the new _euler_exp_broadcast!/_corespreading_eulerexp_broadcast!
+  # paths end-to-end (FLOWVPMCUDAExt). Distinct run name so the scored Phase 1
+  # data/scr_p026ph1_exp_gpu40 dir is never touched. NREVS=26.5278 ends at
+  # total step 990 (40 steps past the 950 restart); the GPU launcher timeout
+  # bounds it regardless (probe semantics).
+  scr_p026ph1b_expgpu_smoke) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true ;;
+
   *) echo "ERROR: unknown screen case '$CASE'" >&2; exit 2 ;;
 esac
 
