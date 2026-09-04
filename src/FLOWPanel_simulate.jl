@@ -917,6 +917,48 @@ function _sa_body_influence!(targets::Tuple, systems_tuple::Tuple,
     return nothing
 end
 
+"""
+Build the RK3 stage re-evaluation closure (026 Phase 1b Task 2), or return
+`nothing` when no wake steps with `FLOWVPM.rungekutta3`. Stages 2-3 of
+`_rk3_convect!` call the closure to re-evaluate particle U/J (+SFS Estr) at
+the moved particle positions: it resets the particle rows, re-applies the
+freestream, and re-runs the wake- and body-induced influence onto the
+particles ONLY — the panel SOLVE stays frozen at its step values — with the
+stage weights `(a, b)` threaded to the stage-gated SFS hooks so
+Dynamic/Constant SFS keep their once-per-step cadence. Shared by simulate!'s
+propagation block and simulate_warmstart!'s end-of-step replay.
+"""
+function _make_rk3_stage_UJ(wakes_tuple::Tuple, systems_tuple::Tuple,
+        backend_wake, backend_system, uinf;
+        wakerow_no_hessian_to_particles::Bool=false,
+        panel_wake_on_particles::Bool=true,
+        particle_hessian_self::Bool=true,
+        body_on_wake::Bool=true,
+        body_hessian_to_particles::Bool=false,
+        body_gradient_core_size::Float64=NaN)
+    any(w -> w isa PanelParticleWake &&
+        w.pfield.integration === FLOWVPM.rungekutta3, wakes_tuple) ||
+        return nothing
+    wake_sources = _collect_wake_sources(wakes_tuple)
+    return (pfield, a, b) -> begin
+        FLOWVPM._reset_particles(pfield)
+        FLOWVPM._reset_particles_sfs(pfield)
+        _apply_freestream_pfield!(pfield, uinf)
+        _sa_wake_influence!((pfield,), wake_sources, backend_wake;
+            needs_induced_vorticity=false,
+            wakerow_no_hessian_to_particles,
+            panel_wake_on_particles,
+            particle_hessian_self,
+            sfs_stage=(a, b))
+        _sa_body_influence!((pfield,), systems_tuple, backend_system;
+            needs_induced_vorticity=false,
+            body_on_wake,
+            body_hessian_to_particles,
+            body_gradient_core_size)
+        return nothing
+    end
+end
+
 "Exterior half-jump stage of `_steady_aerodynamics!` (pure code motion): add
 the +½∇μ tangential half-jump on each surface so body.velocity is the
 EXTERIOR surface limit (matching OLD calcfield_U!). The kernel-induced
@@ -1421,36 +1463,14 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # propagate wake
             _step_timer_measure(:wake_propagation_maintenance) do
-                # RK3 wake integrator (026 Phase 1b Task 2): stages 2-3 need
-                # particle U/J (+SFS) re-evaluated at the moved positions.
-                # The closure freezes the panel SOLVE (strengths/geometry stay
-                # at their step values) and re-runs the wake- and
-                # body-induced influence onto the particles only, with the
-                # stage weights threaded to the stage-gated SFS hooks.
-                rk3_stage_UJ = nothing
-                if any(w -> w isa PanelParticleWake &&
-                        w.pfield.integration === FLOWVPM.rungekutta3, wakes_tuple)
-                    wake_sources_rk3 = _collect_wake_sources(wakes_tuple)
-                    rk3_stage_UJ = (pfield, a, b) -> begin
-                        FLOWVPM._reset_particles(pfield)
-                        FLOWVPM._reset_particles_sfs(pfield)
-                        _apply_freestream_pfield!(pfield, uinf)
-                        _sa_wake_influence!((pfield,), wake_sources_rk3,
-                            backend_wake;
-                            needs_induced_vorticity=false,
-                            wakerow_no_hessian_to_particles,
-                            panel_wake_on_particles,
-                            particle_hessian_self,
-                            sfs_stage=(a, b))
-                        _sa_body_influence!((pfield,), systems_tuple,
-                            backend_system;
-                            needs_induced_vorticity=false,
-                            body_on_wake,
-                            body_hessian_to_particles,
-                            body_gradient_core_size)
-                        return nothing
-                    end
-                end
+                rk3_stage_UJ = _make_rk3_stage_UJ(wakes_tuple, systems_tuple,
+                    backend_wake, backend_system, uinf;
+                    wakerow_no_hessian_to_particles,
+                    panel_wake_on_particles,
+                    particle_hessian_self,
+                    body_on_wake,
+                    body_hessian_to_particles,
+                    body_gradient_core_size)
 
                 seen_prop_pfields = ()  # Ruling 7: convect a shared pfield once
                 for w in wakes_tuple

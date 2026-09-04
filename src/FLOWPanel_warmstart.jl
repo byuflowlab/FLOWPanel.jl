@@ -623,6 +623,19 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     diagnostic_vertical = get(optargs, :diagnostic_vertical, (0.0, 0.0, 1.0))
     sigma_guard = get(optargs, :sigma_guard, NamedTuple())
 
+    # RK3 wake integrator (026 Phase 1b): the replayed end-of-step propagate!
+    # needs the same stage re-evaluation closure simulate! builds. Stage 1
+    # consumes the VTK-restored post-solve U/J (exactly the euler-path
+    # contract above); stages 2-3 re-evaluate through the closure.
+    rk3_stage_UJ = _make_rk3_stage_UJ(wakes_tuple, systems_tuple,
+        backend_wake, backend_system, uinf_replay;
+        wakerow_no_hessian_to_particles=get(optargs, :wakerow_no_hessian_to_particles, false),
+        panel_wake_on_particles=get(optargs, :panel_wake_on_particles, true),
+        particle_hessian_self=get(optargs, :particle_hessian_self, true),
+        body_on_wake=get(optargs, :body_on_wake, true),
+        body_hessian_to_particles=get(optargs, :body_hessian_to_particles, false),
+        body_gradient_core_size=get(optargs, :body_gradient_core_size, NaN))
+
     seen_prop_pfields = ()  # Ruling 7: convect a shared pfield exactly once
     for w in wakes_tuple
         if w isa PanelParticleWake
@@ -630,7 +643,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
             propagate!(w, dt_end; relax=particle_relax,
                 step=restart_step, frames, diagnose_particle_gamma,
                 diagnostic_vertical,
-                propagate_pfield=!repeat, sigma_guard)
+                propagate_pfield=!repeat, sigma_guard, rk3_stage_UJ)
             repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
         elseif !isnothing(w)
             propagate!(w, dt_end; step=restart_step, frames)
