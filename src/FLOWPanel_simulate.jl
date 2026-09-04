@@ -757,7 +757,8 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
         needs_induced_vorticity::Bool=false,
         wakerow_no_hessian_to_particles::Bool=false,
         panel_wake_on_particles::Bool=true,
-        particle_hessian_self::Bool=true)
+        particle_hessian_self::Bool=true,
+        sfs_stage::Tuple=(1, 1))
     if length(wake_sources) > 0
         # Diagnostic gates:
         #   wakerow_no_hessian_to_particles: ablate the panel-wake-row ->
@@ -772,7 +773,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
             panel_targets = !panel_wake_on_particles ?
                 Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField)) : targets
             if length(panel_sources) > 0 && length(panel_targets) > 0
-                influence!(panel_targets, panel_sources, backend_wake; precalc=true,
+                influence!(panel_targets, panel_sources, backend_wake; precalc=true, sfs_stage,
                     scalar_potential=false,
                     velocity=true,
                     velocity_gradient=Tuple(sys isa FLOWVPM.ParticleField ? false : requires_hessian(sys) for sys in panel_targets),
@@ -782,7 +783,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
                 particle_targets = Tuple(t for t in targets if t isa FLOWVPM.ParticleField)
                 nonparticle_targets = Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField))
                 if particle_hessian_self || length(particle_targets) == 0
-                    influence!(targets, pfield_sources, backend_wake; precalc=true,
+                    influence!(targets, pfield_sources, backend_wake; precalc=true, sfs_stage,
                         postcalc=true,
                         scalar_potential=false,
                         velocity=true,
@@ -790,14 +791,14 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
                         extra_outputs=_induced_vorticity_extra_outputs(targets, needs_induced_vorticity))
                 else
                     if length(nonparticle_targets) > 0
-                        influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true,
+                        influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true, sfs_stage,
                             postcalc=false,
                             scalar_potential=false,
                             velocity=true,
                             velocity_gradient=Tuple(requires_hessian(sys) for sys in nonparticle_targets),
                             extra_outputs=_induced_vorticity_extra_outputs(nonparticle_targets, needs_induced_vorticity))
                     end
-                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true,
+                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true, sfs_stage,
                         postcalc=true,
                         scalar_potential=false,
                         velocity=true,
@@ -809,7 +810,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
             panel_sources = Tuple(s for s in wake_sources if !(s isa FLOWVPM.ParticleField))
             pfield_sources = Tuple(s for s in wake_sources if s isa FLOWVPM.ParticleField)
             if length(panel_sources) > 0
-                influence!(targets, panel_sources, backend_wake; precalc=true,
+                influence!(targets, panel_sources, backend_wake; precalc=true, sfs_stage,
                     scalar_potential=false,
                     velocity=true,
                     velocity_gradient=Tuple(requires_hessian(sys) for sys in targets),
@@ -819,7 +820,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
             nonparticle_targets = Tuple(t for t in targets if !(t isa FLOWVPM.ParticleField))
             if length(pfield_sources) > 0
                 if length(nonparticle_targets) > 0
-                    influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true,
+                    influence!(nonparticle_targets, pfield_sources, backend_wake; precalc=true, sfs_stage,
                         postcalc=false,
                         scalar_potential=false,
                         velocity=true,
@@ -827,7 +828,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
                         extra_outputs=_induced_vorticity_extra_outputs(nonparticle_targets, needs_induced_vorticity))
                 end
                 if length(particle_targets) > 0
-                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true,
+                    influence!(particle_targets, pfield_sources, backend_wake; precalc=true, sfs_stage,
                         postcalc=true,
                         scalar_potential=false,
                         velocity=true,
@@ -837,7 +838,7 @@ function _sa_wake_influence!(targets::Tuple, wake_sources::Tuple, backend_wake;
             end
         else
             wake_postcalc = any(source isa FLOWVPM.ParticleField for source in wake_sources)
-            influence!(targets, wake_sources, backend_wake; precalc=true,
+            influence!(targets, wake_sources, backend_wake; precalc=true, sfs_stage,
                 postcalc=wake_postcalc,
                 scalar_potential=false,
                 velocity=true,
@@ -1420,6 +1421,37 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
             # propagate wake
             _step_timer_measure(:wake_propagation_maintenance) do
+                # RK3 wake integrator (026 Phase 1b Task 2): stages 2-3 need
+                # particle U/J (+SFS) re-evaluated at the moved positions.
+                # The closure freezes the panel SOLVE (strengths/geometry stay
+                # at their step values) and re-runs the wake- and
+                # body-induced influence onto the particles only, with the
+                # stage weights threaded to the stage-gated SFS hooks.
+                rk3_stage_UJ = nothing
+                if any(w -> w isa PanelParticleWake &&
+                        w.pfield.integration === FLOWVPM.rungekutta3, wakes_tuple)
+                    wake_sources_rk3 = _collect_wake_sources(wakes_tuple)
+                    rk3_stage_UJ = (pfield, a, b) -> begin
+                        FLOWVPM._reset_particles(pfield)
+                        FLOWVPM._reset_particles_sfs(pfield)
+                        _apply_freestream_pfield!(pfield, uinf)
+                        _sa_wake_influence!((pfield,), wake_sources_rk3,
+                            backend_wake;
+                            needs_induced_vorticity=false,
+                            wakerow_no_hessian_to_particles,
+                            panel_wake_on_particles,
+                            particle_hessian_self,
+                            sfs_stage=(a, b))
+                        _sa_body_influence!((pfield,), systems_tuple,
+                            backend_system;
+                            needs_induced_vorticity=false,
+                            body_on_wake,
+                            body_hessian_to_particles,
+                            body_gradient_core_size)
+                        return nothing
+                    end
+                end
+
                 seen_prop_pfields = ()  # Ruling 7: convect a shared pfield once
                 for w in wakes_tuple
                     if w isa PanelParticleWake
@@ -1427,7 +1459,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
                         propagate!(w, dt; relax=particle_relax,
                             step=i_step, frames, diagnose_particle_gamma,
                             diagnostic_vertical, propagate_pfield=!repeat,
-                            sigma_guard)
+                            sigma_guard, rk3_stage_UJ)
                         repeat || (seen_prop_pfields = (seen_prop_pfields..., w.pfield))
                     elseif !isnothing(w)
                         propagate!(w, dt; step=i_step, frames)

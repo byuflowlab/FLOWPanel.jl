@@ -63,12 +63,13 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
                      plan_slot=nothing, cache_nearfield::Bool=false,
                      production_route=nothing,
                      nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
-                     nearfield_cache_max_build_time::Real=Inf, optargs...)
+                     nearfield_cache_max_build_time::Real=Inf,
+                     sfs_stage::Tuple=(1, 1), optargs...)
 
     # apply pre-calculations per system
     if precalc
         for target in target_bodies
-            pre_evaluate_influence!(target)
+            pre_evaluate_influence!(target; sfs_stage)
         end
     end
 
@@ -80,7 +81,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
     if _gpu_rect_influence!(target_bodies, source_bodies;
             scalar_potential, velocity, velocity_gradient, production_route,
             optargs...)
-        postcalc && post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
+        postcalc && post_evaluate_influence!(target_bodies, source_bodies, backend, nothing; sfs_stage)
         return nothing
     end
 
@@ -146,7 +147,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
     end
 
     if postcalc
-        post_evaluate_influence!(target_bodies, source_bodies, backend, outputs)
+        post_evaluate_influence!(target_bodies, source_bodies, backend, outputs; sfs_stage)
     end
 
     _influence_push_back!(original_targets, target_bodies)
@@ -172,12 +173,12 @@ end
 function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectBackend;
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, precalc=false, postcalc=false,
-                     production_route=nothing, optargs...)
+                     production_route=nothing, sfs_stage::Tuple=(1, 1), optargs...)
 
     # apply pre-calculations per system
     if precalc
         for target in target_bodies
-            pre_evaluate_influence!(target)
+            pre_evaluate_influence!(target; sfs_stage)
         end
     end
 
@@ -194,7 +195,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::DirectB
         optargs...)
 
     if postcalc
-        post_evaluate_influence!(target_bodies, source_bodies, backend, nothing)
+        post_evaluate_influence!(target_bodies, source_bodies, backend, nothing; sfs_stage)
     end
 
     _influence_push_back!(original_targets, target_bodies)
@@ -209,12 +210,15 @@ function influence!(target, source, backend; optargs...)
 end
 
 """
-    pre_evaluate_influence!(system)
+    pre_evaluate_influence!(system; sfs_stage=(1, 1))
 
 Hook for systems that need preprocessing before influence evaluation. The
-default implementation does nothing.
+default implementation does nothing. `sfs_stage` carries the RK stage weights
+`(a, b)` to SFS hooks that gate on the stage (FLOWVPM's Dynamic/Constant SFS
+run their procedures only at `a == 1 || a == 0`); the default `(1, 1)`
+preserves the single-evaluation-per-step behavior.
 """
-function pre_evaluate_influence!(system)
+function pre_evaluate_influence!(system; sfs_stage::Tuple=(1, 1))
     # default behavior
     return nothing
 end
@@ -226,16 +230,18 @@ Hook for systems that need postprocessing after influence evaluation. Tuple
 dispatch walks all target-source combinations; the default scalar
 implementation does nothing.
 """
-function post_evaluate_influence!(targets::Tuple, sources::Tuple, backend::AbstractBackend, outputs)
+function post_evaluate_influence!(targets::Tuple, sources::Tuple, backend::AbstractBackend, outputs;
+        sfs_stage::Tuple=(1, 1))
     for (i_t, target) in enumerate(targets)
         for (i_s, source) in enumerate(sources)
-            post_evaluate_influence!(target, source, backend, outputs; i_target=i_t, i_source=i_s)
+            post_evaluate_influence!(target, source, backend, outputs; i_target=i_t, i_source=i_s, sfs_stage)
         end
     end
     return nothing
 end
 
-function post_evaluate_influence!(target, source, backend::AbstractBackend, outputs; i_target::Int=1, i_source::Int=1)
+function post_evaluate_influence!(target, source, backend::AbstractBackend, outputs;
+        i_target::Int=1, i_source::Int=1, sfs_stage::Tuple=(1, 1))
     # default behavior
     return nothing
 end

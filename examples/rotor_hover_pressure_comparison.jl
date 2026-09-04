@@ -648,6 +648,17 @@ viscous_scheme = core_spreading_active ?
 # Default false = stock forward Euler (bit-identical off-state).
 wake_expint = parse(Bool, get(ENV, "WAKE_EXPINT", "false"))
 
+# Wake integrator override, BRAINSTORM 026 Phase 1b Task 2. WAKE_INTEGRATOR=rk3
+# steps the wake particles with low-storage RK3 (panel solve frozen within the
+# step, particle U/J+SFS re-evaluated per stage, ~3x UJ cost). Default "" keeps
+# the WAKE_EXPINT semantics unchanged; combining the two is an error.
+wake_integrator = lowercase(get(ENV, "WAKE_INTEGRATOR", ""))
+wake_integrator in ("", "rk3") || error(
+    "Unknown WAKE_INTEGRATOR=$(repr(wake_integrator)); supported: rk3")
+wake_rk3 = wake_integrator == "rk3"
+wake_rk3 && wake_expint && error(
+    "WAKE_INTEGRATOR=rk3 and WAKE_EXPINT=true are mutually exclusive")
+
 # The two conversions need mutually exclusive wake options, so build the
 # differing kwargs once rather than duplicating the constructor call.
 # legacy: method_trailing/method_unsteady drive shedding, no unsteady filament.
@@ -711,6 +722,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
     SFS=sfs_choice,
     relaxation=relaxation_scheme,
     expint=wake_expint,
+    rk3=wake_rk3,
     conversion_kwargs...,
     shed_with_induced_velocity,
     particle_maintenance=pnl.ParticleMaintenance((
@@ -1290,7 +1302,7 @@ end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
         "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows)$(nwakerows == 0 ? " (convert-at-shed)" : "") das_refresh=$(set_Das_refresh)")
-println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on"))")
+println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), WAKE_INTEGRATOR=$(wake_rk3 ? "rk3" : "euler-family"), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on"))")
 name = run_name
 
 # Allow other scripts to `include` this file purely for setup (geometry,
@@ -1589,6 +1601,7 @@ if save_path !== nothing
         println(io, "core_spreading_active = $(core_spreading_active)")
         println(io, "core_spreading_sgm0 = $(core_spreading_sgm0)")
         println(io, "wake_expint = $(wake_expint)")
+        println(io, "wake_integrator_rk3 = $(wake_rk3)")
         println(io, "core_size_panel = $(core_size_panel)")
         println(io, "core_size_targets = $(core_size_targets)")
         println(io, "merge_particles = $(merge_particles)")

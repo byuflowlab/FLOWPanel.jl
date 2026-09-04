@@ -1907,6 +1907,12 @@ function PanelParticleWake(body::AbstractLiftingBody;
         # Frozen-gradient geometric local integrator (BRAINSTORM 020 Phase 2R).
         # Default false = stock forward Euler, bit-identical.
         expint=false,
+        # Low-storage RK3 wake integrator (BRAINSTORM 026 Phase 1b Task 2).
+        # Default false; mutually exclusive with expint. Requires the caller
+        # of propagate! to supply an rk3_stage_UJ closure (simulate! builds
+        # one) that re-evaluates particle U/J (+SFS) at RK stages 2-3; the
+        # panel solve/strengths stay frozen within the step.
+        rk3=false,
         # Task 052: array container for the particle field (pass CUDA.CuArray
         # for a device-resident wake) and an optional FMM settings override
         # (a device field REQUIRES all-off autotune; see FLOWVPM_fmm_radix.jl).
@@ -1975,12 +1981,16 @@ function PanelParticleWake(body::AbstractLiftingBody;
     # `pfield.integration`, and under the FLOWVPM default (`rungekutta3`) a
     # CoreSpreading scheme hits the RK3 branch with zeroed stage weights —
     # no core spreading, no beta resets, silently inviscid.
+    Bool(expint) && Bool(rk3) && throw(ArgumentError(
+        "expint and rk3 are mutually exclusive wake integrator choices"))
+    wake_integration = Bool(rk3) ? FLOWVPM.rungekutta3 :
+        Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler
     if pfield === nothing
         pfield = FLOWVPM.ParticleField(max_particles, TF;
             viscous,
             fmm=pfield_fmm,
             SFS,
-            integration=(Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler),
+            integration=wake_integration,
             relaxation,
             arraytype)
     else
@@ -1991,10 +2001,9 @@ function PanelParticleWake(body::AbstractLiftingBody;
         eltype(pfield.particles) == TF || throw(ArgumentError(
             "shared pfield numtype $(eltype(pfield.particles)) does not " *
             "match this wake's numtype $(TF)"))
-        expected_integration = Bool(expint) ? FLOWVPM.euler_exp : FLOWVPM.euler
-        pfield.integration === expected_integration || throw(ArgumentError(
+        pfield.integration === wake_integration || throw(ArgumentError(
             "shared pfield integration $(pfield.integration) does not match " *
-            "this wake's expint choice ($(expected_integration))"))
+            "this wake's expint/rk3 choice ($(wake_integration))"))
     end
 
     # Capture the resolved FLOWVPM construction options for reproduction metadata.
@@ -2072,17 +2081,22 @@ function _make_conversion_diagnostics(conversion::SurfaceVorticityConversion,
 end
 
 """
-Run SFS pre-calculations for particle field before evaluating the velocity field.
+Run SFS pre-calculations for particle field before evaluating the velocity
+field. `sfs_stage = (a, b)` forwards the RK stage weights so stage-gated SFS
+procedures (Dynamic/Constant SFS run only at `a == 1 || a == 0`) keep their
+once-per-step cadence when the RK3 wake integrator re-evaluates influences
+mid-step; the default `(1, 1)` is the stock single-evaluation behavior.
 """
-function pre_evaluate_influence!(pfield::FLOWVPM.ParticleField)
+function pre_evaluate_influence!(pfield::FLOWVPM.ParticleField; sfs_stage::Tuple=(1, 1))
+    a, b = sfs_stage
     if !FLOWVPM.isSFSenabled(pfield.SFS)
-        pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+        pfield.SFS(pfield, FLOWVPM.BeforeUJ(); a, b)
         return nothing
     end
 
     _step_timer_measure(:wake_sfs; nested=true) do
         velocities = copy(view(pfield.particles, FLOWVPM.U_INDEX, 1:pfield.np))
-        pfield.SFS(pfield, FLOWVPM.BeforeUJ())
+        pfield.SFS(pfield, FLOWVPM.BeforeUJ(); a, b)
         FLOWVPM._reset_particles(pfield)
         pfield.particles[FLOWVPM.U_INDEX, 1:pfield.np] .= velocities
     end
@@ -2091,28 +2105,30 @@ end
 
 function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
         source::FLOWVPM.ParticleField, backend::FastMultipoleBackend, outputs;
-        i_target::Int=1, i_source::Int=1)
+        i_target::Int=1, i_source::Int=1, sfs_stage::Tuple=(1, 1))
     pfield === source || return nothing
     FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
 
+    a, b = sfs_stage
     _step_timer_measure(:wake_sfs; nested=true) do
         _, _, target_tree, source_tree, _, direct_list, _ = outputs
         FLOWVPM.Estr_fmm!(pfield, pfield, target_tree, source_tree, direct_list;
             i_target_system=i_target, i_source_system=i_source)
-        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+        pfield.SFS(pfield, FLOWVPM.AfterUJ(); a, b)
     end
     return nothing
 end
 
 function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
         source::FLOWVPM.ParticleField, backend::DirectBackend, outputs;
-        i_target::Int=1, i_source::Int=1)
+        i_target::Int=1, i_source::Int=1, sfs_stage::Tuple=(1, 1))
     pfield === source || return nothing
     FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
 
+    a, b = sfs_stage
     _step_timer_measure(:wake_sfs; nested=true) do
         FLOWVPM.Estr_direct!(pfield)
-        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+        pfield.SFS(pfield, FLOWVPM.AfterUJ(); a, b)
     end
     return nothing
 end
@@ -2203,7 +2219,13 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         propagate_pfield::Bool=true,
         # sigma-collapse guards forwarded to the FLOWVPM euler core-size
         # update (052c trial 1) — see FLOWVPM._sigma_guard_params.
-        sigma_guard::NamedTuple=NamedTuple())
+        sigma_guard::NamedTuple=NamedTuple(),
+        # RK3 wake integrator (026 Phase 1b Task 2): closure
+        # `(pfield, a, b) -> nothing` that re-evaluates particle U/J (+SFS)
+        # at the current particle positions for RK stages 2-3. Built by
+        # simulate! (it holds the systems/backends); required when the wake
+        # was constructed with rk3=true.
+        rk3_stage_UJ=nothing)
 
     # panel wake
     propagate!(w.panel_wake, dt)
@@ -2227,6 +2249,13 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
             isempty(sigma_guard) || throw(ArgumentError(
                 "sigma_guard is not supported by the euler_exp integrator"))
             FLOWVPM._euler_exp(w.pfield, dt; relax)
+        elseif w.pfield.integration === FLOWVPM.rungekutta3
+            isempty(sigma_guard) || throw(ArgumentError(
+                "sigma_guard is not supported by the rungekutta3 integrator"))
+            rk3_stage_UJ === nothing && throw(ArgumentError(
+                "an rk3 wake requires the rk3_stage_UJ closure (simulate! " *
+                "builds it); propagate! got nothing"))
+            _rk3_convect!(w.pfield, dt; relax, stage_UJ=rk3_stage_UJ)
         else
             FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
         end
@@ -2248,6 +2277,84 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         apply_particle_maintenance!(w.pfield, w.particle_maintenance,
             ParticleMaintenanceContext(frames, step, dt))
     end
+end
+
+"""
+    _rk3_convect!(pfield, dt; relax, stage_UJ)
+
+Low-storage RK3 convection of the wake particle field (BRAINSTORM 026 Phase
+1b Task 2), mirroring `FLOWVPM.rungekutta3`'s stage structure while keeping
+FLOWPanel's own influence orchestration:
+
+- Stage 1 consumes the U/J (+SFS) evaluation that `_steady_aerodynamics!`
+  already performed this step at begin-of-step positions (exactly what the
+  `_euler`/`_euler_exp` paths consume), so the step costs 2 extra particle
+  evaluations, not 3.
+- Stages 2-3 call `stage_UJ(pfield, a, b)` to re-evaluate particle
+  velocities/gradients (+SFS Estr) at the current stage positions. The panel
+  SOLVE is frozen within the step — panel strengths and panel-wake geometry
+  stay at their step values — but the (frozen-strength) panel- and
+  panel-wake-induced velocities are re-evaluated at the moved particle
+  positions through the closure. Stage-gated SFS procedures keep their
+  once-per-step cadence via the `sfs_stage=(a,b)` influence hooks.
+- Relaxation (when enabled) uses the stage-3 U/J instead of the canonical
+  fourth evaluation `FLOWVPM.rungekutta3` performs; the production `_euler`
+  path itself relaxes on begin-of-step J, so stage-3 J (evaluated one stage
+  from the end) is strictly fresher than that baseline.
+
+`viscousdiffusion` receives the stage weights (`aux1`/`aux2`), so the
+CoreSpreading RK3 branch composes exactly as in stock FLOWVPM.
+"""
+function _rk3_convect!(pfield::FLOWVPM.ParticleField, dt; relax::Bool=true,
+        stage_UJ)
+    f = pfield.formulation.f
+    g = pfield.formulation.g
+    zeta0 = pfield.kernel.zeta(0.0)
+    Uinf = pfield.Uinf(pfield.t)
+
+    # Reset the low-storage RK state (M rows) of every non-static particle
+    FLOWVPM._reset_M_storage!(pfield)
+
+    for (i_stage, (a, b)) in enumerate(((0.0, 1/3), (-5/9, 15/16), (-153/128, 8/15)))
+        if i_stage > 1
+            stage_UJ(pfield, a, b)
+        end
+        FLOWVPM.update_particle_states(pfield, a, b, dt, Uinf, f, g, zeta0)
+        FLOWVPM.viscousdiffusion(pfield, dt; aux1=a, aux2=b)
+    end
+
+    # Relaxation: align vectorial circulation to local vorticity (stage-3 J)
+    if relax
+        if pfield.particles isa Array
+            for i in 1:pfield.np
+                pfield.particles[FLOWVPM.STATIC_INDEX, i] == 0 &&
+                    pfield.relaxation(FLOWVPM.get_particle(pfield, i))
+            end
+        else
+            FLOWVPM.relax_broadcast!(pfield.relaxation, pfield)
+        end
+    end
+
+    return nothing
+end
+
+"""
+Add the freestream to the particle U rows of a bare particle field (the
+pfield half of `apply_freestream!(w::PanelParticleWake, ...)`); used by the
+RK3 stage re-evaluation, which resets and rebuilds particle velocities
+mid-step.
+"""
+function _apply_freestream_pfield!(pfield::FLOWVPM.ParticleField, uinf)
+    if !(pfield.particles isa Array)
+        _gpu_apply_freestream_device!(pfield, uinf)
+        return nothing
+    end
+    for i in 1:pfield.np
+        for d in 1:3
+            pfield.particles[FLOWVPM.U_INDEX[d], i] += uinf[d]
+        end
+    end
+    return nothing
 end
 
 function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress::Bool=true,

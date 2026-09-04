@@ -119,6 +119,54 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
         @test pf.particles[FLOWVPM.SIGMA_INDEX, 1] ≈ sqrt(sigma0^2 + 2 * nu * dt)
     end
 
+    @testset "RK3 wake integrator wiring (BRAINSTORM 026 Phase 1b)" begin
+        body = make_dirichlet_diamond_body(; nspan=3)
+
+        # rk3=true declares the RK3 scheme on the pfield; combining with
+        # expint is rejected loudly
+        wake = pnl.PanelParticleWake(body; nwakerows=2, max_particles=10,
+            rk3=true)
+        @test wake.pfield.integration === FLOWVPM.rungekutta3
+        @test_throws ArgumentError pnl.PanelParticleWake(body; nwakerows=2,
+            max_particles=10, rk3=true, expint=true)
+
+        # propagate! on an rk3 wake demands the stage-UJ closure
+        @test_throws ArgumentError pnl.propagate!(wake, 1e-3)
+
+        # _rk3_convect! consistency: a constant velocity field with zero
+        # gradient must advance X by exactly dt*U (the low-storage weights
+        # sum to 1), leave Gamma/sigma untouched, and with CoreSpreading
+        # under the RK3 aux weights reproduce sigma^2 += 2*nu*dt exactly.
+        nu, sigma0 = 1.2e-5, 0.04
+        wake_cs = pnl.PanelParticleWake(body; nwakerows=2, max_particles=10,
+            rk3=true,
+            viscous=FLOWVPM.CoreSpreading(nu, sigma0, FLOWVPM.zeta_fmm; beta=1e6))
+        pf = wake_cs.pfield
+        FLOWVPM.add_particle(pf, SVector(0.0, 0.0, 0.0),
+            SVector(1e-3, 0.0, 0.0), sigma0; circulation=1e-3)
+        U0 = [0.3, -0.2, 0.1]
+        set_stage_velocity! = (pfield) -> begin
+            pfield.particles[FLOWVPM.U_INDEX, 1:pfield.np] .= U0
+            pfield.particles[FLOWVPM.J_INDEX, 1:pfield.np] .= 0.0
+            nothing
+        end
+        set_stage_velocity!(pf)
+        stage_calls = Ref(0)
+        stage_UJ = (pfield, a, b) -> begin
+            stage_calls[] += 1
+            set_stage_velocity!(pfield)
+            nothing
+        end
+        dt = 1e-3
+        gamma0 = copy(pf.particles[FLOWVPM.GAMMA_INDEX, 1])
+        pnl._rk3_convect!(pf, dt; relax=false, stage_UJ)
+        @test stage_calls[] == 2   # stage 1 reuses the step's evaluation
+        @test pf.particles[1:3, 1] ≈ U0 .* dt rtol = 1e-14
+        @test pf.particles[FLOWVPM.GAMMA_INDEX, 1] ≈ gamma0 rtol = 1e-14
+        @test pf.particles[FLOWVPM.SIGMA_INDEX, 1] ≈
+              sqrt(sigma0^2 + 2 * nu * dt) rtol = 1e-12
+    end
+
     @testset "Legacy edge-jump conversion golden reference (BRAINSTORM 016)" begin
         # Characterization baseline for the Item 016 refactor, which moves the
         # legacy conversion verbatim behind an opt-in strategy dispatch. The

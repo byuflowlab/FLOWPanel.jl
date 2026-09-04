@@ -25,7 +25,10 @@
 
 set -euo pipefail
 THREADS=64
-EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+# 026 Phase 1b: P018_REPO_OVERRIDE submits from a git worktree carrying code
+# the live checkout must not receive (pair with P018_PROJECT_OVERRIDE below,
+# and give the worktree a `data` symlink to the shared data root).
+EXPECTED_REPO="${P018_REPO_OVERRIDE:-/home/rander39/projects/FLOWPanel.jl}"
 [[ "$PWD" == "$EXPECTED_REPO" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"
@@ -166,6 +169,44 @@ case "$CASE" in
   scr_p019_s030v_rr)      export OVERLAP=2.4; export P_PER_STEP=14; export MERGE_R_FACTOR=0.0041;  export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
   scr_p020r_geom_s020v_rr) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
 
+  # ---- BRAINSTORM/026 Phase 1 no-split discriminator arms (2026-09-03):
+  # warm-start continuations of the scr_p019_s038v_gpu40 stretching ignition
+  # (patient zero idx 102340, growth 850-998, ignition 985-1010) from step 950.
+  # Clones of scr_p019_s038v_gpu40 minus its device pfield: CPU arms (driver
+  # default VPM_ARRAYTYPE=array) because euler_exp has no GPU path; all four
+  # share the backend so arms differ by exactly one knob. NREVS=29.5833 ends
+  # the continuation at total step 1100 (>= design gate step 1070). Submit with
+  # RESTART_STEP=950 RESTART_NAME=scr_p019_s038v_gpu40
+  # RESTART_PATH=data/p026_restart_gpu40_s950 (extracted from the archive
+  # tarball; see BRAINSTORM/026 design doc sec.9-10).
+  scr_p026ph1_ctrl_gpu40)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833 ;;
+  scr_p026ph1_exp_gpu40)     export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export WAKE_EXPINT=true ;;
+  scr_p026ph1_proj_gpu40)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export SFS_NO_BACKSCATTER_PROJECT=true ;;
+  scr_p026ph1_expproj_gpu40) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export WAKE_EXPINT=true; export SFS_NO_BACKSCATTER_PROJECT=true ;;
+
+  # ---- 026 Phase 1 LineGauss-event arms (2026-09-03): same discriminators
+  # replayed on the independent LineGauss ignition (patient zero idx 160932,
+  # root region, ignition ~490-516) from step 450. Source run = the LG twin
+  # of scr_p019_s038v_gpu40 (SAME run name, 052-h200 silo, archived as
+  # __052-h200; LineGauss filament reg, rlxf 0.3, otherwise identical env).
+  # NREVS=15.6944 ends at total step 600. Submit with RESTART_STEP=450
+  # RESTART_NAME=scr_p019_s038v_gpu40 RESTART_PATH=data/p026_restart_lg_s450.
+  scr_p026ph1_ctrl_lg)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss ;;
+  scr_p026ph1_exp_lg)     export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true ;;
+  scr_p026ph1_proj_lg)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export SFS_NO_BACKSCATTER_PROJECT=true ;;
+  scr_p026ph1_expproj_lg) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true; export SFS_NO_BACKSCATTER_PROJECT=true ;;
+
+  # ---- 026 Phase 1b Task 2 RK3 discriminator arms (2026-09-04): same two
+  # ignition continuations as the Phase 1 ctrl arms, stepping the wake with
+  # low-storage RK3 (WAKE_INTEGRATOR=rk3; panel solve frozen within the step,
+  # particle UJ+SFS re-evaluated per stage, ~3x UJ cost). Prediction on
+  # record (design doc sec.14): RK3's dtZ ceiling ~0.84 vs Euler's 2/3 ->
+  # expect DELAY, NOT ARREST. Submit exactly as the Phase 1 arms
+  # (RESTART_STEP/RESTART_NAME/RESTART_PATH), from the Phase-1b worktree via
+  # P018_REPO_OVERRIDE/P018_PROJECT_OVERRIDE.
+  scr_p026ph1_rk3_gpu40) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=29.5833; export WAKE_INTEGRATOR=rk3 ;;
+  scr_p026ph1_rk3_lg)    export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=15.6944; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_INTEGRATOR=rk3 ;;
+
   *) echo "ERROR: unknown screen case '$CASE'" >&2; exit 2 ;;
 esac
 
@@ -195,10 +236,10 @@ echo "BRAINSTORM/018 phase_14 SCREEN — case $CASE (8 revs, no freestream pulse
 echo "  repo:$PWD threads:$THREADS host:$(hostname) job:${SLURM_JOB_ID:-none}"
 echo "  mesh:${RHPC_MESH_FILE:-$RHPC_MESH} formulation:$RHPC_FORMULATION RPM:$RPM NT:$NT depth:${TRUNCATION_DEPTH_R}R rlxf:$RELAX_RLXF"
 echo "  das_eta:${DAS_ETA_KINEMATIC:-nan} overlap:${OVERLAP} pps:${P_PER_STEP} merge_r:${MERGE_R_FACTOR} nrevs:${NREVS} spinup:${SPINUP_REVS}"
-echo "  nwakerows:${NWAKEROWS} das_chord:${DAS_CHORD_FRACTION:-nan} das_uniform:${DAS_UNIFORM_DSIGMA:-nan} visc:${CORE_SPREADING_ACTIVE:-false} expint:${WAKE_EXPINT:-false} sfs_off:${SFS_OFF:-false}"
+echo "  nwakerows:${NWAKEROWS} das_chord:${DAS_CHORD_FRACTION:-nan} das_uniform:${DAS_UNIFORM_DSIGMA:-nan} visc:${CORE_SPREADING_ACTIVE:-false} expint:${WAKE_EXPINT:-false} integrator:${WAKE_INTEGRATOR:-euler-family} sfs_off:${SFS_OFF:-false}"
 echo "  started $(date '+%F %T')"
 
-julia --project=. -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
+julia --project="${P018_PROJECT_OVERRIDE:-.}" -t "$THREADS" examples/rotor_hover_pressure_comparison.jl
 
 echo "Screen case $CASE finished ($(date '+%F %T'))."
 echo "Artifacts: data/$RUN_NAME/${RUN_NAME}_CT_vs_rev.csv + monitors/"

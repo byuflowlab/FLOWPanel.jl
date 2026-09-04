@@ -159,14 +159,16 @@ end
 # host Estr_fmm! convention, so only the dynamic-procedure AfterUJ remains.
 function post_evaluate_influence!(pfield::FLOWVPM.ParticleField,
         source::FLOWVPM.ParticleField, backend::FastMultipoleBackend,
-        outputs::Nothing; i_target::Int=1, i_source::Int=1)
+        outputs::Nothing; i_target::Int=1, i_source::Int=1,
+        sfs_stage::Tuple=(1, 1))
     pfield === source || return nothing
     FLOWVPM.isSFSenabled(pfield.SFS) || return nothing
     _gpu_pfield_on_device(pfield) || error(
         "seam-handled SFS self-influence post hook reached with a host " *
         "particle field; the rectangular seam should have fallen back to fmm!")
+    a, b = sfs_stage
     _step_timer_measure(:wake_sfs; nested=true) do
-        pfield.SFS(pfield, FLOWVPM.AfterUJ())
+        pfield.SFS(pfield, FLOWVPM.AfterUJ(); a, b)
     end
     return nothing
 end
