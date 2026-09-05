@@ -37,3 +37,12 @@ BRAINSTORM/**/figures/*.log
 BRAINSTORM/**/figures/*.fls
 BRAINSTORM/**/figures/*.fdb_latexmk
 BRAINSTORM/**/figures/*.synctex.gz
+
+# local tooling/system
+.DS_Store
+.CondaPkg/
+__pycache__/
+logs/
+benchmark/results/
+Manifest.toml
+Manifest.toml.*
