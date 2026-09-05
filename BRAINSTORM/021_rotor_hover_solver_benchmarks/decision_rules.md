@@ -307,11 +307,33 @@ for the record but **must never be plotted on the same axes**.
 Phase 1 re-run — uses these three commits, as **detached git worktrees**, and no
 others:
 
-| repo | branch of origin | pinned commit | tag |
-| --- | --- | --- | --- |
-| FLOWPanel.jl | `fastmultipole` | the commit tagged below | `021-lg-gen2` |
-| FastMultipole | `flowpanel-20260817` | `0ce3ba60` | `021-lg-gen2` |
-| FLOWVPM.jl | `flowpanel` | `a627dd9` | `021-lg-gen2` |
+| repo | branch of origin | pinned commit | tag | campaign worktree branch |
+| --- | --- | --- | --- | --- |
+| FLOWPanel.jl | `fastmultipole` | the commit tagged below | **`021-lg-gen2b`** | `021-lg-gen2b-wt` |
+| FastMultipole | `flowpanel-20260817` | `0ce3ba60` | `021-lg-gen2` | `021-lg-gen2-wt` |
+| FLOWVPM.jl | `flowpanel` | `a627dd9` | `021-lg-gen2` | `021-lg-gen2-wt` |
+
+**Why FLOWPanel is at `gen2b` and the other two at `gen2`.** The first LineGauss
+submission (jobs 13592956–962, cancelled ~12 min in) recorded
+`commit = 048cac02…-dirty` with **zero tracked modifications**: `_git_describe`
+counted UNTRACKED files, so the job marked its own tree dirty the moment it wrote
+`slurm-*.out` beside the source, and the banner mislabelled FLOWPanel as
+`fp=benchmark`. `gen2b` fixes only that. **The sole campaign-code delta from `gen2`
+to `gen2b` is `benchmark/common.jl` (+10/−2)** — verified by
+`git diff --name-only 021-lg-gen2 021-lg-gen2b`, whose only `src/`-or-`benchmark/`
+entry is that file. Everything else in the delta is documentation, an 018 GPU
+launcher, and `scripts/prep_campaign_worktree.sh`, none of which a 021 run loads.
+**Do not read gen2 → gen2b as a physics or solver change; it is a provenance-marker
+fix.** FastMultipole and FLOWVPM were untouched, so their `gen2` tags still pin the
+identical trees and were not re-cut.
+
+**Live jobs (2026-09-05 14:23):** `13592981`–`13592987` = R1–R7, one per rung, on
+`phys-1-1`…`phys-1-6` and `phys-1-8`, seeded `TUNE_SEED=15:0.55:32` /
+`TUNE_SEED_B0=16:0.65:6`, `MEM_BUDGETS=0:16:128:500`. R1 banner verified: clean
+`commit` (no `-dirty`), `filament_reg = LineGaussRegularization`, all three
+worktrees named. The Gaussian generation is untouched in `~/flowpanel-021` — worktree
+isolation meant no archiving was needed, since the campaign tree's
+`benchmark/results/` starts empty and row-level resume has nothing to skip.
 
 **Resolve the pin by TAG, not by the SHAs above.** All three repos carry the
 annotated tag `021-lg-gen2`; set each worktree up with
