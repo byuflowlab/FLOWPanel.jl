@@ -3,7 +3,6 @@
 #SBATCH --nodes=1
 #SBATCH --partition=mgh
 #SBATCH --gres=gpu:gh200:1
-#SBATCH --constraint=arm
 #SBATCH --cpus-per-task=72
 #SBATCH --mem=192G
 #SBATCH --time=24:00:00
@@ -19,9 +18,11 @@
 #   sbatch [resource overrides] examples/run_dji9443_hover_ct_gpu.slurm.sh <arch> <case_tag>
 #
 # arch: gh200 (default; in-file #SBATCH header matches) | h200 | h100.
-# For non-gh200 arches override partition/gres/constraint/cpus on the sbatch
+# No constraint in the header: mgh is all-ARM so it's redundant there, and a
+# hardcoded arm constraint rejects x86 partitions (eng refused exactly this on
+# 2026-09-05). For non-gh200 arches override partition/gres/cpus on the sbatch
 # command line (052 submit-wrapper style), e.g. H200 via eng:
-#   sbatch --partition=eng --qos=eng --gres=gpu:h200:1 --constraint='' \
+#   sbatch --partition=eng --qos=eng --gres=gpu:h200:1 \
 #          --cpus-per-task=64 ... examples/run_dji9443_hover_ct_gpu.slurm.sh h200 p018_final
 #
 # Runs from the per-arch silo tree ~/FLOWPanel-018-gpu-<arch> against the 052
