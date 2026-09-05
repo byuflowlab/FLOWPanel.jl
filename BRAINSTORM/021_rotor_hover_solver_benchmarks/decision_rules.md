@@ -297,6 +297,90 @@ bcerr_eps, bcerr_certified, t_bcerr, t_step_net, n_particles, CT`.
   filament-family question at 328 vs 329 particles, where the difference was
   structural rather than accumulated.)
 
+## Filament regularization — LineGauss (Ryan's ruling 2026-09-05)
+
+- **`LineGaussRegularization` is the campaign default from 2026-09-05**, following the
+  codebase default flip of 2026-08-29 (task 052d). All nine 021 launchers had pinned
+  `gaussian` since 2026-08-22 — a pin that predates the LineGauss ruling, not a
+  considered rejection of it. Now flipped to `linegauss`; `FLOWPANEL_FILAMENT_REG=gaussian`
+  reproduces pre-2026-09-05 rows.
+- **Phase 2 is RELAUNCHED under LineGauss at every rung R1–R7.** The 2026-08-26..29
+  Gaussian descents (R1–R5) are superseded as cost numbers and retained as the SEED
+  source and as history. Rationale: LineGauss changes the per-edge kernel cost (4 erf +
+  1 exp vs Gaussian's 1 expm1) AND `radius_inflation` (≈6.25σ vs 5.90σ at tol 1e-6),
+  so direct-list sizes and therefore the cost optimum move. A ladder half-Gaussian and
+  half-LineGauss would confound the scaling exponent, which is Phase 2's deliverable.
+- **Phase 1's harvested table is NOT invalidated**: `phase1_case.jl` is a frozen
+  single-step solve and the family was measured inert there (2026-08-22). It is
+  nevertheless now disclosed as Gaussian-provenance in the table header.
+
+### Descent seeding (2026-09-05)
+
+- The tuner gained `TUNE_SEED` / `TUNE_SEED_B0` (`"P:MAC:LEAF"`), read in
+  `rotor_hover_solver_phase2_tune.jl`. Unset = the previous `TUNED`/`REF_START`
+  behaviour, unchanged. The seed is recorded in the `notes` column of every row, so a
+  row can never hide where its descent started.
+- **Two seeds are required because the optimum splits hard by cache regime**, measured
+  in the Gaussian descents: uncached (budget 0) converges to **leaf ≈ 6** (R4 6, R5 6;
+  MAC 0.60–0.65), cached (budget > 0) to **leaf ≈ 32** (R4 32/32, R5 32/32/32; MAC
+  0.50–0.60). Those attractors are 5× apart and no single seed serves both. The
+  driver's fallback `REF_START = (17, 0.5, 21)` is wrong for both at high rungs.
+- `expansion_order` shows **no trend** and scatters 10–17 even within one rung across
+  budgets — the cost surface is flat in P, so the P seed matters little.
+- **Seeding does not weaken any guarantee.** The descent still searches and the
+  BC ≤ 1e-6 certification gate still decides admissibility, so a stale or wrong seed
+  costs optimality, never correctness. Seeds carried over from Gaussian are a
+  *hypothesis* about where LineGauss's optimum sits, not a measurement of it.
+- **R3 budget 0 (Gaussian) carries `tune_timed_out=true`** — best-so-far, not an
+  optimum (§4.1 trap). Excluded from the seed fit and never publishable as a tuned
+  result.
+
+### Trace provenance now includes the filament family (2026-09-05)
+
+`load_trace`'s hard guard was `(rung, mem_budget_gib, tune_reps, tune_abandon_factor,
+hardware_tag)` with a soft warning on `fm_commit` — **the filament family was absent**.
+Since a memoized `t` is a timing and the family changes the objective that timing
+measures, a Gaussian trace would have replayed silently into a LineGauss descent and
+corrupted it with no error raised. `filament_reg` is now a 13th trace column inside the
+HARD guard, and the schema change makes every 12-field Gaussian trace fail loudly at
+the header check ("move it aside before resuming") rather than being partially read.
+
+**Relaunch precondition:** the existing R1–R5 `tune_phase2.csv` rows must be moved
+aside before resubmission. Row-level resume keys on `(rung, mem_budget_gib)` and would
+otherwise skip every already-present rung, producing no LineGauss rows at all.
+
+## Force recovery — Bernoulli-only (Ryan's ruling 2026-09-05)
+
+- **For the remainder of the item, CT is recovered by steady `PressureBernoulli` +
+  Force only.** `PressureLaplace` and `KuttaJoukowski` are retired from the forward
+  measurement path. This aligns the whole item with what Phase 3 already did
+  (`RUN_MONITORS=true`, Bernoulli-only under `PHASE=phase3*`); Phase 2 rows carry no
+  CT and are unaffected.
+- **Consequence — retired knob**: the `PressureLaplace` CG `itmax` per-rung tuning
+  entry (hit its 1000-iteration cap at R3; see `phase_01_hpc_procedure.md`) no longer
+  applies to any forward run. Nothing else in the per-rung tuning procedure changes.
+- **The already-harvested Phase 1 Table 4 keeps all three columns** — it is history,
+  and the `CT_kj` / `CT_laplace` columns are what localised the R7 defect. Footnote it
+  as superseded going forward rather than restating it.
+- **The R7 `CT_laplace` collapse is DEMOTED to non-blocking** (was Phase 1 next-action
+  #3). It no longer gates any 021 deliverable. It remains a real `PressureLaplace`
+  defect on a 419,276-panel mesh and is logged as a standalone defect in `ledger.md`,
+  not dropped.
+- **Redundancy trade, accepted knowingly (Ryan)**: three recoveries are what caught a
+  common-mode post-processing defect that on a single recovery would have read as a
+  physical trend. On one recovery that check is gone. Bernoulli also carries the
+  moving-body inertial-KE caveat — sound for the cross-config deltas Phase 1 used it
+  for, doing more work in Phase 3's within-config time series. **If a CT anomaly needs
+  debugging later, pull `KuttaJoukowski` and/or `PressureLaplace` back in for that
+  diagnosis** — they stay available, they are just not in the standing path.
+- **Bernoulli's own R7 behaviour, for the record**: `CT_bernoulli` does NOT diverge at
+  R7 (0.053203 vs 0.053391 at R6, −0.35%) — no sign flip, no collapse, and the flattest
+  of the three recoveries across the ladder (R1→R7 total spread 0.85%, vs ~4.5% for KJ).
+  But that R6→R7 step is ~17× the R3→R6 steps (~0.02–0.04%) after three flat rungs, and
+  it cannot be a config-set artifact of R7's dropped `krylov_jacobi` / split provenance
+  (configs agree on CT to ~1e-3%, three decades too tight). Treat it as a genuine
+  mesh-rung effect worth a note, not a clean point.
+
 ## Historical agreement stage (COMPLETE 2026-08-14; thresholds retired)
 
 The reference-based strength-agreement thresholds (relL2 ≤ 1e-5 provisional;

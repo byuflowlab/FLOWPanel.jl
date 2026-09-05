@@ -160,6 +160,13 @@ shows nothing):**
 
 ## 5. Recommended next actions, in order
 
+> **NEW RULING 2026-09-05 (Ryan), read before any measurement work:** the item is
+> **Bernoulli-only** for force recovery from here on — steady `PressureBernoulli` +
+> Force. `PressureLaplace` and `KuttaJoukowski` are out of the forward path (pull back
+> in for diagnosis only). Retires the `PressureLaplace` CG `itmax` per-rung knob;
+> demotes the R7 `CT_laplace` defect to non-blocking (still logged in `ledger.md`).
+> Full text: `decision_rules.md`, "Force recovery — Bernoulli-only".
+
 1. **Resolve the two items in §0** — disk sweep authorization, notebook entry.
 2. **Harvest Phase 1.** Every rung R1–R7 now has `agreement.csv` +
    `agreement_spread.csv`. This is a complete, publishable deliverable and

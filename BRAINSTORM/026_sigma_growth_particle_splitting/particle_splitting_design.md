@@ -603,3 +603,332 @@ neighbors), inflating *counts*; the dominance *split* is robust since
 nothing approaches the viscous budget. Local evidence therefore keeps
 **Mechanism A gated off**; run the census on a gpu40/018 series before any
 final ruling.
+
+## 12. Phase 1 launch record (2026-09-03)
+
+**§11-W4 tarball mapping CORRECTION (found during launch).** The Vatistas
+gpu40 and its LineGauss twin share the SAME run name
+`scr_p019_s038v_gpu40` in different silos, and the W4 mapping confused
+them. Verified from run-residue wake-health monitors:
+
+| archive tarball (`/nobackup/archive/.../projects_FLOWPanel.jl/`) | actual identity | evidence |
+|---|---|---|
+| `scr_p019_s038v_gpu40__052-h200.tar.zst` (steps 0–1062) | **LineGauss twin** (052-h200 silo, job 13518861 line) | ignition at ~500–530 (max_u 66→2.2e5); post-ignition corpse by 950 (max_u ≈3e3) |
+| `scr_p019_s038v_gpu40.crashed1061.todelete.tar.zst` (0–1061) | **Vatistas gpu40, part 1** (018-gpu-gh200 silo) | healthy at 940–990 (max_u ≈17–24), ignition 995–1000 (54.6→213, min_σ collapse) |
+| `scr_p019_s038v_gpu40__018-gpu-gh200.tar.zst` (1060–1475) | Vatistas gpu40, part 2 (post-crash chain) | starts at 1060 already post-ignition (max_u 2.4e4) |
+
+A first launch (jobs 13569074–77) warm-started from step 950 of the
+`__052-h200` tarball believing it the Vatistas run — i.e. from the LG
+post-ignition corpse — and was **scancel'd ~40 min in**; its outputs
+(`data/scr_p026ph1_*` dirs + monitor CSVs) were deleted. Silver lining:
+the mis-mapping's discovery located the LG pre-ignition state, so the §9
+LineGauss repeat launched immediately instead of pending a snapshot hunt.
+
+**Corrected launch — eight arms, both ignition events** (m12
+`--qos=normal`, ~29 s/step CPU, ≈1–1.5 h each):
+
+| job | case | event | arm |
+|---|---|---|---|
+| 13569125 | `scr_p026ph1_ctrl_gpu40` | Vatistas, restart 950 → 1100 | control |
+| 13569127 | `scr_p026ph1_exp_gpu40` | " | (a) `WAKE_EXPINT` |
+| 13569129 | `scr_p026ph1_proj_gpu40` | " | (b) `SFS_NO_BACKSCATTER_PROJECT` |
+| 13569131 | `scr_p026ph1_expproj_gpu40` | " | (a+b) |
+| 13569126 | `scr_p026ph1_ctrl_lg` | LineGauss, restart 450 → 600 | control |
+| 13569128 | `scr_p026ph1_exp_lg` | " | (a) |
+| 13569130 | `scr_p026ph1_proj_lg` | " | (b) |
+| 13569132 | `scr_p026ph1_expproj_lg` | " | (a+b) |
+
+- Cases appended to the `run_p018_screen_hpc.slurm.sh` case table (cluster
+  + local copies in sync; cluster backup `.bak_p026`). All clone the
+  `scr_p019_s038v_gpu40` env (OVERLAP 2.4, PPS 11, MERGE_R 0.00524, N=1,
+  DAS_UNIFORM 3.4, viscous CoreSpreading β=1e9, rlxf 0.3) +
+  `WAKE_HEALTH_DTZ=true` + `WAKE_HEALTH_ATTRIBUTION=true`. The `_lg`
+  cases add `FLOWPANEL_FILAMENT_REG=linegauss` (verified from the LG
+  twin's own job banner: linegauss reg, otherwise identical env).
+- Warm-start sources extracted from the archive tarballs (archived run
+  dirs untouched — avoids ARCHIVED-STALE):
+  `data/p026_restart_gpu40_s950/` (Vatistas step 950, from crashed1061
+  tarball) and `data/p026_restart_lg_s450/` (LG step 450, from
+  `__052-h200`). Submission env: `RESTART_STEP={950|450}
+  RESTART_NAME=scr_p019_s038v_gpu40 RESTART_PATH=data/p026_restart_*`.
+  Neither tarball holds fp64 particle VTPs; the loader uses fp32 `.vtp`.
+- Run lengths: gpu40 `NREVS=29.5833` → total step 1100 (spinup_steps=35 +
+  round(36·29.5833)), past the §9 gate step 1070; LG `NREVS=15.6944` →
+  total step 600 (ignition window 490–516 + ~85 steps margin).
+- **Backend deviation from the source run (deliberate)**: all four arms run
+  the CPU host-array pfield (`VPM_ARRAYTYPE=array` driver default) on the
+  cluster's `unified-052` stack, because `_euler_exp` has no GPU/broadcast
+  path (`FLOWVPM_timeintegration.jl:429`, `Threads.@threads` scalar loop).
+  Backend is therefore matched across arms (each differs by exactly one
+  knob) and the ctrl arm doubles as the §9-step-1 check that ignition
+  (steps ~995–998) reproduces off-device. No 026 code deployed to the
+  cluster — Phase 1 needs none (splitting off; `euler_exp`, the projection
+  control, and cross-tag warm-start all pre-exist in unified-052); the W2
+  Δσ² attribution columns are consequently absent from these arms' logs.
+- Provenance for the LG event (from the 052 handoff
+  `FastMultipole/MATRIX_OPERATOR_REFACTOR/052-handoff-prompt-2026-08-31v.md`):
+  LG patient zero = particle idx 160932, root-vortex region ~0.13R
+  off-axis, |Γ| 4e-4 (450) → 2.2e-2 (490) → 37 (517). It is NOT
+  `p022lg_hr10` (that is the 022 ground-effect corpse, ignition step 710).
+- Scoring next: §9 criteria per event — does each ctrl reproduce its
+  patient-zero growth (gpu40: idx 102340, ignition ~995–998; LG: idx
+  160932, ~490–516); do (a)/(b)/(a+b) arrest it (bounded max|Γ|/σ², no
+  compounding leader) — from
+  `monitors/scr_p026ph1_*_monitor04_wake_health*.csv` (max_dtZ,
+  attribution columns) and force monitors. Passing BOTH events is the
+  strong-evidence outcome §9 names. If (a) or (b) alone arrests ignition,
+  the item redirects to integrator/SFS repair before any split geometry.
+
+## 13. Phase 1 harvest and §9 ruling (2026-09-03)
+
+All eight arms ran to full length (gpu40 → step 1100, LG → step 600; no
+crashes; completion judged from logs + wake-health CSV coverage, not sacct).
+Scored from `monitors/scr_p026ph1_*_monitor04_wake_health_system1.csv` and
+`*_CT_vs_rev.csv` (`CT_bernoulli`; the force monitor's CFz column is NOT CT).
+
+**End-window summary** (max over run; min for σ; "u>100" = first step
+max_u exceeds 100):
+
+| case | max_u | max γ/σ² | min σ | max dtZ | u>100 |
+|---|---|---|---|---|---|
+| ctrl_gpu40 | 1.3e6 | 4.1e10 | 9.41e-5 | 3.3e3 | 1011 |
+| proj_gpu40 | 3.2e6 | 2.2e10 | 9.41e-5 | 4.7e4 | 1005 |
+| exp_gpu40 | 48 | 2.7e4 | 2.8e-4 | 0.314 | never |
+| expproj_gpu40 | 38 | 2.8e4 | 3.3e-4 | 0.225 | never |
+| ctrl_lg | 2.1e4 | 2.9e7 | 9.41e-5 | 2.7e2 | 504 |
+| proj_lg | 3.5e5 | 1.2e9 | 9.41e-5 | 9.7e3 | 487 |
+| exp_lg | 35 | 5.2e3 | 3.9e-4 | 0.262 | never |
+| expproj_lg | 37 | 3.8e3 | 4.0e-4 | 0.136 | never |
+
+**Findings:**
+
+- **Ctrl reproduction (§9 step 1): PASS, with a timing note.** LG ctrl
+  ignites in the reference window (u>100 at 504; ref 490–530). gpu40 ctrl
+  ignites ~10–15 steps late (u>100 at 1011 vs ref 995–1000) but with the
+  identical signature: min_σ collapse to the 9.41e-5 floor, γ/σ² → 1e10,
+  dtZ crossing 2/3 before blowup (1.29 at step 1040). Attributed to
+  warm-start perturbation (fp32 VTP restore) + CPU-vs-GPU backend shifting
+  chaotic timing; ignition itself is backend-independent.
+- **(a) `WAKE_EXPINT` alone ARRESTS BOTH ignitions.** Both exp arms stay
+  bounded to end-of-run with max_dtZ ≤ 0.31 < 2/3, no min_σ collapse, no
+  compounding leader. (a+b) likewise. Consistent with the §9 mechanism:
+  ignition is forward-Euler ΔtZ overshoot, removed by the exponential
+  σ/Γ update with zero new physics.
+- **(b) SFS no-backscatter projection alone FAILS both events**, igniting
+  marginally *earlier* than ctrl (1005 vs 1011; 487 vs 504 — within
+  chaotic-timing noise, but clearly no arrest). Backscatter removal is not
+  the lever.
+- **Pre-trigger loads agree.** Pre-ignition-window mean CT: gpu40 arms
+  0.0720–0.0723 (<0.4% spread), LG arms 0.0744–0.0746 (<0.3% spread).
+
+**§9 binding ruling: the redirect branch FIRES.** (a) alone arrests both
+independent ignitions → the lever is integrator repair (item 020 owns the
+closure/stability question; the integrator's definitive write-up is
+`020_sigma_aware_subgrid_closure/phase_02r_integrator.md` — corrected
+frozen-gradient map + exact CoreSpreading composition); splitting's role
+narrows to resolution maintenance. Phase 2 split-geometry work is ON HOLD pending Ryan's ruling.
+Run dirs `data/scr_p026ph1_*` remain on orc unarchived.
+
+## 14. Phase 1b staging (2026-09-04, Ryan-approved ordering)
+
+Follow-on to the §13 ruling, staged in this order:
+
+**Task 1 — GPU/broadcast path for `euler_exp`** (currently CPU-only:
+`FLOWVPM_timeintegration.jl:429` is a `Threads.@threads` scalar loop).
+
+- Two sites need device counterparts: (i) the `_euler_exp` frozen-gradient
+  update (position, `exp(dt·L)·Γ` + `r^(-3g)`/`r^(-g)` rescale, M[9］Zeff
+  stash, SFS Lie split); (ii) the CoreSpreading euler_exp branch
+  (`FLOWVPM_viscous.jl:175-194`, the `expm1` blended diffusion using M[9]).
+- Follow the existing split pattern: `pfield.particles isa Array` → scalar
+  loop, else broadcast (`update_particle_states_broadcast_reformulated!` /
+  `_corespreading_euler_broadcast!` are the templates — row-slice views +
+  preallocated scratch rows).
+- The 3×3 matrix exponential is the only broadcast-unfriendly piece.
+  Options: closed-form 3×3 exp via Cayley–Hamilton/Putzer in elementwise
+  broadcast form, or a custom CUDA/KernelAbstractions kernel with
+  per-thread StaticArrays (likely simpler and matches the CPU code 1:1).
+- Keep existing invariants: device paths skip the `dsigma2_*` splitting
+  accumulators (precedent + comment at `FLOWVPM_timeintegration.jl:383`);
+  `sigma_guard`/`SIGMA_CEIL` stays incompatible with euler_exp; the
+  non-finite-ratio DomainError guard must survive on device (or be checked
+  post-hoc).
+- Tests: CPU-vs-GPU parity on a small random field (positions, Γ, σ to
+  rtol ~1e-6 fp32); the 020 Phase-2R suite still green; GPU smoke per
+  `agent_policies/HPC.md` (m13h or mgh) confirming `FLOWVPMCUDAExt`.
+
+**Task 2 — RK3 discriminator arms** (prediction ON RECORD: RK3 raises the
+linear-stability ceiling only to ΔtZ ≈ 2.51/3 ≈ 0.84 vs forward Euler's
+2/3, while the §13 runaway ramps ΔtZ ~0.3 → 1.3 in ~20 steps → expect
+DELAY, NOT ARREST. Either outcome is valuable: arrest ⇒ GPU-ready fix
+exists today; failure ⇒ falsifies order-of-accuracy as the lever and
+justifies Task 1 for production).
+
+- **Wiring is NOT an env knob**: FLOWPanel's `step!` calls
+  `_euler`/`_euler_exp` directly with U/J pre-evaluated by its own
+  panel+wake orchestration (`FLOWPanel_wake.jl:2226-2237`); RK3 needs
+  UJ+SFS re-evaluated at each of 3 stages. Use FLOWVPM's
+  `rungekutta3(pfield, dt; custom_UJ)` hook with a closure that re-runs
+  the wake's particle UJ evaluation per stage. Design decision to make
+  explicitly: freeze the panel-surface influence within the step
+  (recommended for the discriminator — panels don't move mid-step and the
+  solve happens once) and re-evaluate particle–particle+panel-on-particle
+  velocities/gradients per stage; document whatever is chosen. Add a
+  `WAKE_INTEGRATOR=rk3` (or similar) knob; keep `WAKE_EXPINT` semantics
+  unchanged. Note `viscousdiffusion` already has the RK3 per-stage
+  CoreSpreading branch (`aux1/aux2`), so β=1e9 CoreSpreading composes.
+- Two arms, CPU host-array, backend-matched to §12:
+  `scr_p026ph1_rk3_gpu40` (restart 950 → 1100) and `scr_p026ph1_rk3_lg`
+  (restart 450 → 600, `FLOWPANEL_FILAMENT_REG=linegauss`), same restarts
+  (`data/p026_restart_gpu40_s950`, `data/p026_restart_lg_s450`,
+  `RESTART_NAME=scr_p019_s038v_gpu40`), same env clone + wake-health
+  knobs, `-p m12 --qos=normal`. Cost ≈ 3× UJ ⇒ ~85–90 s/step, ~4 h/arm.
+- Score identically to §13 (max_u / γ/σ² / min_σ / max_dtZ trajectories,
+  u>100 step, pre-trigger CT); compare ignition delay vs ctrl.
+- **Deployment caution**: this one DOES require new code on the cluster
+  (unlike §12). The `~/projects` trees serve live 018/022 campaigns — use
+  a `git worktree` on orc (per HPC.md) with the RK3 branch and point the
+  launcher's `*_REPO_OVERRIDE`/`*_PROJECT_OVERRIDE` at it; do not mutate
+  the live checkouts.
+
+Still pending Ryan: archiving the eight §12 run dirs (hpc-storage);
+notebook entry for Phase 0 + Phase 1 (deferred once, "not yet").
+
+## 15. Phase 1b RK3 discriminator harvest and ruling (2026-09-04)
+
+Arms per §14 Task 2: `scr_p026ph1_rk3_gpu40` (warm start 950, target 1100;
+orc job 13582167) and `scr_p026ph1_rk3_lg` (warm start 450, target 600;
+job 13582168), run from the `~/wt026` worktrees (FLOWPanel `c9b411d`,
+`WAKE_INTEGRATOR=rk3`). **Neither reached its target: both ignited and
+died with `ERROR: PARTICLE OVERFLOW` (500k cap) during blowup-driven
+shedding** — gpu40 at step 983 (n_particles 178k→227k in one step before
+the cap), LG at step 525. The ignition event is fully captured in both
+wake-health CSVs, so the truncation does not affect scorability (arrest
+is falsified by the ignition itself). Scored from
+`monitors/scr_p026ph1_rk3_*_monitor04_wake_health_system1.csv`.
+
+**End-window summary** (§13 format; ctrl rows repeated for reference):
+
+| case | max_u | max γ/σ² | min σ | max dtZ | u>100 | dtZ>2/3 | end |
+|---|---|---|---|---|---|---|---|
+| rk3_gpu40 | 3.1e6 | 6.3e10 | 4.70e-5 | 9.8e3 | **959** | 957 | overflow @983 |
+| rk3_lg | 2.8e6 | 4.1e9 | 4.71e-5 | 2.6e4 | **517** | 497 | overflow @525 |
+| ctrl_gpu40 (§13) | 1.3e6 | 4.1e10 | 9.41e-5 | 3.3e3 | 1011 | — | ran to 1100 |
+| ctrl_lg (§13) | 2.1e4 | 2.9e7 | 9.41e-5 | 2.7e2 | 504 | — | ran to 600 |
+
+**Findings:**
+
+- **Ruling: NO ARREST — and no systematic delay either.** Ignition
+  timing vs ctrl: gpu40 −52 steps (959 vs 1011), LG +13 steps (517 vs
+  504). The signature is identical to §13 ctrl in both: min_σ collapse,
+  γ/σ² → 1e9–1e10, compounding leader, dtZ through the ceiling. RK3's
+  linear-stability ceiling (ΔtZ ≈ 0.84) was crossed at steps 957/497 and
+  saved neither arm. This is the §14 prediction's core claim
+  (order-of-accuracy is not the lever) confirmed *more strongly than
+  predicted* — the expected DELAY did not even materialize.
+- **gpu40's early ignition is chaotic-timing scatter, not a wiring
+  fault.** rk3_gpu40 departs ctrl essentially immediately after
+  warm-start (dtZ 0.38 by step 958 vs ctrl's 0.07 at the same step;
+  u>100 nine steps in), while rk3_lg tracked its ctrl twin closely for
+  ~65 steps (max_u, γ/σ², dtZ all matching to within noise through step
+  ~515) before igniting slightly *later* than ctrl. The LG arm is
+  therefore the wiring control: if the RK3 stage re-evaluation were
+  broken, it would not reproduce ctrl's trajectory for 65 steps. The
+  gpu40 restart state sits near-critical (§13: the runaway ramps
+  ΔtZ 0.3→1.3 in ~20 steps; ctrl itself ignited 10–15 steps late vs its
+  own reference), so a different integrator's truncation error picks a
+  different chaotic realization; timing scatter of ±tens of steps at
+  gpu40 is expected. Net: (−52, +13) brackets zero → no delay signal.
+- **min σ reached 4.70e-5, below the 9.41e-5 floor seen in every §13
+  arm** — the §13 "floor" is evidently the forward-Euler practical bound,
+  not a hard clamp; RK3's multi-stage positions let the collapse run
+  deeper before death.
+- **Pre-ignition loads: CT_bernoulli is UNAVAILABLE for both rk3 arms.**
+  The driver writes `*_CT_vs_rev.csv` only after `simulate!` returns
+  (`examples/rotor_hover_pressure_comparison.jl:1468`), and both arms
+  crashed inside `simulate!`. Fallback check via `monitor02_force` CFz
+  window means (same-step windows, rk3 vs ctrl): gpu40 steps 951–958
+  5.75e-4 vs 5.45e-4 (+5.6%, acceptable given the 8-step window); LG
+  steps 451–500 −1.6e-6 vs +9.8e-5 — both ≈0 (CFz oscillates about zero
+  at this normalization), so the LG window mean is an inconclusive load
+  check, not a discrepancy. No CT-level pre-trigger comparison is
+  possible for this pair.
+- **Cost: RK3 measured ~5–10× the euler arms, well above the 3×-UJ
+  estimate.** gpu40 ~300 s/step and LG ~150 s/step pre-ignition (vs
+  ~29 s/step for the §12 euler arms; §12 predicted ~85–90 s/step). The
+  per-stage re-evaluations rebuild FMM trees and panel-on-particle
+  influence each stage; post-ignition steps ballooned to ~900 s.
+
+**Binding ruling: the §13 redirect stands and is strengthened.** RK3 is
+falsified as a production path (no arrest, no delay, 5–10× cost); the
+lever remains the exponential integrator (`WAKE_EXPINT`/euler_exp), now
+GPU-capable per Task 1. Splitting's role stays narrowed to resolution
+maintenance. Logs:
+`~/wt026/FLOWPanel.jl/logs/slurm/slurm-fp-p026ph1-rk3{,-lg}-1358216{7,8}.{out,err}`;
+run dirs `data/scr_p026ph1_rk3_{gpu40,lg}` on orc (unarchived).
+
+## 16. Expint-fails hunt: shortlist (2026-09-04, per Ryan's step-4 ask)
+
+Goal: events where the exponential integrator does NOT arrest blowup, to
+map the limits of integrator repair and re-motivate Phase 2 splitting.
+Sources: 020 evidence pack + a login-node sweep of every
+`monitor04_wake_health` CSV under `~/projects/FLOWPanel.jl/data`
+(ignition = first max_u>100; "pre-crossing dtZ" = max over rows strictly
+before that step).
+
+**Candidate 1 (STRONGEST — the discriminator pair already exists, no new
+runs needed).** The 020 Phase-2R σ/R=0.02 viscous screen:
+`scr_p019_s020v` (euler ctrl) ignites @213 with pre-crossing dtZ 0.46;
+`scr_p020r_geom_s020v` (job 13154223, the CORRECTED frozen-gradient
+geometric map — same family as production euler_exp) stays healthy past
+the ctrl's death, then a tail-localized contraction ignites @242
+(pre-crossing dtZ 0.47 < 2/3; min σ/σ_shed 0.0137, M=222, 19.6 km/s,
+non-finite-ratio guard stop @243); the rerun `scr_p020r_geom_s020v_rr`
+ignites @210 (pre-crossing dtZ 0.39) — *earlier than ctrl*. Adjudicated
+in `020_.../phase_02_evidence_pack.md` ("stiff integration is a real
+local numerical remedy, but not a sufficient field-level remedy"): the
+regime is under-resolved (Leg-1 pre-onset M≈28), so field-coupled Γ
+amplification runs away regardless of integrator — a resolution-loss
+failure, the original 026 splitting motivation. Residue: monitor CSVs on
+/home (`data/scr_p020_exp_s020v`, `data/scr_p020r_geom_s020v{,_rr}`,
+`data/scr_p019_s020v`) + committed figure CSVs
+(`020_.../figures/fig_stage_b{,_r}/`). NO VTP checkpoints and no archive
+tarballs → any warm-started variant would need a cold rerun (~250 steps,
+cheap). Superseded-prototype caveat does not apply to the 2R runs.
+
+**Candidate 2 (categorical, no run needed).** σ-growth/SIGMA_CEIL cliff
+events (018 NT144 cliff class): `sigma_guard`/`SIGMA_CEIL` is
+*incompatible* with euler_exp by design, so growth-side cliffs sit
+outside expint protection by construction. Cite, don't test.
+
+**Candidate 3 (weak until instrumented).** `p022lg_hr10`: ignition
+@643 (transient; terminal collapse ~710 with min σ → 9.2e-5), but its
+wake-health CSV predates the max_dtZ column, so the not-overshoot claim
+can't be scored from residue. Would need offline dtZ reconstruction or a
+re-run with current monitors — only worth it if Candidate 1 is rejected.
+
+**Sweep caveats:** ~33 older runs report dtZ≡0 (column absent/unpopulated)
+and were excluded from dtZ-based ranking. Low pre-crossing dtZ alone is a
+WEAK discriminant — even `scr_p026ph1_ctrl_gpu40` (which expint arrests)
+shows pre-crossing dtZ 0.34, because dtZ crosses 2/3 only mid-runaway;
+the load-bearing evidence for "expint fails" is the direct 2R pair, not
+the dtZ census.
+
+**§16 reruns LAUNCHED (Ryan-approved 2026-09-05):** cold reruns of the
+pair on the current stack, from the `~/wt026` worktree, m12/normal, full
+VTP series retained for future warm starts. Vatistas pair:
+`scr_p026ef_ctrl_s020v` (job 13591760) / `scr_p026ef_exp_s020v`
+(13591761). LineGauss twins (same knobs +
+`FLOWPANEL_FILAMENT_REG=linegauss`): `scr_p026ef_ctrl_s020v_lg`
+(13591762) / `scr_p026ef_exp_s020v_lg` (13591763). **Ryan's ruling on
+record (2026-09-05): if the LineGauss pair showcases the failure (expint
+arm still blows up), the campaign default filament regularization
+changes to linegauss from then on.**
+
+**Proposed next (Ryan-gated, not launched):** adopt the s020v pair as the
+expint-fails validation target. Optional tightening: one cold §12-style
+pair `ctrl` vs `WAKE_EXPINT=true` on today's production stack (the 2R
+run used the 08-12 code; a rerun on current euler_exp + exact
+CoreSpreading composition would close the residual version gap), ~250
+steps CPU, hours not days. An expint-fails event validated on current
+code becomes the Phase-2 splitting motivation case.

@@ -747,7 +747,7 @@ Merge also reported three Phase 2 problems, all expected and none new: R6/R7
 `tune_phase2.csv` missing (that tuning was never submitted, per §7 of the plan),
 and R3 budget 0 `tune_timed_out=true` (best-so-far, not an optimum).
 
-### OPEN DEFECT — R7 `CT_laplace` collapse
+### OPEN DEFECT (DEMOTED 2026-09-05, non-blocking) — R7 `CT_laplace` collapse
 
 | rung | CT_laplace | CT_bernoulli | CT_kj |
 | --- | --- | --- | --- |
@@ -782,6 +782,17 @@ This localises the defect to **`PressureLaplace` recovery on the R7 mesh**
 (419,276 panels, `dji9443_20260813_..._capped_captess4`). Cause not investigated.
 See `agent_policies/MONITORS.md` for the PressureLaplace constraints — the natural
 first check is whether one of them is violated at R7 resolution but not at R6.
+
+**Status 2026-09-05 (Ryan's ruling):** the item moved to Bernoulli-only force recovery
+for all remaining work (see `decision_rules.md`, "Force recovery — Bernoulli-only"), so
+this defect no longer gates any 021 deliverable and is removed from the Phase 1
+next-actions list. It is NOT withdrawn: it is a genuine `PressureLaplace` recovery
+failure on a 419,276-panel mesh, undiagnosed, and it will bite any other work that
+recovers pressure via Laplace at that resolution. Carried here as a standalone defect.
+Entry point for whoever picks it up: the `PressureLaplace` constraints in
+`agent_policies/MONITORS.md`, and the retired per-rung CG `itmax` knob (1000-cap at R3,
+`phase_01_hpc_procedure.md`) as a candidate cause never confirmed to have been raised
+for R4–R7.
 
 Note this does **not** taint the Phase 1 agreement deliverable, which is a statement
 about solver-to-solver consistency and stands on its own at R7.
