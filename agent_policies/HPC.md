@@ -99,10 +99,25 @@ available" — re-open the ssh socket and retry.
 ## Project Location on the Cluster
 
 All orc jobs launch from `~/projects/{FastMultipole,FLOWVPM.jl,FLOWPanel.jl}` —
-real git clones on branch `unified-052`. Pin a run by COMMITTING (local-only)
-before launching; use `git worktree add` for concurrent experiments needing
-different code states. Deploy local changes by scp/rsync + commit on orc (never
-launch from an uncommitted tree you can't reproduce).
+real git clones on branch `unified-052`, used for development and one-off work.
+
+**Campaign runs do NOT launch from these clones.** See "Campaign Reproducibility"
+in the global `~/.claude/CLAUDE.md` for the binding rules (worktree per campaign,
+every dev'd dependency pinned as its own worktree, no uncommitted state, SHAs
+recorded before submitting). Cluster-specific mechanics only:
+
+- Deploy by **`git fetch origin` + `git worktree add --detach <sha>`**, never by
+  scp/rsync-then-commit-on-orc. Rsync-and-commit is what produced the
+  2026-08-24 provenance collision in BRAINSTORM 021: new FastMultipole content
+  was laid on top of an existing commit, so two entirely different FMM
+  generations both recorded `fm_commit = a9b734ad…-dirty`, and the blob existed
+  in no git history anywhere. A detached worktree cannot do this.
+- Pin the **triple** — FLOWPanel.jl, FastMultipole, FLOWVPM.jl — not just
+  FLOWPanel. A driver resolving a dependency by a fixed `../FastMultipole`
+  sibling path will describe the wrong checkout under a worktree; resolve via
+  `pkgdir(loaded_module)` so the recorded SHA is the one actually loaded.
+- A branch that exists only on the cluster cannot be pinned by anyone else.
+  Push it to origin before it carries a campaign.
 
 **Any GPU job script must set three things, all arch-keyed by `$(uname -m)`:**
 

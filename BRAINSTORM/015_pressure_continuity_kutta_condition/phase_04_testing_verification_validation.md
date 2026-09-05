@@ -1076,3 +1076,53 @@ varied, because `CL_kj_steady` legitimately refines (Neumann −0.399434 →
   ladder cannot overwrite the completed T1/T2 record.
 - `_repro_check` / `_prior_rows` factor the bitwise-reproduction comparison,
   which now covers three families of cells.
+
+## OPEN — `:jump` fallback no longer reproduces the legacy trajectory (2026-09-05)
+
+Found incidentally while running the suite for BRAINSTORM 021 (no 015 code was
+touched; the 021 work is confined to `benchmark/`, which `test/runtests.jl` never
+loads, so 021 is excluded as a cause). Recorded here rather than fixed — nobody is
+mid-flight on 015 and it should not be lost.
+
+**Status:** `test/runtests_unit_kutta.jl`, testset `"explicit jump fallback (:jump)"`
+(line 527) — **2 failures**, at lines 539 and 540. Suite-wide: 656 pass, these 2 fail.
+
+The testset drives a closure whose provider returns NaN with `on_failure=:jump`, and
+asserts the guarantee this document lists at §"explicit jump fallback (:jump)"
+(bitwise `==` vs legacy): a run with `RigidTransitionAttachment` + a failing closure
+must reproduce the plain legacy run **bit for bit**.
+
+| assertion | line | result |
+| --- | --- | --- |
+| `@test_logs (:warn, r"committed a fresh jump")` | 534 | PASS |
+| `b1.strength == b2.strength` | 539 | **FAIL** |
+| `w1.strength[1] == w2.strength[1]` | 540 | **FAIL** |
+| `length(diags) == length(KUTTA_TRANGE)` | 542 | PASS |
+| `all(d -> d.status === :jump_fallback, diags)` | 543 | PASS |
+| `all(d -> d.disposition === :jump_fallback, diags)` | 544 | PASS |
+
+So the fallback **triggers correctly and reports itself correctly** — the warning
+fires and every diagnostic carries `:jump_fallback`. What fails is only the
+equivalence: the resulting state differs.
+
+**This is not a tolerance question.** Observed:
+
+```
+b1.strength    = [-0.18402…, -0.57132…]      w1.strength[1] = [-0.64479…, -0.63592…]
+b2.strength    = [-0.18132…, -0.11076…]      w2.strength[1] = [-0.31286…, -0.30850…]
+```
+
+The second panel-strength component differs by ≈5×, and both wake components by ≈2×.
+A bitwise-equality test failing in the last ulp would be a candidate for relaxing to
+`isapprox`; this is a materially different solution and must not be relaxed away.
+
+**Why it matters:** a fallback that silently changes the answer is worse than one
+that errors. The `:jump` path exists so that a closure failure degrades to the legacy
+behaviour; if it no longer does, `on_failure=:jump` is quietly a third formulation
+rather than an escape hatch.
+
+**Not investigated** — no root cause here. Whoever picks it up: the failure is
+specific to the `:jump` fallback composed with `RigidTransitionAttachment`; the
+neighbouring `:error` rollback and `:commit` determinism testsets (lines 417, 434,
+453) still pass, which localises it to the jump-commit path rather than to closure
+failure handling in general.

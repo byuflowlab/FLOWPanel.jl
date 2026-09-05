@@ -297,6 +297,54 @@ bcerr_eps, bcerr_certified, t_bcerr, t_step_net, n_particles, CT`.
   filament-family question at 328 vs 329 particles, where the difference was
   structural rather than accumulated.)
 
+## GENERATION PIN — LineGauss generation (Ryan's ruling 2026-09-05)
+
+This is **generation break #2** for this campaign; #1 is recorded in `ledger.md`
+(2026-08-24, new FMM + isolated checkout). Rows from different generations are kept
+for the record but **must never be plotted on the same axes**.
+
+**The pinned triple.** Every campaign run from 2026-09-05 — Phase 2, Phase 3, and any
+Phase 1 re-run — uses these three commits, as **detached git worktrees**, and no
+others:
+
+| repo | branch of origin | pinned commit | tag |
+| --- | --- | --- | --- |
+| FLOWPanel.jl | `fastmultipole` | the commit tagged below | `021-lg-gen2` |
+| FastMultipole | `flowpanel-20260817` | `0ce3ba60` | `021-lg-gen2` |
+| FLOWVPM.jl | `flowpanel` | `a627dd9` | `021-lg-gen2` |
+
+**Resolve the pin by TAG, not by the SHAs above.** All three repos carry the
+annotated tag `021-lg-gen2`, and `git worktree add --detach 021-lg-gen2` in each is
+the whole setup step. The tag exists because this document cannot name its own
+commit: FLOWPanel's pinned tree is the one *containing this file*, so a literal SHA
+here would always be the parent commit and would silently pin a tree without its own
+pin record. The FastMultipole and FLOWVPM SHAs are listed because they are fixed
+independently of this file; FLOWPanel's is not. FLOWPanel's code content is identical
+to `63c7f10` — the tagged commit adds only this document and `agent_policies/HPC.md`.
+
+- **All three trees were clean when pinned** (verified 2026-09-05: zero modified
+  tracked files in each), so each SHA fully determines its tree. No `-dirty` markers,
+  unlike every prior generation of this campaign.
+- **One triple for ALL phases.** Mixing SHAs across phases would reintroduce exactly
+  the confound found on 2026-09-05 between the Gaussian R1–R5 tuning (FastMultipole
+  `4c0f1b8`) and any LineGauss rung: LineGauss did not exist in FastMultipole until
+  14 commits after that pin, so a family change and an FMM-build change would have
+  moved together and the cost-scaling exponent would have been uninterpretable.
+- **`Manifest.toml` is deliberately NOT committed.** The campaign environment's
+  Manifest must dev-point at the campaign worktrees, so a committed Manifest would
+  bake in one machine's absolute paths and make the pin misleading. The triple of
+  SHAs is the pin; the Manifest is generated per worktree via `Pkg.develop`.
+- **Provenance is now recorded for all three repos.** `benchmark/common.jl` emits
+  `commit`, `fm_commit`, **`vpm_commit`** (new — FLOWVPM was unrecorded for the entire
+  campaign before this date, so every earlier row has an indeterminate FLOWVPM
+  version) and a **`worktrees`** column of `tag=<dir>@<branch-or-DETACHED>`. All three
+  resolve via `pkgdir(loaded_module)`, NOT a fixed sibling path — under a worktree the
+  sibling path would silently describe the wrong checkout. A row that reads
+  `@DETACHED` is reproducible; one naming a live branch is not, and now says so.
+- General policy for campaign worktrees lives in `~/.claude/CLAUDE.md`
+  ("Campaign Reproducibility") and cluster mechanics in `agent_policies/HPC.md`;
+  neither is restated here.
+
 ## Filament regularization — LineGauss (Ryan's ruling 2026-09-05)
 
 - **`LineGaussRegularization` is the campaign default from 2026-09-05**, following the
