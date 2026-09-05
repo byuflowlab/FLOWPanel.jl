@@ -299,7 +299,7 @@ function load_trace(path, bgib)
     strip(lines[1]) == TRACE_HEADER || error(
         "$path has an unrecognised trace schema; move it aside before resuming")
     expect = (rung, string(bgib), string(tune_reps), string(abandon_factor),
-              hardware_tag, string(FLOWPanel.FILAMENT_REGULARIZATION[]))
+              hardware_tag, string(pnl.FILAMENT_REGULARIZATION[]))
     for (ln, line) in enumerate(Iterators.drop(lines, 1))
         isempty(strip(line)) && continue
         c = String.(split(line, ","))
@@ -567,7 +567,7 @@ for bgib in budgets_gib
     # changes the very objective these timings measure. It belongs in the HARD
     # guard alongside reps/abandon/hardware — without it a Gaussian trace would
     # replay silently into a LineGauss descent.
-    fam_str = string(FLOWPanel.FILAMENT_REGULARIZATION[])
+    fam_str = string(pnl.FILAMENT_REGULARIZATION[])
     provenance = "," * join(string.([rung, bgib, tune_reps, abandon_factor,
                                      hardware_tag, banner.fm_commit, fam_str]), ",")
     any(occursin(",", x) for x in (rung, hardware_tag, banner.fm_commit, fam_str)) &&
