@@ -71,7 +71,7 @@ function assert_and_banner(io::IO=stdout)
                                joinpath(@__DIR__, "..", "..", "FLOWVPM.jl")))
     # Which TREE each package was loaded from, plus whether that tree is a
     # detached-HEAD worktree (the reproducible case) or a live branch checkout.
-    worktrees = join([_worktree_id("fp", @__DIR__),
+    worktrees = join([_worktree_id("fp", _pkg_repo_dir(pnl, @__DIR__)),
                       _worktree_id("fm", _pkg_repo_dir(pnl.FastMultipole, "")),
                       _worktree_id("vpm", _pkg_repo_dir(pnl.FLOWVPM, ""))], " ")
     hardware_tag = get(ENV, "HARDWARE_TAG", gethostname())
@@ -146,8 +146,16 @@ function _git_describe(dir::AbstractString)
     catch
         return "unknown"
     end
+    # TRACKED modifications only (2026-09-05). `status --porcelain` counts
+    # UNTRACKED files too, so a campaign worktree marked itself `-dirty` the
+    # moment the job wrote its own slurm-*.out beside the source — every gen2
+    # row would have carried a dirty flag that says nothing about the code.
+    # `-dirty` must mean "the source differs from the commit", or it is noise,
+    # and this campaign already threw away a generation over an ambiguous
+    # `-dirty` string (ledger.md, 2026-08-24).
     dirty = try
-        isempty(readchomp(`git -C $dir status --porcelain`)) ? "" : "-dirty"
+        isempty(readchomp(`git -C $dir status --porcelain --untracked-files=no`)) ?
+            "" : "-dirty"
     catch
         ""
     end
