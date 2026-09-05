@@ -189,7 +189,15 @@ export JULIA_NUM_THREADS="$THREADS"
 # single-step solve that never sheds a wake, so no filament kernel is
 # reached (measured 2026-08-22 — R1 solution bit-identical under both).
 # It DOES bite the wake-carrying Phase-2 unsteady arms.
-export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-gaussian}"
+# LineGauss is the campaign default from 2026-09-05 (Ryan), following the
+# codebase default flip of 2026-08-29 (task 052d): it is the exact
+# segment-kernel/Gaussian-blob convolution, of which Gaussian is the
+# infinite-line limit, so radius_inflation genuinely bounds the direct/
+# expansion mismatch instead of leaving Gaussian's open along-line error
+# channel (which cost 9e-4 relU on far-field just-shed wake particles).
+# Rows dated before 2026-09-05 in this campaign ran GAUSSIAN; set
+# FLOWPANEL_FILAMENT_REG=gaussian to reproduce them.
+export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-linegauss}"
 export OMP_NUM_THREADS="$THREADS"
 export OPENBLAS_NUM_THREADS="$THREADS"
 export BLAS_NUM_THREADS="$THREADS"

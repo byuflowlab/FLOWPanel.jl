@@ -169,6 +169,19 @@ case "$CASE" in
   scr_p019_s030v_rr)      export OVERLAP=2.4; export P_PER_STEP=14; export MERGE_R_FACTOR=0.0041;  export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
   scr_p020r_geom_s020v_rr) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
 
+  # ---- 026 sec.16 expint-fails validation rerun (2026-09-05): cold reruns of
+  # the 020 Phase-2R sigma/R=0.02 pair on the CURRENT euler_exp stack, under
+  # new tags so the scored 019/020 run dirs are never touched, with the full
+  # VTP series retained to provide warm-start states near ignition (original
+  # ignition refs: euler ctrl ~213, corrected-map exp ~242; dep stack has
+  # moved since, so timing may shift — that re-measurement is the point).
+  scr_p026ef_ctrl_s020v) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+  scr_p026ef_exp_s020v)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
+  # LineGauss twins of the pair (Ryan 2026-09-05): same knobs, filament
+  # regularization switched to linegauss for a family-independent read.
+  scr_p026ef_ctrl_s020v_lg) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss ;;
+  scr_p026ef_exp_s020v_lg)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true ;;
+
   # ---- BRAINSTORM/026 Phase 1 no-split discriminator arms (2026-09-03):
   # warm-start continuations of the scr_p019_s038v_gpu40 stretching ignition
   # (patient zero idx 102340, growth 850-998, ignition 985-1010) from step 950.

@@ -58,8 +58,22 @@ function assert_and_banner(io::IO=stdout)
         "BLAS thread pinning failed: got $blas_threads threads, expected " *
         "$expected_blas in $threading_mode mode")
 
+    # PROVENANCE: all THREE repos, resolved from the LOADED packages (2026-09-05,
+    # Ryan). Resolving by pkgdir rather than a fixed "../../FastMultipole" sibling
+    # is what makes worktrees honest: under a worktree the loaded FastMultipole
+    # may live anywhere, and the sibling path would silently describe the WRONG
+    # checkout. FLOWVPM was never recorded at all until now, so every row before
+    # this date has an indeterminate FLOWVPM version.
     commit = _git_describe(@__DIR__)
-    fm_commit = _git_describe(joinpath(@__DIR__, "..", "..", "FastMultipole"))
+    fm_commit = _git_describe(_pkg_repo_dir(pnl.FastMultipole,
+                              joinpath(@__DIR__, "..", "..", "FastMultipole")))
+    vpm_commit = _git_describe(_pkg_repo_dir(pnl.FLOWVPM,
+                               joinpath(@__DIR__, "..", "..", "FLOWVPM.jl")))
+    # Which TREE each package was loaded from, plus whether that tree is a
+    # detached-HEAD worktree (the reproducible case) or a live branch checkout.
+    worktrees = join([_worktree_id("fp", @__DIR__),
+                      _worktree_id("fm", _pkg_repo_dir(pnl.FastMultipole, "")),
+                      _worktree_id("vpm", _pkg_repo_dir(pnl.FLOWVPM, ""))], " ")
     hardware_tag = get(ENV, "HARDWARE_TAG", gethostname())
     julia_version = string(VERSION)
 
@@ -79,6 +93,8 @@ function assert_and_banner(io::IO=stdout)
         "#   blas_threads   = $blas_threads",
         "#   commit         = $commit",
         "#   fm_commit      = $fm_commit",
+        "#   vpm_commit     = $vpm_commit",
+        "#   worktrees      = $worktrees",
         "#   julia_version  = $julia_version",
         "#   hardware_tag   = $hardware_tag",
         "#   filament_reg   = $filament_reg",
@@ -88,7 +104,39 @@ function assert_and_banner(io::IO=stdout)
     println(io, text)
 
     return (; threading_mode, julia_threads, blas_threads,
-              commit, fm_commit, julia_version, hardware_tag, filament_reg, text)
+              commit, fm_commit, vpm_commit, worktrees,
+              julia_version, hardware_tag, filament_reg, text)
+end
+
+"""
+Directory of the git repo backing a LOADED module, falling back to `fallback`
+when `pkgdir` cannot resolve one (e.g. the package is not dev'd). Using the
+loaded module's own directory is what keeps provenance honest under worktrees.
+"""
+function _pkg_repo_dir(mod, fallback::AbstractString)
+    d = try
+        pkgdir(mod)
+    catch
+        nothing
+    end
+    return (d === nothing || isempty(d)) ? fallback : d
+end
+
+"""
+`tag=<path>@<branch-or-DETACHED>` for one checkout. A DETACHED tree is the
+reproducible case: it is pinned to a commit and cannot drift when someone
+switches branches elsewhere. A named branch is recorded as such so a row never
+claims a reproducibility it does not have.
+"""
+function _worktree_id(tag::AbstractString, dir::AbstractString)
+    isempty(dir) && return "$tag=unknown"
+    br = try
+        b = readchomp(`git -C $dir rev-parse --abbrev-ref HEAD`)
+        b == "HEAD" ? "DETACHED" : b
+    catch
+        return "$tag=unknown"
+    end
+    return "$tag=$(basename(normpath(dir)))@$br"
 end
 
 "Commit hash + dirty marker for the git repository containing `dir`."
@@ -197,6 +245,7 @@ const RUNS_CSV_COLUMNS = (
     :julia_threads, :blas_threads, :t_assembly, :t_factorize, :t_tree,
     :t_precond, :t_rhs, :t_solve_min, :k_reps, :iterations, :rms_residual,
     :max_residual, :mem_state_bytes, :alloc_solve_bytes, :commit, :fm_commit,
+    :vpm_commit, :worktrees,
     :julia_version, :hardware_tag, :filament_reg, :solver_settings,
     :backend_settings, :notes,
 )

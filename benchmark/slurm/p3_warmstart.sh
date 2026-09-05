@@ -195,7 +195,15 @@ export JULIA_NUM_THREADS="$THREADS"
 # NOT inert here: Phase 3 is wake-carrying, so the filament kernel (Channel A)
 # is genuinely evaluated and the family moves the trajectory (measured: 328 vs
 # 329 particles). Phase 3 is Gaussian from birth and carries no rerun debt.
-export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-gaussian}"
+# LineGauss is the campaign default from 2026-09-05 (Ryan), following the
+# codebase default flip of 2026-08-29 (task 052d): it is the exact
+# segment-kernel/Gaussian-blob convolution, of which Gaussian is the
+# infinite-line limit, so radius_inflation genuinely bounds the direct/
+# expansion mismatch instead of leaving Gaussian's open along-line error
+# channel (which cost 9e-4 relU on far-field just-shed wake particles).
+# Rows dated before 2026-09-05 in this campaign ran GAUSSIAN; set
+# FLOWPANEL_FILAMENT_REG=gaussian to reproduce them.
+export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-linegauss}"
 export OMP_NUM_THREADS="$THREADS"
 export OPENBLAS_NUM_THREADS="$THREADS"
 export BLAS_NUM_THREADS="$THREADS"

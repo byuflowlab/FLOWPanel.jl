@@ -132,6 +132,35 @@ p_0, mac_0, leaf_0 = haskey(TUNED, rung) ? TUNED[rung] : REF_START
 haskey(TUNED, rung) || println("no TUNED[$rung]; starting the descent from " *
     "the reference triple $REF_START")
 
+# ---- explicit descent SEED (2026-09-05, Ryan: LineGauss relaunch) -----------
+# TUNED/tune.csv carries the PHASE 1 accuracy-stage knobs, which are a poor
+# start for the cost objective (the R1-R3 hardcoded fallbacks are flagged
+# ~2x too large in leaf, above). The 2026-08-26..29 Gaussian Phase 2 descents
+# measured the real cost optima, and they split HARD by cache regime:
+#   uncached (budget 0): leaf -> 6      (R4 6, R5 6, R3 3; MAC 0.60-0.65)
+#   cached  (budget >0): leaf -> 32     (R4 32/32, R5 32/32/32; MAC 0.50-0.60)
+# A single seed cannot serve both (5x apart), so budget 0 takes its own.
+# These are SEEDS ONLY: the descent still searches, and the BC <= target
+# certification gate still decides admissibility, so a stale or wrong seed
+# costs optimality, never correctness. Recorded in the notes column so a row
+# never hides where its descent started.
+#
+# Format: "P:MAC:LEAF" (e.g. TUNE_SEED=15:0.55:32). Unset => the TUNED/
+# REF_START behaviour above, unchanged.
+function _parse_seed(name)
+    raw = get(ENV, name, "")
+    isempty(raw) && return nothing
+    parts = split(raw, r"[:,]")
+    length(parts) == 3 || error("$name must be \"P:MAC:LEAF\", got \"$raw\"")
+    return (parse(Int, parts[1]), parse(Float64, parts[2]), parse(Int, parts[3]))
+end
+const TUNE_SEED    = _parse_seed("TUNE_SEED")
+const TUNE_SEED_B0 = _parse_seed("TUNE_SEED_B0")
+seed_for(bgib) = (bgib == 0 && TUNE_SEED_B0 !== nothing) ? TUNE_SEED_B0 :
+                 (TUNE_SEED !== nothing ? TUNE_SEED : (p_0, mac_0, leaf_0))
+TUNE_SEED === nothing && TUNE_SEED_B0 === nothing ||
+    println("descent seed: budget>0 -> $(seed_for(16)), budget 0 -> $(seed_for(0))")
+
 # ---- knobs ------------------------------------------------------------------
 const _REPS_DEFAULT = rung in ("R1", "R2", "R3", "R4") ? 5 : 2
 tune_reps = parse(Int, get(ENV, "TUNE_REPS", string(_REPS_DEFAULT)))
@@ -250,7 +279,7 @@ hardware_tag = get(ENV, "HARDWARE_TAG", banner.hardware_tag)
 # descent walks, never a published number.
 const TRACE_HEADER = "expansion_order,multipole_acceptance,leaf_size,t," *
     "success,abandoned,rung,mem_budget_gib,tune_reps,tune_abandon_factor," *
-    "hardware_tag,fm_commit"
+    "hardware_tag,fm_commit,filament_reg"
 trace_path(bgib) = joinpath(outdir, "tune_trace_$(rung)_b$(bgib).csv")
 
 _tnum(x) = @sprintf("%.17g", x)   # full precision: a truncated t would make the
@@ -270,17 +299,18 @@ function load_trace(path, bgib)
     strip(lines[1]) == TRACE_HEADER || error(
         "$path has an unrecognised trace schema; move it aside before resuming")
     expect = (rung, string(bgib), string(tune_reps), string(abandon_factor),
-              hardware_tag)
+              hardware_tag, string(FLOWPanel.FILAMENT_REGULARIZATION[]))
     for (ln, line) in enumerate(Iterators.drop(lines, 1))
         isempty(strip(line)) && continue
         c = String.(split(line, ","))
-        length(c) == 12 || error("$path line $(ln+1): expected 12 fields, " *
+        length(c) == 13 || error("$path line $(ln+1): expected 13 fields, " *
                                  "got $(length(c))")
-        got = (c[7], c[8], c[9], c[10], c[11])
+        got = (c[7], c[8], c[9], c[10], c[11], c[13])
         got == expect || error(
             "$path line $(ln+1): trace provenance disagrees with this run — " *
             "(rung, mem_budget_gib, tune_reps, tune_abandon_factor, " *
-            "hardware_tag) is $got in the trace but $expect now. A memoized " *
+            "hardware_tag, filament_reg) is $got in the trace but $expect now. " *
+            "A memoized "*
             "t is a timing and must not be replayed across a change of " *
             "reps, abandonment rule or hardware. Move the file aside to " *
             "start this descent fresh.")
@@ -532,10 +562,17 @@ for bgib in budgets_gib
     # preemption now costs at most the candidate in flight
     # string(), NOT _csv_cell: load_trace compares these against string(bgib)
     # etc., and _csv_cell's %.9g renders 0.0 as "0", which would never match
+    # filament_reg (2026-09-05): the family changes the per-edge kernel cost
+    # (LineGauss 4 erf + 1 exp vs Gaussian 1 expm1) AND radius_inflation, so it
+    # changes the very objective these timings measure. It belongs in the HARD
+    # guard alongside reps/abandon/hardware — without it a Gaussian trace would
+    # replay silently into a LineGauss descent.
+    fam_str = string(FLOWPanel.FILAMENT_REGULARIZATION[])
     provenance = "," * join(string.([rung, bgib, tune_reps, abandon_factor,
-                                     hardware_tag, banner.fm_commit]), ",")
-    any(occursin(",", x) for x in (rung, hardware_tag, banner.fm_commit)) &&
-        error("a comma in rung/hardware_tag/fm_commit would corrupt the trace")
+                                     hardware_tag, banner.fm_commit, fam_str]), ",")
+    any(occursin(",", x) for x in (rung, hardware_tag, banner.fm_commit, fam_str)) &&
+        error("a comma in rung/hardware_tag/fm_commit/filament_reg would " *
+              "corrupt the trace")
     on_measure = function (P, mac, leaf, t, success, abandoned)
         # a per-system leaf tuple would not round-trip through the trace's one
         # integer column, and the memo key would then never match on replay
@@ -548,9 +585,10 @@ for bgib in budgets_gib
 
     local tuned, hist, tinfo, t_tune
     try
+        seed_p, seed_mac, seed_leaf = seed_for(bgib)
         t_tune = @elapsed ((tuned, hist, tinfo) = FM.tune_fmm_perturb(
-            (rotor,), (rotor,); expansion_order=p_0,
-            multipole_acceptance=mac_0, leaf_size_source=leaf_0,
+            (rotor,), (rotor,); expansion_order=seed_p,
+            multipole_acceptance=seed_mac, leaf_size_source=seed_leaf,
             reps=tune_reps, abandon_factor, max_seconds, cost, memo, on_measure,
             verbose=true))
     catch e
@@ -611,6 +649,7 @@ for bgib in budgets_gib
         banner.commit, banner.fm_commit, time_string(), hardware_tag,
         (isempty(label) ? "" : "$label; ") *
         (n_replayed > 0 ? "resumed_from_trace n_replayed=$n_replayed; " : "") *
+        "seed=$(seed_for(bgib)); " *
         "real-solve objective; TOTAL-memory budget (body+solver state+plan" *
         (info_w.cached ? "+cache" : "") * "); cache used iff it fits; " *
         "warm cache, cold solution; build excluded by construction" *

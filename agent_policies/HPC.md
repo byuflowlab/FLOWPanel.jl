@@ -138,6 +138,44 @@ After any env/depot change, re-run
 `~/projects/smoke_unified_{x86,gpu_m13h,arm}.slurm.sh` (adjust partition/gres
 as needed) and confirm `FLOWVPMCUDAExt` loads.
 
+### Silo checkouts: which are live, and the `data` symlinks
+
+**Active silos (the only ones to submit from):** `~/FLOWPanel-018-gpu-h200`
+(x86/H200: m13h, eng) and `~/FLOWPanel-018-gpu-gh200` (ARM/GH200: mgh).
+Everything else — the `~/FLOWPanel-052*` family and `~/FLOWPanel-018-lg-h200` —
+is **deprecated**: their work was consolidated into `~/projects` (Ryan,
+2026-09), and the leftover trees are pending deletion. Do not submit from
+them, restore their symlinks, or create new silos without Ryan's say-so.
+
+Every **active** silo must contain a `data` **symlink** to the single shared
+data root:
+
+```bash
+ln -s ~/projects/FLOWPanel.jl/data ~/FLOWPanel-<silo>/data
+```
+
+Why it exists: launchers `cd` into the silo and the drivers resolve *relative*
+`data/...` paths from that CWD — both for **inputs** (e.g. the Das arc table
+`data/p018_cs_l3p4_rs1_te_downwash_te.csv`, hard-required by
+`DAS_ARC_HELIX_SOURCE=steady`) and for **outputs** (`data/<run_name>/`). The
+symlink is what makes all silos read and write the one canonical
+`~/projects/FLOWPanel.jl/data/` — the "launcher redirect" older notes mention.
+
+Rules:
+
+- **Never delete, replace, or "clean up" a silo's `data` symlink.** Runs
+  visible through it are NOT duplicates of the projects copy — they ARE the
+  projects copy. Storage/archiver agents must treat these symlinks as
+  infrastructure, dedupe by `realpath`, and attribute all runs to
+  `projects_FLOWPanel.jl`.
+- If the shared data root ever moves (as in the 2026-09-01/02
+  `~/projects_unified` → `~/projects` migration), **repoint every silo's
+  symlink** — a dangling or deleted symlink fails jobs ~1 min in with
+  `DAS_ARC_TABLE ... got "data/..."` (isfile fails silo-relative) and cost 12
+  GPU jobs on 2026-09-02.
+- Before any silo submission wave, verify:
+  `cd ~/FLOWPanel-<silo> && [ -f data/p018_cs_l3p4_rs1_te_downwash_te.csv ]`.
+
 ## Standard Single-Node Julia Launcher
 
 Use the following pattern for an ordinary single-process, threaded Julia job:
