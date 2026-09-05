@@ -23,6 +23,22 @@ FastMultipole carry real per-arch kernel patches (FLOWVPM_fmm_radix.jl;
 containers.jl, translate_batched_cuda.jl, translate_batched_resident.jl) and
 are pinned per arch.
 
+Tag addendum (2026-09-05, per new tags-not-SHAs policy): these pins are now
+also addressable as annotated tags in the cluster repos —
+`campaign/p018-smooth-ladders-20260905` on FLOWPanel (the post-fix pin
+`f46c3fe`), and `campaign/p018-smooth-ladders-20260905-{h200,gh200}` on
+FLOWVPM/FastMultipole. Separately, `campaign/p018-nt-20260905` (all three
+repos; FLOWPanel `0e08ab4` = local HEAD with constraint-free launcher +
+`scripts/prep_campaign_worktree.sh`, FLOWVPM `3315b22`, FastMultipole
+`3da58a1a` unified pins) is the prepared base for the NEXT launches, with
+worktrees `~/wt018/FLOWPanel-nt-{h200,gh200}`, `~/wt018/FLOWVPM-nt`,
+`~/wt018/FastMultipole-nt` and envs `~/p018wtenv-nt-{h200,gh200}` ready but
+unused. Caveat: FLOWPanel@`0e08ab4` against the unified dep pins has not run
+on GPU yet — smoke an NT36 rung before trusting walltimes; note the unified
+deps drop the per-arch silo kernel patches, which kills the cross-arch
+confound going forward but makes new gh200 runs not bit-comparable to old
+mgh NT36 arms.
+
 | Package | Arch | Branch | SHA | Worktree |
 |---|---|---|---|---|
 | FLOWPanel.jl | h200 + gh200 | `p018pin-fp-20260905` | `8f3ca07ca501aac2a3fe333b94afcff4b0a1bb6a` | `wt018/FLOWPanel-pin-h200`, `wt018/FLOWPanel-pin-gh200` (detached, same SHA) |
