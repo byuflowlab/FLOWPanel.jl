@@ -314,8 +314,15 @@ others:
 | FLOWVPM.jl | `flowpanel` | `a627dd9` | `021-lg-gen2` |
 
 **Resolve the pin by TAG, not by the SHAs above.** All three repos carry the
-annotated tag `021-lg-gen2`, and `git worktree add --detach 021-lg-gen2` in each is
-the whole setup step. The tag exists because this document cannot name its own
+annotated tag `021-lg-gen2`; set each worktree up with
+`scripts/prep_campaign_worktree.sh 021-lg-gen2 <dir>`. That creates a branch
+`021-lg-gen2-wt` FROM the tag and adds exactly one commit on top — replacing the
+tracked `data/` fixture dir with a symlink to the consolidated data root, so run
+outputs land outside the worktree. So the worktree HEAD is `tag + 1 data-symlink
+commit`, not the tag itself, and the banner's `worktrees` column will read
+`@021-lg-gen2-wt` rather than `@DETACHED`. Both are reproducible — a campaign branch
+created from a tag and never edited is a fixed commit — but the branch form is what
+this campaign uses, because the symlink commit needs somewhere to land. The tag exists because this document cannot name its own
 commit: FLOWPanel's pinned tree is the one *containing this file*, so a literal SHA
 here would always be the parent commit and would silently pin a tree without its own
 pin record. The FastMultipole and FLOWVPM SHAs are listed because they are fixed

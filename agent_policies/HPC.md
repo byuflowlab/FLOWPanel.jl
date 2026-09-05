@@ -106,7 +106,8 @@ in the global `~/.claude/CLAUDE.md` for the binding rules (worktree per campaign
 every dev'd dependency pinned as its own worktree, no uncommitted state, SHAs
 recorded before submitting). Cluster-specific mechanics only:
 
-- Deploy by **`git fetch origin` + `git worktree add --detach <sha>`**, never by
+- Deploy by **`git fetch origin --tags` + `scripts/prep_campaign_worktree.sh
+  <campaign-tag> <dir>`** (which does `git worktree add -b <tag>-wt`), never by
   scp/rsync-then-commit-on-orc. Rsync-and-commit is what produced the
   2026-08-24 provenance collision in BRAINSTORM 021: new FastMultipole content
   was laid on top of an existing commit, so two entirely different FMM
