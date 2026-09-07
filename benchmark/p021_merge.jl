@@ -78,8 +78,13 @@ quiet mixture of two definitions, so it is an error rather than a warning.
 `expect(rung, rows, hdr) -> Vector{Tuple{key, label}}` names the rows that rung is
 supposed to have contributed; each is checked for presence and uniqueness.
 `keyof(cells, header) -> key` extracts a row's identity.
+`dedup(rows, hdr, rung) -> (keep_indices, infos)`, when given, may collapse rows
+that are duplicates BY DESIGN (see the resume-replay rule below) before the
+uniqueness check runs; collapsed rows are excluded from the merged output and
+reported as info lines, not problems.
 """
-function merge_csv(dir, name, out; keyof, expect, gate = (c, h, rung) -> String[])
+function merge_csv(dir, name, out; keyof, expect,
+                   gate = (c, h, rung) -> String[], dedup = nothing)
     println("\n$name  ($MODE)")
     header = nothing
     all_rows = String[]
@@ -100,8 +105,17 @@ function merge_csv(dir, name, out; keyof, expect, gate = (c, h, rung) -> String[
                   "$header\n  here:    $(lines[1])")
         end
         rows = [split_csv(l) for l in Iterators.drop(lines, 1)]
+        raw = lines[2:end]
+        if dedup !== nothing
+            keepidx, infos = dedup(rows, split_csv(lines[1]), rung)
+            for m in infos
+                println("  · $m")
+            end
+            rows = rows[keepidx]
+            raw = raw[keepidx]
+        end
         found[rung] = rows
-        append!(all_rows, lines[2:end])
+        append!(all_rows, raw)
         println("  $rung: $(length(rows)) row(s)")
     end
     if header === nothing
@@ -157,6 +171,53 @@ col(cells, hdr, name) = (i = findfirst(==(name), hdr);
 const BUDGETS = haskey(ENV, "BUDGETS") ?
     String.(split(ENV["BUDGETS"], r"[:,]")) : nothing
 _istrue(s) = lowercase(strip(s)) == "true"
+# Resume-replay rule (observed 2026-09-07, jobs 13593015-21). A tuner that
+# resumes from its trace APPENDS a fresh row for every budget it had already
+# completed — marked `resumed_from_trace n_replayed=N` in `notes`, with a
+# near-zero t_tune (pure replay, no descent) and the same winner knobs. That
+# second row is not a clobber and not new information; the ORIGINAL row is the
+# one with the real t_tune. So: within a (rung, mem_budget_gib) group, replay
+# rows are collapsed onto the original iff exactly one original exists AND the
+# winner knobs agree. Two originals, or a replay that disagrees on the knobs,
+# is NOT collapsed — that is either the NFS-clobber signature or a descent that
+# continued past the trace, and both must reach the duplicate detector. A group
+# that is all replays (the original was lost) keeps only the newest row.
+_is_replay(c, h) = occursin("resumed_from_trace", col(c, h, "notes"))
+_knobs(c, h) = Tuple(col(c, h, k) for k in
+    ("cached", "expansion_order", "multipole_acceptance", "leaf_size"))
+function replay_dedup(rows, hdr, rung)
+    keep = trues(length(rows))
+    infos = String[]
+    groups = Dict{Any, Vector{Int}}()
+    for (i, r) in enumerate(rows)
+        key = (col(r, hdr, "rung"), col(r, hdr, "mem_budget_gib"))
+        push!(get!(groups, key, Int[]), i)
+    end
+    for (key, idxs) in sort!(collect(groups); by = first)
+        length(idxs) == 1 && continue
+        at = "$rung budget $(key[2]) GiB"
+        orig = [i for i in idxs if !_is_replay(rows[i], hdr)]
+        replays = [i for i in idxs if _is_replay(rows[i], hdr)]
+        if length(orig) == 1
+            agree = [i for i in replays if _knobs(rows[i], hdr) ==
+                                           _knobs(rows[orig[1]], hdr)]
+            for i in agree
+                keep[i] = false
+            end
+            length(agree) == length(replays) && push!(infos,
+                "$at: collapsed $(length(agree)) resume-replay row(s) onto " *
+                "the original")
+        elseif isempty(orig) && length(replays) > 1
+            for i in replays[1:end-1]
+                keep[i] = false
+            end
+            push!(infos, "$at: all $(length(replays)) rows are resume " *
+                "replays (original lost); kept the newest")
+        end
+    end
+    return findall(keep), infos
+end
+
 # A below-floor row legitimately carries cache_capped=true and
 # bc_certified=false: it is the driver's explanatory answer for a budget
 # cheaper than the rung's minimum configuration (e.g. 16 GiB at R6), not a
@@ -164,6 +225,7 @@ _istrue(s) = lowercase(strip(s)) == "true"
 _below_floor(c, h) = occursin("BELOW this rung's floor", col(c, h, "notes"))
 
 merge_csv(results("phase2"), "tune_phase2.csv", "tune_phase2_merged.csv";
+    dedup = replay_dedup,
     gate = function (c, h, rung)
         _below_floor(c, h) && return String[]
         at = "$rung budget $(col(c, h, "mem_budget_gib")) GiB"

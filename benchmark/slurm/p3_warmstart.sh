@@ -216,6 +216,20 @@ export KNOBS_MODE=multi
 export PHASE="${PHASE:-phase3}"
 export RUNG CONFIG
 
+# Under phase3 the driver refuses to run without KNOBS_BUDGET (it selects the
+# Phase-2 winner row: mem_budget_gib in results/phase2/multi/<rung>/
+# tune_phase2.csv; cached-row winners assume a nearfield cache the unsteady
+# driver does not build, so the choice is deliberately explicit, never a
+# default). Fail here at submit/launch time rather than after Julia warmup.
+case "$PHASE" in phase3*)
+    if [ -z "${KNOBS_BUDGET:-}" ]; then
+        echo "ERROR: PHASE=$PHASE requires KNOBS_BUDGET (a mem_budget_gib" >&2
+        echo "value from Phase 2's tune_phase2.csv for $RUNG)" >&2
+        exit 1
+    fi
+    export KNOBS_BUDGET
+esac
+
 # Guess-type gate, same idiom as p1_tune.sh's STAGES: colon- or comma-separated.
 WARMSTARTS="${WARMSTARTS:-cold:prev:extrap}"
 WARMSTARTS="${WARMSTARTS//,/:}"

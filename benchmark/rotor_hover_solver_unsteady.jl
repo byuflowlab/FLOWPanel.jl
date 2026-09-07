@@ -173,6 +173,51 @@ function tuned_knobs(rung)
     return tuned[rung]
 end
 
+# Phase 2 owns tuning; Phase 3 owns amortization (decision_rules ruling 2), so
+# under PHASE=phase3* the apply knobs come from Phase 2's cost-tuned LineGauss
+# winners in results/phase2/<mode>/<rung>/tune_phase2.csv — NEVER from the
+# Phase-1 tune.csv path above, whose Gaussian-era hardcoded fallback would
+# otherwise engage silently (verified 2026-09-07: the campaign worktree has no
+# Phase-1 knob CSVs at all, only bcache_*.bin). Phase 2 winners are keyed by
+# memory budget, and the budgets are machine classes whose cached=true rows
+# were tuned WITH the nearfield cache this driver does not build — so the
+# budget is an explicit submit-line choice (KNOBS_BUDGET, in GiB, matching
+# mem_budget_gib), not a default. The uncached-consistent row is budget 0
+# (matrix-free endpoint), which as of 2026-09-07 exists for R3/R5 only.
+function phase2_knobs(rung)
+    budget = get(ENV, "KNOBS_BUDGET", "")
+    isempty(budget) && error("PHASE=phase3 requires KNOBS_BUDGET (GiB, a " *
+        "mem_budget_gib value from Phase 2's tune_phase2.csv): the winner " *
+        "knobs differ per budget and cached-row winners assume a nearfield " *
+        "cache this driver does not build, so the choice must be explicit")
+    path = joinpath(@__DIR__, "results", "phase2",
+                    get(ENV, "KNOBS_MODE", banner.threading_mode), rung,
+                    "tune_phase2.csv")
+    # a 0-byte file is a still-running tune job that has created but not yet
+    # written its CSV — same meaning as missing, and read_rows would crash on it
+    parsed = isfile(path) && filesize(path) > 0 ? read_rows(path) : nothing
+    parsed === nothing && error("phase3 knobs: $path is missing or empty — " *
+        "Phase 2 Step A has not landed for $rung")
+    cols, rows = parsed
+    sel = nothing
+    avail = String[]
+    for c in rows
+        length(c) >= length(cols) || continue
+        c[cols["rung"]] == rung || continue
+        # below-floor placeholder rows carry bc_certified=false by construction
+        c[cols["bc_certified"]] == "true" || continue
+        push!(avail, c[cols["mem_budget_gib"]])
+        c[cols["mem_budget_gib"]] == budget || continue
+        sel = c   # latest wins (resume-replay rows carry identical knobs)
+    end
+    sel === nothing && error("phase3 knobs: no bc_certified row for $rung " *
+        "at KNOBS_BUDGET=$budget GiB in $path (budgets present: " *
+        "$(join(unique(avail), ", ")))")
+    return (parse(Int, sel[cols["expansion_order"]]),
+            parse(Float64, sel[cols["multipole_acceptance"]]),
+            parse(Int, sel[cols["leaf_size"]]))
+end
+
 # --- RHPC setup-only include (env defaults only where the user set nothing) --
 setdefault!(k, v) = haskey(ENV, k) || (ENV[k] = v)
 ENV["RHPC_SETUP_ONLY"] = "1"
@@ -207,8 +252,10 @@ if n_steps_env > 0
     t_range = range(0.0, step=dt, length=n_steps_env + 1)
 end
 
-# --- roster solver at Phase-1 frozen knobs ----------------------------------
-p_t, mac_t, leaf_t = tuned_knobs(rung)
+# --- roster solver apply knobs: Phase-2 winners under phase3, Phase-1 frozen
+# knobs otherwise (see phase2_knobs above) ------------------------------------
+p_t, mac_t, leaf_t = startswith(get(ENV, "PHASE", "phase2"), "phase3") ?
+    phase2_knobs(rung) : tuned_knobs(rung)
 backend_apply = pnl.FastMultipoleBackend(; expansion_order=p_t,
     multipole_acceptance=mac_t, leaf_size=leaf_t)
 krylov_rtol = target_rel

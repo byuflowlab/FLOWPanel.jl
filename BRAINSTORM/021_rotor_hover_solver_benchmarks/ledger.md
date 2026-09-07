@@ -805,3 +805,54 @@ came from `13482349`. Same mesh, same commit `c665634…-dirty`, same knobs
 `tuned(17, 0.5, 21)`. Legitimate under the reference-free design, which has no
 privileged config and no config ordering — but it is split provenance and is stated
 as such. `krylov_jacobi` is dropped at **R7 only**; it remains selectable R1–R6.
+
+## 2026-09-07 — Phase 2 LineGauss fleet: resubmission record + gen2c pin (closes the gen2b gap)
+
+The paper trail previously ended at the failed gen2b batch. Recording here what
+actually ran, verified on the cluster 2026-09-07.
+
+### What failed (2026-09-05, gen2b)
+
+Both gen2b batches — `13592956–62` and `13592981–87` (p2lg-tune R1–R7, worktree
+`/home/rander39/wt021/FLOWPanel.jl-b`) — died 1–12 min in on the
+`UndefVarError` in the trace-provenance guard of
+`benchmark/rotor_hover_solver_phase2_tune.jl` (driver bound the module as `pnl`,
+guard referenced `FLOWPanel.` directly; R7 jobs were cancelled in the cascade
+before reaching the line). Fix committed locally as `b9c24e0`.
+
+### What ran (the fleet of record)
+
+Fixed on the cluster in worktree `/home/rander39/wt021/FLOWPanel.jl-c`. Smoke
+`13593008` (p2lg-SMOKE-R1) COMPLETED 2026-09-05 14:35, then the full ladder was
+resubmitted the same day:
+
+| rung | job | state (2026-09-07) | elapsed |
+| --- | --- | --- | --- |
+| R1 | 13593015 | COMPLETED 2026-09-05 19:57 | 5 h 14 m |
+| R2 | 13593016 | COMPLETED 2026-09-05 23:06 | 8 h 23 m |
+| R3 | 13593017 | COMPLETED 2026-09-07 07:37 | 7 h 19 m |
+| R4–R7 | 13593018–21 | RUNNING, heartbeats current 2026-09-07 14:35 | — |
+
+### Pin of record: gen2c, not gen2b
+
+The fleet ran at FLOWPanel `54ff10c2b73a6d7ca631214d25df22c70b716525` — one
+commit past tag `021-lg-gen2c` (the worktree-symlink commit; the tag chain is
+gen2b → gen2c, gen2c carrying the UndefVarError fix). Dependencies are at the
+expected gen2 pins: FastMultipole `0ce3ba6` (`021-lg-gen2`), FLOWVPM `a627dd9`
+(`021-lg-gen2`). `filament_reg = LineGaussRegularization` recorded in all trace
+files. SHAs verified against the SLURM logs. Any citation of these runs should
+say **gen2c**, superseding the gen2b wording in `decision_rules.md`.
+
+### R1–R3 early sanity harvest (read-only, 2026-09-07)
+
+Outputs at `benchmark/results/phase2/multi/R{1,2,3}/tune_phase2.csv` in the
+worktree-c checkout, traces alongside per budget. All traps clean: zero
+`tune_timed_out`, zero `bc_certified=false`, zero `cache_capped`. Best configs
+so far (all at the 500 GiB budget): R1 P=12/MAC=0.55/leaf=72 (t_solve_warm
+5882 s of tuning, 105 candidates); R2 P=12/MAC=0.55/leaf=32 (72 candidates);
+R3 P=14/MAC=0.55/leaf=32 (97 candidates). R3's CSV holds 6 rows including 2
+duplicate resume-key pairs — expected artifacts of an interrupt+resume, and the
+resume mechanism demonstrably worked (re-evaluation off the trace in seconds).
+Keep the phase_17 DUPLICATE trap active at full harvest: last row per resume
+key wins. `filament_reg` lives in the trace files only, not the summary CSV —
+trace is canonical. Verdict: full-fleet harvest is turnkey once R4–R7 land.
