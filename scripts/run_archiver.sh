@@ -211,11 +211,54 @@ is_checkout() {
     grep -q "$FLOWPANEL_UUID" "$1/Project.toml" 2>/dev/null
 }
 
+# Several "checkouts" share ONE physical data/ tree: campaign worktrees are
+# created with data/ symlinked back to the primary checkout so a run started
+# from a worktree lands in the shared data root.  Before this dedup (bug found
+# 2026-09-05) --all-checkouts treated each alias as an independent checkout and
+# archived the SAME runs once per alias: redundant tar work, wasted archive
+# space and inodes, and tarballs filed under a <checkout-slug> that did not own
+# the data.  Identity is the PHYSICAL data/ path, not the checkout path.
+#
+# When several checkouts resolve to the same data/, the owner is the one whose
+# data/ is a real directory rather than a symlink; aliases are skipped.  If
+# every candidate is a symlink (no primary in scope) the first one wins, so the
+# runs are still archived exactly once.
+data_realpath() { (cd "$1/data" 2>/dev/null && pwd -P); }
+
 if $ALL_CHECKOUTS; then
     [[ ${#ROOTS[@]} -eq 0 ]] || { echo "FATAL: --all-checkouts and --root are mutually exclusive" >&2; exit 2; }
+    SEEN_DATA=()        # physical data/ paths already claimed
+    SEEN_OWNER=()       # checkout that claimed each, index-aligned with SEEN_DATA
     for c in $CHECKOUT_GLOBS; do
         [[ -d "$c" ]] || continue
-        is_checkout "$c" && ROOTS+=("$c")
+        is_checkout "$c" || continue
+        cdata="$(data_realpath "$c")"
+        [[ -n "$cdata" ]] || continue
+        dup_of=""; dup_i=-1
+        for i in "${!SEEN_DATA[@]}"; do
+            [[ "${SEEN_DATA[$i]}" == "$cdata" ]] || continue
+            dup_of="${SEEN_OWNER[$i]}"; dup_i=$i; break
+        done
+        if [[ -z "$dup_of" ]]; then
+            SEEN_DATA+=("$cdata"); SEEN_OWNER+=("$c"); ROOTS+=("$c")
+            continue
+        fi
+        # Same physical data/ as an earlier candidate.  Promote this one only if
+        # it owns the tree (real dir) and the incumbent merely links to it.
+        if [[ ! -L "$c/data" && -L "$dup_of/data" ]]; then
+            echo "ALIAS-SKIP $dup_of  -- data/ -> $cdata, owned by $c (promoted)"
+            SEEN_OWNER[$dup_i]="$c"
+            # explicit if, not `[[ ]] && x && break`: under `set -e` a false
+            # AND-list as the last command of a loop body kills the script
+            for j in "${!ROOTS[@]}"; do
+                if [[ "${ROOTS[$j]}" == "$dup_of" ]]; then
+                    ROOTS[$j]="$c"
+                    break
+                fi
+            done
+        else
+            echo "ALIAS-SKIP $c  -- data/ -> $cdata, already covered by $dup_of"
+        fi
     done
     [[ ${#ROOTS[@]} -gt 0 ]] || { echo "FATAL: --all-checkouts found no FLOWPanel checkout under $CHECKOUT_GLOBS" >&2; exit 2; }
 fi
