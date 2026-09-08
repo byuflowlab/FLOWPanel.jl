@@ -2217,8 +2217,9 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         # field is convected and maintained exactly once per step. The panel
         # wake is per-body and always propagates.
         propagate_pfield::Bool=true,
-        # sigma-collapse guards forwarded to the FLOWVPM euler core-size
-        # update (052c trial 1) — see FLOWVPM._sigma_guard_params.
+        # sigma-collapse guards forwarded to the FLOWVPM euler / euler_exp
+        # core-size update (052c trial 1; euler_exp added 2026-09-08 for the
+        # 018 Ladder C sigma-collapse mode) — see FLOWVPM._sigma_guard_params.
         sigma_guard::NamedTuple=NamedTuple(),
         # RK3 wake integrator (026 Phase 1b Task 2): closure
         # `(pfield, a, b) -> nothing` that re-evaluates particle U/J (+SFS)
@@ -2246,9 +2247,9 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
     # stock forward Euler unless the wake was built with `expint=true`)
     _step_timer_measure(:wake_convection; nested=true) do
         if w.pfield.integration === FLOWVPM.euler_exp
-            isempty(sigma_guard) || throw(ArgumentError(
-                "sigma_guard is not supported by the euler_exp integrator"))
-            FLOWVPM._euler_exp(w.pfield, dt; relax)
+            # euler_exp applies the guard to the geometric gain ratio rather
+            # than to sigma post-hoc — see FLOWVPM._sigma_guard_params.
+            FLOWVPM._euler_exp(w.pfield, dt; relax, sigma_guard)
         elseif w.pfield.integration === FLOWVPM.rungekutta3
             isempty(sigma_guard) || throw(ArgumentError(
                 "sigma_guard is not supported by the rungekutta3 integrator"))

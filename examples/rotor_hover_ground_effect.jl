@@ -1605,9 +1605,9 @@ if ground_enable && ground_damp_band_r > 0
         # stock forward Euler unless the wake was built with `expint=true`)
         pnl._step_timer_measure(:wake_convection; nested=true) do
             if w.pfield.integration === pnl.FLOWVPM.euler_exp
-                isempty(sigma_guard) || throw(ArgumentError(
-                    "sigma_guard is not supported by the euler_exp integrator"))
-                pnl.FLOWVPM._euler_exp(w.pfield, dt; relax)
+                # euler_exp guards the geometric gain ratio (2026-09-08) —
+                # see FLOWVPM._sigma_guard_params.
+                pnl.FLOWVPM._euler_exp(w.pfield, dt; relax, sigma_guard)
             else
                 pnl.FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
             end
