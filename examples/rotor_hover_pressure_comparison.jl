@@ -438,6 +438,9 @@ sfs_threelevel             = parse(Bool,    get(ENV, "SFS_THREELEVEL",          
 sfs_nostatic               = parse(Bool,    get(ENV, "SFS_NOSTATIC",               "false"))
 sfs_maxC                   = parse(Float64, get(ENV, "SFS_MAXC",                   "1.0"))
 sfs_rlxf                   = parse(Float64, get(ENV, "SFS_RLXF",                   "0.005"))
+# Static-coefficient SFS ladder (018): SFS_CONST_CS=<value> swaps the dynamic
+# procedure for ConstantSFS with that fixed Cs. Unset => dynamic (default).
+sfs_const_cs               = parse(Float64, get(ENV, "SFS_CONST_CS",               "NaN"))
 panel_wake_hessian_to_particles = parse(Bool, get(ENV, "PANEL_WAKE_HESSIAN_TO_PARTICLES",
     string(!parse(Bool, get(ENV, "WAKEROW_NO_HESSIAN_TO_PARTICLES", "true")))))
 wakerow_no_hessian_to_particles = !panel_wake_hessian_to_particles
@@ -488,6 +491,22 @@ end
 
 sfs_choice = if sfs_off
     pnl.FLOWVPM.noSFS
+elseif !isnan(sfs_const_cs)
+    # Static-Cd arm: same model/clipping/control machinery as the default dynamic
+    # branch, but the coefficient is pinned to Cs instead of being recomputed.
+    # Cs is applied per-particle then passed through the SAME clipping strategies,
+    # so ~half the particles are still zeroed by clipping_backscatter; Cs is
+    # therefore comparable to the UNCLIPPED mean of a dynamic run, not its
+    # all-particle mean.
+    sfs_controls = ()
+    sfs_magnitude_control   && (sfs_controls = (sfs_controls..., pnl.FLOWVPM.control_magnitude))
+    sfs_directional_control && (sfs_controls = (sfs_controls..., pnl.FLOWVPM.control_directional))
+    sfs_clippings = sfs_no_backscatter_clip ? () : (pnl.FLOWVPM.clipping_backscatter,)
+    sfs_model = sfs_nostatic ?
+        ((pfield; optargs...) -> pnl.FLOWVPM.E_nostaticparticles(pfield; E=pnl.FLOWVPM.Estr_fmm, optargs...)) :
+        pnl.FLOWVPM.Estr_fmm
+    pnl.FLOWVPM.ConstantSFS(sfs_model; Cs=sfs_const_cs,
+        clippings=sfs_clippings, controls=sfs_controls)
 elseif sfs_backscatter_signed
     pnl.FLOWVPM.SFS_Cd_twolevel_backscatter_signed
 elseif sfs_no_backscatter_project
@@ -507,6 +526,35 @@ else
         pnl.FLOWVPM.pseudo3level_positive_afterUJ;
         alpha=0.999, clippings=sfs_clippings, controls=sfs_controls,
         maxC=sfs_maxC, rlxf=sfs_rlxf)
+end
+
+# Human-readable SFS state for the diagnostics line. The SFS choice is otherwise
+# invisible in the logs, which forced the 018 campaign to infer SFS_OFF delivery
+# indirectly (from the CT rung shifting off the reference) rather than verify it.
+sfs_label = if sfs_off
+    "noSFS"
+elseif !isnan(sfs_const_cs)
+    local ctrls = String[]
+    sfs_magnitude_control   && push!(ctrls, "magnitude")
+    sfs_directional_control && push!(ctrls, "directional")
+    string("ConstantSFS(Cs=", sfs_const_cs,
+           ", clippings=", sfs_no_backscatter_clip ? "none" : "backscatter",
+           ", controls=", isempty(ctrls) ? "none" : join(ctrls, "+"),
+           ", nostatic=", sfs_nostatic, ")")
+elseif sfs_backscatter_signed
+    "SFS_Cd_twolevel_backscatter_signed(static)"
+elseif sfs_no_backscatter_project
+    "SFS_Cd_twolevel_nobackscatter_projection(static)"
+elseif sfs_threelevel
+    "SFS_Cd_threelevel_nobackscatter(static)"
+else
+    local ctrls = String[]
+    sfs_magnitude_control   && push!(ctrls, "magnitude")
+    sfs_directional_control && push!(ctrls, "directional")
+    string("DynamicSFS(rlxf=", sfs_rlxf, ", maxC=", sfs_maxC, ", alpha=0.999",
+           ", clippings=", sfs_no_backscatter_clip ? "none" : "backscatter",
+           ", controls=", isempty(ctrls) ? "none" : join(ctrls, "+"),
+           ", nostatic=", sfs_nostatic, ")")
 end
 
 # wake_rotor = pnl.PanelWake(rotor; nwakerows=12, core_size=wake_core_size)
@@ -1302,7 +1350,7 @@ end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
         "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows)$(nwakerows == 0 ? " (convert-at-shed)" : "") das_refresh=$(set_Das_refresh)")
-println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), WAKE_INTEGRATOR=$(wake_rk3 ? "rk3" : "euler-family"), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on"))")
+println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), WAKE_INTEGRATOR=$(wake_rk3 ? "rk3" : "euler-family"), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on")), SFS=$(sfs_label)")
 name = run_name
 
 # Allow other scripts to `include` this file purely for setup (geometry,
