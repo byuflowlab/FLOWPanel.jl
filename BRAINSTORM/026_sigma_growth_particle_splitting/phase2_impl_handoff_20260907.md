@@ -144,3 +144,74 @@ elongate 0.5, viscous 1.3503, `log_stretch_max` NaN-disabled until §9 arms.
 D5 (SIGMA_CEIL removal) untouched (commit 8, Ryan-gated). RBF-reset site
 untouched per ruling. Commits 4–6 (FLOWPanel policy/persistence/driver) and 7–8
 remain for Session 2 / Ryan.
+
+## Session 2 report (commits 4–6, FLOWPanel + FLOWVPM ring script, 2026-09-08)
+
+All three commits landed with gates green, on `fastmultipole` (FLOWPanel) and
+`flowpanel` (FLOWVPM). Housekeeping commit `9d2c0f1` first captured the
+pre-existing 026 working-tree state (design-doc §17–18 + §3b amendment,
+linegauss dispatcher default + rk3 arm, phase2 handoff/prompt files).
+
+| # | SHA (repo) | what | gate result |
+|---|---|---|---|
+| 4 | `c78f6d1` (FLOWPanel) | `ResolutionSplit{TO}` policy (lazy `enable_resolution_split!` on every application so accumulation runs from step 1 at any cadence); mutual exclusion with `SplitParticles` enforced in the `ParticleMaintenance` tuple ctor; W3 merge interplay via an `on_representative` closure built in `apply_particle_policies!` at the MergeParticles application site (`FLOWVPM_merging.jl` untouched); `_heal_unseeded_rsplit_slots!` for device-shed particles; GPU-seam documentation in `_gpu_copy_side_buffers!` (NO new mirror entries — on device-backed wakes the state is canonical to the host mirror, device field stays `nothing`); replay serialize-then-drop | wake unit suite green incl. 17 new policy tests; replay suite 142+6 green; opt-in `FLOWPANEL_TEST_RESOLUTION_SPLIT_CUDA` seam testset (self-skips, no local GPU) |
+| 5 | `ebbbf3b` (FLOWPanel) | rsplit_* VTP persistence: writer block (six fields, only when enabled, host-mirror-aware, series precision); all-or-nothing loader (all six → enable + exact restore; none → `nothing`, no warn; partial → `ArgumentError`); `_clear_splitting_state!` extended | new 18-test warm-start testset green; IGE suite 113/113 green (run in isolation — see known breakage below) |
+| 6 | `e7681d2` (FLOWPanel) + `65247ee` (FLOWVPM) | WAKE_SPLIT_* env knobs per the Stage 6 table (enabled iff mechanism AND trigger; errors on mech-without-trigger, trigger-without-mech, SIGMA_CEIL+splitting, ON_FLOOR without SIGMA_FLOOR_FRAC>0); splice after MergeParticles; dispatcher arms `scr_p026sp_nt144_cap030`/`_cap018` + twelve `scr_p026s9_*_{floor,split,fs}` §9 matrix arms; self-contained ring collective test `FLOWVPM.jl/examples/p026_ring_split_test.jl` | all four error combos verified firing; enabled setup prints ACTIVE with (Merge, ResolutionSplit) order; splitting-off short-march smoke vs pre-commit-6 driver **bit-identical** (59 files; sole diff = wall_s wall-clock column of the wake-health CSV); ring script runs clean — control conserves to machine precision, split arms ≤0.8% circ / ≤0.4% impulse / ≤3% enstrophy drift over ~1 convective time |
+
+Stage 7 reconciliation checklist:
+
+- Merge hook resets ALL six fields, sigma_0 := merged σ — DONE (closure →
+  `_rsplit_reset_slot!`; asserted by the W3 policy test).
+- Merge→Split order documented — DONE (policy docstring, driver comment,
+  splice order; tuple order preserved by `_split_particle_policies`).
+- Every trigger self-limiting on fresh children — AUDITED (ratio restarts at
+  1 via fresh sigma_0; grow caps: tetra4/tri3 birth σ_c < σ_p, pair2 σ_c=σ_p
+  unreachable on the grow side because grow wins ties; exposure resets to 0;
+  floor guard `sigma_0 > floor` disarms floor-born lineages — Session 1 t8
+  anti-refire tests cover all of these).
+- Floor never GATES splitting — AUDITED (grep: `sigma_floor` appears in
+  `_rsplit_check` only as a shrink TRIGGER; the 052c guard clamps σ in the
+  integrator and never consults split state).
+- Skip telemetry returned + printed — DONE (counters NamedTuple + verbose
+  skip println; WAKE_SPLIT_VERBOSE default true).
+- Split-vs-merge churn observable — DONE (per-step `n_split_*` from the
+  policy verbose line vs merge counts; the deferred-cooldown diagnostic).
+- Old splitting path byte-identical / `FLOWVPM_merging.jl` untouched — HOLDS
+  for this session: zero FLOWVPM `src/` edits (only `examples/` added).
+
+Deviations / notes:
+
+1. **FLOWVPM moved under us**: Ryan landed `119fe23` (merge runaway guard —
+   touches `FLOWVPM_merging.jl`, hook signature unchanged) and `21eeaaa`
+   (euler_exp sigma_guard) mid-session. All Session 2 work was built and
+   tested against that newer HEAD; nothing in them conflicts with the split
+   seams.
+2. **GPU seam heal (small addition beyond plan text)**: particles shed on the
+   device field between maintenance passes miss the add_particle lockstep
+   hook on the host mirror (sigma_0 = 0 would read as infinite growth ratio).
+   `_heal_unseeded_rsplit_slots!` seeds those slots from the current σ before
+   each split application; host-backed wakes are a no-op scan. Documented
+   device-path limitations (accepted): device integrator twins skip
+   accumulation → axis/weight/exposure stay zero (Γ̂ fallback, exposure
+   trigger inert) and dvisc/drvpm stay zero (grow ties route to the viscous
+   kernel).
+3. **§9 matrix thresholds are submission knobs**: SIGMA_FLOOR_FRAC (floor/fs
+   arms) and WAKE_SPLIT_LOG_STRETCH_MAX (split arms) are deliberately NOT
+   baked into the dispatcher — D4 is Ryan-open. The driver fails fast if an
+   arm is submitted without its threshold (mechanism-without-trigger error),
+   so no arm can silently run unarmed. Γ̂-comparison arms via
+   WAKE_SPLIT_STRETCH_AXIS=false at submission.
+4. **Replay drop**: ResolutionSplit is serialized (opaque opts, same
+   convention as SplitParticles) and dropped without warning on
+   deserialization — replay reads particle states from disk and never
+   re-runs splitting.
+5. **Known pre-existing breakage (NOT this session's)**: the first testset of
+   `runtests_unit_warmstart.jl` errors on Julia 1.12 (WeakKeyDict finalizer
+   on immutable `WarmstartNoopSolver`) and aborts the file; the 026 and IGE
+   testsets were run in isolation (green). Also pre-existing dirty files left
+   alone: 018 provenance/handoff docs, `scripts/p018_harvest_ct.py`,
+   formulation src/test edits.
+6. Ring-test output (`examples/p026_ring_split_test_out/`) is generated data,
+   left untracked in FLOWVPM.
+
+Commits 7–8 (campaign launches, SIGMA_CEIL removal) remain Ryan-gated.
