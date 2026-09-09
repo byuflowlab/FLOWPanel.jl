@@ -234,6 +234,43 @@ case "$CASE" in
   # bounds it regardless (probe semantics).
   scr_p026ph1b_expgpu_smoke) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true ;;
 
+  # ---- 026 Phase 2 grow-side splitting arms (design doc §5/§7.3): clone of
+  # the 018 NT144 λ=2.4 arm (p018_csarc_n5_nt144_l2p4, dji dispatcher :650)
+  # + stretch-mechanism splitting on the absolute σ cap. Warm-start from the
+  # archived cliff run (/nobackup/archive/.../p018_csarc_n5_nt144_l2p4_s2gpu
+  # .tar.zst, retained steps 2200-2248): submit with RESTART_STEP/RESTART_NAME/
+  # RESTART_PATH pointing at the extracted state. cap030 holds the pre-cliff
+  # ell=3 radix depth; cap018 targets ell=4 admissibility (§5 table). Accept
+  # (§7.3): no cliff, CT within ±0.36%, 6-8 s/step, split telemetry sane.
+  # LAUNCHES ARE RYAN-GATED (plan commit 7) — arms defined here only.
+  scr_p026sp_nt144_cap030) export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_SIGMA_MAX=0.030 ;;
+  scr_p026sp_nt144_cap018) export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_SIGMA_MAX=0.018 ;;
+
+  # ---- 026 Phase 2 shrink-side §9 s020v matrix (floor / split / floor+split)
+  # on the four scr_p026ef_* ignition brackets. Warm-start at submission from
+  # the retained pre-ignition VTPs (RESTART_STEP inside the bracket):
+  #   ctrl 224/226, exp 209/211, ctrl-lg 229/231, exp-lg 284/286.
+  # THRESHOLDS ARE SUBMISSION KNOBS (Ryan-gated, plan D4/knob table):
+  #   floor arms: --export=ALL,SIGMA_FLOOR_FRAC=<frac> (floor-only: no split)
+  #   split arms: --export=ALL,WAKE_SPLIT_LOG_STRETCH_MAX=<D4 value>
+  #   fs arms:    both of the above (WAKE_SPLIT_ON_FLOOR=true is pre-armed so
+  #               the trigger fires ON the floor, §9.2/§3b)
+  # The driver errors on a mechanism without a trigger (and vice versa), so a
+  # missing submission knob fails fast instead of silently running unarmed.
+  # Γ̂-fallback comparison arms: add WAKE_SPLIT_STRETCH_AXIS=false at submission.
+  scr_p026s9_ctrl_floor)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9 ;;
+  scr_p026s9_ctrl_split)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true ;;
+  scr_p026s9_ctrl_fs)     export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_ON_FLOOR=true ;;
+  scr_p026s9_exp_floor)   export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
+  scr_p026s9_exp_split)   export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true ;;
+  scr_p026s9_exp_fs)      export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_ON_FLOOR=true ;;
+  scr_p026s9_ctrllg_floor) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss ;;
+  scr_p026s9_ctrllg_split) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_SPLIT_STRETCH=true ;;
+  scr_p026s9_ctrllg_fs)    export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_ON_FLOOR=true ;;
+  scr_p026s9_explg_floor) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true ;;
+  scr_p026s9_explg_split) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true ;;
+  scr_p026s9_explg_fs)    export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_ON_FLOOR=true ;;
+
   *) echo "ERROR: unknown screen case '$CASE'" >&2; exit 2 ;;
 esac
 

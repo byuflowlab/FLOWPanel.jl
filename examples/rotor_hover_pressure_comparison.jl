@@ -707,6 +707,81 @@ wake_rk3 = wake_integrator == "rk3"
 wake_rk3 && wake_expint && error(
     "WAKE_INTEGRATOR=rk3 and WAKE_EXPINT=true are mutually exclusive")
 
+# --- BRAINSTORM 026 Phase 2: resolution splitting (viscous tetra4 + two-regime
+# stretch tri3/pair2). OFF by default; enabled iff at least one MECHANISM
+# (WAKE_SPLIT_VISCOUS / WAKE_SPLIT_STRETCH) AND at least one TRIGGER
+# (WAKE_SPLIT_SIGMA_MAX / WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX /
+# WAKE_SPLIT_LOG_STRETCH_MAX / WAKE_SPLIT_ON_FLOOR) are armed; a mechanism
+# without a trigger (or vice versa) is a configuration error, not a silent
+# no-op. Splitting supersedes the SIGMA_CEIL band-aid — combining them is an
+# error (§8).
+wake_split_viscous = parse(Bool, get(ENV, "WAKE_SPLIT_VISCOUS", "false"))
+wake_split_stretch = parse(Bool, get(ENV, "WAKE_SPLIT_STRETCH", "false"))
+wake_split_sigma_max = parse(Float64, get(ENV, "WAKE_SPLIT_SIGMA_MAX", "NaN"))
+wake_split_ratio_max = parse(Float64,
+    get(ENV, "WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX", "NaN"))
+wake_split_log_stretch_max = parse(Float64,
+    get(ENV, "WAKE_SPLIT_LOG_STRETCH_MAX", "NaN"))
+wake_split_on_floor = parse(Bool, get(ENV, "WAKE_SPLIT_ON_FLOOR", "false"))
+wake_split_stretch_axis = parse(Bool, get(ENV, "WAKE_SPLIT_STRETCH_AXIS", "true"))
+wake_split_viscous_offset = parse(Float64,
+    get(ENV, "WAKE_SPLIT_VISCOUS_OFFSET_RATIO", "1.3503"))
+wake_split_compress_offset = parse(Float64,
+    get(ENV, "WAKE_SPLIT_COMPRESS_OFFSET_RATIO", "0.6"))
+wake_split_elongate_offset = parse(Float64,
+    get(ENV, "WAKE_SPLIT_ELONGATE_OFFSET_RATIO", "0.5"))
+wake_split_every = parse(Int, get(ENV, "WAKE_SPLIT_EVERY", "1"))
+wake_split_verbose = parse(Bool, get(ENV, "WAKE_SPLIT_VERBOSE", "true"))
+
+# WAKE_SPLIT_ON_FLOOR arms the shrink trigger AT the 052c floor
+# (SIGMA_FLOOR_FRAC × tip_sigma_default — same formula as the sigma_guard
+# block below; the guard itself is parsed later, this only peeks the env).
+wake_split_floor_frac = parse(Float64, get(ENV, "SIGMA_FLOOR_FRAC", "0.0"))
+wake_split_on_floor && wake_split_floor_frac <= 0 && error(
+    "WAKE_SPLIT_ON_FLOOR=true requires an active 052c floor " *
+    "(SIGMA_FLOOR_FRAC > 0): the floor trigger fires on σ pinned at the floor")
+wake_split_sigma_floor = wake_split_on_floor ?
+    wake_split_floor_frac * tip_sigma_default : NaN
+
+wake_split_mech_armed = wake_split_viscous || wake_split_stretch
+wake_split_trig_armed = !isnan(wake_split_sigma_max) ||
+    !isnan(wake_split_ratio_max) || !isnan(wake_split_log_stretch_max) ||
+    wake_split_on_floor
+wake_split_mech_armed && !wake_split_trig_armed && error(
+    "WAKE_SPLIT_VISCOUS/WAKE_SPLIT_STRETCH armed but no trigger set: also " *
+    "set WAKE_SPLIT_SIGMA_MAX, WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX, " *
+    "WAKE_SPLIT_LOG_STRETCH_MAX, and/or WAKE_SPLIT_ON_FLOOR")
+wake_split_trig_armed && !wake_split_mech_armed && error(
+    "a WAKE_SPLIT_* trigger is set but no mechanism is enabled: also set " *
+    "WAKE_SPLIT_VISCOUS=true and/or WAKE_SPLIT_STRETCH=true")
+wake_split_active = wake_split_mech_armed && wake_split_trig_armed
+wake_split_active && isfinite(parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))) &&
+    error("SIGMA_CEIL and resolution splitting are mutually exclusive: " *
+        "splitting replaces the σ-cap band-aid (BRAINSTORM 026 §8)")
+
+# spliced into the maintenance tuple below; MergeParticles stays FIRST
+# (W3 ordering — merged representatives get fresh split state via the
+# on_representative hook at the merge application site)
+maybe_split = wake_split_active ?
+    (pnl.ResolutionSplit(FV.ResolutionSplitOpts(;
+            sigma_max = wake_split_sigma_max,
+            sigma_growth_ratio_max = wake_split_ratio_max,
+            log_stretch_max = wake_split_log_stretch_max,
+            sigma_floor = wake_split_sigma_floor,
+            enable_viscous_split = wake_split_viscous,
+            enable_stretch_split = wake_split_stretch,
+            viscous_offset_ratio = wake_split_viscous_offset,
+            compress_offset_ratio = wake_split_compress_offset,
+            elongate_offset_ratio = wake_split_elongate_offset,
+            use_stretch_axis = wake_split_stretch_axis);
+        every = wake_split_every, verbose = wake_split_verbose),) : ()
+wake_split_active && println("Resolution splitting ACTIVE: " *
+    "viscous=$(wake_split_viscous) stretch=$(wake_split_stretch) " *
+    "sigma_max=$(wake_split_sigma_max) ratio_max=$(wake_split_ratio_max) " *
+    "log_stretch_max=$(wake_split_log_stretch_max) " *
+    "sigma_floor=$(round(wake_split_sigma_floor, sigdigits=4)) " *
+    "stretch_axis=$(wake_split_stretch_axis) every=$(wake_split_every)")
+
 # The two conversions need mutually exclusive wake options, so build the
 # differing kwargs once rather than duplicating the constructor call.
 # legacy: method_trailing/method_unsteady drive shedding, no unsteady filament.
@@ -780,6 +855,7 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
                 r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
                 sigma_relative=merge_sigma_relative),
+            maybe_split...,
         ))
     )
 
