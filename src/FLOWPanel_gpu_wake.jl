@@ -57,7 +57,21 @@ end
 
 # copy the host-side per-particle bookkeeping (splitting state + filament
 # edge graph) between two fields; these live in plain host arrays on BOTH
-# device- and host-backed fields, so plain copyto! suffices
+# device- and host-backed fields, so plain copyto! suffices.
+#
+# 026 Phase 2 NOTE: `pfield.resolution_split` (ResolutionSplitState) is
+# deliberately NOT in this list. On a device-backed wake the ResolutionSplit
+# policy runs inside `apply_particle_maintenance!` ON THE MIRROR, so the
+# state is enabled on — and canonical to — the mirror; the device field keeps
+# `resolution_split === nothing` (its lockstep/accumulation hooks no-op).
+# There is nothing to sync: the state never exists on both sides. Known
+# device-path limitations (documented, accepted): the device integrator
+# twins skip `_rsplit_accumulate!`, so axis/weight/exposure stay zero
+# (direction falls back to Γ̂; the exposure trigger never fires) and
+# dvisc/drvpm stay zero (grow events route to the viscous kernel by the
+# `dvisc ≥ drvpm` tie). Particles shed device-side between maintenance
+# passes miss the add_particle hook; `_heal_unseeded_rsplit_slots!`
+# (FLOWPanel_wake.jl) seeds their sigma_0 before each split application.
 function _gpu_copy_side_buffers!(dst::FLOWVPM.ParticleField,
                                  src::FLOWVPM.ParticleField)
     for (d, s) in ((dst.splitting_state, src.splitting_state),

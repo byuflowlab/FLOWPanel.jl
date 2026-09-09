@@ -1526,6 +1526,14 @@ ParticleMaintenance(policy::Union{AbstractParticleTrimPolicy,AbstractParticleFun
 
 function ParticleMaintenance(policies::Tuple)
     trim_policies, functional_policies = _split_particle_policies(policies)
+    # 026: the experimental SplitParticles path and the ResolutionSplit path
+    # keep separate per-particle state (SplittingState vs ResolutionSplitState)
+    # and must never be co-active on one field.
+    if any(p isa SplitParticles for p in functional_policies) &&
+            any(p isa ResolutionSplit for p in functional_policies)
+        throw(ArgumentError("SplitParticles and ResolutionSplit policies are " *
+            "mutually exclusive; use one splitting policy per wake"))
+    end
     return ParticleMaintenance(trim_policies, functional_policies)
 end
 
@@ -1650,6 +1658,30 @@ end
 SplitParticles(opts; every=1, verbose=false) =
     SplitParticles(Int(every), opts, verbose)
 
+"""
+    ResolutionSplit(opts::FLOWVPM.ResolutionSplitOpts; every=1, verbose=false)
+
+BRAINSTORM 026 Phase 2 particle-splitting policy (viscous tetra4 +
+two-regime stretch tri3/pair2 mechanisms). Applies
+`FLOWVPM.split_particles!(pfield, opts)` on cadence; the per-particle
+`ResolutionSplitState` is enabled lazily at the first policy application
+(host-side arrays, `nothing` cost when the policy is absent).
+
+Mutually exclusive with the experimental [`SplitParticles`](@ref) policy —
+`ParticleMaintenance` rejects tuples containing both. List `MergeParticles`
+BEFORE `ResolutionSplit` (W3 ordering); when both are present the merge
+application passes the `on_representative` reset hook so a merged particle
+restarts as a fresh entity (sigma_0 = merged σ, accumulators zeroed).
+"""
+struct ResolutionSplit{TO} <: AbstractParticleFunctionalPolicy
+    every::Int
+    opts::TO
+    verbose::Bool
+end
+
+ResolutionSplit(opts; every=1, verbose=false) =
+    ResolutionSplit(Int(every), opts, verbose)
+
 prepare_particle_policy(policy, pfield, ::ParticleMaintenanceContext) = policy
 
 function prepare_particle_policy(policy::FrameBox, pfield, ctx::ParticleMaintenanceContext)
@@ -1714,7 +1746,8 @@ function _keep_particle(policies::Tuple, pfield, i, ctx::ParticleMaintenanceCont
     return true
 end
 
-function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMaintenanceContext)
+function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMaintenanceContext;
+        on_representative=nothing)
     if policy.every > 0 && ctx.step > 0 && ctx.step % policy.every == 0
         FLOWVPM.merge_particles!(pfield;
             r_merge=policy.r,
@@ -1722,6 +1755,7 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
             sigma_relative=policy.sigma_relative,
             max_sigma_ratio=policy.max_sigma_ratio,
             skip_static=policy.skip_static,
+            on_representative=on_representative,
         )
     end
     return nothing
@@ -1734,9 +1768,59 @@ function apply_particle_policy!(policy::SplitParticles, pfield, ctx::ParticleMai
     return nothing
 end
 
+function apply_particle_policy!(policy::ResolutionSplit, pfield, ctx::ParticleMaintenanceContext)
+    # Lazy enable on EVERY application (idempotent), not just on cadence
+    # steps, so integrator-inline accumulation runs from the first step even
+    # with every > 1. On a device-backed wake, maintenance runs on the host
+    # mirror, so the state attaches to the mirror (see FLOWPanel_gpu_wake.jl).
+    FLOWVPM.enable_resolution_split!(pfield)
+    if policy.every > 0 && ctx.step > 0 && ctx.step % policy.every == 0
+        _heal_unseeded_rsplit_slots!(pfield)
+        FLOWVPM.split_particles!(pfield, policy.opts; dt=ctx.dt, verbose=policy.verbose)
+    end
+    return nothing
+end
+
+# On a device-backed wake the ResolutionSplitState lives on the HOST MIRROR
+# (maintenance runs there); particles shed on the device field between
+# maintenance passes therefore miss the add_particle lockstep hook and land
+# in mirror slots with sigma_0 == 0 — which would read as an infinite growth
+# ratio. Seed those slots with the current σ (creation-σ approximation: at
+# most one maintenance cadence of drift) before every split application.
+# Host-backed wakes never hit the branch (hooks seed every slot), so the
+# scan is a cheap no-op there.
+function _heal_unseeded_rsplit_slots!(pfield)
+    rs = pfield.resolution_split
+    rs === nothing && return nothing
+    for i in 1:pfield.np
+        if rs.sigma_0[i] == 0
+            FLOWVPM._rsplit_init_slot!(rs, i, FLOWVPM.get_sigma(pfield, i)[])
+        end
+    end
+    return nothing
+end
+
+# W3 merge interplay: when a ResolutionSplit policy shares the tuple with
+# MergeParticles, a merged representative is a NEW entity — reset its
+# ResolutionSplitState slot (sigma_0 := merged σ, accumulators zeroed) via
+# the merge on_representative hook. FLOWVPM_merging.jl stays ignorant of
+# the split state; the closure lives entirely at this application site.
+function _resolution_split_merge_hook(policies::Tuple, pfield)
+    any(p isa ResolutionSplit for p in policies) || return nothing
+    # enable up front so the hook exists even when Merge (listed first, W3
+    # ordering) fires before the first ResolutionSplit application
+    rs = FLOWVPM.enable_resolution_split!(pfield)
+    return i -> FLOWVPM._rsplit_reset_slot!(rs, i, FLOWVPM.get_sigma(pfield, i)[])
+end
+
 function apply_particle_policies!(policies::Tuple, pfield, ctx::ParticleMaintenanceContext)
+    on_representative = _resolution_split_merge_hook(policies, pfield)
     for policy in policies
-        apply_particle_policy!(policy, pfield, ctx)
+        if policy isa MergeParticles
+            apply_particle_policy!(policy, pfield, ctx; on_representative)
+        else
+            apply_particle_policy!(policy, pfield, ctx)
+        end
     end
     return nothing
 end

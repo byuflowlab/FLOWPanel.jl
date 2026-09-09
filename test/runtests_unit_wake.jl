@@ -1869,6 +1869,114 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
         @test wake.pfield.np == 1
     end
 
+    @testset "ResolutionSplit policy (BRAINSTORM 026 Phase 2)" begin
+        @testset "classification and mutual exclusion" begin
+            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+                enable_viscous_split=true)
+            maintenance = pnl.ParticleMaintenance((
+                pnl.MinGamma(1e-6),
+                pnl.ResolutionSplit(opts),
+            ))
+            @test maintenance.functional_policies isa Tuple{<:pnl.ResolutionSplit}
+
+            legacy_opts = nothing  # opts type is irrelevant to the guard
+            @test_throws ArgumentError pnl.ParticleMaintenance((
+                pnl.SplitParticles(legacy_opts),
+                pnl.ResolutionSplit(opts),
+            ))
+        end
+
+        @testset "fires through maintenance with lazy enable" begin
+            body = make_plate_vortex_body()
+            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+                enable_viscous_split=true)
+            wake = pnl.PanelParticleWake(body; max_particles=32,
+                particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),)))
+
+            FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+            @test wake.pfield.resolution_split === nothing
+
+            pnl.propagate!(wake, 0.0; relax=false, step=1)
+
+            # σ = 1.0 > sigma_max = 0.5; dvisc == drvpm == 0 ties to the
+            # viscous tetra4 kernel → 4 children
+            @test wake.pfield.resolution_split !== nothing
+            @test wake.pfield.np == 4
+        end
+
+        @testset "cadence gates splitting but not the enable" begin
+            body = make_plate_vortex_body()
+            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+                enable_viscous_split=true)
+            wake = pnl.PanelParticleWake(body; max_particles=32,
+                particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts; every=2),)))
+
+            FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+            pnl.propagate!(wake, 0.0; relax=false, step=1)
+            @test wake.pfield.resolution_split !== nothing   # enabled off-cadence
+            @test wake.pfield.np == 1                        # but no split at step 1
+
+            pnl.propagate!(wake, 0.0; relax=false, step=2)
+            @test wake.pfield.np == 4
+        end
+
+        @testset "merge before split resets the representative (W3)" begin
+            body = make_plate_vortex_body()
+            # no triggers armed: the split policy only supplies state + hook
+            opts = FLOWVPM.ResolutionSplitOpts(enable_viscous_split=true,
+                enable_stretch_split=true)
+            wake = pnl.PanelParticleWake(body; max_particles=32,
+                particle_maintenance=pnl.ParticleMaintenance((
+                    pnl.MergeParticles(every=1, r=0.5, r_hash=0.5),
+                    pnl.ResolutionSplit(opts),
+                )))
+
+            FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+            FLOWVPM.add_particle(wake.pfield, [0.1, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+
+            # dirty the accumulators so the reset is observable
+            rs = FLOWVPM.enable_resolution_split!(wake.pfield)
+            for i in 1:2
+                rs.axis[1, i] = 1.0
+                rs.weight[i] = 2.0
+                rs.exposure[i] = 0.3
+                rs.dvisc[i] = 0.1
+                rs.drvpm[i] = 0.2
+            end
+
+            pnl.propagate!(wake, 0.0; relax=false, step=1)
+
+            @test wake.pfield.np == 1
+            sigma_merged = FLOWVPM.get_sigma(wake.pfield, 1)[]
+            @test rs.sigma_0[1] == sigma_merged
+            @test all(rs.axis[:, 1] .== 0)
+            @test rs.weight[1] == 0
+            @test rs.exposure[1] == 0
+            @test rs.dvisc[1] == 0
+            @test rs.drvpm[1] == 0
+        end
+
+        @testset "unseeded-slot heal (GPU shed seam)" begin
+            body = make_plate_vortex_body()
+            opts = FLOWVPM.ResolutionSplitOpts(sigma_growth_ratio_max=1.5,
+                enable_viscous_split=true, enable_stretch_split=true)
+            wake = pnl.PanelParticleWake(body; max_particles=32,
+                particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),)))
+
+            FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+            rs = FLOWVPM.enable_resolution_split!(wake.pfield)
+            # simulate a device-shed particle that missed the add hook:
+            # sigma_0 == 0 would read as an infinite growth ratio
+            rs.sigma_0[1] = 0.0
+
+            pnl.propagate!(wake, 0.0; relax=false, step=1)
+
+            # healed to the current σ (ratio 1) instead of splitting
+            @test wake.pfield.np == 1
+            @test rs.sigma_0[1] == 1.0
+        end
+    end
+
     @testset "RelaxationPlaneFilter validation and frame refresh" begin
         body = make_plate_vortex_body()
 
@@ -2115,5 +2223,48 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
         @test view(w2.pfield.particles, FLOWVPM.GAMMA_INDEX, 1:w2.pfield.np) ==
               view(w0_legacy.pfield.particles, FLOWVPM.GAMMA_INDEX,
                    1:w0_legacy.pfield.np)
+    end
+end
+
+# Opt-in CUDA gate (self-skips without a GPU; BRAINSTORM 026 Phase 2): one
+# forced split through the D2H -> host maintenance -> H2D seam must equal the
+# host-only run, and the ResolutionSplitState must live on the host mirror.
+if parse(Bool, get(ENV, "FLOWPANEL_TEST_RESOLUTION_SPLIT_CUDA", "false"))
+    import Random
+    @testset "ResolutionSplit CUDA host-mirror seam equivalence" begin
+        @test FastMultipole.load_cuda_radix_lifecycle!()
+        CUDAmod = getglobal(FastMultipole, :CUDA)
+        @test Base.invokelatest(CUDAmod.functional)
+
+        body = make_plate_vortex_body()
+        opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+            enable_viscous_split=true, use_stretch_axis=false)
+        maintenance = pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),))
+
+        host_wake = pnl.PanelParticleWake(body; max_particles=32,
+            particle_maintenance=maintenance)
+        FLOWVPM.add_particle(host_wake.pfield, [0.0, 0.0, 0.0],
+            [1e-3, 0.0, 0.0], 1.0)
+
+        device_wake = pnl.PanelParticleWake(body; max_particles=32,
+            particle_maintenance=maintenance, arraytype=CUDAmod.CuArray)
+        mirror = pnl._gpu_pfield_mirror(device_wake.pfield)
+        FLOWVPM.add_particle(mirror, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+        pnl._gpu_sync_device_from_mirror!(device_wake.pfield, mirror)
+
+        # pin both runs to the same tetra orientation draw
+        Random.seed!(20260907)
+        pnl.propagate!(host_wake, 0.0; relax=false, step=1)
+        Random.seed!(20260907)
+        pnl.propagate!(device_wake, 0.0; relax=false, step=1)
+
+        @test host_wake.pfield.np == 4
+        @test device_wake.pfield.np == 4
+        device_host = pnl._wake_monitor_host_pfield(device_wake.pfield)
+        @test Array(device_host.particles[:, 1:4]) ≈
+            host_wake.pfield.particles[:, 1:4] rtol=0 atol=1e-13
+        # state lives on the mirror, not the device field
+        @test device_wake.pfield.resolution_split === nothing
+        @test mirror.resolution_split !== nothing
     end
 end

@@ -141,6 +141,14 @@ function _particle_policy_manifest(policy)
             # reconstruction is still required instead of guessing defaults.
             "opts" => _metadata_unsupported_dict(typeof(policy.opts)),
         )
+    elseif policy isa ResolutionSplit
+        return Dict{String, Any}(
+            "type" => "ResolutionSplit",
+            "every" => policy.every,
+            "verbose" => policy.verbose,
+            # Same opaque-opts convention as SplitParticles above.
+            "opts" => _metadata_unsupported_dict(typeof(policy.opts)),
+        )
     else
         # Prepared* variants are runtime products of prepare_particle_policy;
         # manifests record the original unprepared maintenance tuple.
@@ -741,6 +749,10 @@ function _deserialize_particle_policy(meta)
             skip_static=Bool(get(meta, "skip_static", true)),
         )
     else
+        # SplitParticles and ResolutionSplit fall through here by design:
+        # their FLOWVPM opts are opaque in the manifest, and replay never
+        # re-runs splitting anyway (particle states are read from disk), so
+        # both split policies are dropped without error.
         return nothing
     end
 end

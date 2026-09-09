@@ -779,3 +779,29 @@ end
               view(wake.pfield.particles, 1:3, 1:wake.pfield.np)
     end
 end
+
+@testset "ResolutionSplit policy is serialized then dropped by replay (026)" begin
+    opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5, enable_viscous_split=true)
+    policy = pnl.ResolutionSplit(opts; every=3, verbose=true)
+
+    manifest = pnl._particle_policy_manifest(policy)
+    @test manifest["type"] == "ResolutionSplit"
+    @test manifest["every"] == 3
+    @test manifest["verbose"] == true
+
+    # deserialization drops it without error (opaque FLOWVPM opts; replay
+    # never re-runs splitting), same convention as SplitParticles
+    @test pnl._deserialize_particle_policy(manifest) === nothing
+
+    maintenance_meta = Dict{String, Any}(
+        "type" => "ParticleMaintenance",
+        "trim_policies" => Any[Dict{String, Any}("type" => "MinGamma", "threshold" => 1e-3)],
+        "functional_policies" => Any[
+            Dict{String, Any}("type" => "MergeParticles", "every" => 2),
+            manifest,
+        ],
+    )
+    maintenance = pnl._deserialize_particle_maintenance(maintenance_meta)
+    @test maintenance.trim_policies isa Tuple{<:pnl.MinGamma}
+    @test maintenance.functional_policies isa Tuple{<:pnl.MergeParticles}
+end
