@@ -275,9 +275,9 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     # a previously loaded state with more particles.
     pf.particles[:, :] .= zero(eltype(pf.particles))
     pf.np = 0
-    # 026 W1: same "no stale rows" invariant for the splitting side-buffer
-    # and the filament edge graph (both host-resident, full maxparticles
-    # length). Restored or reconstructed below once np is known.
+    # 026: same "no stale rows" invariant for the filament edge graph and the
+    # resolution-split state (host-resident, full maxparticles length).
+    # Restored below once np is known.
     _clear_splitting_state!(pf)
     if np == 0
         return wake
@@ -325,39 +325,10 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
 
     pf.np = np
 
-    # 026 W1: restore the splitting side-buffer. New checkpoints carry the
-    # six split_* arrays (all-or-nothing — a partial set indicates a
-    # corrupted/stripped file, not an old format); checkpoints predating them
-    # get a defensible reconstruction: sigma_0 := restored (post-SIGMA_CEIL)
-    # σ so every particle is armed (s0 > 0) with ratio exactly 1. That resets
-    # the shrink baseline — shrink accrued before the restart will not
-    # re-trigger (under-triggers only, never over-triggers). sigma_0 itself
-    # is never clamped: it is the creation-time reference, and clamping it
-    # would spuriously arm overgrown particles.
-    st = pf.splitting_state
-    split_fields = ("split_sigma_0", "split_H_chi", "split_hold",
-                    "split_cooldown", "split_dsigma2_visc",
-                    "split_dsigma2_rvpm")
-    present = filter(f -> f in keys(point_data), split_fields)
-    if length(present) == length(split_fields)
-        R = eltype(pf.particles)
-        st.sigma_0[1:np] .= R.(ReadVTK.get_data(point_data["split_sigma_0"]))
-        st.H_chi[1:np] .= R.(ReadVTK.get_data(point_data["split_H_chi"]))
-        st.hold_counter[1:np] .= Int.(ReadVTK.get_data(point_data["split_hold"]))
-        st.cooldown_counter[1:np] .= Int.(ReadVTK.get_data(point_data["split_cooldown"]))
-        st.dsigma2_visc[1:np] .= R.(ReadVTK.get_data(point_data["split_dsigma2_visc"]))
-        st.dsigma2_rvpm[1:np] .= R.(ReadVTK.get_data(point_data["split_dsigma2_rvpm"]))
-    elseif isempty(present)
-        @warn "Warm start: checkpoint predates SplittingState persistence; " *
-            "reconstructing sigma_0 := restored sigma (shrink already " *
-            "accrued before this restart will not re-trigger)." maxlog=1
-        st.sigma_0[1:np] .= view(staging, FLOWVPM.SIGMA_INDEX, :)
-    else
-        throw(ArgumentError("Loaded particle VTK carries a partial " *
-            "SplittingState field set ($(join(present, ", "))) — corrupted " *
-            "or hand-stripped checkpoint; expected all or none of: " *
-            "$(join(split_fields, ", "))."))
-    end
+    # NOTE (D-B, 2026-09-08): checkpoints written before the legacy splitting
+    # path was removed carry six split_* point-data arrays. Nothing requests
+    # them anymore, so they are silently inert extra point data — old
+    # checkpoints keep loading; new checkpoints no longer write them.
 
     # 026 Phase 2: restore the ResolutionSplitState (all-or-nothing on the
     # six rsplit_* fields, no version tag). All six present → enable + exact
@@ -389,17 +360,10 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     return wake
 end
 
-# Zero the full splitting side-buffer and filament edge graph (host vectors
+# Zero the filament edge graph and resolution-split state (host vectors
 # sized to maxparticles) — warm-start counterpart of the particles clear.
 function _clear_splitting_state!(pf)
-    st = pf.splitting_state
     R = eltype(pf.particles)
-    fill!(st.sigma_0, zero(R))
-    fill!(st.H_chi, zero(R))
-    fill!(st.hold_counter, 0)
-    fill!(st.cooldown_counter, 0)
-    fill!(st.dsigma2_visc, zero(R))
-    fill!(st.dsigma2_rvpm, zero(R))
     g = pf.filament_edge_graph
     fill!(g.up_neighbor, 0)
     fill!(g.down_neighbor, 0)

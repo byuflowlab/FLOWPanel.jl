@@ -132,21 +132,13 @@ function _particle_policy_manifest(policy)
             "max_sigma_ratio" => policy.max_sigma_ratio,
             "skip_static" => policy.skip_static,
         )
-    elseif policy isa SplitParticles
-        return Dict{String, Any}(
-            "type" => "SplitParticles",
-            "every" => policy.every,
-            "verbose" => policy.verbose,
-            # Split options are opaque FLOWVPM objects; record that manual
-            # reconstruction is still required instead of guessing defaults.
-            "opts" => _metadata_unsupported_dict(typeof(policy.opts)),
-        )
     elseif policy isa ResolutionSplit
         return Dict{String, Any}(
             "type" => "ResolutionSplit",
             "every" => policy.every,
             "verbose" => policy.verbose,
-            # Same opaque-opts convention as SplitParticles above.
+            # Split options are opaque FLOWVPM objects; record that manual
+            # reconstruction is still required instead of guessing defaults.
             "opts" => _metadata_unsupported_dict(typeof(policy.opts)),
         )
     else
@@ -749,10 +741,9 @@ function _deserialize_particle_policy(meta)
             skip_static=Bool(get(meta, "skip_static", true)),
         )
     else
-        # SplitParticles and ResolutionSplit fall through here by design:
-        # their FLOWVPM opts are opaque in the manifest, and replay never
-        # re-runs splitting anyway (particle states are read from disk), so
-        # both split policies are dropped without error.
+        # ResolutionSplit falls through here by design: its FLOWVPM opts are
+        # opaque in the manifest, and replay never re-runs splitting anyway
+        # (particle states are read from disk), so it is dropped without error.
         return nothing
     end
 end

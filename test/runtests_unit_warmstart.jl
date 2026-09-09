@@ -432,158 +432,6 @@ end
           view(wake_c.pfield.particles, :, 1:wake_c.pfield.np)
 end
 
-# ------------------------------------------------------------------------------
-# BRAINSTORM 026 W1: SplittingState persistence across warm start.
-# Without this, every warm-started particle had sigma_0 = 0 and
-# SigmaShrinkTrigger could never fire on a continued run.
-# ------------------------------------------------------------------------------
-@testset "warm start SplittingState persistence (026 W1)" begin
-    vpm = pnl.FLOWVPM
-
-    function setup_split_wake()
-        body = make_plate_vortex_body()
-        wake = pnl.PanelParticleWake(body; nwakerows=2, max_particles=100,
-            SFS=vpm.noSFS, relaxation=vpm.relaxation_none)
-        # shed one panel-wake row so write_vtk emits the VTS the loader needs
-        pnl.update_TE!(wake, body)
-        pnl.shed_wake!(wake, body)
-        return wake
-    end
-
-    function seed_particles!(wake; np=4)
-        for i in 1:np
-            vpm.add_particle(wake.pfield, (0.3i, 0.1, 0.2),
-                (0.01, 0.0, 0.02i), 0.1 + 0.01i)
-        end
-        return wake
-    end
-
-    split_vectors(st, np) = (st.sigma_0[1:np], st.H_chi[1:np],
-        st.hold_counter[1:np], st.cooldown_counter[1:np],
-        st.dsigma2_visc[1:np], st.dsigma2_rvpm[1:np])
-
-    @testset "A: round trip (new format)" begin
-        wake = seed_particles!(setup_split_wake())
-        pf = wake.pfield
-        np = pf.np
-        st = pf.splitting_state
-        # Distinctive non-default state (exercises the writer without a
-        # split-triggering simulation)
-        for i in 1:np
-            st.sigma_0[i] = 3 * vpm.get_sigma(vpm.get_particle(pf, i))[]
-            st.H_chi[i] = 0.1i
-            st.hold_counter[i] = i
-            st.cooldown_counter[i] = i + 1
-            st.dsigma2_visc[i] = 1e-4 * i
-            st.dsigma2_rvpm[i] = -2e-4 * i
-        end
-        trig = vpm.SigmaShrinkTrigger(0.5)
-        pre_fire = [vpm.should_split(trig, pf, st, i, 0.01) for i in 1:np]
-        pre_sev = [vpm.severity(trig, pf, st, i, 0.01) for i in 1:np]
-        @test all(pre_fire)  # sigma/sigma_0 = 1/3 < 0.5
-
-        path = mktempdir()
-        pnl.write_vtk(joinpath(path, "w1"), wake, 7, 0.35)
-
-        wake2 = setup_split_wake()
-        pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 7)
-        pf2 = wake2.pfield
-        st2 = pf2.splitting_state
-        @test pf2.np == np
-        for (a, b) in zip(split_vectors(st, np), split_vectors(st2, np))
-            @test a == b
-        end
-        # slots beyond np stay zero
-        @test all(iszero, st2.sigma_0[np+1:end])
-        @test all(iszero, st2.hold_counter[np+1:end])
-        # trigger decisions survive the round trip exactly
-        @test [vpm.should_split(trig, pf2, st2, i, 0.01) for i in 1:np] == pre_fire
-        @test [vpm.severity(trig, pf2, st2, i, 0.01) for i in 1:np] == pre_sev
-        # hold-counter continuity: a particle one call away from firing
-        # fires on the next trigger evaluation after restore
-        hold = vpm.HoldTrigger(vpm.SigmaShrinkTrigger(0.5), 3)
-        st2.hold_counter[1] = 2
-        @test vpm.should_split(hold, pf2, st2, 1, 0.01)
-        # the blocker regression: split_particles! performs splits on a
-        # warm-started field
-        opts = vpm.SplitOptions(; trigger=vpm.SigmaShrinkTrigger(0.5),
-            max_fraction=1.0)
-        # burn one maintenance call for the cooldown counters seeded above
-        for _ in 1:maximum(st2.cooldown_counter[1:np])
-            vpm.split_particles!(pf2, opts; dt=0.01)
-        end
-        @test vpm.split_particles!(pf2, opts; dt=0.01) > 0
-    end
-
-    @testset "B: legacy checkpoint fallback" begin
-        wake = seed_particles!(setup_split_wake())
-        pf = wake.pfield
-        np = pf.np
-        # write a full checkpoint, then overwrite the particle VTP with a
-        # legacy-format one (no split_* arrays)
-        path = mktempdir()
-        pnl.write_vtk(joinpath(path, "w1"), wake, 3, 0.1)
-        vtp_dir = joinpath(path, "w1_particles")
-        cells = [pnl.WriteVTK.MeshCell(pnl.WriteVTK.PolyData.Verts(), 1:np)]
-        pnl._write_particles_vtp(joinpath(vtp_dir, "w1_particles.3.vtp"),
-            pf.particles, np, cells, Float64)
-
-        wake2 = setup_split_wake()
-        @test_logs (:warn, r"predates SplittingState") match_mode=:any begin
-            pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 3)
-        end
-        pf2 = wake2.pfield
-        st2 = pf2.splitting_state
-        @test pf2.np == np
-        # reconstructed: armed (s0 > 0), ratio exactly 1, everything else zero
-        for i in 1:np
-            @test st2.sigma_0[i] == vpm.get_sigma(vpm.get_particle(pf2, i))[]
-            @test st2.sigma_0[i] > 0
-        end
-        @test all(iszero, st2.H_chi[1:np])
-        @test all(iszero, st2.hold_counter[1:np])
-        @test all(iszero, st2.dsigma2_visc[1:np])
-        @test all(iszero, st2.dsigma2_rvpm[1:np])
-        trig = vpm.SigmaShrinkTrigger(0.5)
-        @test !any(vpm.should_split(trig, pf2, st2, i, 0.01) for i in 1:np)
-
-        # SIGMA_CEIL cross-check: reconstructed sigma_0 equals the clamped σ
-        sig_max = maximum(vpm.get_sigma(vpm.get_particle(pf, i))[] for i in 1:np)
-        ceil_val = 0.9 * sig_max
-        wake3 = setup_split_wake()
-        withenv("SIGMA_CEIL" => string(ceil_val)) do
-            pnl._load_panel_particle_wake_vtk!(wake3, path, "w1", 3)
-        end
-        pf3 = wake3.pfield
-        st3 = pf3.splitting_state
-        for i in 1:np
-            @test st3.sigma_0[i] == vpm.get_sigma(vpm.get_particle(pf3, i))[]
-            @test st3.sigma_0[i] <= ceil_val + eps(ceil_val)
-        end
-
-        # partial split_* field set is a typed hard failure
-        pnl.write_vtk(joinpath(path, "w1"), wake, 4, 0.2)
-        Xp = pf.particles[vpm.X_INDEX, 1:np]
-        vtp = pnl.WriteVTK.vtk_grid(joinpath(vtp_dir, "w1_particles.4.vtp"),
-            Xp, cells; compress=false)
-        for (fname, idxs) in (("gamma", vpm.GAMMA_INDEX),
-                ("sigma", vpm.SIGMA_INDEX), ("vol", vpm.VOL_INDEX),
-                ("circulation", vpm.CIRCULATION_INDEX),
-                ("velocity", vpm.U_INDEX), ("vorticity", vpm.VORTICITY_INDEX),
-                ("C", vpm.C_INDEX), ("SFS", vpm.SFS_INDEX))
-            vtp[fname, pnl.WriteVTK.VTKPointData()] = pf.particles[idxs, 1:np]
-        end
-        vtp["velocity_gradient", pnl.WriteVTK.VTKPointData()] =
-            reshape(pf.particles[vpm.J_INDEX, 1:np], 3, 3, np)
-        vtp["split_sigma_0", pnl.WriteVTK.VTKPointData()] =
-            pf.splitting_state.sigma_0[1:np]
-        pnl.WriteVTK.vtk_save(vtp)
-        wake4 = setup_split_wake()
-        @test_throws ArgumentError pnl._load_panel_particle_wake_vtk!(
-            wake4, path, "w1", 4)
-    end
-end
-
 @testset "warm start ResolutionSplitState persistence (026 Phase 2)" begin
     vpm = pnl.FLOWVPM
 
@@ -688,5 +536,57 @@ end
         wake2 = setup_rsplit_wake()
         @test_throws ArgumentError pnl._load_panel_particle_wake_vtk!(
             wake2, path, "w1", 4)
+    end
+
+    @testset "D: stale legacy split_* fields ignored silently (D-B)" begin
+        # Checkpoints written before the legacy splitting path was removed
+        # (2026-09-08) carry six split_* point-data arrays. Fabricate one and
+        # verify it loads with no warning/error — the stale fields are inert
+        # extra point data — while the rsplit_* block still restores exactly.
+        wake = seed_particles!(setup_rsplit_wake())
+        pf = wake.pfield
+        np = pf.np
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "w1"), wake, 5, 0.25)
+        vtp_dir = joinpath(path, "w1_particles")
+        cells = [pnl.WriteVTK.MeshCell(pnl.WriteVTK.PolyData.Verts(), 1:np)]
+        Xp = pf.particles[vpm.X_INDEX, 1:np]
+        vtp = pnl.WriteVTK.vtk_grid(joinpath(vtp_dir, "w1_particles.5.vtp"),
+            Xp, cells; compress=false)
+        for (fname, idxs) in (("gamma", vpm.GAMMA_INDEX),
+                ("sigma", vpm.SIGMA_INDEX), ("vol", vpm.VOL_INDEX),
+                ("circulation", vpm.CIRCULATION_INDEX),
+                ("velocity", vpm.U_INDEX), ("vorticity", vpm.VORTICITY_INDEX),
+                ("C", vpm.C_INDEX), ("SFS", vpm.SFS_INDEX))
+            vtp[fname, pnl.WriteVTK.VTKPointData()] = pf.particles[idxs, 1:np]
+        end
+        vtp["velocity_gradient", pnl.WriteVTK.VTKPointData()] =
+            reshape(pf.particles[vpm.J_INDEX, 1:np], 3, 3, np)
+        # legacy Session-2-era block (exact field names/types the old writer used)
+        vtp["split_sigma_0", pnl.WriteVTK.VTKPointData()] = fill(0.3, np)
+        vtp["split_H_chi", pnl.WriteVTK.VTKPointData()] = fill(0.1, np)
+        vtp["split_hold", pnl.WriteVTK.VTKPointData()] = fill(Int32(2), np)
+        vtp["split_cooldown", pnl.WriteVTK.VTKPointData()] = fill(Int32(1), np)
+        vtp["split_dsigma2_visc", pnl.WriteVTK.VTKPointData()] = fill(1e-4, np)
+        vtp["split_dsigma2_rvpm", pnl.WriteVTK.VTKPointData()] = fill(-2e-4, np)
+        # plus a full rsplit_* block that must still restore
+        vtp["rsplit_sigma_0", pnl.WriteVTK.VTKPointData()] = collect(0.05 .+ 0.01*(1:np))
+        vtp["rsplit_axis", pnl.WriteVTK.VTKPointData()] = repeat([0.1, -0.2, 0.3], 1, np)
+        vtp["rsplit_weight", pnl.WriteVTK.VTKPointData()] = fill(0.4, np)
+        vtp["rsplit_exposure", pnl.WriteVTK.VTKPointData()] = fill(-0.05, np)
+        vtp["rsplit_dvisc", pnl.WriteVTK.VTKPointData()] = fill(1e-4, np)
+        vtp["rsplit_drvpm", pnl.WriteVTK.VTKPointData()] = fill(2e-4, np)
+        pnl.WriteVTK.vtk_save(vtp)
+
+        wake2 = setup_rsplit_wake()
+        @test_logs min_level=Base.CoreLogging.Warn begin
+            pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 5)
+        end
+        pf2 = wake2.pfield
+        @test pf2.np == np
+        rs2 = pf2.resolution_split
+        @test rs2 !== nothing
+        @test rs2.sigma_0[1:np] == collect(0.05 .+ 0.01*(1:np))
+        @test all(rs2.weight[1:np] .== 0.4)
     end
 end

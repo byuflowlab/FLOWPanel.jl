@@ -790,7 +790,7 @@ end
     @test manifest["verbose"] == true
 
     # deserialization drops it without error (opaque FLOWVPM opts; replay
-    # never re-runs splitting), same convention as SplitParticles
+    # never re-runs splitting)
     @test pnl._deserialize_particle_policy(manifest) === nothing
 
     maintenance_meta = Dict{String, Any}(

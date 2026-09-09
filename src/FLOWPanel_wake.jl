@@ -1526,14 +1526,6 @@ ParticleMaintenance(policy::Union{AbstractParticleTrimPolicy,AbstractParticleFun
 
 function ParticleMaintenance(policies::Tuple)
     trim_policies, functional_policies = _split_particle_policies(policies)
-    # 026: the experimental SplitParticles path and the ResolutionSplit path
-    # keep separate per-particle state (SplittingState vs ResolutionSplitState)
-    # and must never be co-active on one field.
-    if any(p isa SplitParticles for p in functional_policies) &&
-            any(p isa ResolutionSplit for p in functional_policies)
-        throw(ArgumentError("SplitParticles and ResolutionSplit policies are " *
-            "mutually exclusive; use one splitting policy per wake"))
-    end
     return ParticleMaintenance(trim_policies, functional_policies)
 end
 
@@ -1649,15 +1641,6 @@ MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
     MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
                    skip_static)
 
-struct SplitParticles{TO} <: AbstractParticleFunctionalPolicy
-    every::Int
-    opts::TO
-    verbose::Bool
-end
-
-SplitParticles(opts; every=1, verbose=false) =
-    SplitParticles(Int(every), opts, verbose)
-
 """
     ResolutionSplit(opts::FLOWVPM.ResolutionSplitOpts; every=1, verbose=false)
 
@@ -1667,8 +1650,8 @@ two-regime stretch tri3/pair2 mechanisms). Applies
 `ResolutionSplitState` is enabled lazily at the first policy application
 (host-side arrays, `nothing` cost when the policy is absent).
 
-Mutually exclusive with the experimental [`SplitParticles`](@ref) policy —
-`ParticleMaintenance` rejects tuples containing both. List `MergeParticles`
+THE particle-splitting policy (the legacy experimental one was removed in
+its favor, Ryan authorization 2026-09-08). List `MergeParticles`
 BEFORE `ResolutionSplit` (W3 ordering); when both are present the merge
 application passes the `on_representative` reset hook so a merged particle
 restarts as a fresh entity (sigma_0 = merged σ, accumulators zeroed).
@@ -1757,13 +1740,6 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
             skip_static=policy.skip_static,
             on_representative=on_representative,
         )
-    end
-    return nothing
-end
-
-function apply_particle_policy!(policy::SplitParticles, pfield, ctx::ParticleMaintenanceContext)
-    if policy.every > 0 && ctx.step > 0 && ctx.step % policy.every == 0
-        FLOWVPM.split_particles!(pfield, policy.opts; dt=ctx.dt, verbose=policy.verbose)
     end
     return nothing
 end
@@ -2344,11 +2320,6 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         else
             FLOWVPM._euler(w.pfield, dt; relax, sigma_guard)
         end
-        # FLOWPanel calls the integrators directly, bypassing FLOWVPM.nextstep
-        # — so the H_chi exposure hook that nextstep provides must be invoked
-        # here or split exposure triggers never accumulate in production
-        # (no-op unless pfield.track_H_chi is set by a SeparationTrigger).
-        FLOWVPM.accumulate_H_chi!(w.pfield, dt)
     end
 
     if diagnose_particle_gamma
@@ -2475,10 +2446,6 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress
 
     _write_particles_vtp(particles_block * ".$idx.vtp", host_particles, np,
         cells, _particle_vtp_eltype(host_particles);
-        # 026 W1: persist the splitting side-buffer so warm starts restore
-        # trigger state. Always host-resident (on GPU-backed fields the
-        # mirror sync copies it, but the live buffer is host either way).
-        split_state=w.pfield.splitting_state,
         # 026 Phase 2: ResolutionSplitState is canonical to the HOST field —
         # the mirror when device-backed (see _gpu_copy_side_buffers! note) —
         # so read it off host_pf, not w.pfield. `nothing` (feature off) skips
@@ -2503,7 +2470,7 @@ end
 # FLOWPANEL_PARTICLE_PRECISION above).
 # Always uncompressed; conversion is skipped when the data already matches.
 function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
-        split_state=nothing, resolution_split=nothing) where T
+        resolution_split=nothing) where T
     _conv(a) = eltype(a) === T ? a : T.(a)
     X = _conv(view(host_particles, FLOWVPM.X_INDEX, 1:np))
     vtp = WriteVTK.vtk_grid(filename, X, cells; compress=false)
@@ -2518,20 +2485,6 @@ function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
         vtp["C", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.C_INDEX, 1:np))
         vtp["SFS", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.SFS_INDEX, 1:np))
         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(_conv(view(host_particles, FLOWVPM.J_INDEX, 1:np)), 3, 3, np)
-
-        # 026 W1: splitting side-buffer (optional arrays; the warm-start
-        # loader probes for split_sigma_0 and falls back to reconstruction
-        # for checkpoints that predate them). Counters are written as Int32
-        # (exact under either FLOWPANEL_PARTICLE_PRECISION); reals follow the
-        # series precision T like every other real field.
-        if split_state !== nothing
-            vtp["split_sigma_0", WriteVTK.VTKPointData()] = _conv(view(split_state.sigma_0, 1:np))
-            vtp["split_H_chi", WriteVTK.VTKPointData()] = _conv(view(split_state.H_chi, 1:np))
-            vtp["split_hold", WriteVTK.VTKPointData()] = Int32.(view(split_state.hold_counter, 1:np))
-            vtp["split_cooldown", WriteVTK.VTKPointData()] = Int32.(view(split_state.cooldown_counter, 1:np))
-            vtp["split_dsigma2_visc", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_visc, 1:np))
-            vtp["split_dsigma2_rvpm", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_rvpm, 1:np))
-        end
 
         # 026 Phase 2: ResolutionSplitState persistence (written only when
         # the feature is enabled; the warm-start loader treats the six

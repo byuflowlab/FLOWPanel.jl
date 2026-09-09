@@ -74,8 +74,7 @@ end
 # (FLOWPanel_wake.jl) seeds their sigma_0 before each split application.
 function _gpu_copy_side_buffers!(dst::FLOWVPM.ParticleField,
                                  src::FLOWVPM.ParticleField)
-    for (d, s) in ((dst.splitting_state, src.splitting_state),
-                   (dst.filament_edge_graph, src.filament_edge_graph))
+    let s = src.filament_edge_graph, d = dst.filament_edge_graph
         for fname in fieldnames(typeof(s))
             a = getfield(s, fname)
             a isa AbstractArray && copyto!(getfield(d, fname), a)

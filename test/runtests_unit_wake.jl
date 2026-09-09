@@ -1870,7 +1870,7 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
     end
 
     @testset "ResolutionSplit policy (BRAINSTORM 026 Phase 2)" begin
-        @testset "classification and mutual exclusion" begin
+        @testset "classification" begin
             opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
                 enable_viscous_split=true)
             maintenance = pnl.ParticleMaintenance((
@@ -1878,12 +1878,6 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
                 pnl.ResolutionSplit(opts),
             ))
             @test maintenance.functional_policies isa Tuple{<:pnl.ResolutionSplit}
-
-            legacy_opts = nothing  # opts type is irrelevant to the guard
-            @test_throws ArgumentError pnl.ParticleMaintenance((
-                pnl.SplitParticles(legacy_opts),
-                pnl.ResolutionSplit(opts),
-            ))
         end
 
         @testset "fires through maintenance with lazy enable" begin
