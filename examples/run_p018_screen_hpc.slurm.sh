@@ -37,10 +37,11 @@ CASE="${1:-}"
 export JULIA_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" OPENBLAS_NUM_THREADS="$THREADS" \
        BLAS_NUM_THREADS="$THREADS" MKL_NUM_THREADS="$THREADS" MPLBACKEND=Agg
 
-# BRAINSTORM/025 (2026-08-20): the codebase default filament regularization
-# changed to Gaussian. Pin this campaign to the legacy Vatistas family so
-# results stay comparable; override at submission via --export if intended.
-export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-vatistas}"
+# BRAINSTORM/026 §17 (Ryan ruling 2026-09-05): campaign default filament
+# regularization is now LINEGAUSS — the §16 s020v reruns showed the expint
+# arm still blows up under LineGauss, firing the on-record ruling. Vatistas
+# remains available per-case or via --export for A/Bs.
+export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-linegauss}"
 command -v julia >/dev/null 2>&1 || \
   export PATH="/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/bin:$PATH"
 
@@ -181,6 +182,10 @@ case "$CASE" in
   # regularization switched to linegauss for a family-independent read.
   scr_p026ef_ctrl_s020v_lg) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss ;;
   scr_p026ef_exp_s020v_lg)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_EXPINT=true ;;
+  # RK3 discriminator on the LineGauss s020v event (Ryan 2026-09-05, post-§17):
+  # does a multi-stage integrator fix what expint only delays? Same knobs as
+  # ctrl-lg; submit with a >=36 h wall (RK3 measured 5-10x euler cost, §15).
+  scr_p026ef_rk3_s020v_lg)  export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_INTEGRATOR=rk3 ;;
 
   # ---- BRAINSTORM/026 Phase 1 no-split discriminator arms (2026-09-03):
   # warm-start continuations of the scr_p019_s038v_gpu40 stretching ignition

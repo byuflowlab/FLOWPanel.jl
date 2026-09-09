@@ -175,6 +175,21 @@ particle), so the split is isotropic-on-average:
 
 ### 3b. Mechanism B — rVPM-compression split (anisotropic; Ryan 2026-08-27)
 
+> **AMENDMENT (Ryan 2026-09-07, third ruling — two-regime stretch
+> mechanism):** the stretch mechanism is sign-dependent, superseding this
+> section's routing of *both* regimes to the 3-child triangle. Negative
+> stretching (compression: tube shortens/fattens) keeps the triangle
+> geometry below (`_split_compress_tri3!`). Positive stretching
+> (elongation: tube lengthens/thins — the shrink-side events) now routes
+> to a **2-child in-line kernel** (`_split_elongate_pair2!`): children at
+> ±b along the averaged stretch axis (b = 0.5 σ_p default, spacing 1.0
+> σ_p), each Γ_p/2 ∥ Γ_p, and **σ_c = σ_p** — the cross-section is fine,
+> the split re-discretizes the LENGTH. Total Γ, centroid, linear impulse
+> exact; angular impulse exact by symmetry. Same mechanism/enable flag
+> (`enable_stretch_split`); the two kernels are dispatched by event side
+> (grow → compression → tri3, shrink → elongation → pair2). Implemented in
+> FLOWVPM `src/FLOWVPM_resolution_split.jl` (Phase 2 commit 2).
+
 **Purpose (Ryan 2026-09-02)**: the hope of the rVPM anisotropic splitting is
 to (1) **conserve overlap of vortical structures** and (2) **give vorticity
 another degree of freedom to deform under high strain**, hopefully improving
@@ -932,3 +947,116 @@ run used the 08-12 code; a rerun on current euler_exp + exact
 CoreSpreading composition would close the residual version gap), ~250
 steps CPU, hours not days. An expint-fails event validated on current
 code becomes the Phase-2 splitting motivation case.
+
+## 17. §16 expint-fails rerun harvest and ruling (2026-09-05)
+
+Four cold s020v rerun arms (§16 candidate 1, launch record in
+`phase1b_handoff_prompt_3.md`: jobs 13591760–63, m12 CPU, 12 h wall,
+`~/wt026` worktree, 323 steps, full VTP retention). All four arms
+IGNITED and died; completion judged from logs + wake-health CSVs, not
+sacct (sacct briefly showed ctrl COMPLETED while it was still RUNNING —
+the PATH/socket gotcha struck again mid-babysit and produced a false
+"ctrl stopped at 208" alarm, later retracted).
+
+Scored from `monitors/scr_p026ef_*_monitor04_wake_health_system1.csv`.
+No `*_CT_vs_rev.csv` exists (written post-`simulate!`; no arm finished)
+— load agreement uses monitor02 **CFx** (thrust axis is x,
+`diagnostic_vertical=(1,0,0)`; CFz is a near-zero lateral component and
+must not be averaged for load comparisons).
+
+**Summary** (max over run; min for σ; "u>100" = first step max_u > 100;
+first dtZ>2/3 coincided with ignition in all four arms):
+
+| case | max_u | max γ/σ² | min σ | max dtZ | u>100 | death (step, cause) |
+|---|---|---|---|---|---|---|
+| ctrl_s020v (euler, Vatistas) | 7.7e5 | 7.6e9 | 9.41e-5 | 1.3e4 | 225 | 263, PARTICLE OVERFLOW (500k) |
+| exp_s020v (expint, Vatistas) | 4.3e9 | 1.9e16 | 1.94e-5 | 1.9e7 | 210 | 211, DomainError NaN (frozen-gradient ratio, `FLOWVPM_timeintegration.jl:486`) |
+| ctrl_s020v_lg (euler, LineGauss) | 3.2e6 | 1.2e11 | 9.41e-5 | 1.5e4 | 230 | 260, PARTICLE OVERFLOW (500k) |
+| exp_s020v_lg (expint, LineGauss) | 1.5e3 | 6.5e6 | 4.61e-5 | 3.9e1 | 285 | 300, DomainError Inf (same site) |
+
+**Findings:**
+
+- **Expint-FAILS confirmed on the current stack → §16 candidate 1 is
+  VALIDATED as the Phase-2 splitting motivation case.** In the
+  resolution-loss regime the exponential integrator does not arrest —
+  the opposite of the §13 gpu40/LG events. Vatistas expint ignites
+  *earlier* than its euler ctrl (210 vs 225) and dies within one step
+  (NaN); LineGauss expint delays ignition 55 steps (285 vs 230) but
+  still ignites and dies (+15 steps, Inf). Death mode differs by
+  integrator: euler arms grind to the 500k particle cap (+38/+30 steps
+  post-ignition; the overflow is intra-step — last wake-health rows
+  show 190k/27k particles because post-ignition shedding explodes
+  within a step); expint arms die at the frozen-gradient ratio
+  the moment the field goes non-finite.
+- **Ryan's linegauss ruling (2026-09-05) FIRES: exp-lg blew up.** Per
+  the ruling the campaign default filament regularization changes to
+  linegauss from then on. Proposed implementation (Ryan scope sign-off
+  pending): flip the dispatcher default at
+  `examples/run_p018_screen_hpc.slurm.sh:43` from
+  `${FLOWPANEL_FILAMENT_REG:-vatistas}` to
+  `${FLOWPANEL_FILAMENT_REG:-linegauss}` and update the 025 comment
+  block above it; per-case `FLOWPANEL_FILAMENT_REG=vatistas` overrides
+  remain available for A/Bs. No other Vatistas pin found in the
+  dispatcher (the `_lg` cases already pin linegauss explicitly).
+- **Pre-trigger loads agree.** Mean CFx over steps 150–200:
+  Vatistas −0.0762 (ctrl) vs −0.0757 (exp), −0.72%; LineGauss −0.0768
+  (ctrl-lg) vs −0.0752 (exp-lg), −2.15%.
+- **Do not score against the original 019/020 verdicts** (dep stack
+  moved 08-24); ignition timing here (225/230 for euler ctrls) vs the
+  original refs (213/242) confirms timing shifted, signature did not.
+
+**Pacing note:** ~78–108 s/step at steps 135–169 rising with particle
+count to ~167–200 s/step near death; euler ctrl reached step 263 in
+~5h55m, exp-lg reached 300 in ~5h50m. A 323-step survivor would have
+needed ~7–8 h of the 12 h wall.
+
+**Warm-start brackets (full VTP series retained, verified on orc):**
+ctrl_s020v 224/226, exp_s020v 209/211, ctrl_s020v_lg 229/231,
+exp_s020v_lg 284/286 (steps below/above each arm's first u>100).
+
+Run dirs `data/scr_p026ef_*` remain on orc unarchived (archive after
+Ryan reviews; hpc-storage must NOT touch them before then).
+
+## 18. RK3 confound check on the s020v expint-fails event (2026-09-06)
+
+Arm `scr_p026ef_rk3_s020v_lg` (job 13593720, m12 CPU, `~/wt026` at tag
+`campaign/p026ef-rk3-20260905`): cold s020v rerun, same knobs as ctrl-lg
+plus `WAKE_INTEGRATOR=rk3`. Banner verified live (`WAKE_INTEGRATOR=rk3`,
+`filament regularization = LineGaussRegularization (pinned by
+FLOWPANEL_FILAMENT_REG)`). Purpose (§17 follow-up): if RK3 arrests the
+event, the failure is time-integration accuracy and the Phase-2
+splitting motivation weakens; if it ignites, the resolution-loss
+reading stands.
+
+**Ruling: NO ARREST — RK3 ignited far *earlier* than every euler/expint
+arm.** First max_u>100 at step **74** (ctrl-lg 230, exp-lg 285); first
+dtZ>2/3 the same step; died at step 92's shedding with `ERROR: PARTICLE
+OVERFLOW` (500k) after ~1.5 h (~50–55 s/step).
+
+| case | max_u | max γ/σ² | min σ | max dtZ | u>100 | death (step, cause) |
+|---|---|---|---|---|---|---|
+| rk3_s020v_lg | 1.3e6 | 5.0e9 | 4.71e-5 | 5.1e3 | **74** | 92, PARTICLE OVERFLOW |
+| ctrl_s020v_lg (§17) | 3.2e6 | 1.2e11 | 9.41e-5 | 1.5e4 | 230 | 260, PARTICLE OVERFLOW |
+| exp_s020v_lg (§17) | 1.5e3 | 6.5e6 | 4.61e-5 | 3.9e1 | 285 | 300, DomainError Inf |
+
+- Signature identical to the §17 family: min-σ collapse (again below the
+  euler 9.41e-5 practical floor, matching §15's multi-stage-positions
+  observation), γ/σ² → 5e9, dtZ through the ceiling, particle-count
+  thrashing (15k→107k→26k) in the last five steps before overflow.
+- Pre-trigger loads agree: mean monitor02 CFx over steps 40–70 −0.0824
+  (rk3) vs −0.0845 (ctrl-lg), +2.4% — comparable to §17's exp-lg −2.15%.
+  Only ~70 clean steps exist given the early ignition.
+- The very early ignition (74 vs 230) reads as §15's chaotic-timing
+  scatter, amplified by the near-critical s020v regime; §15's rk3_lg arm
+  already validated the RK3 wiring (tracked its ctrl for ~65 steps), so
+  this is not a wiring fault.
+
+**Consequence: the §17 verdict stands and is strengthened —
+order-of-accuracy is falsified as the lever for the resolution-loss
+event; Phase-2 splitting proceeds as motivated.** Ryan confirmed the
+implementation direction the same day (plan drafted; see
+`~/.claude/plans/shimmering-wobbling-sunrise.md`). Log:
+`~/wt026/FLOWPanel.jl/logs/slurm/slurm-fp-p026ef-rk3-lg-13593720.{out,err}`;
+run dir `data/scr_p026ef_rk3_s020v_lg` (on /home, unarchived; no VTP
+warm-start value — ignition fully bracketed but the event class is
+already covered by the §17 arms).
