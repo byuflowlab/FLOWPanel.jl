@@ -2462,7 +2462,8 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress
     np = w.pfield.np
     # Task 052: WriteVTK needs host arrays; on a device-backed field this is
     # the refreshed host mirror (D2H of the live prefix), else a no-op alias.
-    host_particles = _wake_monitor_host_pfield(w.pfield).particles
+    host_pf = _wake_monitor_host_pfield(w.pfield)
+    host_particles = host_pf.particles
     # Task 052c io fix (Ryan-approved 2026-08-26, single-series ruling same
     # day): ONE uncompressed particle series at a user-chosen precision
     # (zlib costs ~10x the raw write for ~8% size on this data, so it is
@@ -2477,7 +2478,12 @@ function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress
         # 026 W1: persist the splitting side-buffer so warm starts restore
         # trigger state. Always host-resident (on GPU-backed fields the
         # mirror sync copies it, but the live buffer is host either way).
-        split_state=w.pfield.splitting_state)
+        split_state=w.pfield.splitting_state,
+        # 026 Phase 2: ResolutionSplitState is canonical to the HOST field —
+        # the mirror when device-backed (see _gpu_copy_side_buffers! note) —
+        # so read it off host_pf, not w.pfield. `nothing` (feature off) skips
+        # the block entirely.
+        resolution_split=host_pf.resolution_split)
 
     vtp_relpath = joinpath(vpm_name * "_particles", vpm_name * "_particles.$idx.vtp")
     _pvd_append!(particles_pvd_name * ".pvd", t, vtp_relpath; overwrite)
@@ -2497,7 +2503,7 @@ end
 # FLOWPANEL_PARTICLE_PRECISION above).
 # Always uncompressed; conversion is skipped when the data already matches.
 function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
-        split_state=nothing) where T
+        split_state=nothing, resolution_split=nothing) where T
     _conv(a) = eltype(a) === T ? a : T.(a)
     X = _conv(view(host_particles, FLOWVPM.X_INDEX, 1:np))
     vtp = WriteVTK.vtk_grid(filename, X, cells; compress=false)
@@ -2525,6 +2531,19 @@ function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
             vtp["split_cooldown", WriteVTK.VTKPointData()] = Int32.(view(split_state.cooldown_counter, 1:np))
             vtp["split_dsigma2_visc", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_visc, 1:np))
             vtp["split_dsigma2_rvpm", WriteVTK.VTKPointData()] = _conv(view(split_state.dsigma2_rvpm, 1:np))
+        end
+
+        # 026 Phase 2: ResolutionSplitState persistence (written only when
+        # the feature is enabled; the warm-start loader treats the six
+        # rsplit_* fields as all-or-nothing — no version tag, no TOML). All
+        # reals, so every field follows the series precision T.
+        if resolution_split !== nothing
+            vtp["rsplit_sigma_0", WriteVTK.VTKPointData()] = _conv(view(resolution_split.sigma_0, 1:np))
+            vtp["rsplit_axis", WriteVTK.VTKPointData()] = _conv(view(resolution_split.axis, :, 1:np))
+            vtp["rsplit_weight", WriteVTK.VTKPointData()] = _conv(view(resolution_split.weight, 1:np))
+            vtp["rsplit_exposure", WriteVTK.VTKPointData()] = _conv(view(resolution_split.exposure, 1:np))
+            vtp["rsplit_dvisc", WriteVTK.VTKPointData()] = _conv(view(resolution_split.dvisc, 1:np))
+            vtp["rsplit_drvpm", WriteVTK.VTKPointData()] = _conv(view(resolution_split.drvpm, 1:np))
         end
     end
 

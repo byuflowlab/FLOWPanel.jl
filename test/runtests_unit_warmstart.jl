@@ -583,3 +583,110 @@ end
             wake4, path, "w1", 4)
     end
 end
+
+@testset "warm start ResolutionSplitState persistence (026 Phase 2)" begin
+    vpm = pnl.FLOWVPM
+
+    function setup_rsplit_wake()
+        body = make_plate_vortex_body()
+        wake = pnl.PanelParticleWake(body; nwakerows=2, max_particles=100,
+            SFS=vpm.noSFS, relaxation=vpm.relaxation_none)
+        pnl.update_TE!(wake, body)
+        pnl.shed_wake!(wake, body)
+        return wake
+    end
+
+    function seed_particles!(wake; np=4)
+        for i in 1:np
+            vpm.add_particle(wake.pfield, (0.3i, 0.1, 0.2),
+                (0.01, 0.0, 0.02i), 0.1 + 0.01i)
+        end
+        return wake
+    end
+
+    @testset "A: full-block exact restore" begin
+        wake = seed_particles!(setup_rsplit_wake())
+        pf = wake.pfield
+        np = pf.np
+        rs = vpm.enable_resolution_split!(pf)
+        for i in 1:np
+            rs.sigma_0[i] = 0.05 + 0.01i
+            rs.axis[1, i] = 0.1i; rs.axis[2, i] = -0.2i; rs.axis[3, i] = 0.3i
+            rs.weight[i] = 0.4i
+            rs.exposure[i] = -0.05i
+            rs.dvisc[i] = 1e-4 * i
+            rs.drvpm[i] = 2e-4 * i
+        end
+
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "w1"), wake, 7, 0.35)
+
+        wake2 = setup_rsplit_wake()
+        @test wake2.pfield.resolution_split === nothing
+        pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 7)
+        pf2 = wake2.pfield
+        rs2 = pf2.resolution_split
+        @test pf2.np == np
+        @test rs2 !== nothing
+        @test rs2.sigma_0[1:np] == rs.sigma_0[1:np]
+        @test rs2.axis[:, 1:np] == rs.axis[:, 1:np]
+        @test rs2.weight[1:np] == rs.weight[1:np]
+        @test rs2.exposure[1:np] == rs.exposure[1:np]
+        @test rs2.dvisc[1:np] == rs.dvisc[1:np]
+        @test rs2.drvpm[1:np] == rs.drvpm[1:np]
+        # slots beyond np stay zero
+        @test all(iszero, rs2.sigma_0[np+1:end])
+        @test all(iszero, rs2.weight[np+1:end])
+        @test all(iszero, rs2.axis[:, np+1:end])
+
+        # ratio trigger fires identically after restore: force σ/σ₀ > 2
+        opts = vpm.ResolutionSplitOpts(sigma_growth_ratio_max=2.0,
+            enable_viscous_split=true, enable_stretch_split=true)
+        rs2.sigma_0[1] = vpm.get_sigma(pf2, 1)[] / 3
+        rs2.dvisc[1] = 1.0   # route grow → viscous tetra4
+        counters = vpm.split_particles!(pf2, opts)
+        @test counters.n_split_viscous == 1
+        @test pf2.np == np + 3
+    end
+
+    @testset "B: absent block leaves state nothing (feature off)" begin
+        wake = seed_particles!(setup_rsplit_wake())
+        @test wake.pfield.resolution_split === nothing
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "w1"), wake, 3, 0.1)
+
+        wake2 = setup_rsplit_wake()
+        pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 3)
+        @test wake2.pfield.np == wake.pfield.np
+        @test wake2.pfield.resolution_split === nothing
+    end
+
+    @testset "C: partial block is a typed hard failure" begin
+        wake = seed_particles!(setup_rsplit_wake())
+        pf = wake.pfield
+        np = pf.np
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "w1"), wake, 4, 0.2)
+        vtp_dir = joinpath(path, "w1_particles")
+        cells = [pnl.WriteVTK.MeshCell(pnl.WriteVTK.PolyData.Verts(), 1:np)]
+        Xp = pf.particles[vpm.X_INDEX, 1:np]
+        vtp = pnl.WriteVTK.vtk_grid(joinpath(vtp_dir, "w1_particles.4.vtp"),
+            Xp, cells; compress=false)
+        for (fname, idxs) in (("gamma", vpm.GAMMA_INDEX),
+                ("sigma", vpm.SIGMA_INDEX), ("vol", vpm.VOL_INDEX),
+                ("circulation", vpm.CIRCULATION_INDEX),
+                ("velocity", vpm.U_INDEX), ("vorticity", vpm.VORTICITY_INDEX),
+                ("C", vpm.C_INDEX), ("SFS", vpm.SFS_INDEX))
+            vtp[fname, pnl.WriteVTK.VTKPointData()] = pf.particles[idxs, 1:np]
+        end
+        vtp["velocity_gradient", pnl.WriteVTK.VTKPointData()] =
+            reshape(pf.particles[vpm.J_INDEX, 1:np], 3, 3, np)
+        vtp["rsplit_sigma_0", pnl.WriteVTK.VTKPointData()] = fill(0.1, np)
+        vtp["rsplit_weight", pnl.WriteVTK.VTKPointData()] = fill(0.2, np)
+        pnl.WriteVTK.vtk_save(vtp)
+
+        wake2 = setup_rsplit_wake()
+        @test_throws ArgumentError pnl._load_panel_particle_wake_vtk!(
+            wake2, path, "w1", 4)
+    end
+end
