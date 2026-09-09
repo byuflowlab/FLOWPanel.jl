@@ -215,3 +215,70 @@ Deviations / notes:
    left untracked in FLOWVPM.
 
 Commits 7–8 (campaign launches, SIGMA_CEIL removal) remain Ryan-gated.
+
+## Session 3 report (ship resolution splitting as THE system; legacy removal, 2026-09-08)
+
+Ryan authorization 2026-09-08 executed: resolution splitting is now THE
+particle-splitting system of FLOWVPM; the legacy experimental path is
+removed. Merging (`merge_particles!`) and the filament edge graph are
+untouched features (per Ryan's mid-session reminder, only splitting was
+removed).
+
+FLOWVPM commits (branch `flowpanel`, on top of `65247ee`):
+
+| # | SHA | what | gate result |
+|---|---|---|---|
+| 1 | `2a1b970` | first-class `run_vpm!` wiring: `split_every::Int=0` / `split_opts=nothing` kwargs (pattern-matched on `merge_every`/`merge_kwargs`), applied AFTER merging (W3), `enable_resolution_split!` called before step 1 so triggers integrate at any cadence, error on `split_every>0` without opts; D-A native merge reset in `_finalize_merged_particle!` (`rs === nothing || _rsplit_reset_slot!(rs, representative, sigma)`); docstrings updated (only splitting system) | `runtests_resolution_split.jl` 829/829 incl. new s3 wiring/merge-reset testset |
+| 2 | `8b0b70d` | legacy removal: legacy machinery deleted (`SplittingState`/`SplitOptions`/`SplitDirection`/trigger tree/`_do_split!`/`accumulate_H_chi!` + exports + include); `ParticleField` drops `splitting_state`/`splitting_workspace`/`track_H_chi`/`H_chi_axis`/`H_chi_clip_positive` + lockstep hooks + `nextstep` hook; six legacy `dsigma2_*` writes dropped (mirrors kept) + legacy RBF-reset accumulator clear dropped (new mirrors untouched there per the standing Session-1 ruling); legacy merge-reset block replaced by D-A; `runtests_dsigma2_accumulators.jl` deleted after porting its invariants onto the `dvisc`/`drvpm` mirrors | `runtests_resolution_split.jl` 861/861; FULL suite `julia --project=test test/runtests.jl` exit 0, 0 failures (merging + filament suites green) |
+
+**Inventory correction found during commit 2**: `src/FLOWVPM_splitting.jl`
+was two subsystems in one file — legacy splitting (top ~650 lines) AND the
+whole filament-edge-graph machinery (`add_edge!` … `filament_calibration_sweep`,
+exported, 477+ tests). Deleting the file wholesale broke the filament suite;
+resolved by moving the filament machinery verbatim (plus its four geometric
+helpers `_strain_tensor`/`_eSe`/`_leading_eig_sym3`/`_unit_strength`/
+`_unit_streamline`/`_filament_axis_unit`) to new `src/FLOWVPM_filament_edges.jl`
+(included after `merging`), then deleting the file. Exports unchanged.
+
+FLOWPanel companion commit (branch `fastmultipole`, on top of `ef239de`),
+listed separately per scope:
+
+| SHA | what | gate result |
+|---|---|---|
+| `7dd1dc7` | delete `SplitParticles` policy + apply + mutual-exclusion guard; `accumulate_H_chi!` call in `propagate!`; `split_*` VTP writer block + kwarg; `split_*` loader block + legacy `_clear_splitting_state!` lines; `splitting_state` GPU side-buffer entry; `SplitParticles` replay branch; W1 testset removed, new D-B testset added | wake unit suite green (16 policy tests); replay 142+6; warm-start 026 testset 23/23 isolated; IGE 113/113 isolated; smoke below |
+
+**D-A outcome**: adopted as recommended — native guarded reset in
+`_finalize_merged_particle!`; `on_representative` hook KEPT. The FLOWPanel
+merge-hook closure (`_resolution_split_merge_hook`) is now
+redundant-but-harmless and was LEFT IN PLACE (minimal-companion principle;
+it double-resets the same slot idempotently).
+
+**D-B outcome**: verified by a new permanent testset
+("D: stale legacy split_* fields ignored silently") in
+`runtests_unit_warmstart.jl`: a fabricated Session-2-era checkpoint carrying
+all six `split_*` arrays plus a full `rsplit_*` block loads with no
+warning/error, the stale arrays are inert extra point data, and the
+`rsplit_*` state restores exactly. New checkpoints no longer write `split_*`.
+
+**Grep audit**: `SplittingState|SplitOptions|H_chi|hold_counter|cooldown_counter|dsigma2_`
+→ zero live references in FLOWVPM `src/`+`test/`+`examples/` and FLOWPanel
+`src/`+`test/`. Sole intentional hits: three string literals inside the D-B
+test that fabricate the stale legacy field names.
+
+**Bit-identity smoke** (splitting off, Session-2 recipe: scratchpad cwd,
+`NREVS=0.25 FREESTREAM_RAMP_REVS=0.1 FREESTREAM_HOLD_REVS=0.05
+FREESTREAM_WITHDRAW_REVS=0.05 SETTLE_REVS=0.05`, `julia -t1`,
+`examples/rotor_hover_pressure_comparison.jl`): baseline = git worktrees
+FLOWPanel `ef239de` + FLOWVPM `65247ee`; candidate = post-removal trees.
+108 output files, identical file lists, 99/108 md5-identical. The 9 diffs
+are fully accounted for: wake-health CSV differs ONLY in the `wall_s`
+column (allowed); case-metadata TOML only in absolute paths and wall-clock
+timings; the 7 particle VTPs are bit-identical in every shared point-data
+field (verified field-by-field via ReadVTK) with only the six removed
+`split_*` arrays absent from the candidate — the intended format change.
+
+Notes: the CoreSpreading RBF σ-reset no longer clears any Δσ² attribution
+(the legacy clear was deleted with the legacy state; the new mirrors were
+deliberately never cleared there per the Session-1 ruling — flag to Ryan if
+CoreSpreading+splitting is ever co-armed). Commits 7–8 (campaign launches,
+SIGMA_CEIL removal) remain Ryan-gated and untouched.
