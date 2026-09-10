@@ -77,7 +77,9 @@ Env:
   TUNE_ABANDON_FACTOR default 1.3
   TUNE_MAX_SECONDS    per-budget wall-clock backstop (default: per-rung table)
   NFCACHE_MAX_BUILD_TIME  hard cap on a single cache build (default Inf).
-                      The build is SERIAL, so this can bind before memory does.
+                      The build parallelizes over julia threads (and a plan
+                      rebuilt at the same (leaf, MAC) adopts the previous
+                      cache via NF_DONOR retarget instead of re-probing).
   FLOOR_LEAF          leaf used to price the cheapest configuration a rung
                       admits, for the below-floor check (default 9).
   CACHE_TREE          per-solve FmmPlan reuse for the budget-0 rows. MUST match
@@ -187,6 +189,19 @@ const _MAXSEC = Dict("R1" => 18000.0, "R2" => 36000.0, "R3" => 72000.0,
                      "R7" => 432000.0)
 max_seconds = parse(Float64, get(ENV, "TUNE_MAX_SECONDS", string(_MAXSEC[rung])))
 max_build_time = parse(Float64, get(ENV, "NFCACHE_MAX_BUILD_TIME", "Inf"))
+
+# Near-field cache DONOR: one Ref shared across every candidate's KrylovSolver.
+# When a candidate rebuilds the plan at the same (leaf, MAC) as the previous
+# cached candidate (the descent frequently perturbs only P), the new cache
+# adopts the previous blocks via FastMultipole.retarget_nearfield_cache —
+# verified exactly (block specs + geometry), falling back to a fresh build on
+# ANY mismatch — instead of re-probing (hours at R6/R7). The donor keeps the
+# previous cache's GiBs alive BETWEEN candidates, so it is dropped whenever
+# donor + the next candidate's predicted footprint would crowd physical RAM
+# (the budget axis is hypothetical-node memory; this guard is about the real
+# node). t_cache_build for a retargeted candidate reports the retarget cost.
+const NF_DONOR = Ref{Any}(nothing)
+_donor_bytes() = NF_DONOR[] === nothing ? 0 : NF_DONOR[].cache.bytes
 cache_tree_uncached = get(ENV, "CACHE_TREE", "0") == "1"
 # Leaves scanned to price a rung's memory FLOOR — the cheapest configuration it
 # admits — so an impossible budget is reported up front rather than discovered
@@ -414,10 +429,17 @@ function solve_cost(P, mac, leaf, budget_bytes; allow_cache=true)
                    "$(round(predicted/1024^3; digits=2)) GiB"))
     end
 
+    # drop the donor rather than overcommit the node (see NF_DONOR above)
+    if _donor_bytes() > 0 &&
+            predicted + _donor_bytes() > 0.85 * Sys.total_memory()
+        NF_DONOR[] = nothing; GC.gc()
+    end
+
     solver = pnl.KrylovSolver(rotor; method=:gmres, itmax=500, atol=1e-14,
         rtol=target_rel, memory=50, backend,
         cache_tree = cached ? true : cache_tree_uncached,
         cache_nearfield = cached, persistent_plan = cached,
+        nearfield_cache_donor = NF_DONOR,
         nearfield_cache_max_bytes = cached ?
             max(cache_bytes, budget_bytes - fixed) : typemax(Int),
         nearfield_cache_max_build_time = max_build_time)

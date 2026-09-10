@@ -61,6 +61,7 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
                      scalar_potential=false, velocity=false,
                      velocity_gradient=false, precalc=false, postcalc=false,
                      plan_slot=nothing, cache_nearfield::Bool=false,
+                     nearfield_cache_donor=nothing,
                      production_route=nothing,
                      nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
                      nearfield_cache_max_build_time::Real=Inf,
@@ -134,12 +135,37 @@ function influence!(target_bodies::Tuple, source_bodies::Tuple, backend::FastMul
             # the fresh plan (same lifetime/validity contract); fmm! picks the
             # cache up from the plan automatically. The caps are forwarded so
             # callers can size them to the case: FastMultipole's 4 GiB default
-            # is below what the larger 021 ladder rungs need (R4 ≈ 4.5 GiB),
-            # and the build is serial, so max_build_time is wall-clock.
-            cache_nearfield && FastMultipole.build_nearfield_cache!(plan,
-                target_bodies, source_bodies;
-                max_bytes=nearfield_cache_max_bytes,
-                max_build_time=nearfield_cache_max_build_time)
+            # is below what the larger 021 ladder rungs need (R4 ≈ 4.5 GiB);
+            # max_build_time is wall-clock (the build parallelizes over
+            # Threads.nthreads()).
+            #
+            # nearfield_cache_donor (a Ref, or nothing): when the previous
+            # plan's cache was snapshotted here, a rebuild at the same
+            # (leaf, MAC) on frozen geometry adopts its blocks via
+            # retarget_nearfield_cache instead of re-probing — the retarget
+            # verifies block specs and geometry exactly and falls back to a
+            # fresh build on ANY mismatch (e.g. changed knobs). The donor ref
+            # is refreshed after every build so successive tuner candidates
+            # chain automatically.
+            if cache_nearfield
+                donor = nearfield_cache_donor === nothing ? nothing :
+                        nearfield_cache_donor[]
+                cache = donor === nothing ? nothing :
+                    FastMultipole.retarget_nearfield_cache(donor,
+                        plan.target_tree, plan.source_tree, plan.direct_list,
+                        plan.derivatives_switches, source_bodies)
+                if cache === nothing
+                    cache = FastMultipole.build_nearfield_cache!(plan,
+                        target_bodies, source_bodies;
+                        max_bytes=nearfield_cache_max_bytes,
+                        max_build_time=nearfield_cache_max_build_time)
+                else
+                    plan.nearfield_cache[] = cache
+                end
+                nearfield_cache_donor === nothing ||
+                    (nearfield_cache_donor[] = FastMultipole.NearfieldCacheDonor(
+                        cache, plan.target_tree, plan.source_tree, source_bodies))
+            end
             plan_slot[] = (plan, key)
         end
         FastMultipole.fmm!(target_bodies, source_bodies, plan_slot[][1];

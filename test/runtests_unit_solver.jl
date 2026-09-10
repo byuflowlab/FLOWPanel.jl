@@ -2262,6 +2262,71 @@ end
         end
     end
 
+    @testset "KrylovSolver nearfield_cache_donor (retarget across solvers)" begin
+        # A donor Ref shared across solver instances lets a plan rebuilt at
+        # the same (leaf, MAC) on frozen geometry adopt the previous cache's
+        # blocks (retarget) instead of re-probing. The retargeted cache must
+        # alias the donor's storage and the solve must match a donor-free
+        # cached solve EXACTLY (same blocks, same BLAS path).
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=16)
+        kw = (; backend, method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
+        function fresh_sphere()
+            body = make_sphere_source_body()
+            body.velocity .= 0
+            body.velocity[1, :] .= 1.0
+            return body
+        end
+
+        donor = Ref{Any}(nothing)
+
+        # first cached solve fills the donor
+        body_a = fresh_sphere()
+        solver_a = pnl.KrylovSolver(body_a; kw..., cache_nearfield=true,
+            persistent_plan=true, nearfield_cache_donor=donor)
+        pnl.solve!(body_a, solver_a)
+        @test solver_a.solved
+        @test donor[] isa FastMultipole.NearfieldCacheDonor
+        donor_data = donor[].cache.matrices.data
+        @test !isempty(donor_data)
+
+        # second solver at IDENTICAL knobs: cache must be retargeted (alias),
+        # not rebuilt, and the solution must match a donor-free cached solve
+        body_b = fresh_sphere()
+        solver_b = pnl.KrylovSolver(body_b; kw..., cache_nearfield=true,
+            persistent_plan=true, nearfield_cache_donor=donor)
+        pnl.solve!(body_b, solver_b)
+        @test solver_b.solved
+        cache_b = solver_b.kop.plan_slot[][1].nearfield_cache[]
+        @test cache_b isa FastMultipole.NearfieldInfluenceCache
+        @test cache_b.matrices.data === donor_data     # retargeted, not re-probed
+
+        body_ref = fresh_sphere()
+        solver_ref = pnl.KrylovSolver(body_ref; kw..., cache_nearfield=true,
+            persistent_plan=true)
+        pnl.solve!(body_ref, solver_ref)
+        @test body_b.strength == body_ref.strength     # bit-identical blocks
+
+        # changed knobs: retarget must refuse and build fresh (correctness
+        # guard — never a stale cache)
+        body_c = fresh_sphere()
+        backend_c = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=24)
+        solver_c = pnl.KrylovSolver(body_c; backend=backend_c, method=:gmres,
+            atol=1e-12, rtol=1e-10, itmax=200, cache_nearfield=true,
+            persistent_plan=true, nearfield_cache_donor=donor)
+        pnl.solve!(body_c, solver_c)
+        @test solver_c.solved
+        cache_c = solver_c.kop.plan_slot[][1].nearfield_cache[]
+        @test cache_c.matrices.data !== donor_data     # fresh build
+        @test donor[].cache === cache_c                # donor refreshed
+        body_ref_c = fresh_sphere()
+        solver_ref_c = pnl.KrylovSolver(body_ref_c; backend=backend_c,
+            method=:gmres, atol=1e-12, rtol=1e-10, itmax=200)
+        pnl.solve!(body_ref_c, solver_ref_c)
+        @test isapprox(body_c.strength, body_ref_c.strength; rtol=1e-10)
+    end
+
 end
 
 # println("done.")

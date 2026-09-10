@@ -866,19 +866,22 @@ struct KrylovOperator{TB<:AbstractBody,B<:AbstractBackend,TF}
     cache_tree::Bool               # reuse the FMM plan across applies within a solve
     cache_nearfield::Bool          # dense near-field cache on the plan (implies cache_tree)
     nearfield_cache_max_bytes::Int # size cap for that cache (FastMultipole default is 4 GiB)
-    nearfield_cache_max_build_time::Float64  # wall-clock cap; the cache build is serial
+    nearfield_cache_max_build_time::Float64  # wall-clock cap; the build parallelizes over Threads.nthreads()
     plan_slot::Base.RefValue{Any}  # (FmmPlan, key) or nothing; cleared around each solve
+    nearfield_cache_donor::Base.RefValue{Any}  # NearfieldCacheDonor or nothing; lets a plan rebuilt at the same (leaf, MAC) adopt the previous cache's blocks instead of re-probing (may be a Ref SHARED across solver instances, e.g. successive tuner candidates)
 end
 
 function KrylovOperator(body::AbstractBody, backend::AbstractBackend;
                         cache_tree::Bool=false, cache_nearfield::Bool=false,
                         nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
-                        nearfield_cache_max_build_time::Real=Inf)
+                        nearfield_cache_max_build_time::Real=Inf,
+                        nearfield_cache_donor::Base.RefValue{Any}=Ref{Any}(nothing))
     TF = numtype(body)
     return KrylovOperator{typeof(body),typeof(backend),TF}(
         body, backend, copy(body.normals), zeros(TF, body.ncells),
         cache_tree, cache_nearfield, Int(nearfield_cache_max_bytes),
-        Float64(nearfield_cache_max_build_time), Ref{Any}(nothing))
+        Float64(nearfield_cache_max_build_time), Ref{Any}(nothing),
+        nearfield_cache_donor)
 end
 
 function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, α, β)
@@ -886,6 +889,7 @@ function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, false}})(C, B, 
     Gx = _apply_neumann_G!(op.body, B, op.backend, op.normals, op.strengths_scratch;
                            plan_slot=op.cache_tree ? op.plan_slot : nothing,
                            cache_nearfield=op.cache_nearfield,
+                           nearfield_cache_donor=op.nearfield_cache_donor,
                            nearfield_cache_max_bytes=op.nearfield_cache_max_bytes,
                            nearfield_cache_max_build_time=op.nearfield_cache_max_build_time)
     C .*= β
@@ -897,6 +901,7 @@ function (op::KrylovOperator{<:AbstractBody{<:Any, <:Any, <:Any, true}})(C, B, �
     Gx = _apply_dirichlet_G!(op.body, B, op.backend, op.strengths_scratch;
                              plan_slot=op.cache_tree ? op.plan_slot : nothing,
                              cache_nearfield=op.cache_nearfield,
+                             nearfield_cache_donor=op.nearfield_cache_donor,
                              nearfield_cache_max_bytes=op.nearfield_cache_max_bytes,
                              nearfield_cache_max_build_time=op.nearfield_cache_max_build_time)
     C .*= β
@@ -1010,10 +1015,14 @@ function KrylovSolver(body::AbstractBody;
         cache_tree::Bool=false,     # per-solve FMM plan reuse (021 Phase 2b)
         cache_nearfield::Bool=false, # dense near-field cache on the plan (021 Phase 2b)
         # Caps for that cache. FastMultipole's 4 GiB default is below what the
-        # larger 021 rungs need (R4 ≈ 4.5 GiB), and the build is serial, so the
-        # time cap is wall-clock rather than a per-thread budget.
+        # larger 021 rungs need (R4 ≈ 4.5 GiB); the time cap is wall-clock
+        # (the build parallelizes over Threads.nthreads()).
         nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
         nearfield_cache_max_build_time::Real=Inf,
+        # a Ref{Any} (share ONE Ref across solver instances to chain): when a
+        # plan is rebuilt at the same (leaf, MAC) on frozen geometry, its cache
+        # adopts the previous build's blocks via retarget instead of re-probing
+        nearfield_cache_donor::Base.RefValue{Any}=Ref{Any}(nothing),
         persistent_plan::Bool=false, # cross-solve plan persistence (see docstring)
     )
     TF = numtype(body)
@@ -1033,7 +1042,8 @@ function KrylovSolver(body::AbstractBody;
 
     # matrix-free operator + persistent workspace
     kop = KrylovOperator(body, backend; cache_tree, cache_nearfield,
-                         nearfield_cache_max_bytes, nearfield_cache_max_build_time)
+                         nearfield_cache_max_bytes, nearfield_cache_max_build_time,
+                         nearfield_cache_donor)
     n = body.ncells
     prod! = (y, x, α, β) -> kop(y, x, α, β)
     A = LinearOperators.LinearOperator(TF, n, n, false, false, prod!)

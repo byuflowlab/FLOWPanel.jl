@@ -114,6 +114,7 @@ function _apply_neumann_G!(body::AbstractBody{<:Any,<:Any,<:Any,false},
                            normals::AbstractMatrix,
                            strengths_scratch::AbstractVector;
                            plan_slot=nothing, cache_nearfield::Bool=false,
+                           nearfield_cache_donor=nothing,
                            nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
                            nearfield_cache_max_build_time::Real=Inf)
 
@@ -129,6 +130,7 @@ function _apply_neumann_G!(body::AbstractBody{<:Any,<:Any,<:Any,false},
         influence!(body, body, backend; velocity=true)
     else
         influence!(body, body, backend; velocity=true, plan_slot, cache_nearfield,
+                   nearfield_cache_donor,
                    nearfield_cache_max_bytes, nearfield_cache_max_build_time)
     end
 
@@ -148,6 +150,7 @@ function _apply_dirichlet_G!(body::AbstractBody{<:Any,<:Any,<:Any,true},
                              x::AbstractVector, backend::AbstractBackend,
                              strengths_scratch::AbstractVector;
                              plan_slot=nothing, cache_nearfield::Bool=false,
+                             nearfield_cache_donor=nothing,
                              nearfield_cache_max_bytes::Integer=FastMultipole.NEARFIELD_CACHE_DEFAULT_MAX_BYTES,
                              nearfield_cache_max_build_time::Real=Inf)
 
@@ -160,7 +163,7 @@ function _apply_dirichlet_G!(body::AbstractBody{<:Any,<:Any,<:Any,true},
         influence!(body, body, backend; scalar_potential=true, velocity=false)
     else
         influence!(body, body, backend; scalar_potential=true, velocity=false,
-                   plan_slot, cache_nearfield,
+                   plan_slot, cache_nearfield, nearfield_cache_donor,
                    nearfield_cache_max_bytes, nearfield_cache_max_build_time)
     end
 
