@@ -220,7 +220,8 @@ function cold_packages()
             realpath(path) == realpath(pin["path"]) || error("Loaded $name outside pinned worktree")
             facts["sha"] == pin["sha"] && isempty(facts["status"]) || error("Dirty or wrong $name commit")
             readchomp(`git -C $path cat-file -t refs/tags/$tag`) == "tag" || error("Campaign tag must be annotated")
-            readchomp(`git -C $path rev-parse $tag^{commit}`) == facts["sha"] || error("Execution tag mismatch")
+            revision = tag * "^{commit}"
+            readchomp(`git -C $path rev-parse $revision`) == facts["sha"] || error("Execution tag mismatch")
             isfile(joinpath(path,".git")) || error("$name is not a git worktree")
         end
     end

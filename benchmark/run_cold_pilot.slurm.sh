@@ -50,6 +50,8 @@ run_process() {
  taskset -c "$cpulist" bash benchmark/run_cold_process.sh "$jt" "$bt" "$driver" > "$pilot/$generation.log" 2>&1
 }
 if [[ "$stage" != timing_profiles ]]; then
+# Parse without loading packages before spending time on precompilation.
+taskset -c "$cpulist" bash benchmark/run_cold_process.sh 1 1 benchmark/cold_parse.jl > "$pilot/parse.log" 2>&1
 # Environment/precompilation process is isolated from tests and timed processes.
 taskset -c "$cpulist" bash benchmark/run_cold_process.sh 4 1 benchmark/cold_precompile.jl > "$pilot/precompile.log" 2>&1
 run_process controls-j1 1 1 test/runtests_benchmark_cold.jl
