@@ -15,7 +15,9 @@ set -euo pipefail
 set +u # Site profile reads optional interactive-shell variables.
 source /etc/profile
 set -u
-module load julia/1.11.7-6bmogfl
+# The pinned environment includes CUDA extensions; precompile needs its toolkit
+# even though this pilot executes CPU solvers only.
+module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
 export RUNG=R1 CONFIGS=fgs:krylov_ilu
 stage=${COLD_PILOT_STAGE:-all}
@@ -28,6 +30,8 @@ pilot="$COLD_DATA_ROOT/pilot-$SLURM_JOB_ID"
 mkdir "$pilot"
 cp "$CAMPAIGN_PINS" "$pilot/campaign_pins.toml"
 cp "$COLD_PROJECT/Manifest.toml" "$pilot/Manifest.toml"
+module list > "$pilot/modules.txt" 2>&1
+command -v ptxas > "$pilot/ptxas_path.txt"
 lscpu > "$pilot/lscpu.txt"
 # Use distinct physical cores from the allocation, keeping every arm on this node.
 cpulist=$(python3 - <<'PY'
