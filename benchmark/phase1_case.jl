@@ -36,13 +36,14 @@ banner = assert_and_banner()
 # staircase rows destroyed by R2–R4 writers). Merge per-rung dirs for
 # analysis; local sequential runs keep the flat layout.
 _rung_sub = get(ENV, "PER_RUNG_DIR", "0") == "1" ? get(ENV, "RUNG", "") : ""
-results_dir = joinpath(@__DIR__, "results", "phase1", banner.threading_mode, _rung_sub)
+case_root = get(ENV, "BENCH_CASE_ROOT", joinpath(@__DIR__, "results", "phase1"))
+results_dir = joinpath(case_root, banner.threading_mode, _rung_sub)
 mkpath(results_dir)
 # knobs_dir: where tuning outputs (tune.csv, fgstune_*, fgsprecond.csv) and
 # the frozen-b cache are read from. Tuning runs in multi mode only; single-
 # mode table jobs pass KNOBS_MODE=multi to reuse them (b and knobs are
 # mode-independent — pure functions of geometry/BC and the tuner's choices).
-knobs_dir = joinpath(@__DIR__, "results", "phase1",
+knobs_dir = joinpath(case_root,
                      get(ENV, "KNOBS_MODE", banner.threading_mode), _rung_sub)
 mkpath(knobs_dir)
 
@@ -214,9 +215,9 @@ println("$rung Dirichlet case: $(rotor.ncells) panels, rms(b) = $rms_b " *
 solution_column = 2
 "Restore the frozen pre-solve state (cold solve; FGS seeds from body.strength)."
 function reset_cold!()
+    rotor.velocity .= frozen_velocity
     pnl.set_strengths!(rotor)                       # col 1 = BC sources
     rotor.strength[:, solution_column] .= 0
-    rotor.velocity .= frozen_velocity
     rotor.potential .= potential_frozen             # rhs = -potential contract
     return nothing
 end

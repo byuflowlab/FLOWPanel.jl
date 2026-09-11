@@ -55,3 +55,5 @@ Source lives in `src/` as `FLOWPanel_<subsystem>.jl` files; the authoritative lo
 
 Compute shedding from the *constructed* body's cells, never the raw mesh: with `ensure_winding=true` (default) the constructor re-winds `cells` in place, so shedding computed from raw mesh cells attaches the wake at the wrong edges with **no error** — the body silently sheds almost no circulation (observed: rotor-hover CT collapsed ~3.6×, 0.0505→0.014). Build a `noshedding` body first, run `calc_shedding_from_seed` on *its* `.nodes`/`.cells`, then rebuild with the shedding. See the `RigidWakeBody` docstring in `src/FLOWPanel_liftingbody.jl` and `examples/rotor_hover_convergence.jl`.
 
+
+For ORC execution, read the current top-level `BYU_ORC_AGENTS.md` site policy.

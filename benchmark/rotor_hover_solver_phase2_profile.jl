@@ -21,6 +21,11 @@ mid-ladder on the pinned HPC node, both modes):
     CACHE_B=1 julia --project -t 4 benchmark/rotor_hover_solver_phase2_profile.jl
 =###############################################################################
 
+using Profile
+if get(ENV, "COLD_INVESTIGATION", "0") == "1"
+    include(joinpath(@__DIR__, "fgs_cold_common.jl"))
+    cold_main(; profile=true)
+else
 include(joinpath(@__DIR__, "common.jl"))
 include(joinpath(@__DIR__, "phase1_case.jl"))
 
@@ -152,3 +157,4 @@ end
 
 close(sio)
 println("\n$rung profiles written to $outdir")
+end # legacy mode
