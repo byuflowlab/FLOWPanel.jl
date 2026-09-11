@@ -1161,6 +1161,102 @@ end
         @test pnl._solver_metadata_dict(solver_ref)["cache_nearfield"] === false
     end
 
+    @testset "assemble_influence_block! opt-in (030 Phase 2)" begin
+        # FLOWPanel bodies opt in to FastMultipole's dense-block assembly
+        # hook: near-field cache blocks are ASSEMBLED per (target, source)
+        # pair via `induced` instead of unit-strength probing through
+        # `direct!`. Assembled and probed blocks must agree to rtol 1e-12
+        # (NOT bitwise — summation order may differ), for both raw output
+        # forms the cache stores: Dirichlet scalar-potential rows (diamond
+        # body WITH shedding panels, so the attached-wake term and the
+        # side-aware self limit are exercised) and Neumann gradient rows
+        # (sphere source body).
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=16)
+
+        # compare the assembled cache the plan built against probe-built
+        # blocks on the SAME trees, then the operator apply through each
+        function compare_caches(body, plan, y_asm, apply_cached!)
+            @test FastMultipole.overrides_block_assembly(body)  # premise
+            @test length(plan.direct_list) > 0    # premise: real near field
+            cache_asm = plan.nearfield_cache[]
+            @test cache_asm isa FastMultipole.NearfieldInfluenceCache
+
+            cache_probe = FastMultipole.NearfieldInfluenceCache((body,),
+                plan.target_tree, (body,), plan.source_tree, plan.direct_list,
+                plan.derivatives_switches; use_block_assembly=false)
+            @test cache_asm.entries == cache_probe.entries
+            @test cache_asm.matrices.sizes == cache_probe.matrices.sizes
+            @test any(!iszero, cache_probe.matrices.data)   # non-vacuous
+            worst = 0.0
+            for k in eachindex(cache_asm.entries)
+                ba, _ = FastMultipole.get_matrix_vector(cache_asm.matrices, k)
+                bp, _ = FastMultipole.get_matrix_vector(cache_probe.matrices, k)
+                isapprox(ba, bp; rtol=1e-12) || (worst = max(worst,
+                    norm(ba - bp) / max(norm(ba), norm(bp))))
+            end
+            @test worst == 0.0   # every block within rtol 1e-12
+
+            # operator apply through the probe-built cache matches
+            plan.nearfield_cache[] = cache_probe
+            y_probe = apply_cached!()
+            @test any(!iszero, y_probe)
+            @test isapprox(y_asm, y_probe; rtol=1e-12)
+            plan.nearfield_cache[] = cache_asm
+        end
+
+        # --- Dirichlet scalar-potential rows (shedding panels present) -----
+        body_d = make_dirichlet_diamond_body(nspan=40)
+        @test body_d.nsheddings > 0           # premise: attached wake exercised
+        nd = body_d.ncells
+        xd = sin.(0.7 .* (1:nd)) .+ 0.1
+        scratch_d = zeros(nd)
+        slot_d = Ref{Any}(nothing)
+        apply_d! = () -> copy(pnl._apply_dirichlet_G!(body_d, xd, backend,
+            scratch_d; plan_slot=slot_d, cache_nearfield=true))
+        y_asm_d = apply_d!()
+        compare_caches(body_d, slot_d[][1], y_asm_d, apply_d!)
+
+        # --- Neumann gradient rows -----------------------------------------
+        # NOTE: initialize geometry before planning — a raw body has all-zero
+        # controlpoints, and >leaf_size coincident targets make the octree
+        # target subdivision recurse without bound (no depth guard upstream).
+        body_n = make_sphere_source_body()
+        pnl.calc_normals!(body_n)
+        pnl.calc_controlpoints!(body_n)
+        nn = body_n.ncells
+        xn = cos.(0.3 .* (1:nn)) .- 0.05
+        scratch_n = zeros(nn)
+        slot_n = Ref{Any}(nothing)
+        apply_n! = () -> copy(pnl._apply_neumann_G!(body_n, xn, backend,
+            body_n.normals, scratch_n; plan_slot=slot_n, cache_nearfield=true))
+        y_asm_n = apply_n!()
+        compare_caches(body_n, slot_n[][1], y_asm_n, apply_n!)
+
+        # --- full cached KrylovSolver solve: assembled vs probe-built ------
+        body_s = make_dirichlet_diamond_body(nspan=40)
+        body_s.velocity .= 0
+        body_s.velocity[1, :] .= 1.0
+        solver_s = pnl.KrylovSolver(body_s; backend, method=:gmres,
+            atol=1e-13, rtol=1e-13, itmax=400, cache_nearfield=true,
+            persistent_plan=true)
+        pnl.solve!(body_s, solver_s)
+        @test solver_s.solved
+        mu_asm = copy(body_s.strength)
+        plan_s = solver_s.kop.plan_slot[][1]
+        @test plan_s.nearfield_cache[] isa FastMultipole.NearfieldInfluenceCache
+
+        # swap in probe-built blocks on the same persistent plan and re-solve
+        plan_s.nearfield_cache[] = FastMultipole.NearfieldInfluenceCache(
+            (body_s,), plan_s.target_tree, (body_s,), plan_s.source_tree,
+            plan_s.direct_list, plan_s.derivatives_switches;
+            use_block_assembly=false)
+        pnl.solve!(body_s, solver_s)
+        @test solver_s.kop.plan_slot[][1] === plan_s   # premise: plan reused
+        @test any(!iszero, body_s.strength[:, 2])
+        @test isapprox(body_s.strength, mu_asm; rtol=1e-12)
+    end
+
     @testset "KrylovSolver persistent_plan + rigid motion (021 tree reuse)" begin
         # Cross-solve plan (+ near-field cache) persistence under rigid
         # motion: the Dirichlet scalar operator is exactly invariant, so a

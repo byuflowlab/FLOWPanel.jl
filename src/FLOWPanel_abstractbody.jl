@@ -1344,6 +1344,82 @@ function _direct_body!(target_system, target_index, derivatives_switch::FastMult
     end
 end
 
+# BRAINSTORM 030: opt-in dense influence-block assembly. FastMultipole's
+# near-field cache builder fills each block through this hook instead of
+# unit-strength probing through `direct!`. Entries are ASSIGNED per
+# (target, source) pair — the same per-pair `induced` values `_direct_body!`
+# accumulates (side-aware self limits and the attached-wake term included) —
+# with the `Val(FILAMENT_REGULARIZATION[])` function barrier crossed ONCE per
+# block (see the function-barrier comment on `direct!` above).
+function FastMultipole.assemble_influence_block!(block::AbstractMatrix,
+        target_buffer::AbstractMatrix, target_range::UnitRange{Int},
+        switch::FastMultipole.DerivativesSwitch, source_system::AbstractBody,
+        source_buffer::AbstractMatrix, source_range::UnitRange{Int})
+    return _assemble_influence_block!(block, target_buffer, target_range,
+        switch, source_system, source_buffer, source_range,
+        Val(FILAMENT_REGULARIZATION[]))
+end
+
+# `induced` reads strengths from the source-buffer column, and the builder
+# shares buffers across build threads (this overload must not mutate them),
+# so each source column is copied once into a private single-column scratch
+# whose strength rows are unit-activated per component. Every other row a
+# kernel reads (positions, vertices, attached-wake data) is column-local
+# (see the buffer layout in `_induced_wake`), so `induced` on the scratch
+# column reproduces the probe's per-pair values exactly.
+function _assemble_influence_block!(block, target_buffer, target_range,
+        switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM,TS},
+        source_system::AbstractBody{<:Any,NK}, source_buffer, source_range,
+        fam::Val) where {PS,GS,HS,NO,NM,TS,NK}
+    TF = eltype(block)
+    TFt = eltype(target_buffer)
+    n_out = (PS ? 1 : 0) + (GS ? 3 : 0) + (HS ? 9 : 0) + (TS ? 18 : 0) + NO
+    core_size = source_system.core_size
+    scratch = Matrix{eltype(source_buffer)}(undef, size(source_buffer, 1), 1)
+    j = 0
+    for i_body in source_range
+        @views scratch[:, 1] .= source_buffer[:, i_body]
+        for i_comp in 1:NK
+            for r in 5:4+NK
+                scratch[r, 1] = zero(eltype(scratch))
+            end
+            scratch[4+i_comp, 1] = one(eltype(scratch))
+            j += 1
+            for (it, i_target) in enumerate(target_range)
+                target = FastMultipole.StaticArrays.SVector{3,TFt}(
+                    target_buffer[1, i_target], target_buffer[2, i_target],
+                    target_buffer[3, i_target])
+                phi, U, H = induced(target, source_system, scratch, 1, switch,
+                    fam; core_size)
+                r0 = (it - 1) * n_out
+                o = 0
+                if PS
+                    block[r0+1, j] = phi
+                    o = 1
+                end
+                if GS
+                    block[r0+o+1, j] = U[1]
+                    block[r0+o+2, j] = U[2]
+                    block[r0+o+3, j] = U[3]
+                    o += 3
+                end
+                if HS
+                    for h in 1:9
+                        block[r0+o+h, j] = H[h]
+                    end
+                    o += 9
+                end
+                # TS / extra-output rows: `direct!` never writes them, so the
+                # probe stores zeros there — match it
+                for rr in o+1:n_out
+                    block[r0+rr, j] = zero(TF)
+                end
+            end
+        end
+    end
+    return block
+end
+
 function FastMultipole.buffer_to_system_strength!(system::AbstractBody{<:Any,1,<:Any}, i_body, source_buffer, i_buffer)
     system.strength[i_body, 1] = source_buffer[5, i_buffer]
 end
