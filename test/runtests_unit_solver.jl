@@ -1331,6 +1331,103 @@ end
         compare_matrices(fgs_sh.nonself_matrices, fgs_sp.nonself_matrices)
     end
 
+    @testset "far-pair point-panel approximation (030 Phase 3b)" begin
+        # PROTOTYPE: with FARFIELD_ETA[] finite, block ASSEMBLY replaces the
+        # full Hess-Smith integral by a point source sigma*A + point dipole
+        # mu*A*nhat at the panel centroid for pairs with r > eta*L (L =
+        # longest edge); the attached-wake term is always added exactly.
+        # Leading error O((L/r)^2) — measured 2026-09-10 on the sphere cache:
+        # max block-normalized entry error ~ 0.14/eta^2 (8.4e-3 at eta=4),
+        # solve-level strength perturbation ~1e-4. Exact mode is the DEFAULT
+        # and all rtol-1e-12 exactness tests above run at Inf.
+        @test pnl.FARFIELD_ETA[] == Inf        # default is exact
+        @test pnl.with_farfield_eta(() -> pnl.FARFIELD_ETA[], 4.0) == 4.0
+        @test_throws ErrorException pnl.with_farfield_eta(() -> error("x"), 3.0)
+        @test pnl.FARFIELD_ETA[] == Inf        # restored after error
+
+        backend = pnl.FastMultipoleBackend(; expansion_order=8,
+            multipole_acceptance=0.4, leaf_size=16)
+
+        function blocknorm_err(cache_a, cache_e)
+            worst = 0.0
+            for k in eachindex(cache_a.entries)
+                ba, _ = FastMultipole.get_matrix_vector(cache_a.matrices, k)
+                be, _ = FastMultipole.get_matrix_vector(cache_e.matrices, k)
+                bm = maximum(abs, be)
+                bm == 0 && continue
+                worst = max(worst, maximum(abs, ba .- be) / bm)
+            end
+            return worst
+        end
+
+        # --- sphere Neumann: far pairs dominate the direct list ------------
+        body_n = make_sphere_source_body()
+        pnl.calc_normals!(body_n)
+        pnl.calc_controlpoints!(body_n)
+        nn = body_n.ncells
+        xn = cos.(0.3 .* (1:nn)) .- 0.05
+        scratch_n = zeros(nn)
+        slot_n = Ref{Any}(nothing)
+        pnl._apply_neumann_G!(body_n, xn, backend, body_n.normals, scratch_n;
+            plan_slot=slot_n, cache_nearfield=true)
+        plan_n = slot_n[][1]
+        cache_exact = plan_n.nearfield_cache[]
+        build_eta(eta) = pnl.with_farfield_eta(eta) do
+            FastMultipole.NearfieldInfluenceCache((body_n,),
+                plan_n.target_tree, (body_n,), plan_n.source_tree,
+                plan_n.direct_list, plan_n.derivatives_switches)
+        end
+        err4 = blocknorm_err(build_eta(4.0), cache_exact)
+        err8 = blocknorm_err(build_eta(8.0), cache_exact)
+        @test err4 > 0                 # premise: approximation engaged
+        @test err4 < 2e-2              # measured 8.4e-3, 2x margin
+        @test err8 < err4              # (L/r)^2: error shrinks with eta
+        # exact-mode rebuild through the wrapper is exactly the stored cache
+        errInf = blocknorm_err(build_eta(Inf), cache_exact)
+        @test errInf == 0.0
+
+        # --- diamond (shedding, NK=2): far path with attached wake ---------
+        body_d = make_dirichlet_diamond_body(nspan=40)
+        nd = body_d.ncells
+        xd = sin.(0.7 .* (1:nd)) .+ 0.1
+        scratch_d = zeros(nd)
+        slot_d = Ref{Any}(nothing)
+        pnl._apply_dirichlet_G!(body_d, xd, backend, scratch_d;
+            plan_slot=slot_d, cache_nearfield=true)
+        plan_d = slot_d[][1]
+        cache_d_exact = plan_d.nearfield_cache[]
+        cache_d2 = pnl.with_farfield_eta(2.0) do
+            FastMultipole.NearfieldInfluenceCache((body_d,),
+                plan_d.target_tree, (body_d,), plan_d.source_tree,
+                plan_d.direct_list, plan_d.derivatives_switches)
+        end
+        # measured: only ~1.2% of pairs far at eta=2 on this fixture,
+        # blocknorm error 4.5e-6
+        @test blocknorm_err(cache_d2, cache_d_exact) < 1e-4
+
+        # --- solve-level acceptance: cached KrylovSolver at eta=4 ----------
+        function sphere_solve(eta)
+            b = make_sphere_source_body()
+            pnl.calc_normals!(b); pnl.calc_controlpoints!(b)
+            b.velocity .= 0; b.velocity[1, :] .= 1.0
+            s = pnl.KrylovSolver(b; backend, method=:gmres, atol=1e-13,
+                rtol=1e-13, itmax=400, cache_nearfield=true,
+                persistent_plan=true)
+            pnl.with_farfield_eta(eta) do
+                pnl.solve!(b, s)
+            end
+            return b, s
+        end
+        b_exact, s_exact = sphere_solve(Inf)
+        b_eta, s_eta = sphere_solve(4.0)
+        @test s_exact.solved && s_eta.solved
+        rel = norm(b_eta.strength - b_exact.strength) / norm(b_exact.strength)
+        @test 0 < rel < 1e-3           # measured 1.9e-4 at eta=4
+        # boundary residual: perturbed operator, bounded degradation
+        res_eta = flow_tangency_max_residuals((b_eta,))[1]
+        @test res_eta < 1e-3           # measured 1.6e-4 (exact: 2.9e-8)
+    end
+
     @testset "KrylovSolver persistent_plan + rigid motion (021 tree reuse)" begin
         # Cross-solve plan (+ near-field cache) persistence under rigid
         # motion: the Dirichlet scalar operator is exactly invariant, so a
