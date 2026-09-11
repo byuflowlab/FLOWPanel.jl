@@ -93,6 +93,7 @@ end
                     "MEMORY_GIB"=>"501", "MEMORY_GIB"=>"abc",
                     "EXPECT_JULIA_THREADS"=>"0", "BENCH_BLAS_THREADS"=>"0",
                     "OMP_NUM_THREADS"=>"0", "THREADING_MODE"=>"bad",
+                    "KNOBS_MODE"=>"../../outside", "PER_RUNG_DIR"=>"bad", "K_REPS"=>"bad",
                     "CONFIG_FILE"=>joinpath(dir,"missing.toml"))
                 withenv(key=>value) do
                     @test_throws Exception cold_initialize!()

@@ -93,3 +93,9 @@ configuration hash, Julia/BLAS versions and memory ceiling. `CAMPAIGN_PINS` enfo
 clean worktrees and annotated execution tags before fixture loading. The campaign
 preparation helper adds a data-symlink commit after its input tag: create and record
 an annotated tag for that actual execution commit before running.
+
+The Slurm driver also supports `COLD_PILOT_STAGE=controls_smoke` for a
+non-preemptible test allocation, followed by `COLD_PILOT_STAGE=timing_profiles`
+with the preserved absolute `CONFIG_FILE`. All three timing settings and both
+profile processes still execute sequentially on the same node in the second job.
+The default `all` mode runs every stage in one allocation.

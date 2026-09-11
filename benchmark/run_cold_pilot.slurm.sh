@@ -16,6 +16,12 @@ source /etc/profile
 module load julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
 export RUNG=R1 CONFIGS=fgs:krylov_ilu
+stage=${COLD_PILOT_STAGE:-all}
+[[ "$stage" == all || "$stage" == controls_smoke || "$stage" == timing_profiles ]] || exit 2
+if [[ "$stage" == timing_profiles ]]; then
+ : "${CONFIG_FILE:?selected smoke settings required}"
+ [[ -f "$CONFIG_FILE" ]] || exit 2
+fi
 pilot="$COLD_DATA_ROOT/pilot-$SLURM_JOB_ID"
 mkdir "$pilot"
 cp "$CAMPAIGN_PINS" "$pilot/campaign_pins.toml"
@@ -41,6 +47,7 @@ run_process() {
  export OUTDIR="$pilot/$generation" BENCH_CASE_ROOT="$pilot/fixture-$generation"
  taskset -c "$cpulist" bash benchmark/run_cold_process.sh "$jt" "$bt" "$driver" > "$pilot/$generation.log" 2>&1
 }
+if [[ "$stage" != timing_profiles ]]; then
 # Environment/precompilation process is isolated from tests and timed processes.
 taskset -c "$cpulist" bash benchmark/run_cold_process.sh 4 1 benchmark/cold_precompile.jl > "$pilot/precompile.log" 2>&1
 run_process controls-j1 1 1 test/runtests_benchmark_cold.jl
@@ -48,7 +55,13 @@ run_process controls-j4 4 1 test/runtests_benchmark_cold.jl
 export STAGE=baseline
 unset CONFIG_FILE
 run_process smoke-j4-b1 4 1 benchmark/rotor_hover_solver_cold_smoke.jl
-export CONFIG_FILE="$pilot/smoke-j4-b1/selected.toml" STAGE=verify
+export CONFIG_FILE="$pilot/smoke-j4-b1/selected.toml"
+if [[ "$stage" == controls_smoke ]]; then
+ printf 'controls and smoke completed\n' > "$pilot/COMPLETED"
+ exit 0
+fi
+fi
+export STAGE=verify
 sha256sum "$CONFIG_FILE" > "$pilot/selected.sha256"
 run_process timing-j4-b1 4 1 benchmark/rotor_hover_solver_cold.jl
 run_process timing-j64-b1 64 1 benchmark/rotor_hover_solver_cold.jl
