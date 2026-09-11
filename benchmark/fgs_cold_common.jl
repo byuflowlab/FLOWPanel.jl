@@ -86,15 +86,17 @@ function cold_configs(rung, kinds, stage; file="")
         push!(configs, seed)
         stage == "screen" || continue
         # Bounded one-factor-at-a-time neighbors; do not conflate thread effects.
-        axes = kind == "fgs" ? [
+        # Tuples preserve each axis's element types (numeric vector promotion
+        # would turn integer and Boolean Krylov settings into Float64 values).
+        axes = kind == "fgs" ? (
             "P" => [seed["P"]-2, seed["P"]+2],
             "MAC" => [seed["MAC"]-0.1, seed["MAC"]+0.1],
             "leaf" => [max(10, seed["leaf"]÷2), 2seed["leaf"]],
             "inner" => [max(1, seed["inner"]÷2), 2seed["inner"]],
-            "sweep_order" => ["colored"]] : [
+            "sweep_order" => ["colored"]) : (
             "P" => [seed["P"]-1, seed["P"]+1],
             "MAC" => [0.6, 0.7], "leaf" => [4, 8], "memory" => [100],
-            "cache_nearfield" => [true]]
+            "cache_nearfield" => [true])
         for (key, values) in axes, value in values
             c = copy(seed); c[key] = value; push!(configs, c)
         end
