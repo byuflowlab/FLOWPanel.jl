@@ -1518,9 +1518,6 @@ function FGSSolver(body::AbstractBody;
                                              # (e.g. as a formulation green_solver)
         use_block_assembly::Bool=true,       # 030 Phase 3 diagnostic knob: false forces
                                              # unit-strength probing for the FGS matrices
-        farfield_eta::Real=Inf,              # 030 Phase 3b PROTOTYPE knob: finite eta
-                                             # assembles far pairs (r > eta*L) from the
-                                             # point-panel approximation; Inf = exact
     )
 
     # calculate control points if needed
@@ -1533,9 +1530,7 @@ function FGSSolver(body::AbstractBody;
     TF = numtype(body)
     bodies = (body,)
     fgs = build_fgs ?
-        with_farfield_eta(farfield_eta) do
-            FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), use_block_assembly)
-        end :
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), use_block_assembly) :
         nothing
 
     Uext = zeros(TF, 3, body.ncells)

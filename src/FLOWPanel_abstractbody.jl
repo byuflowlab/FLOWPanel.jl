@@ -1351,62 +1351,13 @@ end
 # accumulates (side-aware self limits and the attached-wake term included) —
 # with the `Val(FILAMENT_REGULARIZATION[])` function barrier crossed ONCE per
 # block (see the function-barrier comment on `direct!` above).
-
-# BRAINSTORM 030 Phase 3b (PROTOTYPE): far-pair point-panel approximation.
-# When FARFIELD_ETA[] is finite, a pair whose target lies farther than
-# eta * L from the panel centroid (L = longest edge) is assembled from the
-# panel's leading far-field multipole instead of the full Hess-Smith
-# integral: point source sigma*A and/or point dipole mu*A*nhat at the
-# centroid (nhat = GeometricTools right-hand-rule normal; VortexRing is
-# exactly the constant-doublet panel in the far field). Calibrated against
-# `_induced` 2026-09-10: phi = -A/(4pi) (sigma/r + mu (nhat.r)/r^3),
-# U = +grad(phi); leading error O((L/r)^2). The attached-wake term does NOT
-# decay with panel distance (semi-infinite filaments) and is always added
-# EXACTLY via `_induced_wake`. Hessian rows have no point form here: blocks
-# whose switch requests hessians assemble exactly. Inf (the DEFAULT) means
-# exact assembly everywhere; the knob only affects blocks ASSEMBLED through
-# this hook (cache/FGS builds), never `direct!` evaluation paths.
-const FARFIELD_ETA = Ref{Float64}(Inf)
-
-"""
-    with_farfield_eta(f, eta)
-
-Run `f()` with `FARFIELD_ETA[] = eta` (restored afterwards). Wrap a
-cache/FGS BUILD in this to opt that build into the 030 Phase 3b far-pair
-point-panel approximation; evaluation of already-built blocks is unaffected.
-"""
-function with_farfield_eta(f, eta::Real)
-    old = FARFIELD_ETA[]
-    FARFIELD_ETA[] = Float64(eta)
-    try
-        return f()
-    finally
-        FARFIELD_ETA[] = old
-    end
-end
-
-# far-field support + unit-component -> (sigma, mu) weights per kernel type
-@inline _farfield_supported(::Type) = false
-@inline _farfield_supported(::Type{ConstantSource}) = true
-@inline _farfield_supported(::Type{ConstantDoublet}) = true
-@inline _farfield_supported(::Type{Union{ConstantSource, ConstantDoublet}}) = true
-@inline _farfield_supported(::Type{VortexRing}) = true
-@inline _farfield_supported(::Type{Union{ConstantSource, VortexRing}}) = true
-@inline _farfield_sigma_mu(::Type{ConstantSource}, i_comp) = (1.0, 0.0)
-@inline _farfield_sigma_mu(::Type{ConstantDoublet}, i_comp) = (0.0, 1.0)
-@inline _farfield_sigma_mu(::Type{Union{ConstantSource, ConstantDoublet}}, i_comp) =
-    i_comp == 1 ? (1.0, 0.0) : (0.0, 1.0)
-@inline _farfield_sigma_mu(::Type{VortexRing}, i_comp) = (0.0, 1.0)
-@inline _farfield_sigma_mu(::Type{Union{ConstantSource, VortexRing}}, i_comp) =
-    i_comp == 1 ? (1.0, 0.0) : (0.0, 1.0)
-
 function FastMultipole.assemble_influence_block!(block::AbstractMatrix,
         target_buffer::AbstractMatrix, target_range::UnitRange{Int},
         switch::FastMultipole.DerivativesSwitch, source_system::AbstractBody,
         source_buffer::AbstractMatrix, source_range::UnitRange{Int})
     return _assemble_influence_block!(block, target_buffer, target_range,
         switch, source_system, source_buffer, source_range,
-        Val(FILAMENT_REGULARIZATION[]), FARFIELD_ETA[])
+        Val(FILAMENT_REGULARIZATION[]))
 end
 
 # `induced` reads strengths from the source-buffer column, and the builder
@@ -1418,76 +1369,28 @@ end
 # column reproduces the probe's per-pair values exactly.
 function _assemble_influence_block!(block, target_buffer, target_range,
         switch::FastMultipole.DerivativesSwitch{PS,GS,HS,NO,NM,TS},
-        source_system::AbstractBody{TK,NK}, source_buffer, source_range,
-        fam::Val, eta::Float64=Inf) where {PS,GS,HS,NO,NM,TS,TK,NK}
+        source_system::AbstractBody{<:Any,NK}, source_buffer, source_range,
+        fam::Val) where {PS,GS,HS,NO,NM,TS,NK}
     TF = eltype(block)
     TFt = eltype(target_buffer)
     n_out = (PS ? 1 : 0) + (GS ? 3 : 0) + (HS ? 9 : 0) + (TS ? 18 : 0) + NO
     core_size = source_system.core_size
     scratch = Matrix{eltype(source_buffer)}(undef, size(source_buffer, 1), 1)
-    # 030 Phase 3b: far-pair point-panel switch (exact when eta == Inf).
-    # No point form for hessian rows — HS blocks assemble exactly.
-    use_ff = isfinite(eta) && _farfield_supported(TK) && !HS
     j = 0
     for i_body in source_range
         @views scratch[:, 1] .= source_buffer[:, i_body]
-        # per-COLUMN far-field geometry (never per pair): centroid, area,
-        # GT normal, longest edge from the buffer vertex rows
-        local cen, nhat, area, thresh2
-        col_ff = use_ff
-        if use_ff
-            v1, v2, v3 = get_vertices(source_system, source_buffer, i_body)
-            cen = (v1 + v2 + v3) * 0.3333333333333333
-            nvec = FastMultipole.StaticArrays.cross(v2 - v1, v3 - v1)
-            nn = sqrt(nvec[1]^2 + nvec[2]^2 + nvec[3]^2)
-            area = 0.5 * nn
-            L2 = max(sum(abs2, v2 - v1), sum(abs2, v3 - v2), sum(abs2, v1 - v3))
-            thresh2 = eta * eta * L2
-            if nn > sqrt(eps(one(nn))) * L2
-                nhat = nvec / nn
-            else
-                col_ff = false   # degenerate panel: no reliable normal
-                nhat = FastMultipole.StaticArrays.SVector{3,TF}(0, 0, 0)
-            end
-        else
-            cen = FastMultipole.StaticArrays.SVector{3,TF}(0, 0, 0)
-            nhat = cen; area = zero(TF); thresh2 = zero(TF)
-        end
         for i_comp in 1:NK
             for r in 5:4+NK
                 scratch[r, 1] = zero(eltype(scratch))
             end
             scratch[4+i_comp, 1] = one(eltype(scratch))
             j += 1
-            sigma_w, mu_w = col_ff ? _farfield_sigma_mu(TK, i_comp) : (0.0, 0.0)
             for (it, i_target) in enumerate(target_range)
                 target = FastMultipole.StaticArrays.SVector{3,TFt}(
                     target_buffer[1, i_target], target_buffer[2, i_target],
                     target_buffer[3, i_target])
-                local phi, U, H
-                r2 = col_ff ? sum(abs2, target - cen) : zero(TF)
-                if col_ff && r2 > thresh2
-                    # point source sigma*A + point dipole mu*A*nhat at the
-                    # centroid (calibration: phi = -A/4pi (sigma/r +
-                    # mu nhat.r/r^3), U = +grad phi); attached wake added
-                    # exactly below — it does not decay with panel distance
-                    rv = target - cen
-                    rinv2 = one(TF) / r2
-                    rinv = sqrt(rinv2)
-                    ndr = FastMultipole.StaticArrays.dot(nhat, rv)
-                    c = area * ONE_OVER_4PI
-                    phi = -c * (sigma_w * rinv + mu_w * ndr * rinv2 * rinv)
-                    U = c * (sigma_w * rinv2 * rinv) * rv +
-                        (c * mu_w * rinv2 * rinv) * (3 * ndr * rinv2 * rv - nhat)
-                    H = zero(FastMultipole.StaticArrays.SMatrix{3,3,TF,9})
-                    pw, vw, _ = _induced_wake(target, (v1, v2, v3),
-                        source_system, scratch, 1, switch)
-                    phi += pw
-                    U += vw
-                else
-                    phi, U, H = induced(target, source_system, scratch, 1,
-                        switch, fam; core_size)
-                end
+                phi, U, H = induced(target, source_system, scratch, 1, switch,
+                    fam; core_size)
                 r0 = (it - 1) * n_out
                 o = 0
                 if PS
