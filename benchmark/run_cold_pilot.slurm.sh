@@ -12,7 +12,9 @@
 #SBATCH --error=logs/slurm/cold-pilot-%j.err
 # Read BYU_ORC_AGENTS.md before submission. Submit from this pinned worktree.
 set -euo pipefail
+set +u # Site profile reads optional interactive-shell variables.
 source /etc/profile
+set -u
 module load julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
 export RUNG=R1 CONFIGS=fgs:krylov_ilu
