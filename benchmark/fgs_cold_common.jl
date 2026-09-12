@@ -69,7 +69,32 @@ function cold_check_config(c; selected=false)
     return c
 end
 
+# Explicit one-factor-at-a-time screen roster, e.g. SCREEN_SET="inner:1,2,3,5"
+# or "MAC:0.3,0.5;leaf:25,50,200". Values parse with the seed field's type so
+# integer/Boolean axes cannot promote to Float64; the seed itself always runs.
+function cold_screen_axes(spec, seed)
+    axes = Pair{String,Vector}[]
+    for entry in split(spec, ';')
+        parts = split(entry, ':')
+        length(parts) == 2 || error("SCREEN_SET entries must be key:v1,v2,...")
+        key = String(parts[1])
+        haskey(seed, key) || error("SCREEN_SET key $key not in $(seed["kind"]) seed")
+        default = seed[key]
+        values = map(split(parts[2], ',')) do v
+            s = String(strip(v))
+            default isa Bool ? parse(Bool, s) :
+                default isa Integer ? parse(Int, s) :
+                default isa Real ? parse(Float64, s) : s
+        end
+        push!(axes, key => values)
+    end
+    return Tuple(axes)
+end
+
 function cold_configs(rung, kinds, stage; file="")
+    screen_set = get(ENV, "SCREEN_SET", "")
+    !isempty(screen_set) && stage != "screen" && error("SCREEN_SET requires STAGE=screen")
+    !isempty(screen_set) && !isempty(file) && error("SCREEN_SET conflicts with CONFIG_FILE")
     if !isempty(file)
         doc = TOML.parsefile(file)
         haskey(doc, "configs") && Set(keys(doc)) != Set(["configs"]) && error("Unknown CONFIG_FILE field")
@@ -88,7 +113,8 @@ function cold_configs(rung, kinds, stage; file="")
         # Bounded one-factor-at-a-time neighbors; do not conflate thread effects.
         # Tuples preserve each axis's element types (numeric vector promotion
         # would turn integer and Boolean Krylov settings into Float64 values).
-        axes = kind == "fgs" ? (
+        axes = !isempty(screen_set) ? cold_screen_axes(screen_set, seed) :
+            kind == "fgs" ? (
             "P" => [seed["P"]-2, seed["P"]+2],
             "MAC" => [seed["MAC"]-0.1, seed["MAC"]+0.1],
             "leaf" => [max(10, seed["leaf"]÷2), 2seed["leaf"]],
@@ -100,7 +126,7 @@ function cold_configs(rung, kinds, stage; file="")
         for (key, values) in axes, value in values
             c = copy(seed); c[key] = value; push!(configs, c)
         end
-        if kind == "krylov_ilu"
+        if kind == "krylov_ilu" && isempty(screen_set)
             for leaf in (5,10,20), mac in (0.8,1.0)
                 c = copy(seed); c["ilu_leaf"] = leaf; c["ilu_MAC"] = mac
                 push!(configs, c)
@@ -147,6 +173,8 @@ function cold_preflight(; profile=false)
     get(ENV,"KNOBS_MODE",mode) in ("single","multi") || error("Invalid KNOBS_MODE")
     get(ENV,"PER_RUNG_DIR","0") in ("0","1") || error("Invalid PER_RUNG_DIR")
     parse(Int,get(ENV,"K_REPS","1")) > 0 || error("Invalid K_REPS")
+    get(ENV, "COLD_PREPARED_ONLY", "0") in ("0", "1") || error("Invalid COLD_PREPARED_ONLY")
+    parse(Int, get(ENV, "COLD_PROFILE_REPS", "1")) > 0 || error("Invalid COLD_PROFILE_REPS")
     jt = parse(Int, get(ENV, "EXPECT_JULIA_THREADS", "1"))
     jt > 0 && Threads.nthreads() == jt || error("Julia thread request mismatch")
     bt = parse(Int, get(ENV, "BENCH_BLAS_THREADS", "1"))
@@ -246,6 +274,9 @@ function cold_provenance(out, stage)
         "requested_julia_threads" => parse(Int,ENV["EXPECT_JULIA_THREADS"]),
         "requested_blas_threads" => parse(Int,ENV["BENCH_BLAS_THREADS"]),
         "thread_environment" => Dict(k=>get(ENV,k,"") for k in ("OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS","BLIS_NUM_THREADS","VECLIB_MAXIMUM_THREADS","BLAS_NUM_THREADS")),
+        "prepared_only" => get(ENV, "COLD_PREPARED_ONLY", "0") == "1",
+        "profile_reps" => parse(Int, get(ENV, "COLD_PROFILE_REPS", "1")),
+        "screen_set" => get(ENV, "SCREEN_SET", ""),
         "schema" => 2, "stage" => stage, "packages" => packages,
         "julia_version" => string(VERSION), "julia_threads" => Threads.nthreads(),
         "blas_threads" => LinearAlgebra.BLAS.get_num_threads(),
@@ -433,7 +464,10 @@ function cold_benchmark(c, dir; selected=false)
     cold_csv(joinpath(dir, "warmup.csv"), [warm])
     warm.eligible || error("Warmup failed accuracy/status/memory gate")
     rows = NamedTuple[]
-    for mode in ("prepared", "fresh")
+    # COLD_PREPARED_ONLY=1: the optimization campaign excludes construction and
+    # warm starts, so fresh-scope sampling (constructor-dominated) is skipped.
+    modes = get(ENV, "COLD_PREPARED_ONLY", "0") == "1" ? ("prepared",) : ("prepared", "fresh")
+    for mode in modes
         k = warm.solve_seconds < 60 ? 5 : warm.solve_seconds < 600 ? 3 : 2
         # Fresh setup may dominate; use an excluded, compiled fresh trial to choose k.
         if mode == "fresh"
@@ -465,7 +499,7 @@ function cold_benchmark(c, dir; selected=false)
             cold_require(row.eligible && agreement <= 1e-8, "Trial failed correctness, memory, or repeatability gate")
         end
     end
-    summaries = map(("prepared", "fresh")) do mode
+    summaries = map(modes) do mode
         rr = filter(r -> r.mode == mode, rows)
         times = [r.total_seconds for r in rr]
         (; mode, minimum_seconds=minimum(times), median_seconds=median(times),
@@ -515,8 +549,14 @@ function cold_profile(c, dir; selected=true)
     row, reference = cold_trial(solver; crosscheck=rung in ("R1", "R2"))
     cold_csv(joinpath(dir, "unprofiled_trial.csv"), [row])
     row.eligible || error("Profile candidate failed validation")
-    cold_reset!(solver); Profile.clear()
-    Profile.@profile pnl._solve!(rotor, solver)
+    # COLD_PROFILE_REPS accumulates samples over repeated prepared solves for
+    # denser attribution; resets stay outside every recorded region and the
+    # final solution is validated below.
+    Profile.clear()
+    for _ in 1:parse(Int, get(ENV, "COLD_PROFILE_REPS", "1"))
+        cold_reset!(solver)
+        Profile.@profile pnl._solve!(rotor, solver)
+    end
     serialize(joinpath(dir, "cpu_profile.jls"), Profile.retrieve())
     for format in (:flat, :tree)
         open(joinpath(dir, "cpu_$(format).txt"), "w") do io
@@ -614,13 +654,20 @@ function cold_run(configs, out, stage; profile=false)
             failures += 1
             cold_write_toml(joinpath(dir, "status.toml"), Dict("status" => "failed", "error" => sprint(showerror, err, catch_backtrace())))
             @error "Recorded failed candidate" dir exception=(err, catch_backtrace())
-            # The pilot stops at the first failed arm. Screening is a later task.
+            # Generated screen candidates record failures and continue (e.g. a
+            # roster point whose calibration cannot cross the accuracy gate);
+            # baseline/verify and selected executions still stop at the first
+            # failed arm.
+            if stage == "screen" && isempty(cold_selected_file)
+                GC.gc()
+                continue
+            end
             rethrow()
         end
         GC.gc()
     end
-    cold_write_toml(joinpath(out, "selected.toml"), Dict("configs" => selected))
     !profile && isempty(selected) && error("No eligible candidates; inspect status.toml and trials.csv")
+    cold_write_toml(joinpath(out, "selected.toml"), Dict("configs" => selected))
     stage == "verify" && failures > 0 && error("Verification has failed candidates")
     return nothing
 end

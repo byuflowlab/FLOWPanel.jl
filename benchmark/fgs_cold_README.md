@@ -35,6 +35,35 @@ occupy separate solve regions and are validated after recording. CPU reports use
 native frames and thread/task grouping. The raw allocation profile retains stacks;
 its report lists sampled allocations (sample rate 0.01), not exact attribution.
 
+## Optimization-campaign controls (v8)
+
+The initialized-FGS optimization campaign
+(`BRAINSTORM/021_rotor_hover_solver_benchmarks/fgs_initialized_cpu_optimization_plan_20260911.md`)
+adds three environment controls; all default to the pilot behavior when unset.
+
+- `COLD_PREPARED_ONLY=1` skips the fresh scope entirely (constructor-dominated;
+  the plan excludes construction and warm starts). Prepared sampling, gates and
+  summaries are unchanged.
+- `SCREEN_SET="key:v1,v2,...[;key2:...]"` replaces the default `screen` axes
+  with an explicit one-factor-at-a-time roster off the rung seed (e.g.
+  `inner:1,2,3,5` for the plan's step-1 inner-iteration screen; the seed value
+  always runs). Values parse with the seed field's type; unknown keys, wrong
+  types, out-of-range values, non-`screen` stages, and combination with
+  `CONFIG_FILE` all fail before any filesystem work. Generated screen
+  candidates still calibrate their own stopping tolerance through the
+  staircase, and a failed screen candidate is recorded in its `status.toml`
+  and skipped rather than stopping the roster; baseline/verify/selected
+  executions still stop at the first failure.
+- `COLD_PROFILE_REPS=N` accumulates the CPU profile over N repeated prepared
+  solves (resets outside recorded regions; final solution still validated).
+  The allocation profile remains a single solve.
+
+`benchmark/run_cold_opt.slurm.sh` drives the campaign sequence on one node:
+controls → smoke → prepared-only seed baselines (j4/b1, j64/b1) → `SCREEN_SET`
+screen (j64/b1) → accumulated seed profile. `COLD_OPT_RUNG` (default `R2`),
+`COLD_OPT_SCREEN_SET` (default `inner:1,2,3,5`) and
+`COLD_OPT_STAGE ∈ {all, controls_smoke, screen_profile}` parameterize it.
+
 ## Calibration and gates
 
 Only generated baseline/screen candidates calibrate. The smoke calibrates once and

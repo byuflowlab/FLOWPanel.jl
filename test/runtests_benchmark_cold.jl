@@ -77,6 +77,38 @@ end
     end
 end
 
+@testset "SCREEN_SET explicit roster" begin
+    withenv("SCREEN_SET" => "inner:1,2,3,5") do
+        configs = cold_configs("R2", ["fgs"], "screen")
+        @test length(configs) == 5
+        @test sort([c["inner"] for c in configs]) == [1, 2, 3, 5, 10]
+        @test all(c -> c["inner"] isa Int && !(c["inner"] isa Bool), configs)
+        @test all(c -> c["P"] == 8 && c["MAC"] == 0.4 && c["leaf"] == 100, configs)
+        @test length(unique(cold_id.(configs))) == 5
+        @test_throws Exception cold_configs("R2", ["fgs"], "baseline")
+        @test_throws Exception cold_configs("R2", ["fgs"], "verify")
+        # ILU seed has no "inner" field: unknown axis fails loudly.
+        @test_throws Exception cold_configs("R2", ["krylov_ilu"], "screen")
+        mktempdir() do dir
+            path = joinpath(dir, "configs.toml")
+            c = cold_seed("R2", "fgs"); c["tolerance"] = 1e-10
+            cold_write_toml(path, Dict("configs" => [c]))
+            @test_throws Exception cold_configs("R2", ["fgs"], "screen"; file=path)
+        end
+    end
+    withenv("SCREEN_SET" => "MAC:0.3,0.5;leaf:25,50,200") do
+        configs = cold_configs("R2", ["fgs"], "screen")
+        @test length(configs) == 6   # seed + two MAC neighbors + three leaves
+        @test all(c -> c["leaf"] isa Int && c["MAC"] isa Float64, configs)
+    end
+    for bad in ("inner", "inner:", "bogus:1,2", "inner:0", "inner:abc",
+            "MAC:1.5", "inner:1;inner", "inner:1.5")
+        withenv("SCREEN_SET" => bad) do
+            @test_throws Exception cold_configs("R2", ["fgs"], "screen")
+        end
+    end
+end
+
 @testset "Invalid input has no filesystem effects" begin
     mktempdir() do dir
         out, fixture = joinpath(dir,"output"), joinpath(dir,"fixture")
@@ -94,6 +126,9 @@ end
                     "EXPECT_JULIA_THREADS"=>"0", "BENCH_BLAS_THREADS"=>"0",
                     "OMP_NUM_THREADS"=>"0", "THREADING_MODE"=>"bad",
                     "KNOBS_MODE"=>"../../outside", "PER_RUNG_DIR"=>"bad", "K_REPS"=>"bad",
+                    "COLD_PREPARED_ONLY"=>"2", "COLD_PREPARED_ONLY"=>"bad",
+                    "COLD_PROFILE_REPS"=>"0", "COLD_PROFILE_REPS"=>"bad",
+                    "SCREEN_SET"=>"inner:1,2",
                     "CONFIG_FILE"=>joinpath(dir,"missing.toml"))
                 withenv(key=>value) do
                     @test_throws Exception cold_initialize!()
@@ -147,6 +182,18 @@ cold_profile(c, dir; selected=true) = error("injected profile verification failu
 cold_benchmark(c, dir; selected=false) = error("injected selected solve failure")
 end
 
+module ColdScreenFailureHarness
+import LinearAlgebra
+include(joinpath(@__DIR__, "..", "benchmark", "fgs_cold_common.jl"))
+rung = "R1"
+cold_selected_file = ""
+# One roster point fails; the seed (inner=10) succeeds with a stub summary.
+cold_benchmark(c, dir; selected=false) = c["inner"] != 10 ?
+    error("injected screen candidate failure") :
+    [(; mode="prepared", minimum_seconds=1.0, median_seconds=1.0,
+        maximum_seconds=1.0, spread_seconds=0.0, repetitions=5, eligible=true)]
+end
+
 @testset "Failed requested execution cannot report completion" begin
     for profile in (false,true), stage in ("baseline","verify")
         mktempdir() do dir
@@ -158,5 +205,28 @@ end
             @test TOML.parsefile(only(statuses))["status"] == "failed"
             @test !isfile(joinpath(dir,"selected.toml"))
         end
+    end
+end
+
+@testset "Screen records failed candidates and continues" begin
+    seed = cold_seed("R1", "fgs")
+    bad = copy(seed); bad["inner"] = 3
+    # Partial failure: the failed roster point is recorded, the survivor wins.
+    mktempdir() do dir
+        @test ColdScreenFailureHarness.cold_run([bad, seed], dir, "screen") === nothing
+        statuses = Dict(joinpath(root,f) => TOML.parsefile(joinpath(root,f))["status"]
+            for (root,_,files) in walkdir(dir) for f in files if f == "status.toml")
+        @test sort(collect(values(statuses))) == ["completed", "failed"]
+        selected = TOML.parsefile(joinpath(dir,"selected.toml"))["configs"]
+        @test length(selected) == 1 && selected[1]["inner"] == 10
+    end
+    # Total failure: every candidate recorded, no selection is reported.
+    mktempdir() do dir
+        bad2 = copy(seed); bad2["inner"] = 5
+        @test_throws ErrorException ColdScreenFailureHarness.cold_run([bad, bad2], dir, "screen")
+        statuses = [joinpath(root,f) for (root,_,files) in walkdir(dir) for f in files if f == "status.toml"]
+        @test length(statuses) == 2
+        @test all(TOML.parsefile(s)["status"] == "failed" for s in statuses)
+        @test !isfile(joinpath(dir,"selected.toml"))
     end
 end
