@@ -18,7 +18,9 @@
 
     Contrary to a remark in an earlier revision of the theory note, (I−B) is
     not a low-rank update of the factored G (only B = G − WC is), so the Green
-    solve carries its own one-time bordered LU.
+    solve carries its own one-time factorization: an implicit-Householder
+    reduction of the gauge-fixed system (052e.2b Tier 0B-R, ADOPT 2026-09-07),
+    with the bordered LU retained as the debug/reference route.
 =###############################################################################
 
 ################################################################################
@@ -72,7 +74,11 @@ body-only Green system `(I−B)q = Sσ` for the wake potential trace `q` (σ fro
 sampled wake velocities), then solve `G·μE = −S·σ0 − q`. The near-null constant
 mode of `(I−B)` is removed by `gauge`:
 
-- `:area_mean`: area-weighted zero-mean trace (bordered Lagrange row).
+- `:area_mean`: area-weighted zero-mean trace. With `green_solver=nothing`
+  this is the implicit-Householder reduced solve (052e.2b ADOPT; see
+  [`GreenHouseholderState`](@ref)).
+- `:area_mean_bordered`: same gauge via the bordered Lagrange-row LU —
+  the validated debug/reference route (requires `green_solver=nothing`).
 - `:lsq`: min-norm least squares with the same area constraint row (QR;
   requires `green_solver=nothing`).
 
@@ -101,11 +107,14 @@ struct GreenReconstruction{TS<:Union{Nothing,KrylovSolver,FGSSolver}} <: Abstrac
     function GreenReconstruction(; gauge::Symbol=:area_mean,
             recompute_interval::Int=1,
             green_solver::Union{Nothing,KrylovSolver,FGSSolver}=nothing)
-        gauge in (:area_mean, :lsq) ||
+        gauge in (:area_mean, :area_mean_bordered, :lsq) ||
             error("Invalid GreenReconstruction gauge :$gauge; "*
-                  "expected :area_mean or :lsq.")
+                  "expected :area_mean, :area_mean_bordered, or :lsq.")
         gauge === :lsq && !isnothing(green_solver) &&
             error("gauge=:lsq requires green_solver=nothing (dense QR route).")
+        gauge === :area_mean_bordered && !isnothing(green_solver) &&
+            error("gauge=:area_mean_bordered requires green_solver=nothing "*
+                  "(dense bordered-LU debug/reference route).")
         recompute_interval >= 1 ||
             error("recompute_interval must be >= 1; got $recompute_interval.")
         return new{typeof(green_solver)}(gauge, recompute_interval, green_solver)
@@ -149,8 +158,9 @@ struct HybridWakePotential <: AbstractSolveFormulation
             dirichlet_residual_scale::Real=1,
             neumann_residual_scale::Real=1,
             require_outer_convergence::Bool=false)
-        gauge in (:area_mean, :lsq) || error(
-            "Invalid HybridWakePotential gauge :$gauge; expected :area_mean or :lsq.")
+        gauge in (:area_mean, :area_mean_bordered, :lsq) || error(
+            "Invalid HybridWakePotential gauge :$gauge; expected :area_mean, "*
+            ":area_mean_bordered, or :lsq.")
         recompute_interval >= 1 || error("recompute_interval must be >= 1")
         max_outer_iterations >= 1 || error("max_outer_iterations must be >= 1")
         isfinite(outer_tolerance) && outer_tolerance > 0 || error(
@@ -336,15 +346,40 @@ factorization, matrix-free Krylov, relaxed Picard). Every subtype carries the
 reconstructed trace in a `q::Vector` field."
 abstract type AbstractGreenState end
 
-"Dense gauge-fixed body-only Green solve (the `Backslash`-analogue): one-time
-assembly of B plus a bordered LU (`gauge=:area_mean`) or QR (`gauge=:lsq`)."
+"Dense gauge-fixed body-only Green solve, debug/reference routes: one-time
+assembly of B plus a bordered LU (`gauge=:area_mean_bordered`) or QR
+(`gauge=:lsq`). The production `:area_mean` route is
+[`GreenHouseholderState`](@ref) (052e.2b ADOPT); this bordered LU is retained
+as its validated reference."
 struct GreenSolveState{TF, TFACT} <: AbstractGreenState
-    fact::TFACT           # :area_mean → LU of bordered [(I−B) a; aᵀ 0]
-                          # :lsq       → QR of [(I−B); aᵀ]
+    fact::TFACT           # :area_mean_bordered → LU of bordered [(I−B) a; aᵀ 0]
+                          # :lsq                → QR of [(I−B); aᵀ]
     gauge::Symbol
     q::Vector{TF}         # length N
     rhs_b::Vector{TF}     # length N+1
-    sol_b::Vector{TF}     # length N+1 (used by :area_mean)
+    sol_b::Vector{TF}     # length N+1 (used by :area_mean_bordered)
+end
+
+"Production dense `:area_mean` Green solve (052e.2b Tier 0B-R, ADOPT ruling
+2026-09-07): implicit-Householder reduction of the gauge-fixed system. With
+`â = a/‖a‖` and the reflector `H = I − 2vvᵀ` chosen so `H â = s e_N`
+(cancellation-avoiding sign `s = −sign(â_N)`), the two-sided transform
+`Ã = H (I−B) Hᵀ` maps the gauge constraint `aᵀq = 0` to `(H q)_N = 0`, so the
+solve is an LU of the leading (N−1)×(N−1) block of `Ã`; the compatibility
+multiplier λ comes from the omitted row. No dense basis or projection matrix is
+formed; parity vs the bordered route and conditioning telemetry are recorded in
+`FastMultipole/MATRIX_OPERATOR_REFACTOR/052e2b-tier0br-results-2026-09-07.md`
+(reduced block better conditioned than the bordered matrix on all fixtures)."
+struct GreenHouseholderState{TF, TFACT} <: AbstractGreenState
+    v::Vector{TF}         # unit Householder reflector
+    s::TF                 # sign: H â = s e_N
+    anorm::TF             # ‖a‖₂
+    rowN::Vector{TF}      # Ã[N, 1:N−1] (untouched by the block LU)
+    At::Matrix{TF}        # Ã = H(I−B)Hᵀ; leading block overwritten by its LU
+    fact::TFACT           # LU of Ã[1:N−1, 1:N−1] (views into At)
+    lambda::Base.RefValue{TF} # compatibility multiplier of the last solve
+    q::Vector{TF}         # length N
+    bt::Vector{TF}        # solve scratch: H·b, then [y; 0]
 end
 
 "Matrix-free bordered Green solve reusing a `KrylovSolver`'s options and
@@ -499,6 +534,15 @@ function initialize_formulation(f::HybridWakePotential, systems_tuple,
             "HybridWakePotential Dirichlet target $i must be a source+doublet RigidWakeBody")
         solver isa Backslash || error(
             "HybridWakePotential Dirichlet target $i requires a Backslash solver")
+        for shed in body.shedding
+            n_unpaired = count(<=(0), view(shed, 4, :))
+            n_unpaired == 0 || error(
+                "HybridWakePotential Dirichlet target $i has $n_unpaired "*
+                "unpaired shedding edge(s): the trace reconstruction requires "*
+                "paired shedding edges so the upper-minus-lower Kutta map "*
+                "annihilates constants (C*1 = 0); an unpaired edge would "*
+                "silently zero its Kutta trace correction.")
+        end
         TF = eltype(body.strength)
         N = body.ncells
         green = _build_green_state(body, f.gauge, nothing)
@@ -651,14 +695,45 @@ function _assemble_W!(W, body::RigidWakeBody, edges::SheddingEdgeMap)
     return W
 end
 
+"Build the implicit-Householder reduced Green solve state (production
+`:area_mean` route; see [`GreenHouseholderState`](@ref))."
+function _build_green_householder_state(body::RigidWakeBody)
+    TF = eltype(body.strength)
+    N = body.ncells
+    A = Matrix{TF}(undef, N, N)
+    _assemble_B!(A, body)
+    @. A = -A
+    for i in 1:N
+        A[i, i] += one(TF)
+    end
+    a = TF.(_panel_areas(body))
+    anorm = LA.norm(a)
+    # reflector with cancellation-avoiding sign: H â = s e_N
+    v = a ./ anorm
+    s = -sign(v[N] == zero(TF) ? one(TF) : v[N])
+    v[N] -= s
+    v ./= LA.norm(v)
+    # in-place two-sided transform A ← H A Hᵀ via two rank-one updates
+    t = Vector{TF}(undef, N)
+    LA.mul!(t, LA.transpose(A), v)       # t = Aᵀv
+    A .-= (2 .* v) .* LA.transpose(t)    # A ← (I − 2vvᵀ) A
+    LA.mul!(t, A, v)                     # t = (HA) v
+    A .-= (2 .* t) .* LA.transpose(v)    # A ← HA (I − 2vvᵀ) = H A Hᵀ
+    rowN = A[N, 1:N-1]
+    fact = lu!(view(A, 1:N-1, 1:N-1))
+    return GreenHouseholderState{TF, typeof(fact)}(v, s, anorm, rowN, A, fact,
+        Ref(zero(TF)), zeros(TF, N), zeros(TF, N))
+end
+
 function _build_green_solve_state(body::RigidWakeBody, gauge::Symbol)
+    gauge === :area_mean && return _build_green_householder_state(body)
     TF = eltype(body.strength)
     N = body.ncells
     B = Matrix{TF}(undef, N, N)
     _assemble_B!(B, body)
     a = TF.(_panel_areas(body))
 
-    if gauge === :area_mean
+    if gauge === :area_mean_bordered
         K = Matrix{TF}(undef, N+1, N+1)
         @views begin
             K[1:N, 1:N] .= .-B
@@ -691,7 +766,7 @@ function _green_solve_q!(gs::GreenSolveState, Ssigma::AbstractVector)
     N = length(gs.q)
     gs.rhs_b[1:N] .= Ssigma
     gs.rhs_b[N+1] = zero(eltype(gs.rhs_b))
-    if gs.gauge === :area_mean
+    if gs.gauge === :area_mean_bordered
         ldiv!(gs.sol_b, gs.fact, gs.rhs_b)
         gs.q .= view(gs.sol_b, 1:N)
     else # :lsq (min-residual with the area row; overdetermined (N+1)×N)
@@ -702,9 +777,35 @@ end
 _green_solve_q!(gs::GreenSolveState, Ssigma::AbstractVector, body, backend) =
     _green_solve_q!(gs, Ssigma)
 
-"Route dispatch for the Green-system solve state: `nothing` → dense bordered
-factorization (`Backslash`-analogue); `KrylovSolver` → matrix-free bordered
-Krylov; `FGSSolver` → matrix-free relaxed Picard."
+"Reduced solve (allocation-free): `q̃ = [y; 0]` with `Ã₁₁ y = (H b)₁:ₙ₋₁`,
+`λ = s/‖a‖ · ((H b)_N − Ã[N,1:N−1]·y)`, `q = Hᵀ q̃` (H symmetric)."
+function _green_solve_q!(gs::GreenHouseholderState, Ssigma::AbstractVector)
+    N = length(gs.q)
+    bt = gs.bt
+    bt .= Ssigma
+    bt .-= (2 * LA.dot(gs.v, bt)) .* gs.v          # bt = H b
+    y = view(bt, 1:N-1)
+    ldiv!(gs.fact, y)                              # y ← Ã₁₁ \ y (in place)
+    gs.lambda[] = gs.s / gs.anorm * (bt[N] - LA.dot(gs.rowN, y))
+    bt[N] = zero(eltype(bt))
+    gs.q .= bt
+    gs.q .-= (2 * LA.dot(gs.v, gs.q)) .* gs.v      # q = H [y; 0]
+    return gs.q
+end
+_green_solve_q!(gs::GreenHouseholderState, Ssigma::AbstractVector, body,
+    backend) = _green_solve_q!(gs, Ssigma)
+
+"Compatibility multiplier λ of the state's last Green solve (zero for the
+unconstrained-residual `:lsq` route)."
+_green_lambda(gs::GreenHouseholderState) = gs.lambda[]
+_green_lambda(gs::GreenSolveState) =
+    gs.gauge === :lsq ? zero(eltype(gs.q)) : gs.sol_b[end]
+
+"Route dispatch for the Green-system solve state: `nothing` → dense one-time
+factorization (`Backslash`-analogue; implicit-Householder reduction for
+`:area_mean`, bordered LU/QR for `:area_mean_bordered`/`:lsq`);
+`KrylovSolver` → matrix-free bordered Krylov; `FGSSolver` → matrix-free
+relaxed Picard."
 _build_green_state(body::RigidWakeBody, gauge::Symbol, ::Nothing) =
     _build_green_solve_state(body, gauge)
 _build_green_state(body::RigidWakeBody, gauge::Symbol, ks::KrylovSolver) =
@@ -990,11 +1091,10 @@ function _green_diagnostics!(state::HybridBodyState, body::RigidWakeBody)
         _green_B_product!(Bq, body, state.green.q, DirectBackend())
     end
     areas = eltype(Bq).(_panel_areas(body))
-    # Dense :area_mean uses the bordered equation
+    # The dense :area_mean routes solve the gauge-fixed equation
     # (I-B)q + a*lambda = Ssigma. Include the compatibility multiplier in
     # the reported linear-system residual instead of mislabelling it as error.
-    lambda = state.green.gauge === :area_mean ? state.green.sol_b[end] :
-        zero(eltype(Bq))
+    lambda = _green_lambda(state.green)
     defect = state.green.q .- Bq .+ areas .* lambda .- state.Ssigma
     state.green_residual[] = LA.norm(defect) /
         max(LA.norm(state.Ssigma), eps(eltype(defect)))

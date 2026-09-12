@@ -51,7 +51,9 @@ function assert_and_banner(io::IO=stdout)
     # (backslash_ldiv, and the Backslash reference solves), which is exactly
     # what Phase 1 is trying to measure. Asserting makes a mismatch a hard
     # failure instead of a value that is merely recorded and later believed.
-    expected_blas = threading_mode == "single" ? 1 : julia_threads
+    default_blas = threading_mode == "single" ? 1 : julia_threads
+    expected_blas = parse(Int, get(ENV, "BENCH_BLAS_THREADS", string(default_blas)))
+    expected_blas > 0 || error("BENCH_BLAS_THREADS must be a positive integer")
     LinearAlgebra.BLAS.set_num_threads(expected_blas)
     blas_threads = LinearAlgebra.BLAS.get_num_threads()
     blas_threads == expected_blas || error(

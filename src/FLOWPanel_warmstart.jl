@@ -330,15 +330,20 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
     # them anymore, so they are silently inert extra point data — old
     # checkpoints keep loading; new checkpoints no longer write them.
 
-    # 026 Phase 2: restore the ResolutionSplitState (all-or-nothing on the
-    # six rsplit_* fields, no version tag). All six present → enable + exact
-    # restore; none → leave `nothing` (feature was off, no warn); partial →
-    # corrupted/stripped checkpoint. On a device-backed field the state is
-    # canonical to the host MIRROR (see _gpu_copy_side_buffers! in
+    # 026 Phase 2 (fractional-gating revision, Ryan 2026-09-08): restore the
+    # ResolutionSplitState (all-or-nothing on the five rsplit_* fields, no
+    # version tag). All five present → enable + restore; none → leave
+    # `nothing` (feature was off, no warn); partial → corrupted/stripped
+    # checkpoint. Legacy saves from the absolute-threshold revision also
+    # carry rsplit_exposure — those restore sigma_0/axis/weight but ZERO the
+    # accumulators (old dvisc/drvpm recorded post-clamp applied Δσ², not
+    # attempted; not comparable) and warn. On a device-backed field the state
+    # is canonical to the host MIRROR (see _gpu_copy_side_buffers! in
     # FLOWPanel_gpu_wake.jl), so restore lands there.
     rsplit_fields = ("rsplit_sigma_0", "rsplit_axis", "rsplit_weight",
-                     "rsplit_exposure", "rsplit_dvisc", "rsplit_drvpm")
+                     "rsplit_dvisc", "rsplit_drvpm")
     rsplit_present = filter(f -> f in keys(point_data), rsplit_fields)
+    rsplit_legacy = "rsplit_exposure" in keys(point_data)
     if length(rsplit_present) == length(rsplit_fields)
         rs_pf = pf.particles isa Array ? pf : _gpu_pfield_mirror(pf)
         rs = FLOWVPM.enable_resolution_split!(rs_pf)
@@ -347,10 +352,17 @@ function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, w
         rs.sigma_0[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_sigma_0"]))
         rs.axis[:, 1:np] .= R.(ReadVTK.get_data(point_data["rsplit_axis"]))
         rs.weight[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_weight"]))
-        rs.exposure[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_exposure"]))
-        rs.dvisc[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_dvisc"]))
-        rs.drvpm[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_drvpm"]))
-    elseif !isempty(rsplit_present)
+        if rsplit_legacy
+            @warn "Loaded a legacy (pre-fractional-gating) " *
+                "ResolutionSplitState checkpoint: dropping rsplit_exposure " *
+                "and zeroing dvisc/drvpm (old accumulators recorded applied " *
+                "post-clamp Δσ², incompatible with attempted-Δσ² gating); " *
+                "split triggers re-arm from this step."
+        else
+            rs.dvisc[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_dvisc"]))
+            rs.drvpm[1:np] .= R.(ReadVTK.get_data(point_data["rsplit_drvpm"]))
+        end
+    elseif !isempty(rsplit_present) || rsplit_legacy
         throw(ArgumentError("Loaded particle VTK carries a partial " *
             "ResolutionSplitState field set ($(join(rsplit_present, ", "))) " *
             "— corrupted or hand-stripped checkpoint; expected all or none " *
@@ -384,7 +396,6 @@ function _zero_resolution_split_state!(rs)
     fill!(rs.sigma_0, 0)
     fill!(rs.axis, 0)
     fill!(rs.weight, 0)
-    fill!(rs.exposure, 0)
     fill!(rs.dvisc, 0)
     fill!(rs.drvpm, 0)
     return nothing

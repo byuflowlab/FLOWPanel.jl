@@ -1760,8 +1760,9 @@ end
 # On a device-backed wake the ResolutionSplitState lives on the HOST MIRROR
 # (maintenance runs there); particles shed on the device field between
 # maintenance passes therefore miss the add_particle lockstep hook and land
-# in mirror slots with sigma_0 == 0 — which would read as an infinite growth
-# ratio. Seed those slots with the current σ (creation-σ approximation: at
+# in mirror slots with sigma_0 == 0 — which would leave every fractional
+# trigger permanently dead for that particle (the check requires σ₀ > 0).
+# Seed those slots with the current σ (creation-σ approximation: at
 # most one maintenance cadence of drift) before every split application.
 # Host-backed wakes never hit the branch (hooks seed every slot), so the
 # scan is a cheap no-op there.
@@ -2486,15 +2487,17 @@ function _write_particles_vtp(filename, host_particles, np, cells, ::Type{T};
         vtp["SFS", WriteVTK.VTKPointData()] = _conv(view(host_particles, FLOWVPM.SFS_INDEX, 1:np))
         vtp["velocity_gradient", WriteVTK.VTKPointData()] = reshape(_conv(view(host_particles, FLOWVPM.J_INDEX, 1:np)), 3, 3, np)
 
-        # 026 Phase 2: ResolutionSplitState persistence (written only when
-        # the feature is enabled; the warm-start loader treats the six
-        # rsplit_* fields as all-or-nothing — no version tag, no TOML). All
-        # reals, so every field follows the series precision T.
+        # 026 Phase 2 (fractional-gating revision, Ryan 2026-09-08):
+        # ResolutionSplitState persistence (written only when the feature is
+        # enabled; the warm-start loader treats the five rsplit_* fields as
+        # all-or-nothing — no version tag, no TOML — with a legacy-migration
+        # path for pre-revision six-field saves that also carried
+        # rsplit_exposure). All reals, so every field follows the series
+        # precision T.
         if resolution_split !== nothing
             vtp["rsplit_sigma_0", WriteVTK.VTKPointData()] = _conv(view(resolution_split.sigma_0, 1:np))
             vtp["rsplit_axis", WriteVTK.VTKPointData()] = _conv(view(resolution_split.axis, :, 1:np))
             vtp["rsplit_weight", WriteVTK.VTKPointData()] = _conv(view(resolution_split.weight, 1:np))
-            vtp["rsplit_exposure", WriteVTK.VTKPointData()] = _conv(view(resolution_split.exposure, 1:np))
             vtp["rsplit_dvisc", WriteVTK.VTKPointData()] = _conv(view(resolution_split.dvisc, 1:np))
             vtp["rsplit_drvpm", WriteVTK.VTKPointData()] = _conv(view(resolution_split.drvpm, 1:np))
         end

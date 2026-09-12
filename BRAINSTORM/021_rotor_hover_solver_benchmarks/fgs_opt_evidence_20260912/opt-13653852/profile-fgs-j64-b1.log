@@ -1,0 +1,29 @@
+┌ Warning: There were no samples collected in one or more groups.
+│ This may be due to idle threads, or you may need to run your
+│ program longer (perhaps by running it multiple times),
+│ or adjust the delay between samples with `Profile.init()`.
+└ @ Profile /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Profile/src/Profile.jl:1240
+┌ Warning: There were no samples collected in one or more groups.
+│ This may be due to idle threads, or you may need to run your
+│ program longer (perhaps by running it multiple times),
+│ or adjust the delay between samples with `Profile.init()`.
+└ @ Profile /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Profile/src/Profile.jl:1240
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 64
+#   blas_threads   = 1
+#   commit         = 32fe1c439f701506eee1338e16f3b83e6fec2179
+#   fm_commit      = ef10643a401d6da16e28be87805b67d11bdf1fb5
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-cold-source-20260911-v8-wt fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-3-5
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-12 00:01:28
+######################################################################
+TUNED[R2] = (17, 0.5, 12) (csv-first precedence; hardcoded R1-R3 are fallback)
+R2 Dirichlet case: 15760 panels, rms(b) = 0.011835954920956087 (direct source assembly 4.7 s)
+
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R2", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 10, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 1.073823105370851e-8)

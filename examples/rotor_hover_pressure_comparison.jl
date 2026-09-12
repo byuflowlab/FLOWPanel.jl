@@ -109,6 +109,20 @@ merge_r_factor = parse(Float64, get(ENV, "MERGE_R_FACTOR", "0.02"))
 merge_r_hash_factor = 0.02
 merge_sigma_relative = false
 merge_particles = parse(Bool, get(ENV, "MERGE_PARTICLES", "true"))
+# MERGE_OVERLAP=Φ_merge switches merging to the overlap gate (theory doc §4,
+# Ryan 2026-09-09): sigma_relative=true with r = 1/Φ_merge, so a pair merges
+# only when its overlap σ_min/dist exceeds Φ_merge. Stability against the
+# split system requires Φ_merge > the child target overlap
+# (WAKE_SPLIT_ELONGATE_OVERLAP); recommended 3.5. Default OFF (NaN) — the
+# absolute-radius production behavior is kept pending an A/B (the overlap
+# gate merges strictly less, so particle counts rise).
+merge_overlap = parse(Float64, get(ENV, "MERGE_OVERLAP", "NaN"))
+if !isnan(merge_overlap)
+    merge_overlap > 0 || error("MERGE_OVERLAP must be positive, got $(merge_overlap)")
+    merge_sigma_relative = true
+    merge_r_factor = 1 / merge_overlap
+    merge_r_hash_factor = 1 / merge_overlap
+end
 # Das (first shed-row offset) = max(eta*dt*|V_te|, min_displacement), so eta is
 # the fraction of one timestep's trailing-edge travel. Note the offset displaces
 # the whole attached wake row downstream of the TE, but does NOT set the shed
@@ -707,22 +721,24 @@ wake_rk3 = wake_integrator == "rk3"
 wake_rk3 && wake_expint && error(
     "WAKE_INTEGRATOR=rk3 and WAKE_EXPINT=true are mutually exclusive")
 
-# --- BRAINSTORM 026 Phase 2: resolution splitting (viscous tetra4 + two-regime
-# stretch tri3/pair2). OFF by default; enabled iff at least one MECHANISM
-# (WAKE_SPLIT_VISCOUS / WAKE_SPLIT_STRETCH) AND at least one TRIGGER
-# (WAKE_SPLIT_SIGMA_MAX / WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX /
-# WAKE_SPLIT_LOG_STRETCH_MAX / WAKE_SPLIT_ON_FLOOR) are armed; a mechanism
-# without a trigger (or vice versa) is a configuration error, not a silent
-# no-op. Splitting supersedes the SIGMA_CEIL band-aid — combining them is an
-# error (§8).
+# --- BRAINSTORM 026 Phase 2 (fractional-gating revision, Ryan 2026-09-08):
+# resolution splitting (viscous tetra4 + two-regime stretch tri3/pair2).
+# Triggers are PER-MECHANISM growth fractions vs each particle's σ₀
+# (WAKE_SPLIT_FRAC_VISCOUS / WAKE_SPLIT_FRAC_COMPRESS /
+# WAKE_SPLIT_FRAC_ELONGATE), accumulated as attempted (pre-clamp) Δσ² so
+# clamp-pinned particles keep firing. σ bounds are CLAMPS, not triggers:
+# WAKE_SPLIT_SIGMA_MIN/MAX clamp emitted children (defaulting to the 052c
+# sigma_guard floor / SIGMA_CEIL so the two clamp layers agree), and the
+# integrator guard is a permanent partner of splitting — the old
+# SIGMA_CEIL-vs-splitting mutual exclusion is gone. OFF by default; enabled
+# iff at least one mechanism is enabled AND its fraction is set; a mechanism
+# without its fraction (or vice versa) is a configuration error, not a
+# silent no-op.
 wake_split_viscous = parse(Bool, get(ENV, "WAKE_SPLIT_VISCOUS", "false"))
 wake_split_stretch = parse(Bool, get(ENV, "WAKE_SPLIT_STRETCH", "false"))
-wake_split_sigma_max = parse(Float64, get(ENV, "WAKE_SPLIT_SIGMA_MAX", "NaN"))
-wake_split_ratio_max = parse(Float64,
-    get(ENV, "WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX", "NaN"))
-wake_split_log_stretch_max = parse(Float64,
-    get(ENV, "WAKE_SPLIT_LOG_STRETCH_MAX", "NaN"))
-wake_split_on_floor = parse(Bool, get(ENV, "WAKE_SPLIT_ON_FLOOR", "false"))
+wake_split_f_visc = parse(Float64, get(ENV, "WAKE_SPLIT_FRAC_VISCOUS", "NaN"))
+wake_split_f_comp = parse(Float64, get(ENV, "WAKE_SPLIT_FRAC_COMPRESS", "NaN"))
+wake_split_f_elong = parse(Float64, get(ENV, "WAKE_SPLIT_FRAC_ELONGATE", "NaN"))
 wake_split_stretch_axis = parse(Bool, get(ENV, "WAKE_SPLIT_STRETCH_AXIS", "true"))
 wake_split_viscous_offset = parse(Float64,
     get(ENV, "WAKE_SPLIT_VISCOUS_OFFSET_RATIO", "1.3503"))
@@ -730,56 +746,70 @@ wake_split_compress_offset = parse(Float64,
     get(ENV, "WAKE_SPLIT_COMPRESS_OFFSET_RATIO", "0.6"))
 wake_split_elongate_offset = parse(Float64,
     get(ENV, "WAKE_SPLIT_ELONGATE_OFFSET_RATIO", "0.5"))
+# Adaptive in-line elongation (theory doc §3, Ryan 2026-09-09): child count
+# m = clamp(round(λ_att·σ₀/σ_c), 2, m_max) tiles the accumulated stretch at
+# the target child overlap Φ_t. Default Φ_t = the shedding OVERLAP so split
+# children match the discretization the wake was born with;
+# WAKE_SPLIT_ELONGATE_OVERLAP=NaN selects the legacy fixed 2-child kernel
+# (WAKE_SPLIT_ELONGATE_OFFSET_RATIO spacing) as the comparison arm.
+wake_split_elongate_overlap = parse(Float64,
+    get(ENV, "WAKE_SPLIT_ELONGATE_OVERLAP", string(overlap)))
+wake_split_elongate_m_max = parse(Int,
+    get(ENV, "WAKE_SPLIT_ELONGATE_M_MAX", "4"))
 wake_split_every = parse(Int, get(ENV, "WAKE_SPLIT_EVERY", "1"))
 wake_split_verbose = parse(Bool, get(ENV, "WAKE_SPLIT_VERBOSE", "true"))
 
-# WAKE_SPLIT_ON_FLOOR arms the shrink trigger AT the 052c floor
-# (SIGMA_FLOOR_FRAC × tip_sigma_default — same formula as the sigma_guard
-# block below; the guard itself is parsed later, this only peeks the env).
+# Emission clamps: default to the 052c guard bounds (SIGMA_FLOOR_FRAC ×
+# tip_sigma_default and SIGMA_CEIL — the guard itself is parsed later, this
+# only peeks the env) so children respect the same σ bounds the integrator
+# enforces; explicit WAKE_SPLIT_SIGMA_MIN/MAX override.
 wake_split_floor_frac = parse(Float64, get(ENV, "SIGMA_FLOOR_FRAC", "0.0"))
-wake_split_on_floor && wake_split_floor_frac <= 0 && error(
-    "WAKE_SPLIT_ON_FLOOR=true requires an active 052c floor " *
-    "(SIGMA_FLOOR_FRAC > 0): the floor trigger fires on σ pinned at the floor")
-wake_split_sigma_floor = wake_split_on_floor ?
-    wake_split_floor_frac * tip_sigma_default : NaN
+wake_split_guard_ceil = parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))
+wake_split_sigma_min = parse(Float64, get(ENV, "WAKE_SPLIT_SIGMA_MIN",
+    wake_split_floor_frac > 0 ?
+        string(wake_split_floor_frac * tip_sigma_default) : "NaN"))
+wake_split_sigma_max = parse(Float64, get(ENV, "WAKE_SPLIT_SIGMA_MAX",
+    isfinite(wake_split_guard_ceil) ? string(wake_split_guard_ceil) : "NaN"))
 
-wake_split_mech_armed = wake_split_viscous || wake_split_stretch
-wake_split_trig_armed = !isnan(wake_split_sigma_max) ||
-    !isnan(wake_split_ratio_max) || !isnan(wake_split_log_stretch_max) ||
-    wake_split_on_floor
-wake_split_mech_armed && !wake_split_trig_armed && error(
-    "WAKE_SPLIT_VISCOUS/WAKE_SPLIT_STRETCH armed but no trigger set: also " *
-    "set WAKE_SPLIT_SIGMA_MAX, WAKE_SPLIT_SIGMA_GROWTH_RATIO_MAX, " *
-    "WAKE_SPLIT_LOG_STRETCH_MAX, and/or WAKE_SPLIT_ON_FLOOR")
-wake_split_trig_armed && !wake_split_mech_armed && error(
-    "a WAKE_SPLIT_* trigger is set but no mechanism is enabled: also set " *
-    "WAKE_SPLIT_VISCOUS=true and/or WAKE_SPLIT_STRETCH=true")
-wake_split_active = wake_split_mech_armed && wake_split_trig_armed
-wake_split_active && isfinite(parse(Float64, get(ENV, "SIGMA_CEIL", "Inf"))) &&
-    error("SIGMA_CEIL and resolution splitting are mutually exclusive: " *
-        "splitting replaces the σ-cap band-aid (BRAINSTORM 026 §8)")
+wake_split_viscous && isnan(wake_split_f_visc) && error(
+    "WAKE_SPLIT_VISCOUS=true requires WAKE_SPLIT_FRAC_VISCOUS (its " *
+    "per-mechanism growth fraction)")
+!wake_split_viscous && !isnan(wake_split_f_visc) && error(
+    "WAKE_SPLIT_FRAC_VISCOUS is set but WAKE_SPLIT_VISCOUS is not enabled")
+wake_split_stretch && isnan(wake_split_f_comp) && isnan(wake_split_f_elong) &&
+    error("WAKE_SPLIT_STRETCH=true requires WAKE_SPLIT_FRAC_COMPRESS " *
+        "and/or WAKE_SPLIT_FRAC_ELONGATE")
+!wake_split_stretch && (!isnan(wake_split_f_comp) || !isnan(wake_split_f_elong)) &&
+    error("WAKE_SPLIT_FRAC_COMPRESS/WAKE_SPLIT_FRAC_ELONGATE set but " *
+        "WAKE_SPLIT_STRETCH is not enabled")
+wake_split_active = wake_split_viscous || wake_split_stretch
 
 # spliced into the maintenance tuple below; MergeParticles stays FIRST
 # (W3 ordering — merged representatives get fresh split state via the
 # on_representative hook at the merge application site)
 maybe_split = wake_split_active ?
     (pnl.ResolutionSplit(FV.ResolutionSplitOpts(;
+            f_visc = wake_split_f_visc,
+            f_comp = wake_split_f_comp,
+            f_elong = wake_split_f_elong,
+            sigma_min = wake_split_sigma_min,
             sigma_max = wake_split_sigma_max,
-            sigma_growth_ratio_max = wake_split_ratio_max,
-            log_stretch_max = wake_split_log_stretch_max,
-            sigma_floor = wake_split_sigma_floor,
             enable_viscous_split = wake_split_viscous,
             enable_stretch_split = wake_split_stretch,
             viscous_offset_ratio = wake_split_viscous_offset,
             compress_offset_ratio = wake_split_compress_offset,
             elongate_offset_ratio = wake_split_elongate_offset,
+            elongate_overlap = wake_split_elongate_overlap,
+            elongate_m_max = wake_split_elongate_m_max,
             use_stretch_axis = wake_split_stretch_axis);
         every = wake_split_every, verbose = wake_split_verbose),) : ()
 wake_split_active && println("Resolution splitting ACTIVE: " *
     "viscous=$(wake_split_viscous) stretch=$(wake_split_stretch) " *
-    "sigma_max=$(wake_split_sigma_max) ratio_max=$(wake_split_ratio_max) " *
-    "log_stretch_max=$(wake_split_log_stretch_max) " *
-    "sigma_floor=$(round(wake_split_sigma_floor, sigdigits=4)) " *
+    "f_visc=$(wake_split_f_visc) f_comp=$(wake_split_f_comp) " *
+    "f_elong=$(wake_split_f_elong) " *
+    "elongate_overlap=$(wake_split_elongate_overlap) " *
+    "elongate_m_max=$(wake_split_elongate_m_max) " *
+    "clamp=[$(wake_split_sigma_min), $(wake_split_sigma_max)] " *
     "stretch_axis=$(wake_split_stretch_axis) every=$(wake_split_every)")
 
 # The two conversions need mutually exclusive wake options, so build the
@@ -1729,6 +1759,7 @@ if save_path !== nothing
         println(io, "core_size_panel = $(core_size_panel)")
         println(io, "core_size_targets = $(core_size_targets)")
         println(io, "merge_particles = $(merge_particles)")
+        println(io, "merge_overlap = $(merge_overlap)")
         println(io, "relax_rlxf = $(relax_rlxf)")
         println(io, "relax_scheme = \"$(relax_scheme_name)\"")
         println(io, "relax_filter_downstream_R = $(relax_filter_downstream_R)")

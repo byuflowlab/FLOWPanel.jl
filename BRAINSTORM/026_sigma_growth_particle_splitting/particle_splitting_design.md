@@ -1060,3 +1060,321 @@ implementation direction the same day (plan drafted; see
 run dir `data/scr_p026ef_rk3_s020v_lg` (on /home, unarchived; no VTP
 warm-start value — ignition fully bracketed but the event class is
 already covered by the §17 arms).
+
+---
+
+# §19 Design amendment — per-mechanism fractional gating, σ bounds as clamps (Ryan rulings 2026-09-08)
+
+Ryan reviewed the shipped trigger set and replaced it. Four rulings
+(AskUserQuestion, 2026-09-08), all implemented the same day on the live
+checkouts:
+
+1. **Gate metric**: each mechanism fires on its OWN accumulated growth
+   fraction relative to the particle's `sigma_0`, using the per-mechanism
+   Δσ² accumulators (`dvisc`, `drvpm`) that previously only routed:
+   mechanism k fires when `sqrt(σ₀² + Δσ²_k)/σ₀` leaves
+   `[1 − f_elong, 1 + f_k]` on its side. The trigger IS the mechanism —
+   the `dvisc ≥ drvpm` routing tie-break is deleted.
+2. **Shrink side unified**: accumulators record ATTEMPTED (pre-clamp) Δσ²,
+   so floor/ceil-pinned particles keep accruing credit and **triggers still
+   fire at the clamps**. This subsumes and deletes the exposure integral
+   (`log_stretch_max`) and the floor-pin trigger (both were workarounds for
+   realized-σ starvation on the floor).
+3. **rVPM accumulator is signed net**: compression (+) and elongation (−)
+   cancel; a particle that compresses then relaxes back never splits.
+   Net > 0 → tri3, net < 0 → pair2.
+4. **σ_max/σ_min are clamps, not triggers**: the integrator sigma_guard
+   floor/ceil stays as a permanent partner of splitting (the "band-aid"
+   framing and the SIGMA_CEIL-vs-splitting mutual-exclusion error are
+   retired — **commit 8 (§8 SIGMA_CEIL removal) is CANCELLED**), and
+   emitted children are additionally clamped into `[sigma_min, sigma_max]`
+   at emission (vol recomputed from the clamped σ_c).
+
+Anti-refire stays cooldown-free: `_rsplit_reset_slot!` restamps
+`sigma_0 = σ_c` and zeroes accumulators on every child and merged
+representative, so a still-pinned child re-arms only after fresh attempted
+deformation.
+
+Knob surface (old → new):
+`ResolutionSplitOpts.sigma_max/sigma_growth_ratio_max/log_stretch_max/sigma_floor`
+→ `f_visc/f_comp/f_elong` (NaN-disabled fractions) + `sigma_min/sigma_max`
+(NaN-unbounded emission clamps). Driver:
+`WAKE_SPLIT_SIGMA_MAX`(trigger)/`_SIGMA_GROWTH_RATIO_MAX`/`_LOG_STRETCH_MAX`/
+`_ON_FLOOR` → `WAKE_SPLIT_FRAC_VISCOUS`/`_FRAC_COMPRESS`/`_FRAC_ELONGATE` +
+`WAKE_SPLIT_SIGMA_MIN`/`_SIGMA_MAX` (clamps, defaulting to the 052c
+sigma_guard floor and `SIGMA_CEIL` so the two clamp layers agree).
+`ResolutionSplitState` drops `exposure` (state file: sigma_0, axis, weight,
+dvisc, drvpm); particle-VTK persistence is now 5 `rsplit_*` fields, with a
+warn-and-zero-accumulators migration path for legacy 6-field saves
+(old accumulators recorded applied post-clamp Δσ², not comparable).
+
+Consequences for pending work:
+- **Commit 7 arms** (§8.4 cap030/cap018, §9 s020v matrix): still Ryan-gated;
+  the cap arms' `WAKE_SPLIT_SIGMA_MAX` is now the emission clamp and the
+  operating point moves to `WAKE_SPLIT_FRAC_COMPRESS` (re-derive vs the §5
+  adequacy table so splits fire before particles sit long at the clamp);
+  shrink arms move from `WAKE_SPLIT_LOG_STRETCH_MAX`+`WAKE_SPLIT_ON_FLOOR`
+  to `WAKE_SPLIT_FRAC_ELONGATE` (D4 value must be re-derived in fraction
+  space). Dispatcher comments updated in `run_p018_screen_hpc.slurm.sh`.
+- **Commit 8 is cancelled** (ruling 4); D5 closed accordingly.
+- GPU gap note (§ device paths): the exposure-trigger half of the gap is
+  gone with the trigger; the accumulator half remains — device-resident
+  integrator twins still do not maintain `dvisc`/`drvpm`, so splitting
+  remains host-mirror-only.
+
+# §20 Separation-criteria audit — child spacing/count vs vortex-tube physics (2026-09-09)
+
+Audit of the split kernels' *geometry* (how far apart, how many children)
+against the physics that fires the §19 triggers. Elongation first (the
+production-relevant mechanism). All facts pinned from the live checkouts.
+
+## 20.1 Conventions and code facts
+
+- **Overlap convention**: $\Phi \equiv \sigma/h$ (spacing $h = \sigma/\Phi$).
+  Pinned at `FLOWPanel_wake.jl:730` (`sigma = dist*overlap/p_per_step`) and
+  `:2113` (`h = sigma/overlap`). Driver `OVERLAP` default 3.0; the 018
+  campaign convention is 2.75. A shed particle is born tiling filament
+  length $\ell_0 = \sigma_0/\Phi$ ($\approx 0.36\,\sigma_0$ at $\Phi=2.75$).
+- **rVPM σ-law** (`FLOWVPM_timeintegration.jl` MM4; 020
+  `phase_01_theory.md` §2.1): $\dot\sigma = -\sigma Z$ with $Z = h_\sigma s$
+  and $h_\Gamma = 2h_\sigma$ at $(f,g)=(0,1/5)$, so $|\Gamma|$ grows at rate
+  $2Z$ while $\sigma^2$ decays at rate $2Z$. Since circulation is conserved
+  along the tube, $|\Gamma| \propto \Gamma_{\rm circ} L \propto L$: **the
+  represented segment length grows exactly as $|\Gamma|$, and
+  $\sigma^2 L = \mathrm{const}$ holds exactly for the rVPM channel.** Hence
+
+  $$\lambda \equiv \frac{L}{L_0} = \frac{\sigma_0^2}{\sigma_{\rm att}^2},
+  \qquad \sigma_{\rm att}^2 = \sigma_0^2 + \texttt{drvpm},$$
+
+  and at the elongation trigger $\lambda^* = (1-f_{\rm elong})^{-2}$
+  (e.g. 2.04 at $f_{\rm elong}=0.3$). Caveat: the *material* line stretch is
+  $e^{\int s\,dt}$; the represented tube stretches as $e^{2\int Z\,dt} =
+  e^{2h_\sigma\int s\,dt}$ — at $h_\sigma = 1/5$ only 2/5 of kinematic
+  stretching becomes represented length. $\lambda$ from `drvpm` measures the
+  represented tube, which is the right quantity for re-discretization.
+- **"Attempted" λ under clamps**: each accumulation step records
+  $\Delta\sigma^2$ computed *off the realized (clamped) σ*, so `drvpm` is a
+  chained linearization, not the free trajectory. Floor-pinned at
+  $\sigma_f$: per-step $\Delta\sigma^2 \approx -2\sigma_f^2 Z\,dt$, giving
+  $\lambda_{\rm att} = [1 - 2(\sigma_f/\sigma_0)^2\!\int\!Z\,dt]^{-1}$ vs
+  the free $\lambda = e^{2\int Z dt}$ — first-order equal, with
+  $\lambda_{\rm att}$ running high for long pinned windows at
+  $\sigma_f \approx \sigma_0$ and low for $\sigma_f \ll \sigma_0$. Adequate
+  for split sizing (splits fire at small fractions, so windows are short).
+
+## 20.2 Elongation (pair2) audit — VERDICT: fixed spacing is arbitrary
+
+Current kernel: $m=2$ children at $\pm 0.5\,\sigma_p$ (spacing
+$s = 1.0\,\sigma_p$), $\sigma_c = \sigma_p$, $\Gamma_c = \Gamma_p/2$,
+`circulation` unchanged (correct — series division of a tube keeps
+circulation).
+
+- **Tiling mismatch.** The parent represents $\lambda\ell_0$ of tube; $m$
+  children should be spaced $s_{\rm phys} = \lambda\ell_0/m$. Unclamped
+  ($\sigma_p = (1-f)\sigma_0$, $m=2$):
+
+  $$\frac{s_{\rm current}}{s_{\rm phys}}
+  = \frac{1.0\,(1-f)\sigma_0}{\lambda\sigma_0/(2\Phi)}
+  = 2\Phi(1-f)^3 .$$
+
+  At $(\Phi,f)=(2.75,0.3)$: **1.89 — children placed ~89 % too far
+  apart**; crossover at $f\approx 0.43$; at $f=0.5$ the same constant
+  UNDER-covers (0.69). No fixed ratio matches the physics as $f_{\rm elong}$
+  varies — confirming the coupling the reset prompt suspected.
+- **Overlap.** Child–child overlap $\Phi_{cc} = \sigma_c/s = 1.0$ for the
+  defaults vs the 2.75 shedding convention — under-overlapped by 2.75×
+  relative to birth discretization (but see §20.3: merging, not shedding,
+  sets the wake's effective spacing).
+
+**Matched design (closed form, no new state).** Choose target overlap
+$\Phi_t$; child spacing $s_t = \sigma_c/\Phi_t$; child count from tiling
+$\lambda\ell_0$ with $\ell_0 = \sigma_0/\Phi_t$:
+
+$$m^\* = \frac{\lambda_{\rm att}\,\ell_0}{s_t}
+       = \lambda_{\rm att}\,\frac{\sigma_0}{\sigma_c}
+       \;\;\xrightarrow{\ \sigma_c=(1-f)\sigma_0,\ \text{unclamped}\ }\;
+       (1-f_{\rm elong})^{-3} = \lambda_{\rm att}^{3/2}.$$
+
+Properties (all exact pre-rounding):
+
+1. **The volume rule emerges**: $m^\*\sigma_c^3 = \sigma_0^3$ — the
+   overlap-matched tiling is precisely merging's inverse
+   ($\sigma = \sqrt[3]{\Sigma\sigma^3}$), restoring the σ³-consistency the
+   W5 hygiene rule gave up.
+2. **Self-consistent without per-particle $\ell_0$ state**: a child's
+   implied birth tile $\sigma_c/\Phi_t$ equals its true tile
+   $\lambda\ell_0/m^\*$ identically — including when floor-pinned
+   ($\sigma_c = \sigma_f$ enters both sides). The NEW-state option in the
+   reset prompt is NOT needed; $\Phi_t$ as a knob suffices.
+3. **Composition is exact**: $m_1 m_2 = \lambda_1\frac{\sigma_0}{\sigma_1}
+   \cdot \lambda_2\frac{\sigma_1}{\sigma_2} = \lambda_{\rm tot}
+   \frac{\sigma_0}{\sigma_2}$ — repeated small splits produce the same
+   child count, σ, and tiled span as one big split. Only integer rounding
+   breaks this, boundedly.
+4. Numbers at $(f,\Phi_t,\sigma_0)=(0.3, 2.75, \sigma^\*{=}0.0381R)$:
+   $\lambda^\* = 2.04$, $m^\* = 2.92 \to 3$ children, spacing
+   $s = \lambda\ell_0/3 = 0.247\,\sigma_0 = 0.0094R$.
+
+## 20.3 The binding constraint is MERGING, not the tube physics
+
+Production merge (driver lines 108–110, 856–859): every step,
+`sigma_relative=false`, radius $r_m = 0.02R$ ABSOLUTE (= $0.525\,\sigma^*$),
+pairing = nearest-within-radius (no Γ-alignment gate; `gamma_align_cos`
+defaults off), representative $\sigma = \sqrt[3]{\Sigma\sigma^3}$.
+
+- $r_m = 0.02R$ **exceeds the shed spacing** $\sigma^\*/\Phi = 0.0139R$:
+  the wake's effective spacing floor is set by merging, not by `OVERLAP`.
+  The overlap "maintained everywhere else" is at most
+  $\sigma^\*/r_m \approx 1.9$, less after merge σ-growth.
+- Overlap-matched children ($s = 0.0094R \ll r_m$) are **immediate merge
+  candidates** (identical σ, mutual nearest). Split leaves σ unchanged;
+  merge returns $\sigma = m^{1/3}\sigma_c$. A split→merge cycle is
+  therefore a **σ-pump**: ×$m^{1/3}$ per cycle (+26 % at $m=2$, +44 % at
+  $m=3$) with both states re-armed fresh each time — positive feedback,
+  not mere churn. The §19 anti-refire argument covers accumulators only;
+  it cannot prevent this.
+- The current $1.0\,\sigma_p$ spacing ($\approx 0.7\sigma_0 = 0.0267R$ at
+  $f=0.3$, $\sigma_0=\sigma^*$) clears $r_m$ by only 34 % — the shipped
+  constant sits near the minimum merge-safe spacing, apparently by
+  accident. Note the margin shrinks as $\sigma_p$ floors: at
+  $\sigma_p = \sigma_f < 0.02R/1.0$ the CURRENT kernel is merge-unsafe too.
+
+Resolution options (Ryan): (a) **merge-safe spacing floor** in the kernel:
+$s \ge \kappa\,r_m$ (κ ≈ 1.2), reducing $m$ to
+$\max(2, \lfloor\lambda\ell_0/(\kappa r_m)\rfloor)$ when the floor binds —
+physics-tiling whenever merging permits, graceful degradation to
+pair2-at-safe-spacing otherwise (requires passing the merge radius to
+`ResolutionSplitOpts`); (b) merge exemption for fresh children (age state —
+against the no-cooldown ruling); (c) Γ-alignment gate on merging (would
+also stop the wholesale wake coarsening production currently relies on);
+(d) shrink $r_m$. Recommendation: (a).
+
+## 20.4 Compression (tri3) — analysis only
+
+Tube picture: `drvpm` > 0, $\lambda < 1$; cross-sectional area grows by
+$1/\lambda = (1+f_{\rm comp})^2$ at trigger. Re-discretizing the fattened
+bundle into children of birth-sized cores needs
+$m \approx (1+f_{\rm comp})^2$ filaments: $m=3$ is matched to
+$f_{\rm comp} \approx 0.73$; at the likelier 0.3–0.5, $m=2$ suffices. So
+yes — child count should scale with accumulated compression, with exponent
+1 in $\sigma_{\rm att}^2/\sigma_0^2$ (2-D cross-section) vs the elongation
+$\lambda^{3/2}$ (1-D length at fixed cross-section). The FIXED ring radius,
+unlike pair2's spacing, already scales with realized compression through
+$\sigma_p$; it under-represents attempted fattening only when
+ceiling-pinned ($\sigma_p < \sigma_{\rm att}$ — substituting
+$\sigma_{\rm att} = \sqrt{\sigma_0^2 + \texttt{drvpm}}$ for $\sigma_p$ in
+the radius would fix that if it ever matters). Ring children at the default
+$0.6\sigma_p$ (spacing $1.04\,\sigma_p$, grow-side $\sigma_p \ge
+(1{+}f)\sigma_0$) are merge-safe under production numbers ($\ge 0.05R$ at
+$f{=}0.3$, $\sigma_0{=}\sigma^*$). D2 (0.6 vs moment-match 1.155) stays
+open pending the §3a kernel-fit study. **Hygiene flag**: tri3/tetra4 pass
+the parent's `circulation` to every child, but parallel-filament division
+should carry `circ`$/m$ (pair2's unchanged `circ` is correct — series
+division). `circulation` is diagnostic-only today; fix opportunistically.
+
+## 20.5 Viscous (tetra4) — audit note only
+
+Offset $1.3503\,\sigma_p$ is the per-axis second-moment match (§3a);
+spacing $\approx 3.5\,\sigma_c$ under-overlapped as documented. Zero
+production events; D3 stays gated on the §3a kernel-fit study. No change.
+
+## 20.6 Proposed elongation kernel (pending Ryan's rulings)
+
+In-line adaptive-$m$: $m = \mathrm{clamp}(\mathrm{round}(
+\lambda_{\rm att}\sigma_0/\sigma_c),\ 2,\ m_{\max})$, spacing
+$s = \lambda_{\rm att}\ell_0/m$ (exact tiling; $\approx \sigma_c/\Phi_t$),
+subject to the §20.3 merge-safe floor; symmetric offsets
+$\big(k - \tfrac{m+1}{2}\big)s$, $k=1{:}m$ along the averaged axis;
+$\Gamma_c = \Gamma_p/m$, $\sigma_c = \sigma_p$, `circulation` unchanged.
+Γ-total, centroid, linear impulse exact for any $m$; angular impulse exact
+by symmetry. Knobs per the established pattern: `elongate_overlap`
+($\Phi_t$; NaN → legacy fixed-ratio pair2), `elongate_m_max`,
+merge-floor passthrough; driver `WAKE_SPLIT_ELONGATE_OVERLAP` /
+`_ELONGATE_M_MAX`. Capacity check becomes $m-1$ appended slots; verbose
+counters gain a children-emitted tally. Tests: extend t1/t2/t9 to adaptive
+$m$; new composition test (two small splits ≡ one big: same $m\sigma^3$
+and span); overlap + merge-floor assertions; re-derive t3/t4 pins for
+$m>2$ in-line geometry.
+
+## 20.7 Rulings and implementation (Ryan, AskUserQuestion 2026-09-09)
+
+Theory now lives in `splitting_theory.md` (same directory) — a SINGLE living
+draft, updated in place with no change history (Ryan's requested format);
+this design doc remains the decision/history record. Rulings on the §20
+audit, all implemented the same day on the live checkouts (uncommitted, on
+top of the still-uncommitted §19 redesign):
+
+1. **Adaptive in-line elongation kernel SHIPPED** (`_split_elongate_line!` +
+   `_elongate_plan`): `m = clamp(round(λ_att·σ₀/σ_c), 2, elongate_m_max)`
+   children tile the accumulated stretch at target child overlap
+   `elongate_overlap` (Φ_t). New `ResolutionSplitOpts` fields
+   `elongate_overlap` (NaN → legacy fixed pair2, the FLOWVPM default) and
+   `elongate_m_max` (default 4); driver `WAKE_SPLIT_ELONGATE_OVERLAP`
+   (defaults to the shedding `OVERLAP`, so the driver runs adaptive by
+   default) and `WAKE_SPLIT_ELONGATE_M_MAX`. `split_particles!` return
+   gained `n_children_elongate`.
+2. **Merge–split interplay → overlap-gated merging as an OFF-by-default
+   knob**: `MERGE_OVERLAP=Φ_merge` flips the driver's MergeParticles to
+   `sigma_relative=true, r = 1/Φ_merge` (merging already supports the
+   criterion natively — no FLOWVPM change). Recommended Φ_merge = 3.5 >
+   Φ_t = 2.75 kills the §20.3 σ-pump by construction; production keeps the
+   absolute 0.02R radius pending an A/B (the gate merges strictly less, so
+   counts/cost rise).
+3. **Compression stays m = 3** even though the count-match is
+   `m ≈ (1+f_comp)²` (triangle matched to f_comp ≈ 0.73): m = 2 would
+   impose artificial transverse anisotropy on an axisymmetric fattening.
+   Noted in the kernel docstring + theory doc §5 that higher m with a more
+   complicated child shape is the future extension; this effectively pairs
+   the mechanism with f_comp ≈ 0.73 when count-matching matters.
+4. **circulation bookkeeping fixed**: tri3/tetra4 children now carry
+   `circ/3` / `circ/4` (lengthwise bundle division splits the vorticity
+   flux); elongation kernels keep `circ` unchanged (crosswise cut).
+   Diagnostic-only field, no dynamics change.
+
+Correction to §20.6 as written: the elongation kernel's angular impulse is
+NOT exact by ± symmetry (quadratic offset terms don't cancel); it obeys the
+t2 bound `|ΔA| ≤ a²|Γ|/3`, `a = (m−1)s/2`, vanishing when the axis ∥ Γ.
+Tests: t10 (plan math, saturation, conservation + geometry + angular bound,
+exact composition, capacity, legacy fallback, validation) and t11
+(circulation shares) added to `runtests_resolution_split.jl` — suite
+1011/1011 green.
+
+# §21 Launch-prep rulings and GPU directive (Ryan, 2026-09-11)
+
+Cost models re-derived against the §20.7 adaptive kernel (launch-prep
+session, 2026-09-11):
+
+- **Elongation cost is now fraction-independent.** Exact composition +
+  volume rule make the full-descent multiplier
+  $(\sigma_0/\sigma_{\rm floor})^3$ — ≈64× to the 0.25σ₀ floor regardless
+  of $f_{\rm elong}$ (~72× at $f=0.3$ with rounding; plan unclamped for
+  $f \le 1-4^{-1/3} \approx 0.37$). Against measured populations: healthy
+  field (60/180k below floor) +~4k (+2%); cs0p002-style ignited tail
+  (4401) +~277k (~1.5× field), and firing continues past 64× at m_max per
+  fire while attempted collapse keeps accruing (capacity `break` is the
+  backstop). $f_{\rm elong}$ therefore controls granularity/timing, not
+  total cost; the cost levers are `elongate_m_max` (m_max=2 reproduces
+  pair2 economics, ~15× at $f=0.3$) and the merge policy.
+- **Compression bound unchanged**: σ_c = σ_p/√3 keeps the self-limiting
+  bound $f_{\rm comp} < \sqrt3-1 \approx 0.732$; per §20.7 ruling 3, m=3 is
+  count-matched at that same fraction, making $f_{\rm comp}=0.73$ the
+  principled operating point (σ-neutral per fire, matched cross-section
+  re-discretization).
+
+**RULED (Ryan 2026-09-11): settings adopted for the gated arms** —
+`WAKE_SPLIT_FRAC_ELONGATE=0.3` (m=3/fire, confirmed firing in the
+2026-09-10 driver smoke), `WAKE_SPLIT_FRAC_COMPRESS=0.73`, adaptive
+elongation at the default Φ_t (= shedding `OVERLAP`), and a
+`MERGE_OVERLAP=3.5`-vs-production-absolute A/B as the first merge
+discriminator (exp bracket first).
+
+**RULED (Ryan 2026-09-11): implement splitting and merging on GPU before
+launch.** The 09-11 session re-confirmed splitting is silently CPU-only
+(device integrator twins skip all `_rsplit_accumulate*`; no fail-fast), and
+per-arm GPU capability is wanted per the standing GPU-default preference.
+Scoping fact: GPU maintenance already runs merge + the split pass on the
+host mirror (`_apply_particle_maintenance_device!`,
+`src/FLOWPanel_gpu_wake.jl`); the gap is ONLY device-side accumulation of
+the trigger/direction state and its D2H sync. Handoff:
+`gpu_split_merge_reset_prompt_20260911.md` (this directory). Campaign
+launches remain Ryan-gated.

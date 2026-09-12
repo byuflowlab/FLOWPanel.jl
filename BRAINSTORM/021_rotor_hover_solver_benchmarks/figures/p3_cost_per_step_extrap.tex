@@ -1,0 +1,39 @@
+% 021 Phase 3 — per-step cost (t_step_net) vs rotor revs, EXTRAPOLATED
+% guesses (WARMSTART_ORDER=1). Same conventions as p3_cost_per_step_cold.tex
+% (color = solver, style = rung). Backslash has no warm-start mode.
+% Data: p3_cost_per_step_extrap/<rung>_<config>.csv. Arms still running on
+% 2026-09-07 are absent — add their \addplot lines as they land.
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[width=12cm, height=8cm,
+    xlabel={rotor revolutions since restart}, ylabel={wall time per step [s]},
+    title={Warm start: extrapolated (order 1)},
+    legend pos=outer north east, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35}]
+% R1 (solid)
+\addplot[color=red!70!black, thick] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R1_krylov_gmres.csv};
+\addlegendentry{GMRES}
+\addplot[color=orange!80!black, thick] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R1_krylov_jacobi.csv};
+\addlegendentry{GMRES+Jacobi}
+\addplot[color=blue!70!black, thick] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R1_krylov_ilu.csv};
+\addlegendentry{GMRES+ILU}
+\addplot[color=green!50!black, thick] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R1_fgs.csv};
+\addlegendentry{FGS}
+\addplot[color=violet, thick] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R1_fgmres_fgs.csv};
+\addlegendentry{FGMRES+FGS}
+% rung line-style key
+\addlegendimage{color=gray, thick}
+\addlegendentry{R1 (solid)}
+\addlegendimage{color=gray, thick, dashed}
+\addlegendentry{R2 (dashed)}
+% R2 (dashed)
+\addplot[color=red!70!black, thick, dashed, forget plot] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R2_krylov_gmres.csv};
+\addplot[color=orange!80!black, thick, dashed, forget plot] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R2_krylov_jacobi.csv};
+\addplot[color=blue!70!black, thick, dashed, forget plot] table [col sep=comma, x=rev, y=t_step_net] {p3_cost_per_step_extrap/R2_krylov_ilu.csv};
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

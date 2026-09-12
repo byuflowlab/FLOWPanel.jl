@@ -1,0 +1,2 @@
+solved,retained_bytes,process_peak_rss_bytes,relative_solution_delta,fmm_rel_l2,fmm_rel_max,fmm_certified,fmm_seconds,epsilon_requested,direct_rel_l2,evaluator_delta,direct_seconds,authoritative_evaluator,authoritative_rel_l2,accepted,eligible
+true,472820312,2070044672,0,4.36849893e-07,6.00089284e-06,true,0.708084652,1.18359549e-09,4.36865673e-07,5.29506002e-09,3.24320027,certified_fmm,4.36849893e-07,true,true

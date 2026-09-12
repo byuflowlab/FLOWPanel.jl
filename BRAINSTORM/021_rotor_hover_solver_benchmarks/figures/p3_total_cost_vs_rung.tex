@@ -1,0 +1,46 @@
+% 021 Phase 3 — total warm-segment cost (sum of t_step_net over the 73-step
+% restart segment) vs rung. Solid = cold guesses, dashed = extrapolated;
+% color = solver (same palette as solver_scaling.tex). Backslash is cold-only.
+% Data: p3_total_cost_vs_rung/<config>.csv (columns total_cold, total_prev,
+% total_extrap; nan = arm not yet complete on 2026-09-07 — recompile after
+% regenerating the CSVs once remaining arms land).
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[width=11cm, height=8cm,
+    symbolic x coords={R1,R2,R3}, xtick=data,
+    xlabel={mesh rung}, ylabel={total segment cost [s]},
+    title={Total cost of the 73-step restart segment},
+    legend pos=outer north east, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35},
+    unbounded coords=discard]
+% cold (solid)
+\addplot[color=black, mark=square*, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/backslash.csv};
+\addlegendentry{Backslash}
+\addplot[color=red!70!black, mark=o, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/krylov_gmres.csv};
+\addlegendentry{GMRES}
+\addplot[color=orange!80!black, mark=triangle*, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/krylov_jacobi.csv};
+\addlegendentry{GMRES+Jacobi}
+\addplot[color=blue!70!black, mark=diamond*, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/krylov_ilu.csv};
+\addlegendentry{GMRES+ILU}
+\addplot[color=green!50!black, mark=*, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/fgs.csv};
+\addlegendentry{FGS}
+\addplot[color=violet, mark=pentagon*, thick] table [col sep=comma, x=rung, y=total_cold] {p3_total_cost_vs_rung/fgmres_fgs.csv};
+\addlegendentry{FGMRES+FGS}
+% style key
+\addlegendimage{color=gray, thick}
+\addlegendentry{cold (solid)}
+\addlegendimage{color=gray, thick, dashed}
+\addlegendentry{extrap (dashed)}
+% extrapolated (dashed)
+\addplot[color=red!70!black, mark=o, thick, dashed, forget plot] table [col sep=comma, x=rung, y=total_extrap] {p3_total_cost_vs_rung/krylov_gmres.csv};
+\addplot[color=orange!80!black, mark=triangle*, thick, dashed, forget plot] table [col sep=comma, x=rung, y=total_extrap] {p3_total_cost_vs_rung/krylov_jacobi.csv};
+\addplot[color=blue!70!black, mark=diamond*, thick, dashed, forget plot] table [col sep=comma, x=rung, y=total_extrap] {p3_total_cost_vs_rung/krylov_ilu.csv};
+\addplot[color=green!50!black, mark=*, thick, dashed, forget plot] table [col sep=comma, x=rung, y=total_extrap] {p3_total_cost_vs_rung/fgs.csv};
+\addplot[color=violet, mark=pentagon*, thick, dashed, forget plot] table [col sep=comma, x=rung, y=total_extrap] {p3_total_cost_vs_rung/fgmres_fgs.csv};
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

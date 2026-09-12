@@ -1,0 +1,35 @@
+% 021 Phase 1 — certified BC rel-L2 residual vs panel count, all 7 rungs.
+% Data: p1_residual_vs_rung/<config>.csv, transcribed from
+% phase1_agreement_table_R1_R7.md Table 2 (BC rel-L2 column, FMM residual
+% backend; O(N^2) direct cross-check in Table 3 agrees to <1%). Dashed line =
+% 1e-6 certification target. backslash_coupled sits at ~4.6e-5 by
+% construction (coupled formulation residual definition), still certified.
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{loglogaxis}[width=11cm, height=8cm,
+    xlabel={panel count $N$}, ylabel={BC rel-$L_2$ residual},
+    legend pos=outer north east, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35}]
+\addplot[color=black, mark=square*, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/backslash_ref.csv};
+\addlegendentry{Backslash (ref)}
+\addplot[color=gray, mark=square, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/backslash_coupled.csv};
+\addlegendentry{Backslash (coupled)}
+\addplot[color=red!70!black, mark=o, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/krylov_gmres.csv};
+\addlegendentry{GMRES}
+\addplot[color=orange!80!black, mark=triangle*, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/krylov_jacobi.csv};
+\addlegendentry{GMRES+Jacobi}
+\addplot[color=blue!70!black, mark=diamond*, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/krylov_ilu.csv};
+\addlegendentry{GMRES+ILU}
+\addplot[color=green!50!black, mark=*, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/fgs.csv};
+\addlegendentry{FGS}
+\addplot[color=violet, mark=pentagon*, thick] table [col sep=comma, x=N, y=bc_relL2] {p1_residual_vs_rung/fgmres_fgs.csv};
+\addlegendentry{FGMRES+FGS}
+\addplot[color=black, dashed, domain=8016:419276, samples=2] {1e-6};
+\addlegendentry{certification target}
+\end{loglogaxis}
+\end{tikzpicture}
+\end{document}

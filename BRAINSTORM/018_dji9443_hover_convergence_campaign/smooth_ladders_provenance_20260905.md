@@ -78,7 +78,22 @@ be overridden on eng — NT144→m13h). Submitted 2026-09-05 from the worktrees:
 | 4 `_3r_sv_s1p5` | 13592731 | 13592732 | 13592733 |
 
 13592738 is the GPU-path canary (SurfaceVorticityConversion vs device-resident
-CuArray pfield, never exercised before).
+CuArray pfield, never exercised before). GPU-path risk RETIRED 2026-09-05:
+13592731 (smooth s1p5 NT36) passed first shed on the CuArray pfield, ~2 s/step.
+
+Ryan 2026-09-05: ladders SHORTENED to NT36+NT72 for turnaround — all four
+NT144 rungs (13592724/727/730/733) cancelled. Two discriminator arms added,
+submitted from the SAME running pin (`f46c3fe` worktrees) for comparability:
+
+| Arm | NT36 (mgh) | NT72 (eng) | Exports |
+|---|---|---|---|
+| 5 `_3r_exp` exponential integrator | 13592894 | 13592895 | `WAKE_EXPINT=true` (legacy shedding) |
+| 6 `_3r_srlx` SFS exact-rate rlxf | = reference 13507289 (rlxf 0.005 at NT36) | 13592896 | `SFS_RLXF=0.0025031` = 1−(1−0.005)^(36/72) |
+
+Arm 6 isolates the per-step SFS coefficient memory-time suspect: if the NT72
+CT lands on the NT36 value (0.070775) instead of the reference NT72 (0.071844),
+the DynamicSFS per-step rlxf is the driver; ladder 3 (`sfs3nb`) separately
+tests the backscatter/procedure side.
 
 Post-submission fix (recorded): the initial pin (`8f3ca07c`) inherited the
 cluster repo's tracked `data/` fixture CSVs, so the worktree `data` was a real

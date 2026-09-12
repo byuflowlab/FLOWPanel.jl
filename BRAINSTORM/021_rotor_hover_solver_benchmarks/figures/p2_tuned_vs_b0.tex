@@ -1,0 +1,30 @@
+% 021 Phase 2 — per-solve wall time: b0 (uncached, seed knobs ~(17,0.65,6))
+% vs best tuned candidate (cached, min certified t_solve_warm), rungs R1-R5.
+% Data: p2_tuned_vs_b0/times.csv, harvested 2026-09-08 from
+% wt021/FLOWPanel.jl-c/benchmark/results/phase2/multi/R*/tune_phase2.csv.
+% R4 b0 = 143.4 s from job 13603860 (certified 2026-09-08, trace point
+% (17,0.65,6)); it was absent from R4's tune CSV rows at harvest time.
+% R3/R5 b0 rows used adapted knobs (p=16), not the nominal seed. R6/R7
+% pending (tune jobs hung). Caveat: tuned times are cached-budget rows, so
+% the gap includes both knob tuning AND near-field caching.
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[width=11cm, height=8cm,
+    ybar, bar width=11pt,
+    symbolic x coords={R1,R2,R3,R4,R5}, xtick=data,
+    xlabel={mesh rung}, ylabel={GMRES per-solve wall time [s]},
+    legend pos=north west, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35},
+    nodes near coords, every node near coord/.append style={font=\tiny},
+    point meta=explicit symbolic]
+\addplot[fill=red!60!black!40, draw=red!60!black] table [col sep=comma, x=rung, y=t_b0, meta=t_b0] {p2_tuned_vs_b0/times.csv};
+\addlegendentry{b0 (uncached, seed knobs)}
+\addplot[fill=blue!60!black!40, draw=blue!60!black] table [col sep=comma, x=rung, y=t_tuned, meta=t_tuned] {p2_tuned_vs_b0/times.csv};
+\addlegendentry{tuned (cached, best certified)}
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

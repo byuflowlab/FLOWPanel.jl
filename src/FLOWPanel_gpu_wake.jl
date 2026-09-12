@@ -66,10 +66,11 @@ end
 # `resolution_split === nothing` (its lockstep/accumulation hooks no-op).
 # There is nothing to sync: the state never exists on both sides. Known
 # device-path limitations (documented, accepted): the device integrator
-# twins skip `_rsplit_accumulate!`, so axis/weight/exposure stay zero
-# (direction falls back to Γ̂; the exposure trigger never fires) and
-# dvisc/drvpm stay zero (grow events route to the viscous kernel by the
-# `dvisc ≥ drvpm` tie). Particles shed device-side between maintenance
+# twins skip `_rsplit_accumulate!` and the Δσ² attribution mirrors, so
+# axis/weight stay zero (direction falls back to Γ̂) and dvisc/drvpm stay
+# zero — with fractional gating (Ryan 2026-09-08) that means NO trigger can
+# fire on device-resident steps; splitting remains host-mirror-only.
+# Particles shed device-side between maintenance
 # passes miss the add_particle hook; `_heal_unseeded_rsplit_slots!`
 # (FLOWPanel_wake.jl) seeds their sigma_0 before each split application.
 function _gpu_copy_side_buffers!(dst::FLOWVPM.ParticleField,
