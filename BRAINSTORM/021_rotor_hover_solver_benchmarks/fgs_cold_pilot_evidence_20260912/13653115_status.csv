@@ -1,0 +1,7 @@
+status,arm,solver,thread
+completed,timing-j4-b1,fgs_409bb3aaf67bbd18,j4_b1
+completed,timing-j4-b1,krylov_ilu_d569863eedc13014,j4_b1
+completed,timing-j64-b1,fgs_409bb3aaf67bbd18,j64_b1
+completed,timing-j64-b1,krylov_ilu_d569863eedc13014,j64_b1
+completed,timing-j64-b64,fgs_409bb3aaf67bbd18,j64_b64
+completed,timing-j64-b64,krylov_ilu_d569863eedc13014,j64_b64

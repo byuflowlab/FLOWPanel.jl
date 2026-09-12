@@ -1871,7 +1871,7 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
 
     @testset "ResolutionSplit policy (BRAINSTORM 026 Phase 2)" begin
         @testset "classification" begin
-            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+            opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5,
                 enable_viscous_split=true)
             maintenance = pnl.ParticleMaintenance((
                 pnl.MinGamma(1e-6),
@@ -1882,7 +1882,7 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
 
         @testset "fires through maintenance with lazy enable" begin
             body = make_plate_vortex_body()
-            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+            opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5,
                 enable_viscous_split=true)
             wake = pnl.PanelParticleWake(body; max_particles=32,
                 particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),)))
@@ -1890,27 +1890,34 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
             FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
             @test wake.pfield.resolution_split === nothing
 
+            # step 1: lazy enable, zero accumulators => no fire
             pnl.propagate!(wake, 0.0; relax=false, step=1)
+            rs = wake.pfield.resolution_split
+            @test rs !== nothing
+            @test wake.pfield.np == 1
 
-            # σ = 1.0 > sigma_max = 0.5; dvisc == drvpm == 0 ties to the
-            # viscous tetra4 kernel → 4 children
-            @test wake.pfield.resolution_split !== nothing
+            # viscous credit past the f_visc=0.5 threshold on σ₀ = 1
+            # (dvisc > ((1.5)² − 1)·σ₀² = 1.25) => tetra4, 4 children
+            rs.dvisc[1] = 2.0
+            pnl.propagate!(wake, 0.0; relax=false, step=2)
             @test wake.pfield.np == 4
         end
 
         @testset "cadence gates splitting but not the enable" begin
             body = make_plate_vortex_body()
-            opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+            opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5,
                 enable_viscous_split=true)
             wake = pnl.PanelParticleWake(body; max_particles=32,
                 particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts; every=2),)))
 
             FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
             pnl.propagate!(wake, 0.0; relax=false, step=1)
-            @test wake.pfield.resolution_split !== nothing   # enabled off-cadence
+            rs = wake.pfield.resolution_split
+            @test rs !== nothing                             # enabled off-cadence
             @test wake.pfield.np == 1                        # but no split at step 1
 
-            pnl.propagate!(wake, 0.0; relax=false, step=2)
+            rs.dvisc[1] = 2.0                                # armed and firing...
+            pnl.propagate!(wake, 0.0; relax=false, step=2)   # ...on the cadence step
             @test wake.pfield.np == 4
         end
 
@@ -1933,7 +1940,6 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
             for i in 1:2
                 rs.axis[1, i] = 1.0
                 rs.weight[i] = 2.0
-                rs.exposure[i] = 0.3
                 rs.dvisc[i] = 0.1
                 rs.drvpm[i] = 0.2
             end
@@ -1945,14 +1951,13 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
             @test rs.sigma_0[1] == sigma_merged
             @test all(rs.axis[:, 1] .== 0)
             @test rs.weight[1] == 0
-            @test rs.exposure[1] == 0
             @test rs.dvisc[1] == 0
             @test rs.drvpm[1] == 0
         end
 
         @testset "unseeded-slot heal (GPU shed seam)" begin
             body = make_plate_vortex_body()
-            opts = FLOWVPM.ResolutionSplitOpts(sigma_growth_ratio_max=1.5,
+            opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5,
                 enable_viscous_split=true, enable_stretch_split=true)
             wake = pnl.PanelParticleWake(body; max_particles=32,
                 particle_maintenance=pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),)))
@@ -1960,12 +1965,12 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
             FLOWVPM.add_particle(wake.pfield, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
             rs = FLOWVPM.enable_resolution_split!(wake.pfield)
             # simulate a device-shed particle that missed the add hook:
-            # sigma_0 == 0 would read as an infinite growth ratio
+            # sigma_0 == 0 would leave every fractional trigger dead for it
             rs.sigma_0[1] = 0.0
 
             pnl.propagate!(wake, 0.0; relax=false, step=1)
 
-            # healed to the current σ (ratio 1) instead of splitting
+            # healed to the current σ (fresh reference) instead of staying inert
             @test wake.pfield.np == 1
             @test rs.sigma_0[1] == 1.0
         end
@@ -2231,7 +2236,7 @@ if parse(Bool, get(ENV, "FLOWPANEL_TEST_RESOLUTION_SPLIT_CUDA", "false"))
         @test Base.invokelatest(CUDAmod.functional)
 
         body = make_plate_vortex_body()
-        opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5,
+        opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5,
             enable_viscous_split=true, use_stretch_axis=false)
         maintenance = pnl.ParticleMaintenance((pnl.ResolutionSplit(opts),))
 
@@ -2239,11 +2244,13 @@ if parse(Bool, get(ENV, "FLOWPANEL_TEST_RESOLUTION_SPLIT_CUDA", "false"))
             particle_maintenance=maintenance)
         FLOWVPM.add_particle(host_wake.pfield, [0.0, 0.0, 0.0],
             [1e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.enable_resolution_split!(host_wake.pfield).dvisc[1] = 2.0
 
         device_wake = pnl.PanelParticleWake(body; max_particles=32,
             particle_maintenance=maintenance, arraytype=CUDAmod.CuArray)
         mirror = pnl._gpu_pfield_mirror(device_wake.pfield)
         FLOWVPM.add_particle(mirror, [0.0, 0.0, 0.0], [1e-3, 0.0, 0.0], 1.0)
+        FLOWVPM.enable_resolution_split!(mirror).dvisc[1] = 2.0
         pnl._gpu_sync_device_from_mirror!(device_wake.pfield, mirror)
 
         # pin both runs to the same tetra orientation draw

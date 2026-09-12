@@ -22,6 +22,9 @@ higher-level suite.
 
 - Broad regression: `test/runtests.jl`
 - Solver changes: `test/runtests_unit_solver.jl`
+- Green-solve route changes (Householder/bordered `(I−B)q = Sσ` machinery in
+  `FLOWPanel_formulation.jl`): `test/runtests_unit_green_householder.jl`, then
+  `test/formulation_test.jl` (standalone)
 - FMM or induced-velocity changes: `test/runtests_unit_fmm.jl`
 - Kernel gradient or Hessian-sensitive changes: `test/runtests_unit_kernel_gradient.jl`
 - Body assembly / geometry bookkeeping changes: `test/runtests_unit_body.jl`

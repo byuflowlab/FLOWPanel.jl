@@ -1,0 +1,15 @@
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = f03ab18a7841e9a38876603a48b1799d83fd1e41
+#   fm_commit      = ef10643a401d6da16e28be87805b67d11bdf1fb5
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-cold-source-20260912-v9-wt fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-1-25
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-12 09:03:09
+######################################################################

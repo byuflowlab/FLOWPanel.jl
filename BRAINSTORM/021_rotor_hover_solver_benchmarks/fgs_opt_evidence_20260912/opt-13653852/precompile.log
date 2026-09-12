@@ -1,0 +1,18 @@
+Precompiling project...
+  26755.9 ms  ✓ FLOWPanel
+  1 dependency successfully precompiled in 56 seconds. 299 already precompiled.
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = 32fe1c439f701506eee1338e16f3b83e6fec2179
+#   fm_commit      = ef10643a401d6da16e28be87805b67d11bdf1fb5
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-cold-source-20260911-v8-wt fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-3-5
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-11 23:29:24
+######################################################################

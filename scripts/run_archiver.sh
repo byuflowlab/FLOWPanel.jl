@@ -55,6 +55,15 @@
 #                           [--compress zstd|gzip|none] [--fast-verify]
 #   scripts/run_archiver.sh --restore RUN [--root DIR] [--apply]
 #   scripts/run_archiver.sh --resume-delete RUN [--root DIR] [--apply]
+#   scripts/run_archiver.sh --supersede --only RUN[,RUN...] [--root DIR] [--apply]
+#
+# --supersede is the sanctioned exit from the ARCHIVED-STALE dead end for a run
+# whose chain CONTINUED, REWOUND or DIVERGED after its tarball was written (so
+# --resume-delete's byte-for-byte check can never pass).  It renames the
+# existing tarball aside to <tarball>.superseded.<utc> -- nothing is ever
+# overwritten or deleted on the archive -- and then re-archives the CURRENT
+# on-disk state through the normal tar/verify/trim flow.  Scoped by --only,
+# per-run, exactly like --include-recent: Ryan names runs, never a blanket.
 #
 # With no --root, the current checkout (cwd) is the only one processed -- the
 # same behaviour as before this option existed.
@@ -98,6 +107,7 @@ RESUME_DELETE=""
 FAST_VERIFY=false
 ALL_CHECKOUTS=false
 INCLUDE_RECENT=false
+SUPERSEDE=false
 ROOTS=()
 
 while [[ $# -gt 0 ]]; do
@@ -107,6 +117,7 @@ while [[ $# -gt 0 ]]; do
         --root)           ROOTS+=("${2:-}"); shift 2 ;;
         --all-checkouts)  ALL_CHECKOUTS=true; shift ;;
         --include-recent) INCLUDE_RECENT=true; shift ;;
+        --supersede)      SUPERSEDE=true; shift ;;
         --keep)           KEEP_STEPS="${2:-}"; shift 2 ;;
         --restore)        RESTORE="${2:-}"; shift 2 ;;
         --resume-delete)  RESUME_DELETE="${2:-}"; shift 2 ;;
@@ -454,12 +465,27 @@ fi
 # but recent activity is RECENT: it looks finished, but the quiet window has not
 # elapsed, so it needs Ryan's say-so (Ryan, 2026-08-27).
 
-# Echoes the matching job name, or nothing.
+# Echoes the matching job name, or nothing.  Two tests, either one matches:
+#   1. normalised job name is a substring of the run name (historic test);
+#   2. the two names share a common SUFFIX of >= $SUFFIX_MATCH_LEN characters.
+# The suffix test exists because launchers prefix job names with things the run
+# directory never contains: job `fp-018gpu-n2_nt72_l3p0` normalises to
+# `018gpu_n2_nt72_l3p0`, which is NOT a substring of the directory it was
+# actively writing, `p018_csarc_n2_nt72_l3p0` (observed false negative,
+# 2026-08-27; bit again on `..._3r_exp_nt` 2026-09-07).  Their common suffix
+# `n2_nt72_l3p0` is what actually identifies the run -- campaign names load
+# their distinguishing tokens at the END.  The threshold errs toward LIVE:
+# short shared tails like `l3p0` alone must not match (12+ chars required),
+# but a cross-rung false positive is acceptable where a false negative is not.
+SUFFIX_MATCH_LEN="${SUFFIX_MATCH_LEN:-12}"
 queue_match() {
-    local run="$1" jn
+    local run="$1" jn k="$SUFFIX_MATCH_LEN"
     while IFS= read -r jn; do
         [[ -z "$jn" ]] && continue
         [[ "$run" == *"$jn"* ]] && { echo "$jn"; return 0; }
+        if (( ${#jn} >= k && ${#run} >= k )); then
+            [[ "${run: -k}" == "${jn: -k}" ]] && { echo "$jn"; return 0; }
+        fi
     done <<< "$job_names"
     return 1
 }
@@ -655,6 +681,24 @@ if [[ -n "$RESUME_DELETE" ]]; then
     acquire_checkout_lock "$SLUG" || { checkout_locked_msg "$SLUG"; exit 6; }
     dir="$DATA_DIR/$run"
     [[ -d "$dir" ]] || { echo "FATAL: --resume-delete '$run' matches no directory under $DATA_DIR/" >&2; exit 5; }
+
+    # Liveness guard (added 2026-09-08).  This path previously had NO liveness
+    # check at all: a STALE-classified run that was in fact being written (queue
+    # name mangling defeated the old substring match on `..._3r_exp_nt`,
+    # 2026-09-07) went straight to byte verification, and only the byte drift
+    # kept files from being deleted from under the live job.  Same belt and
+    # braces as the archive path: queue is advisory, mtime is the real signal.
+    jm="$(queue_match "$run" || true)"
+    if [[ -n "$jm" ]]; then
+        echo "RESUME-DELETE-REFUSED $run  (queue job '$jm' matches -- run is live, nothing deleted)"
+        exit 9
+    fi
+    qh="$(quiet_hours_of "$dir")"
+    if (( qh < RECENT_HOT_HOURS )); then
+        echo "RESUME-DELETE-REFUSED $run  quiet=${qh}h (<${RECENT_HOT_HOURS}h) -- written too recently to be a finished run, nothing deleted"
+        exit 9
+    fi
+
     tarball="$(find_tarball "$ARCHIVE_DIR/$SLUG" "$run")" || {
         echo "FATAL: no tarball for '$run' under $ARCHIVE_DIR/$SLUG (checkout $(cd "$root" && pwd -P))" >&2; exit 5; }
     case "$tarball" in
@@ -755,6 +799,13 @@ if $INCLUDE_RECENT && [[ -z "$ONLY" ]]; then
     exit 2
 fi
 
+# Same guard, same reason: superseding an existing verified tarball is a
+# per-run decision Ryan makes by name, never a blanket.
+if $SUPERSEDE && [[ -z "$ONLY" ]]; then
+    echo "FATAL: --supersede must be scoped with --only RUN[,RUN...]." >&2
+    exit 2
+fi
+
 if $APPLY; then
     mkdir -p "$ARCHIVE_DIR" 2>/dev/null || true
     if [[ ! -d "$ARCHIVE_DIR" || ! -w "$ARCHIVE_DIR" ]]; then
@@ -810,10 +861,50 @@ for dir in "$DATA_DIR"/*/; do
     done
 
     if [[ -n "$existing" ]]; then
+        # -------------------------------------------------------- supersede
+        # Ryan-approved exit from the STALE dead end: set the old tarball aside
+        # under a name the classifier does not match (nothing on the archive is
+        # ever overwritten or deleted), then FALL THROUGH to the normal fresh
+        # archive flow -- which re-applies every gate (LIVE, RECENT, mtime
+        # snapshots) and re-tars the CURRENT on-disk state.
+        if $SUPERSEDE && in_only "$run"; then
+            # Refuse before touching the archive if the run looks live NOW:
+            # renaming first and skipping later would leave the run with no
+            # canonical tarball for no gain.
+            jm="$(queue_match "$run" || true)"
+            if [[ -n "$jm" ]]; then
+                echo "SUPERSEDE-REFUSED $run  (queue job '$jm' matches -- run is live, tarball untouched)"
+                stale_count=$(( stale_count + 1 ))
+                continue
+            fi
+            qh="$(quiet_hours_of "$dir")"
+            # Gate must match the fall-through archive flow, or a run quiet
+            # between the two thresholds gets its tarball renamed aside and is
+            # then dropped as RECENT -- left with NO canonical tarball.  The
+            # fall-through archives a 2-24h-quiet run only under
+            # --include-recent, so only then may supersede accept one.
+            sup_gate="$QUIET_HOURS"
+            $INCLUDE_RECENT && sup_gate="$RECENT_HOT_HOURS"
+            if (( qh < sup_gate )); then
+                echo "SUPERSEDE-REFUSED $run  quiet=${qh}h (<${sup_gate}h gate) -- fall-through archive would not re-tar it, tarball untouched (add --include-recent if Ryan approved)"
+                stale_count=$(( stale_count + 1 ))
+                continue
+            fi
+            vdest="$existing.superseded.$(date -u +%Y%m%dT%H%M%SZ)"
+            if $APPLY; then
+                mv "$existing" "$vdest"
+                [[ -f "$existing.fp" ]] && mv "$existing.fp" "$vdest.fp"
+                echo "SUPERSEDED $run  old tarball preserved at $vdest -- re-archiving current state"
+            else
+                echo "SUPERSEDE-PLAN $run  would preserve $existing as $vdest, then re-archive current state (below)"
+            fi
+            # fall through to the normal archive flow for this run
+        else
         # A tarball already here means the archive step ran.  If ParaView files
         # are ALSO still on /home the delete step did not complete -- report it
         # and stop; do not re-tar and do not silently delete.  Ryan decides,
-        # then authorises --resume-delete for that run.
+        # then authorises --resume-delete (interrupted delete) or
+        # --supersede (chain moved on) for that run.
         # An archived run is EXPECTED to still hold its newest $KEEP_STEPS steps
         # on /home -- that is the point of the window.  Stale means VTK survives
         # OUTSIDE that window, i.e. the delete did not finish.
@@ -824,12 +915,40 @@ for dir in "$DATA_DIR"/*/; do
             del_mb=$(( $(awk -F'\t' '/^DEL/{s+=$2} END{print s+0}' "$sel") / 1048576 ))
             why="delete may have been interrupted"
             [[ -f "$dir/RESTORED.txt" ]] && why="marker says deliberately restored $(awk '/^date/{print $2}' "$dir/RESTORED.txt")"
-            echo "ARCHIVED-STALE $run  tarball=$existing  outside_keep_window=${del_n}files/${del_mb}MB  -- ASK RYAN, $why"
+            # ------------------------------------------ stale subtype (2026-09-08)
+            # "Delete interrupted" and "chain moved on after archiving" used to
+            # share one ambiguous label, and they have OPPOSITE remedies:
+            # resume-delete is only sound when disk still matches the tarball;
+            # a continued/rewound/diverged chain needs --supersede.  The
+            # fingerprint sidecar written at archive time (max archived body
+            # step + that file's size) lets us tell them apart for free.
+            subtype=""; remedy="--resume-delete if interrupted, --supersede if the chain moved on"
+            if [[ -f "$existing.fp" ]]; then
+                fp_max="$(awk '$1=="max_step"{print $2}' "$existing.fp")"
+                fp_bytes="$(awk '$1=="body_bytes"{print $2}' "$existing.fp")"
+                disk_max="$( { find "$dir" -name "${run}_body1.*.vtu" 2>/dev/null | sed 's/.*_body1\.\([0-9][0-9]*\)\.vtu$/\1/' | sort -n | tail -1; } || true )"
+                if [[ -n "$fp_max" && -n "$disk_max" ]]; then
+                    if (( disk_max > fp_max )); then
+                        subtype="CONTINUED(tar<=$fp_max, disk<=$disk_max)"; remedy="--supersede (new steps are NOT in the tarball)"
+                    elif (( disk_max < fp_max )); then
+                        subtype="REWOUND(tar<=$fp_max, disk<=$disk_max)"; remedy="--supersede (old tarball holds steps disk no longer has; it is preserved, never overwritten)"
+                    else
+                        db="$( { "${STAT_FMT[@]}" "$dir/${run}_body1/${run}_body1.$disk_max.vtu" 2>/dev/null | awk '{print $1}'; } || true )"
+                        if [[ -n "$db" && -n "$fp_bytes" && "$db" == "$fp_bytes" ]]; then
+                            subtype="INTERRUPTED(step $fp_max matches)"; remedy="--resume-delete (verifies byte-for-byte before deleting)"
+                        else
+                            subtype="DIVERGED(step $disk_max: disk ${db:-?}B vs tar ${fp_bytes:-?}B)"; remedy="--supersede (same steps, different bytes)"
+                        fi
+                    fi
+                fi
+            fi
+            echo "ARCHIVED-STALE $run  ${subtype:+subtype=$subtype  }tarball=$existing  outside_keep_window=${del_n}files/${del_mb}MB  -- ASK RYAN ($remedy), $why"
             stale_count=$(( stale_count + 1 ))
         else
             echo "ARCHIVED-ALREADY $run  tarball=$existing  keeping=[$(awk -F'\t' '/^KEEP/{print $3}' "$sel")]"
         fi
         continue
+        fi
     fi
 
     jm="$(queue_match "$run" || true)"
@@ -931,7 +1050,13 @@ for dir in "$DATA_DIR"/*/; do
         verify_fail=$(( verify_fail + 1 ))
         continue
     fi
-    mv "$part" "$final"
+    # The tarball stays at its .partial name until it has PASSED verification
+    # (reordered 2026-09-08; it used to be promoted first and renamed away on
+    # failure).  Two failure modes closed: a kill between promote and verify
+    # left an UNVERIFIED file at the canonical name, indistinguishable from a
+    # good archive on the next pass; and any pre-existing file at the canonical
+    # name (e.g. under --supersede semantics) would have been destroyed by an
+    # unverified newcomer.  Nothing sits at $final until it has earned it.
 
     # A run that is being written while we tar it would produce an inconsistent
     # archive.  The mtime snapshot taken before the tar is the check: if anything
@@ -943,22 +1068,23 @@ for dir in "$DATA_DIR"/*/; do
     # evidence is how a bad tarball's forensics vanish.
     mtime_after="$(newest_mtime "$dir")"
     if [[ -z "$mtime_after" || "$mtime_after" != "$mtime_before" ]]; then
-        mv "$final" "$final.changed.$LOCK_TOKEN" 2>/dev/null || true
+        mv "$part" "$final.changed.$LOCK_TOKEN" 2>/dev/null || true
         verify_fail=$(( verify_fail + 1 ))
         echo "CHANGED-DURING-ARCHIVE $run  the run was written while being tarred (or its mtime became unreadable); nothing deleted, tarball moved to $final.changed.$LOCK_TOKEN"
         continue
     fi
 
-    if ! verify_tarball "$final" "$manifest" "$run"; then
-        # Rename it out of the way: a file sitting at the canonical archive name
-        # is indistinguishable from a good archive on the next pass, and would be
-        # reported ARCHIVED-ALREADY.  Renamed, it is preserved for inspection and
-        # the next run re-archives from scratch.
-        mv "$final" "$final.corrupt.$LOCK_TOKEN" 2>/dev/null || true
+    if ! verify_tarball "$part" "$manifest" "$run"; then
+        # Rename it out of the way: preserved for inspection under a name no
+        # classifier matches, and the next pass re-archives from scratch.
+        mv "$part" "$final.corrupt.$LOCK_TOKEN" 2>/dev/null || true
         verify_fail=$(( verify_fail + 1 ))
         echo "         nothing deleted for $run; bad tarball moved to $final.corrupt.$LOCK_TOKEN"
         continue
     fi
+
+    # Verified -- NOW it may claim the canonical name.
+    mv "$part" "$final"
 
     tar_bytes="$("${STAT_FMT[@]}" "$final" | awk '{print $1}')"
     tar_mb=$(( tar_bytes / 1048576 ))
@@ -1005,6 +1131,19 @@ for dir in "$DATA_DIR"/*/; do
     fi
     printf 'archived %s\ncheckout_slug %s\nsource_checkout %s\ntarball %s\nfiles %s\nsrc_bytes %s\ntar_bytes %s\ndate %s\nkept_steps %s\nnote the kept steps are warm-startable in place; no unpacking needed\nrestore: scripts/run_archiver.sh --root %s --restore %s --apply\n' \
         "$run" "$SLUG" "$SRC_ABS" "$final" "$nfiles" "$src_bytes" "$tar_bytes" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$keptsteps" "$SRC_ABS" "$run" > "$dir/ARCHIVED.txt"
+
+    # Chain fingerprint sidecar (2026-09-08): max archived body step and that
+    # file's byte size, straight from the manifest -- no extra I/O.  The STALE
+    # classifier reads it to tell an interrupted delete from a chain that
+    # continued/rewound/diverged after archiving, which have opposite remedies.
+    awk -F'\t' -v run="$run" '
+        index($2, run "/" run "_body1/" run "_body1.") == 1 {
+            s = $2; sub(/^.*_body1\./, "", s); sub(/\.vtu$/, "", s)
+            if (s ~ /^[0-9]+$/ && (!found || s+0 > m)) { m = s+0; b = $1; found = 1 }
+        }
+        END { if (found) printf "max_step %d\nbody_bytes %d\n", m, b }
+    ' "$manifest" > "$final.fp" 2>/dev/null || true
+    [[ -s "$final.fp" ]] || rm -f "$final.fp"
 
     # Append-only index at the archive root: one row per archived run, so
     # "which clone did this come from?" is a single grep over everything.

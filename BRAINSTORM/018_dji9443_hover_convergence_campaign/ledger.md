@@ -3175,3 +3175,23 @@ p018_csarc_l4p0 24.8G, p018_csarc_l3p0 24.7G, n5_nt144_l2p4_s2gpu 32.2G,
 n3_nt72_l2p4_s2gpu 30.7G). Live campaigns (022m_4r_oge, 018gpu-*-3r ladder,
 scr_p019/p020 screen jobs) confirmed untouched. Cap still breached by ~143G;
 next lever is Ryan's RECENT approvals, not a sweep (sweep math shows little to reclaim).
+
+2026-09-08 — storage cycle (two-part, Ryan-approved): archived p3_checkpoint_R1
+(1381 MB src -> 1042 MB tar.zst, verified, kept steps 463-467). Then, on Ryan's
+approval that all 018 runs had terminated: (1) archived the 9 RECENT
+p018_csarc_* runs (--include-recent --only, APPLY, VERIFY_FAIL_COUNT=0), freed
+289304 MB; (2) superseded the 7 ARCHIVED-STALE p018 runs (--supersede
+--include-recent, old tarballs preserved as .tar.zst.superseded.<utc>, current
+state re-tarred and verified, VERIFY_FAIL_COUNT=0), freed 135213 MB. Combined
+freed 424517 MB (~415 GiB): home 560321 -> 168728 MB (547 -> 165 GiB), cap
+breach CLEARED (400 G cap, ~235 G headroom). data/ now 105 GiB. Live jobs
+protected throughout: p3_checkpoint_R2/R3 and all 021 runs untouched
+(13603465/13603524 warm-start from them); new GPU arms 13610777-79
+(fp-018gpu-*-g25) verified cold-start, writing only to new *_g25 dirs absent
+from both --only lists. HAZARD LOGGED for follow-up: run_archiver.sh:94-95 gate
+mismatch — --supersede refuses only <RECENT_HOT_HOURS=2h but the archive flow
+gates at QUIET_HOURS=24h, so superseding a run quiet 2-24h without
+--include-recent renames its only tarball aside and never re-archives it; fix =
+supersede refusal gate should use QUIET_HOURS unless --include-recent. Also:
+"0 runs exceed 288 steps" step-distribution baseline is stale (csarc runs
+reached 2159 restartable steps).

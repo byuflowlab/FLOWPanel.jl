@@ -1,0 +1,32 @@
+% 021 Phase 1 — steady-solve wall time vs panel count, all 7 rungs.
+% Data: p1_time_vs_rung/<config>.csv, transcribed from
+% phase1_agreement_table_R1_R7.md Table 2 (t_steady column, FMM residual
+% backend). backslash_{ref,coupled} end at R4 (dense G infeasible above);
+% krylov_jacobi ends at R6 (dropped at R7 per ladder definition).
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{loglogaxis}[width=11cm, height=8cm,
+    xlabel={panel count $N$}, ylabel={steady-solve wall time [s]},
+    legend pos=north west, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35}]
+\addplot[color=black, mark=square*, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/backslash_ref.csv};
+\addlegendentry{Backslash (ref)}
+\addplot[color=gray, mark=square, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/backslash_coupled.csv};
+\addlegendentry{Backslash (coupled)}
+\addplot[color=red!70!black, mark=o, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/krylov_gmres.csv};
+\addlegendentry{GMRES}
+\addplot[color=orange!80!black, mark=triangle*, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/krylov_jacobi.csv};
+\addlegendentry{GMRES+Jacobi}
+\addplot[color=blue!70!black, mark=diamond*, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/krylov_ilu.csv};
+\addlegendentry{GMRES+ILU}
+\addplot[color=green!50!black, mark=*, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/fgs.csv};
+\addlegendentry{FGS}
+\addplot[color=violet, mark=pentagon*, thick] table [col sep=comma, x=N, y=t_steady] {p1_time_vs_rung/fgmres_fgs.csv};
+\addlegendentry{FGMRES+FGS}
+\end{loglogaxis}
+\end{tikzpicture}
+\end{document}

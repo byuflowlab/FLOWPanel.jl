@@ -1,0 +1,30 @@
+[[configs]]
+MAC = 0.3
+P = 6
+cache_leaf_lu = true
+inner = 10
+kind = "fgs"
+leaf = 50
+max_iterations = 300
+rlx = 1.0
+rung = "R1"
+sweep_order = "lexicographic"
+tolerance = 1.7658196194548e-8
+[[configs]]
+MAC = 0.65
+P = 17
+atol = 1.0e-14
+cache_nearfield = false
+cache_tree = true
+diagonal_shift = 0.0
+equilibrate = false
+ilu_MAC = 1.0
+ilu_leaf = 10
+itmax = 500
+kind = "krylov_ilu"
+leaf = 6
+memory = 50
+pattern_entries_per_panel = 8192
+persistent_plan = true
+rtol = 1.0e-6
+rung = "R1"

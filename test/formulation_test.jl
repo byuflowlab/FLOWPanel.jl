@@ -339,16 +339,27 @@ end
     println("  ‖B·1 − 1‖∞ (constant eigenmode defect): $(round(maximum(abs, ones_response .- 1); sigdigits=3))")
 
     gs_am = pnl._build_green_solve_state(body, :area_mean)
+    @test gs_am isa pnl.GreenHouseholderState  # 052e.2b production route
     q_am = copy(pnl._green_solve_q!(gs_am, Ssigma))
     gs_ls = pnl._build_green_solve_state(body, :lsq)
     q_ls = copy(pnl._green_solve_q!(gs_ls, Ssigma))
 
-    # bordered system: (I−B)q + λa = Sσ with aᵀq = 0
-    lambda = gs_am.sol_b[end]
+    # gauge-fixed system: (I−B)q + λa = Sσ with aᵀq = 0
+    lambda = pnl._green_lambda(gs_am)
     res_am = norm((q_am - B*q_am) .+ lambda .* a - Ssigma)/max(norm(Ssigma), eps())
     @test res_am <= 1e-10
     @test abs(dot(a, q_am)) <= 1e-8*norm(q_am)*norm(a)
     println("  gauge multiplier λ (compatibility defect): $(round(lambda; sigdigits=3))")
+
+    # Householder route vs retained bordered debug/reference route
+    gs_bord = pnl._build_green_solve_state(body, :area_mean_bordered)
+    @test gs_bord isa pnl.GreenSolveState
+    q_bord = copy(pnl._green_solve_q!(gs_bord, Ssigma))
+    tau = 1e3*sqrt(N)*eps()                    # Tier 0B-R parity tolerance
+    scale = sqrt(sum(a .* q_bord.^2)/sum(a))
+    @test maximum(abs, q_am - q_bord) <= tau*scale
+    @test abs(lambda - pnl._green_lambda(gs_bord)) <=
+        tau*max(abs(pnl._green_lambda(gs_bord)), norm(Ssigma)/norm(a))
 
     # C·q is gauge-invariant on paired edges
     Cq_am = kutta_map(body, q_am)
@@ -659,6 +670,15 @@ end
 # ------------------------------------------------------------------------------
 @testset "Stage 9b: HybridWakePotential panel-only oracle" begin
     wake = flat_wake(body0, gamma0)
+
+    # unpaired shedding edges are a hard init error for this formulation
+    # (052e.1): its Kutta strength difference is applied implicitly, so a
+    # silent zeroed correction would corrupt the reconstructed trace.
+    bodyU = deepcopy(body0)
+    bodyU.shedding[1][4, 1] = -1
+    @test_throws ErrorException pnl.initialize_formulation(
+        pnl.HybridWakePotential(), (bodyU,), (wake,), pnl.Backslash(bodyU),
+        DIRECT, DIRECT)
 
     bodyD = deepcopy(body0)
     solverD = pnl.Backslash(bodyD)

@@ -1,0 +1,32 @@
+% 021 Phase 2 — best certified per-solve time vs near-field cache memory
+% budget (mem_budget_gib in {0,16,128,500}; 0 = uncached b0), one line per
+% rung. Min over duplicate rows per (rung,budget); FMM knobs re-tuned at each
+% budget. Data: p2_cost_vs_budget/times.csv from
+% wt021/FLOWPanel.jl-c/benchmark/results/phase2/multi/R*/tune_phase2.csv
+% (harvested 2026-09-08). R4 budget-0 = 143.4 s from job 13603860 (not in
+% CSV). R5 cached budgets nan pending harvest; R6/R7 tune jobs hung.
+\documentclass[tikz]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\pagecolor{white}
+\begin{document}
+\begin{tikzpicture}
+\begin{semilogyaxis}[width=11cm, height=8cm,
+    symbolic x coords={0,16,128,500}, xtick=data,
+    xlabel={near-field cache budget [GiB]}, ylabel={best certified GMRES per-solve time [s]},
+    legend pos=outer north east, legend style={font=\footnotesize},
+    grid=both, minor grid style={gray!15}, major grid style={gray!35},
+    unbounded coords=discard]
+\addplot[color=black, mark=square*, thick] table [col sep=comma, x=budget, y=R1] {p2_cost_vs_budget/times.csv};
+\addlegendentry{R1 (8{,}016)}
+\addplot[color=red!70!black, mark=o, thick] table [col sep=comma, x=budget, y=R2] {p2_cost_vs_budget/times.csv};
+\addlegendentry{R2 (15{,}760)}
+\addplot[color=orange!80!black, mark=triangle*, thick] table [col sep=comma, x=budget, y=R3] {p2_cost_vs_budget/times.csv};
+\addlegendentry{R3 (28{,}752)}
+\addplot[color=blue!70!black, mark=diamond*, thick] table [col sep=comma, x=budget, y=R4] {p2_cost_vs_budget/times.csv};
+\addlegendentry{R4 (58{,}192)}
+\addplot[color=green!50!black, mark=*, thick] table [col sep=comma, x=budget, y=R5] {p2_cost_vs_budget/times.csv};
+\addlegendentry{R5 (108{,}240)}
+\end{semilogyaxis}
+\end{tikzpicture}
+\end{document}

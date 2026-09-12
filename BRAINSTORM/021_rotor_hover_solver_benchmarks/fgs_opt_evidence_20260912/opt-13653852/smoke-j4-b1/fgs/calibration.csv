@@ -1,0 +1,9 @@
+iteration,internal_residual,fmm_rel_l2,fmm_rel_max,fmm_certified,fmm_seconds,epsilon_requested,direct_rel_l2,evaluator_delta,direct_seconds,authoritative_evaluator,authoritative_rel_l2,accepted
+1,0.0279097428,1,2.35804741,true,8.67790655,1.18359549e-09,NaN,NaN,0,certified_fmm,1,false
+2,0.00166778016,0.0473968704,0.140907873,true,6.65122496,1.18359549e-09,NaN,NaN,0,certified_fmm,0.0473968704,false
+3,0.000163286783,0.00439071371,0.0137957414,true,6.67765495,1.18359549e-09,NaN,NaN,0,certified_fmm,0.00439071371,false
+4,1.96180403e-05,0.000444853687,0.001657488,true,6.66675158,1.18359549e-09,NaN,NaN,0,certified_fmm,0.000444853687,false
+5,2.37903326e-06,4.7722663e-05,0.000200993183,true,6.67315749,1.18359549e-09,NaN,NaN,0,certified_fmm,4.7722663e-05,false
+6,2.77793003e-07,5.25081473e-06,2.3462915e-05,true,6.64779097,1.18359549e-09,NaN,NaN,0,certified_fmm,5.25081473e-06,false
+7,3.18569669e-08,5.9682018e-07,2.68419133e-06,true,6.65109847,1.18359549e-09,NaN,NaN,0,certified_fmm,5.9682018e-07,true
+8,3.61960404e-09,1.163835e-07,9.05123856e-07,true,6.65285556,1.18359549e-09,NaN,NaN,0,certified_fmm,1.163835e-07,true

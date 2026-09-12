@@ -461,7 +461,6 @@ end
             rs.sigma_0[i] = 0.05 + 0.01i
             rs.axis[1, i] = 0.1i; rs.axis[2, i] = -0.2i; rs.axis[3, i] = 0.3i
             rs.weight[i] = 0.4i
-            rs.exposure[i] = -0.05i
             rs.dvisc[i] = 1e-4 * i
             rs.drvpm[i] = 2e-4 * i
         end
@@ -479,7 +478,6 @@ end
         @test rs2.sigma_0[1:np] == rs.sigma_0[1:np]
         @test rs2.axis[:, 1:np] == rs.axis[:, 1:np]
         @test rs2.weight[1:np] == rs.weight[1:np]
-        @test rs2.exposure[1:np] == rs.exposure[1:np]
         @test rs2.dvisc[1:np] == rs.dvisc[1:np]
         @test rs2.drvpm[1:np] == rs.drvpm[1:np]
         # slots beyond np stay zero
@@ -487,11 +485,11 @@ end
         @test all(iszero, rs2.weight[np+1:end])
         @test all(iszero, rs2.axis[:, np+1:end])
 
-        # ratio trigger fires identically after restore: force σ/σ₀ > 2
-        opts = vpm.ResolutionSplitOpts(sigma_growth_ratio_max=2.0,
+        # fractional trigger fires identically after restore: give particle 1
+        # a viscous credit past the f_visc=0.5 threshold on its restored σ₀
+        opts = vpm.ResolutionSplitOpts(f_visc=0.5,
             enable_viscous_split=true, enable_stretch_split=true)
-        rs2.sigma_0[1] = vpm.get_sigma(pf2, 1)[] / 3
-        rs2.dvisc[1] = 1.0   # route grow → viscous tetra4
+        rs2.dvisc[1] = 2.0 * rs2.sigma_0[1]^2   # > ((1.5)² − 1)·σ₀²
         counters = vpm.split_particles!(pf2, opts)
         @test counters.n_split_viscous == 1
         @test pf2.np == np + 3
@@ -538,6 +536,59 @@ end
             wake2, path, "w1", 4)
     end
 
+    @testset "E: legacy 6-field save (with rsplit_exposure) migrates" begin
+        # Pre-fractional-gating checkpoints carry rsplit_exposure and
+        # applied-Δσ² accumulators: sigma_0/axis/weight restore, exposure is
+        # dropped, dvisc/drvpm are zeroed (semantics changed to attempted
+        # Δσ², Ryan 2026-09-08) with a warning.
+        wake = seed_particles!(setup_rsplit_wake())
+        pf = wake.pfield
+        np = pf.np
+        rs = vpm.enable_resolution_split!(pf)
+        for i in 1:np
+            rs.sigma_0[i] = 0.05 + 0.01i
+            rs.axis[1, i] = 0.1i; rs.axis[2, i] = -0.2i; rs.axis[3, i] = 0.3i
+            rs.weight[i] = 0.4i
+            rs.dvisc[i] = 1e-4 * i
+            rs.drvpm[i] = 2e-4 * i
+        end
+        path = mktempdir()
+        pnl.write_vtk(joinpath(path, "w1"), wake, 5, 0.25)
+        # graft the legacy exposure array onto the fresh save
+        vtp_dir = joinpath(path, "w1_particles")
+        cells = [pnl.WriteVTK.MeshCell(pnl.WriteVTK.PolyData.Verts(), 1:np)]
+        Xp = pf.particles[vpm.X_INDEX, 1:np]
+        vtp = pnl.WriteVTK.vtk_grid(joinpath(vtp_dir, "w1_particles.5.vtp"),
+            Xp, cells; compress=false)
+        for (fname, idxs) in (("gamma", vpm.GAMMA_INDEX),
+                ("sigma", vpm.SIGMA_INDEX), ("vol", vpm.VOL_INDEX),
+                ("circulation", vpm.CIRCULATION_INDEX),
+                ("velocity", vpm.U_INDEX), ("vorticity", vpm.VORTICITY_INDEX),
+                ("C", vpm.C_INDEX), ("SFS", vpm.SFS_INDEX))
+            vtp[fname, pnl.WriteVTK.VTKPointData()] = pf.particles[idxs, 1:np]
+        end
+        vtp["velocity_gradient", pnl.WriteVTK.VTKPointData()] =
+            reshape(pf.particles[vpm.J_INDEX, 1:np], 3, 3, np)
+        vtp["rsplit_sigma_0", pnl.WriteVTK.VTKPointData()] = rs.sigma_0[1:np]
+        vtp["rsplit_axis", pnl.WriteVTK.VTKPointData()] = rs.axis[:, 1:np]
+        vtp["rsplit_weight", pnl.WriteVTK.VTKPointData()] = rs.weight[1:np]
+        vtp["rsplit_exposure", pnl.WriteVTK.VTKPointData()] = fill(0.3, np)
+        vtp["rsplit_dvisc", pnl.WriteVTK.VTKPointData()] = rs.dvisc[1:np]
+        vtp["rsplit_drvpm", pnl.WriteVTK.VTKPointData()] = rs.drvpm[1:np]
+        pnl.WriteVTK.vtk_save(vtp)
+
+        wake2 = setup_rsplit_wake()
+        @test_logs (:warn, r"legacy") match_mode=:any (
+            pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 5))
+        rs2 = wake2.pfield.resolution_split
+        @test rs2 !== nothing
+        @test rs2.sigma_0[1:np] == rs.sigma_0[1:np]
+        @test rs2.axis[:, 1:np] == rs.axis[:, 1:np]
+        @test rs2.weight[1:np] == rs.weight[1:np]
+        @test all(iszero, rs2.dvisc[1:np])      # accumulators re-armed
+        @test all(iszero, rs2.drvpm[1:np])
+    end
+
     @testset "D: stale legacy split_* fields ignored silently (D-B)" begin
         # Checkpoints written before the legacy splitting path was removed
         # (2026-09-08) carry six split_* point-data arrays. Fabricate one and
@@ -562,7 +613,9 @@ end
         end
         vtp["velocity_gradient", pnl.WriteVTK.VTKPointData()] =
             reshape(pf.particles[vpm.J_INDEX, 1:np], 3, 3, np)
-        # legacy Session-2-era block (exact field names/types the old writer used)
+        # legacy Session-2-era block (exact field names/types the old writer
+        # used; the rsplit_* block below is ALSO legacy-format — it carries
+        # rsplit_exposure — so the loader takes the migration path)
         vtp["split_sigma_0", pnl.WriteVTK.VTKPointData()] = fill(0.3, np)
         vtp["split_H_chi", pnl.WriteVTK.VTKPointData()] = fill(0.1, np)
         vtp["split_hold", pnl.WriteVTK.VTKPointData()] = fill(Int32(2), np)
@@ -579,14 +632,17 @@ end
         pnl.WriteVTK.vtk_save(vtp)
 
         wake2 = setup_rsplit_wake()
-        @test_logs min_level=Base.CoreLogging.Warn begin
-            pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 5)
-        end
+        # stale split_* fields stay silently inert; the rsplit_exposure field
+        # makes this a legacy save, so ONLY the migration warning fires
+        @test_logs (:warn, r"legacy") match_mode=:any (
+            pnl._load_panel_particle_wake_vtk!(wake2, path, "w1", 5))
         pf2 = wake2.pfield
         @test pf2.np == np
         rs2 = pf2.resolution_split
         @test rs2 !== nothing
         @test rs2.sigma_0[1:np] == collect(0.05 .+ 0.01*(1:np))
         @test all(rs2.weight[1:np] .== 0.4)
+        @test all(iszero, rs2.dvisc[1:np])   # legacy accumulators re-armed
+        @test all(iszero, rs2.drvpm[1:np])
     end
 end

@@ -781,7 +781,7 @@ end
 end
 
 @testset "ResolutionSplit policy is serialized then dropped by replay (026)" begin
-    opts = FLOWVPM.ResolutionSplitOpts(sigma_max=0.5, enable_viscous_split=true)
+    opts = FLOWVPM.ResolutionSplitOpts(f_visc=0.5, enable_viscous_split=true)
     policy = pnl.ResolutionSplit(opts; every=3, verbose=true)
 
     manifest = pnl._particle_policy_manifest(policy)
