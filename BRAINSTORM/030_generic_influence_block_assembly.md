@@ -243,6 +243,37 @@ All tests green: FastMultipole cache test file (25+8+17+4 pre-existing, 6 parall
   `runtests_unit_solver.jl`) in the live checkouts. Pending items (a) tree.jl
   guard, (b) notebook entry, (c) wt030 worktree deletion: untouched, Ryan's call.
 
+- 2026-09-12 (merge-back session, continued): **MERGE-BACK COMPLETE — Stage 2
+  DONE, worktrees deleted.** Ryan cleared 052 ("at a stopping point") and
+  ordered the merge + `~/wt030` deletion. Production had moved since the
+  morning check (FLOWPanel `8dce66c`→`004ce84` WIP snapshot; FastMultipole
+  `da1bd13a`→`d3af45f1`→`fab2612a`), so Stage 1 was re-run on the new tips:
+  merge commits FLOWPanel `e4a5630`, FastMultipole `ac7230a6`, both
+  auto-merged with ZERO conflicts (overlapping `src/FastMultipole.jl`,
+  `src/fmm.jl` hunks were disjoint). Re-validation on the merged pair:
+  driver **597299/597299**, `runtests_unit_solver.jl` **489/489**; full
+  `runtests.jl` aborted in Free Wakes with 4 errors in the ResolutionSplit
+  (026 Phase 2) testsets — attributed to cross-repo skew, NOT 030: the tests
+  (added by production `004ce84`) call `ResolutionSplitOpts(; f_visc,
+  enable_viscous_split)`, kwargs that exist only in live FLOWVPM's
+  *uncommitted* 026 diff (`src/FLOWVPM_resolution_split.jl`), unavailable to
+  the clean wt030 FLOWVPM worktree at the same commit `8b0b70d`. All other
+  testsets through Free Wakes passed (720/724); the pre-redux full run had
+  covered the remainder green except the pre-existing Kutta `:jump` 656/658.
+  Stage 2: fast-forward merges — live FLOWPanel `fastmultipole` `004ce84`→
+  **`e4a5630`**, live FastMultipole `flowpanel-20260817` `fab2612a`→
+  **`ac7230a6`**. Live smoke checks: driver **597299/597299**, Solvers
+  **489/489**. Committed, NOT pushed. `~/wt030` worktrees (FLOWPanel,
+  FastMultipole, FLOWVPM) removed via `git worktree remove` and the directory
+  deleted — no history lost (true worktrees; `030-block-assembly` branch refs
+  remain in the main repos). Note: the 026 agent's
+  `rotor_hover_pressure_comparison` job was running in the live FLOWPanel
+  checkout during the ff merge (Ryan-ordered); its in-memory session is
+  unaffected, but any Julia process launched in that checkout after the merge
+  runs the merged tree. Outstanding: pending item (a) tree.jl guard and (b)
+  notebook entry remain Ryan's call; the Kutta `:jump` pre-existing failure
+  and the 026 FLOWVPM commit skew belong to their respective owners.
+
 ## Implementation prompt (Phase 1 + 2)
 
 See `BRAINSTORM/030_implementation_prompt_20260909.md`.
