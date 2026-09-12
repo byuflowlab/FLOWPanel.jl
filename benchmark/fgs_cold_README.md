@@ -128,3 +128,27 @@ non-preemptible test allocation, followed by `COLD_PILOT_STAGE=timing_profiles`
 with the preserved absolute `CONFIG_FILE`. All three timing settings and both
 profile processes still execute sequentially on the same node in the second job.
 The default `all` mode runs every stage in one allocation.
+# Saved bases for staged screens (v9)
+
+R4 now uses the frozen 58,192-panel `65_209` mesh. Its starting settings
+P8/MAC0.4/leaf100/inner3 are provisional R2-derived settings, not an R4
+optimum. R4 uses certified evaluation and direct fallback when certification
+is inconclusive, as required by the initialized-CPU plan. Existing thresholds
+and R1–R3 evaluation behavior are unchanged.
+
+`COLD_OPT_STAGE=attribution` runs controls, smoke, prepared j4/b1 and j64/b1
+baselines, then profiling, without a tuning screen. `COLD_MIN_REPS=10` sets a
+minimum number of unprofiled repetitions; its default 1 preserves the old
+adaptive count. `COLD_OPT_PROFILE_REPS=20` requests 20 accumulated prepared
+CPU solves in the launcher (default 10). Timed and profiled solves remain
+separate, with resets and validation outside the timed/profiled regions.
+
+`SCREEN_BASE_FILE=/absolute/bases.toml` accepts the selected-config TOML schema
+with one or more accepted configurations. It requires `STAGE=screen` and an
+explicit `SCREEN_SET`, and conflicts with `CONFIG_FILE`. The roster contains
+each base plus its one-factor neighbors, deduplicated by configuration. FGS
+tolerances are reset and independently staircase-calibrated for every point.
+The input file is copied and hashed in process provenance. For the campaign
+launcher, pass `COLD_OPT_SCREEN_BASE_FILE` with `COLD_OPT_SCREEN_SET`; the base
+file applies only to the screen process. v8 had no way to screen around saved
+winners: its screen always started from the frozen rung seed.

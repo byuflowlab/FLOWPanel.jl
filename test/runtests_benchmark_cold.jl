@@ -24,7 +24,7 @@ include(joinpath(@__DIR__, "..", "benchmark", "fgs_cold_common.jl"))
 end
 
 @testset "Configuration contracts and selected immutability" begin
-    for rung in ("R1", "R2", "R3")
+    for rung in ("R1", "R2", "R3", "R4")
         configs = cold_configs(rung, ["fgs", "krylov_ilu"], "screen")
         @test length(configs) == 25
         @test length(unique(cold_id.(configs))) == 25
@@ -61,7 +61,7 @@ end
         end
         for (key,value) in ("unknown"=>1, "P"=>true, "P"=>1.5, "P"=>0,
                 "leaf"=>-1, "MAC"=>NaN, "MAC"=>Inf, "MAC"=>1.1,
-                "diagnostic"=>1, "kind"=>"bad", "rung"=>"R4")
+                "diagnostic"=>1, "kind"=>"bad", "rung"=>"R5")
             bad = copy(c); bad[key] = value
             @test_throws Exception cold_check_config(bad)
         end
@@ -109,6 +109,31 @@ end
     end
 end
 
+@testset "Screen around saved winners recalibrates every neighbor" begin
+    mktempdir() do dir
+        path = joinpath(dir, "bases.toml")
+        bases = [merge(cold_seed("R2", "fgs"), Dict{String,Any}("inner"=>n, "tolerance"=>1e-9)) for n in (3,5)]
+        cold_write_toml(path, Dict("configs"=>bases))
+        original = read(path)
+        withenv("SCREEN_BASE_FILE"=>path, "SCREEN_SET"=>"leaf:25,50,200") do
+            configs = cold_configs("R2", ["fgs"], "screen")
+            @test Set((c["inner"], c["leaf"]) for c in configs) == Set(Iterators.product((3,5), (25,50,100,200)))
+            @test length(configs) == 8
+            @test all(c -> c["tolerance"] == 0.0 && c["P"] == 8 && c["MAC"] == 0.4, configs)
+            @test read(path) == original
+            @test_throws Exception cold_configs("R3", ["fgs"], "screen")
+            @test_throws Exception cold_configs("R2", ["fgs"], "baseline")
+            @test_throws Exception cold_configs("R2", ["fgs"], "screen"; file=path)
+            withenv("SCREEN_SET"=>"") do
+                @test_throws Exception cold_configs("R2", ["fgs"], "screen")
+            end
+            withenv("SCREEN_BASE_FILE"=>joinpath(dir,"missing.toml")) do
+                @test_throws Exception cold_configs("R2", ["fgs"], "screen")
+            end
+        end
+    end
+end
+
 @testset "Invalid input has no filesystem effects" begin
     mktempdir() do dir
         out, fixture = joinpath(dir,"output"), joinpath(dir,"fixture")
@@ -117,7 +142,10 @@ end
                 "FLOWPANEL_FILAMENT_REG"=>"linegauss", "CONFIGS"=>"fgs",
                 "CONFIG_FILE"=>"", "MEMORY_GIB"=>"500") do
             @test cold_preflight().memory == 500*2.0^30
-            for (key,value) in ("STAGE"=>"unknown", "RUNG"=>"R4",
+            withenv("RUNG"=>"R4") do
+                @test cold_preflight().configs[1]["rung"] == "R4"
+            end
+            for (key,value) in ("STAGE"=>"unknown", "RUNG"=>"R5",
                     "OUTDIR"=>"relative", "BENCH_CASE_ROOT"=>"relative",
                     "BENCH_CASE_ROOT"=>out, "BENCH_CASE_ROOT"=>joinpath(out,"nested"),
                     "CACHE_B"=>"1", "SKIP_B"=>"1", "CONFIGS"=>"unknown",
@@ -128,7 +156,9 @@ end
                     "KNOBS_MODE"=>"../../outside", "PER_RUNG_DIR"=>"bad", "K_REPS"=>"bad",
                     "COLD_PREPARED_ONLY"=>"2", "COLD_PREPARED_ONLY"=>"bad",
                     "COLD_PROFILE_REPS"=>"0", "COLD_PROFILE_REPS"=>"bad",
+                    "COLD_MIN_REPS"=>"0", "COLD_MIN_REPS"=>"bad",
                     "SCREEN_SET"=>"inner:1,2",
+                    "SCREEN_BASE_FILE"=>joinpath(dir,"missing.toml"),
                     "CONFIG_FILE"=>joinpath(dir,"missing.toml"))
                 withenv(key=>value) do
                     @test_throws Exception cold_initialize!()
@@ -169,6 +199,12 @@ end
         @test e.authoritative_rel_l2 == 1e-7
     end
     @test !cold_acceptance(1e-7,false,1e-7,1e-8,"R3").accepted
+    @test cold_acceptance(1e-7,true,NaN,NaN,"R4").accepted
+    @test !cold_acceptance(1e-7,false,NaN,NaN,"R4").accepted
+    @test cold_acceptance(2e-6,false,1e-7,2e-6,"R4").authoritative_evaluator == "direct_fallback"
+    @test cold_acceptance(2e-6,false,1e-7,2e-6,"R4").accepted
+    @test !cold_acceptance(2e-6,false,2e-6,0.0,"R4").accepted
+    @test !cold_acceptance(1e-7,true,1e-7,1.01e-7,"R4").accepted
     @test_throws ErrorException cold_require(false,"profile verification failed")
     @test cold_require(true,"valid") === nothing
 end

@@ -24,7 +24,7 @@ module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
 export RUNG=${COLD_OPT_RUNG:-R2} CONFIGS=fgs
 screen_set=${COLD_OPT_SCREEN_SET:-inner:1,2,3,5}
 stage=${COLD_OPT_STAGE:-all}
-[[ "$stage" == all || "$stage" == controls_smoke || "$stage" == screen_profile ]] || exit 2
+[[ "$stage" == all || "$stage" == controls_smoke || "$stage" == screen_profile || "$stage" == attribution ]] || exit 2
 if [[ "$stage" == screen_profile ]]; then
  : "${CONFIG_FILE:?selected smoke settings required}"
  [[ -f "$CONFIG_FILE" ]] || exit 2
@@ -80,13 +80,18 @@ run_process baseline-j4-b1 4 1 benchmark/rotor_hover_solver_cold.jl
 run_process baseline-j64-b1 64 1 benchmark/rotor_hover_solver_cold.jl
 # Step-1 screen: explicit roster, per-candidate tolerance recalibration; a
 # failed roster point is recorded and skipped inside the process.
+if [[ "$stage" != attribution ]]; then
 (
  export STAGE=screen SCREEN_SET="$screen_set"
  unset CONFIG_FILE
+ if [[ -n "${COLD_OPT_SCREEN_BASE_FILE:-}" ]]; then
+  export SCREEN_BASE_FILE="$COLD_OPT_SCREEN_BASE_FILE"
+ fi
  run_process screen-j64-b1 64 1 benchmark/rotor_hover_solver_cold.jl
 )
+fi
 # Accumulated CPU profile of the calibrated seed for denser attribution.
-export STAGE=verify COLD_INVESTIGATION=1 COLD_PROFILE_REPS=10
+export STAGE=verify COLD_INVESTIGATION=1 COLD_PROFILE_REPS=${COLD_OPT_PROFILE_REPS:-10}
 run_process profile-fgs-j64-b1 64 1 benchmark/rotor_hover_solver_phase2_profile.jl
 sha256sum -c "$run/selected.sha256"
 printf 'completed\n' > "$run/COMPLETED"

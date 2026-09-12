@@ -5,7 +5,9 @@ using TOML, SHA, Statistics, Serialization, Profile
 const COLD_TARGET = 1e-6
 const COLD_SEEDS = Dict("R1" => (6, 0.3, 50, 10, 17),
                         "R2" => (8, 0.4, 100, 10, 17),
-                        "R3" => (6, 0.3, 100, 5, 16))
+                        "R3" => (6, 0.3, 100, 5, 16),
+                        # Provisional R2-derived starting point, NOT tuned R4 knobs.
+                        "R4" => (8, 0.4, 100, 3, 17))
 
 function cold_seed(rung, kind)
     p, mac, leaf, inner, kp = COLD_SEEDS[rung]
@@ -93,6 +95,13 @@ end
 
 function cold_configs(rung, kinds, stage; file="")
     screen_set = get(ENV, "SCREEN_SET", "")
+    base_file = get(ENV, "SCREEN_BASE_FILE", "")
+    if !isempty(base_file)
+        stage == "screen" || error("SCREEN_BASE_FILE requires STAGE=screen")
+        isempty(file) || error("SCREEN_BASE_FILE conflicts with CONFIG_FILE")
+        isempty(screen_set) && error("SCREEN_BASE_FILE requires explicit SCREEN_SET")
+        isabspath(base_file) && isfile(base_file) || error("SCREEN_BASE_FILE must be an existing absolute file")
+    end
     !isempty(screen_set) && stage != "screen" && error("SCREEN_SET requires STAGE=screen")
     !isempty(screen_set) && !isempty(file) && error("SCREEN_SET conflicts with CONFIG_FILE")
     if !isempty(file)
@@ -105,9 +114,19 @@ function cold_configs(rung, kinds, stage; file="")
         return filter(c -> c["kind"] in kinds, configs)
     end
     stage == "verify" && error("STAGE=verify requires CONFIG_FILE")
+    seeds = if isempty(base_file)
+        [cold_seed(rung, kind) for kind in kinds]
+    else
+        withenv("SCREEN_BASE_FILE" => nothing, "SCREEN_SET" => nothing) do
+            cold_configs(rung, kinds, "verify"; file=base_file)
+        end
+    end
     configs = Dict{String,Any}[]
-    for kind in kinds
-        seed = cold_seed(rung, kind)
+    for original in seeds
+        seed = copy(original)
+        kind = seed["kind"]
+        # A saved winner supplies settings, never a tolerance for its neighbors.
+        !isempty(base_file) && kind == "fgs" && (seed["tolerance"] = 0.0)
         push!(configs, seed)
         stage == "screen" || continue
         # Bounded one-factor-at-a-time neighbors; do not conflate thread effects.
@@ -144,7 +163,7 @@ function cold_preflight(; profile=false)
     stage = get(ENV, "STAGE", "baseline")
     stage in ("baseline", "screen", "verify") || error("Invalid STAGE")
     rung = get(ENV, "RUNG", "")
-    haskey(COLD_SEEDS, rung) || error("Cold investigation supports R1–R3")
+    haskey(COLD_SEEDS, rung) || error("Cold investigation supports R1–R4")
     for key in ("OUTDIR", "BENCH_CASE_ROOT")
         haskey(ENV, key) && isabspath(ENV[key]) || error("$key must be an explicit absolute path")
     end
@@ -175,6 +194,7 @@ function cold_preflight(; profile=false)
     parse(Int,get(ENV,"K_REPS","1")) > 0 || error("Invalid K_REPS")
     get(ENV, "COLD_PREPARED_ONLY", "0") in ("0", "1") || error("Invalid COLD_PREPARED_ONLY")
     parse(Int, get(ENV, "COLD_PROFILE_REPS", "1")) > 0 || error("Invalid COLD_PROFILE_REPS")
+    parse(Int, get(ENV, "COLD_MIN_REPS", "1")) > 0 || error("Invalid COLD_MIN_REPS")
     jt = parse(Int, get(ENV, "EXPECT_JULIA_THREADS", "1"))
     jt > 0 && Threads.nthreads() == jt || error("Julia thread request mismatch")
     bt = parse(Int, get(ENV, "BENCH_BLAS_THREADS", "1"))
@@ -191,7 +211,7 @@ function cold_preflight(; profile=false)
     !isempty(file) && (!isabspath(file) || !isfile(file)) && error("CONFIG_FILE must be an existing absolute file")
     configs = cold_configs(rung, kinds, stage; file)
     isempty(configs) && error("No matching configurations")
-    mesh = Dict("R1"=>"23_73", "R2"=>"33_105", "R3"=>"45_145")[rung]
+    mesh = Dict("R1"=>"23_73", "R2"=>"33_105", "R3"=>"45_145", "R4"=>"65_209")[rung]
     isfile(joinpath(@__DIR__, "..", "examples", "data", "dji9443_20260813_$(mesh)_capped_captess4.msh")) || error("Missing rotor mesh")
     pins = get(ENV, "CAMPAIGN_PINS", "")
     if !isempty(pins)
@@ -267,6 +287,8 @@ function cold_provenance(out, stage)
     cp(manifest, joinpath(out,"Manifest.toml"))
     pins = get(ENV,"CAMPAIGN_PINS", "")
     !isempty(pins) && cp(pins, joinpath(out,"campaign_pins.toml"))
+    base_file = get(ENV, "SCREEN_BASE_FILE", "")
+    !isempty(base_file) && cp(base_file, joinpath(out, "screen_bases.toml"))
     affinity = Sys.islinux() ? read("/proc/self/status", String) : "unavailable on this OS"
     cold_write_toml(joinpath(out, "provenance.toml"), Dict(
         "manifest_sha256" => bytes2hex(sha256(read(manifest))),
@@ -276,7 +298,9 @@ function cold_provenance(out, stage)
         "thread_environment" => Dict(k=>get(ENV,k,"") for k in ("OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS","BLIS_NUM_THREADS","VECLIB_MAXIMUM_THREADS","BLAS_NUM_THREADS")),
         "prepared_only" => get(ENV, "COLD_PREPARED_ONLY", "0") == "1",
         "profile_reps" => parse(Int, get(ENV, "COLD_PROFILE_REPS", "1")),
+        "minimum_reps" => parse(Int, get(ENV, "COLD_MIN_REPS", "1")),
         "screen_set" => get(ENV, "SCREEN_SET", ""),
+        "screen_base_sha256" => isempty(base_file) ? "rung_seed" : bytes2hex(sha256(read(base_file))),
         "schema" => 2, "stage" => stage, "packages" => packages,
         "julia_version" => string(VERSION), "julia_threads" => Threads.nthreads(),
         "blas_threads" => LinearAlgebra.BLAS.get_num_threads(),
@@ -340,7 +364,7 @@ end
 
 function cold_acceptance(fmm_rel, certified, direct_rel, delta, rung)
     direct = isfinite(direct_rel)
-    evaluator = certified ? "certified_fmm" : direct && rung in ("R1", "R2") ? "direct_fallback" : "uncertified_fmm"
+    evaluator = certified ? "certified_fmm" : direct && rung in ("R1", "R2", "R4") ? "direct_fallback" : "uncertified_fmm"
     authoritative_rel = evaluator == "direct_fallback" ? direct_rel : fmm_rel
     accepted = evaluator != "uncertified_fmm" && isfinite(authoritative_rel) && authoritative_rel <= COLD_TARGET
     if certified && direct
@@ -355,7 +379,7 @@ function cold_validate(x; crosscheck=false)
     e = bc_error!(rotor, x; rms_b, target_rel=COLD_TARGET, safety=0.1,
         max_expansion_order=20, multipole_acceptance=0.5, leaf_size=20, phi_out=phi)
     direct_rel = NaN; delta = NaN; direct_seconds = 0.0
-    if crosscheck || (!e.error_success && rung in ("R1", "R2"))
+    if crosscheck || (!e.error_success && rung in ("R1", "R2", "R4"))
         direct_phi = similar(phi)
         d = bc_error!(rotor, x; rms_b, backend=:direct, phi_out=direct_phi)
         direct_rel = d.rel_l2; direct_seconds = d.t_eval
@@ -482,6 +506,7 @@ function cold_benchmark(c, dir; selected=false)
                 "Excluded fresh solve failed validation/agreement")
             k = firstrow.total_seconds < 60 ? 5 : firstrow.total_seconds < 600 ? 3 : 2
         end
+        k = max(k, parse(Int, get(ENV, "COLD_MIN_REPS", "1")))
         for trial in 1:k
             setup_seconds = 0.0; setup_bytes = 0; setup_gc = 0.0
             if mode == "fresh"
@@ -598,7 +623,8 @@ function cold_smoke(configs, out)
             cold_require(independent, "Constructors share solver cache state")
             rows = NamedTuple[]; reference = nothing
             for (i, solver) in enumerate((first_solver, first_solver, second_solver))
-                row, x = cold_trial(solver; crosscheck=true)
+                # R4 uses certified evaluation, with direct fallback if inconclusive.
+                row, x = cold_trial(solver; crosscheck=rung != "R4")
                 reference === nothing && (reference = x)
                 agreement = norm(x-reference)/max(norm(reference),eps())
                 push!(rows,(; trial=i, independent, zero_reset_verified=true, relative_solution_delta=agreement, row...))
