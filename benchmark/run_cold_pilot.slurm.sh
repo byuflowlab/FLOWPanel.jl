@@ -21,8 +21,8 @@ module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
 export RUNG=R1 CONFIGS=fgs:krylov_ilu
 stage=${COLD_PILOT_STAGE:-all}
-[[ "$stage" == all || "$stage" == controls_smoke || "$stage" == timing_profiles ]] || exit 2
-if [[ "$stage" == timing_profiles ]]; then
+[[ "$stage" == all || "$stage" == controls_smoke || "$stage" == timing_profiles || "$stage" == profiles_only ]] || exit 2
+if [[ "$stage" == timing_profiles || "$stage" == profiles_only ]]; then
  : "${CONFIG_FILE:?selected smoke settings required}"
  [[ -f "$CONFIG_FILE" ]] || exit 2
 fi
@@ -53,7 +53,7 @@ run_process() {
  export OUTDIR="$pilot/$generation" BENCH_CASE_ROOT="$pilot/fixture-$generation"
  taskset -c "$cpulist" bash benchmark/run_cold_process.sh "$jt" "$bt" "$driver" > "$pilot/$generation.log" 2>&1
 }
-if [[ "$stage" != timing_profiles ]]; then
+if [[ "$stage" != timing_profiles && "$stage" != profiles_only ]]; then
 # Parse without loading packages before spending time on precompilation.
 taskset -c "$cpulist" bash benchmark/run_cold_process.sh 1 1 benchmark/cold_parse.jl > "$pilot/parse.log" 2>&1
 # Environment/precompilation process is isolated from tests and timed processes.
@@ -71,9 +71,11 @@ fi
 fi
 export STAGE=verify
 sha256sum "$CONFIG_FILE" > "$pilot/selected.sha256"
+if [[ "$stage" != profiles_only ]]; then
 run_process timing-j4-b1 4 1 benchmark/rotor_hover_solver_cold.jl
 run_process timing-j64-b1 64 1 benchmark/rotor_hover_solver_cold.jl
 run_process timing-j64-b64 64 64 benchmark/rotor_hover_solver_cold.jl
+fi
 export COLD_INVESTIGATION=1
 for kind in fgs krylov_ilu; do
  export CONFIGS="$kind"
