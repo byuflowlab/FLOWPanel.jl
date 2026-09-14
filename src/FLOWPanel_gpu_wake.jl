@@ -59,20 +59,22 @@ end
 # edge graph) between two fields; these live in plain host arrays on BOTH
 # device- and host-backed fields, so plain copyto! suffices.
 #
-# 026 Phase 2 NOTE: `pfield.resolution_split` (ResolutionSplitState) is
-# deliberately NOT in this list. On a device-backed wake the ResolutionSplit
-# policy runs inside `apply_particle_maintenance!` ON THE MIRROR, so the
-# state is enabled on — and canonical to — the mirror; the device field keeps
-# `resolution_split === nothing` (its lockstep/accumulation hooks no-op).
-# There is nothing to sync: the state never exists on both sides. Known
-# device-path limitations (documented, accepted): the device integrator
-# twins skip `_rsplit_accumulate!` and the Δσ² attribution mirrors, so
-# axis/weight stay zero (direction falls back to Γ̂) and dvisc/drvpm stay
-# zero — with fractional gating (Ryan 2026-09-08) that means NO trigger can
-# fire on device-resident steps; splitting remains host-mirror-only.
-# Particles shed device-side between maintenance
-# passes miss the add_particle hook; `_heal_unseeded_rsplit_slots!`
-# (FLOWPanel_wake.jl) seeds their sigma_0 before each split application.
+# 026 Phase 2 NOTE (amended for GPU splitting, 2026-09-12):
+# `pfield.resolution_split` (ResolutionSplitState) is not in this list
+# because it is synced separately by `_gpu_sync_rsplit!` (live prefix,
+# widened on H2D — see below). The state is canonical on the DEVICE field:
+# the broadcast integrator twins accumulate axis/weight/dvisc/drvpm in
+# device arrays every step (`ResolutionSplitState` backing storage matches
+# the pfield's array type). The split pass itself still runs host-side on
+# the mirror (serial loop, RNG, add_particle), reading accumulators synced
+# D2H and pushing children's fresh state back H2D.
+# Particles shed device-side between maintenance passes miss the
+# add_particle hook; `_heal_unseeded_rsplit_slots!` (FLOWPanel_wake.jl)
+# re-inits their slots (sigma_0 seed + zeroed accumulators) on the mirror
+# before each split application. Stale device rs tails from prefix
+# shrinkage are overwritten by the widened H2D rs sync (the mirror's
+# vacated slots are zeroed by the remove_particle lockstep hooks), so a
+# stale sigma_0 can never masquerade as a seeded slot.
 function _gpu_copy_side_buffers!(dst::FLOWVPM.ParticleField,
                                  src::FLOWVPM.ParticleField)
     let s = src.filament_edge_graph, d = dst.filament_edge_graph
@@ -81,6 +83,24 @@ function _gpu_copy_side_buffers!(dst::FLOWVPM.ParticleField,
             a isa AbstractArray && copyto!(getfield(d, fname), a)
         end
     end
+    return nothing
+end
+
+"""
+Copy the resolution-split state's first `ncols` columns from `src` to `dst`
+(no-op unless BOTH fields have the state enabled). Contiguous-prefix 5-arg
+copyto! for the same CuArray↔Array fast-path rationale as the particle sync.
+"""
+function _gpu_sync_rsplit!(dst::FLOWVPM.ParticleField,
+                           src::FLOWVPM.ParticleField, ncols::Int)
+    rsd = dst.resolution_split
+    rss = src.resolution_split
+    (rsd === nothing || rss === nothing || ncols <= 0) && return nothing
+    copyto!(rsd.sigma_0, 1, rss.sigma_0, 1, ncols)
+    copyto!(rsd.axis, 1, rss.axis, 1, 3 * ncols)
+    copyto!(rsd.weight, 1, rss.weight, 1, ncols)
+    copyto!(rsd.dvisc, 1, rss.dvisc, 1, ncols)
+    copyto!(rsd.drvpm, 1, rss.drvpm, 1, ncols)
     return nothing
 end
 
@@ -95,6 +115,7 @@ function _gpu_sync_mirror_from_device!(mirror::FLOWVPM.ParticleField,
         copyto!(mirror.particles, 1, pfield.particles, 1,
                 size(pfield.particles, 1) * np)
     end
+    _gpu_sync_rsplit!(mirror, pfield, np)
     mirror.np = np
     mirror.t = pfield.t
     mirror.nt = pfield.nt
@@ -111,6 +132,13 @@ function _gpu_sync_device_from_mirror!(pfield::FLOWVPM.ParticleField,
         copyto!(pfield.particles, 1, mirror.particles, 1,
                 size(mirror.particles, 1) * np)
     end
+    # rs sync is WIDENED to cover the pre-maintenance device prefix
+    # (pfield.np is still the old device np here): when host maintenance
+    # removed particles, the mirror's vacated slots were zeroed by the
+    # remove_particle lockstep hooks, and carrying those zeros to the device
+    # prevents stale rs tails from masquerading as seeded slots when
+    # device-side shedding regrows the prefix.
+    _gpu_sync_rsplit!(pfield, mirror, max(pfield.np, np))
     pfield.np = np
     _gpu_copy_side_buffers!(pfield, mirror)
     return pfield
@@ -130,6 +158,14 @@ matrix; side buffers are synced explicitly).
 function _apply_particle_maintenance_device!(pfield::FLOWVPM.ParticleField,
         maintenance, ctx)
     mirror = _gpu_pfield_mirror(pfield)
+    # 026 GPU splitting: the ResolutionSplitState is canonical on the DEVICE
+    # field (the broadcast integrator twins accumulate there). Enable on both
+    # sides up front (idempotent) so the rs prefix syncs inside the two sync
+    # calls below are live from the first maintenance pass.
+    if any(p isa ResolutionSplit for p in maintenance.functional_policies)
+        FLOWVPM.enable_resolution_split!(pfield)
+        FLOWVPM.enable_resolution_split!(mirror)
+    end
     _gpu_sync_mirror_from_device!(mirror, pfield)
     apply_particle_maintenance!(mirror, maintenance, ctx)
     _gpu_sync_device_from_mirror!(pfield, mirror)

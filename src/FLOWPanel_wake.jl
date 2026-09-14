@@ -1757,15 +1757,19 @@ function apply_particle_policy!(policy::ResolutionSplit, pfield, ctx::ParticleMa
     return nothing
 end
 
-# On a device-backed wake the ResolutionSplitState lives on the HOST MIRROR
-# (maintenance runs there); particles shed on the device field between
-# maintenance passes therefore miss the add_particle lockstep hook and land
-# in mirror slots with sigma_0 == 0 — which would leave every fractional
-# trigger permanently dead for that particle (the check requires σ₀ > 0).
-# Seed those slots with the current σ (creation-σ approximation: at
-# most one maintenance cadence of drift) before every split application.
-# Host-backed wakes never hit the branch (hooks seed every slot), so the
-# scan is a cheap no-op there.
+# On a device-backed wake the ResolutionSplitState is canonical on the
+# DEVICE field (broadcast integrator twins accumulate there; synced to the
+# host mirror at each maintenance pass — see FLOWPanel_gpu_wake.jl).
+# Particles shed on the device field between maintenance passes miss the
+# add_particle lockstep hook and land in slots with sigma_0 == 0 — which
+# would leave every fractional trigger permanently dead for that particle
+# (the check requires σ₀ > 0). Re-init those slots (sigma_0 = current σ,
+# accumulators zeroed — creation-σ approximation: at most one maintenance
+# cadence of drift) on the mirror before every split application; the H2D
+# rs sync carries the healed state back. Stale device rs tails cannot fake
+# a seeded slot: the widened H2D sync overwrites them with the mirror's
+# zeroed vacated slots. Host-backed wakes never hit the branch (hooks seed
+# every slot), so the scan is a cheap no-op there.
 function _heal_unseeded_rsplit_slots!(pfield)
     rs = pfield.resolution_split
     rs === nothing && return nothing
