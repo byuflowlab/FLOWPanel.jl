@@ -47,6 +47,23 @@ PY
 export RUNG=R4 CONFIGS=fgs STAGE=verify COLD_PREPARED_ONLY=1
 export CONFIG_FILE="$PWD/benchmark/retained_r4_diagnostics.toml"
 export COLD_DIAG_REPS=${COLD_DIAG_REPS:-10}
+allcpus=$(<"$run/cpu_affinity_j64.txt")
+export OUTDIR="$run/parse" BENCH_CASE_ROOT="$run/fixture-controls"
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 1 1 \
+    benchmark/cold_parse.jl > "$run/parse.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    benchmark/cold_precompile.jl > "$run/precompile.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 1 1 \
+    test/runtests_benchmark_cold.jl > "$run/controls-benchmark-j1.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_benchmark_cold.jl > "$run/controls-benchmark-j4.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_unit_solver.jl > "$run/controls-flowpanel-solver.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_unit_fgs_history.jl > "$run/controls-flowpanel-history.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 -e \
+    'using FastMultipole; include(joinpath(pkgdir(FastMultipole),"test","solve_test.jl")); include(joinpath(pkgdir(FastMultipole),"test","fgs_coloring_test.jl"))' \
+    > "$run/controls-fastmultipole.log" 2>&1
 for jt in 1 4 8 16 32 64; do
     cpulist=$(<"$run/cpu_affinity_j$jt.txt")
     out="$run/j$jt-b1"
