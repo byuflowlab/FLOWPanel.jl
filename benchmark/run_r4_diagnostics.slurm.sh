@@ -62,7 +62,7 @@ taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
 taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
     test/runtests_unit_fgs_history.jl > "$run/controls-flowpanel-history.log" 2>&1
 taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 -e \
-    'using FastMultipole; include(joinpath(pkgdir(FastMultipole),"test","solve_test.jl")); include(joinpath(pkgdir(FastMultipole),"test","fgs_coloring_test.jl"))' \
+    'using FastMultipole; fm=pkgdir(FastMultipole); include(joinpath(fm,"test","gravitational.jl")); include(joinpath(fm,"test","solve_test.jl")); include(joinpath(fm,"test","fgs_coloring_test.jl"))' \
     > "$run/controls-fastmultipole.log" 2>&1
 for jt in 1 4 8 16 32 64; do
     cpulist=$(<"$run/cpu_affinity_j$jt.txt")
