@@ -234,6 +234,16 @@ case "$CASE" in
   # bounds it regardless (probe semantics).
   scr_p026ph1b_expgpu_smoke) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true ;;
 
+  # ---- 026 GPU-splitting verification smokes (2026-09-14): expgpu_smoke clone
+  # + §21 split settings, all three mechanisms armed (f_visc = 4^(1/3)-1,
+  # count-matched tetra4 analog of f_comp = sqrt(3)-1; Ryan 2026-09-14). gpuv
+  # twins run via run_p018_screen_gpu052.slurm.sh (VPM_ARRAYTYPE=cuarray);
+  # cpuv is the backend-matched CPU comparison. Distinct case names keep the
+  # data dirs disjoint. Submit with the gpu40 s950 restart env (see ph1b note).
+  scr_p026gpuv_split)      export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_VISCOUS=true; export WAKE_SPLIT_FRAC_COMPRESS=0.73; export WAKE_SPLIT_FRAC_ELONGATE=0.3; export WAKE_SPLIT_FRAC_VISCOUS=0.587 ;;
+  scr_p026gpuv_splitmerge) export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_VISCOUS=true; export WAKE_SPLIT_FRAC_COMPRESS=0.73; export WAKE_SPLIT_FRAC_ELONGATE=0.3; export WAKE_SPLIT_FRAC_VISCOUS=0.587; export MERGE_OVERLAP=3.5 ;;
+  scr_p026cpuv_split)      export OVERLAP=2.4; export P_PER_STEP=11; export MERGE_R_FACTOR=0.00524; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export NREVS=26.5278; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_VISCOUS=true; export WAKE_SPLIT_FRAC_COMPRESS=0.73; export WAKE_SPLIT_FRAC_ELONGATE=0.3; export WAKE_SPLIT_FRAC_VISCOUS=0.587 ;;
+
   # ---- 026 Phase 2 grow-side splitting arms (design doc §5/§7.3): clone of
   # the 018 NT144 λ=2.4 arm (p018_csarc_n5_nt144_l2p4, dji dispatcher :650)
   # + stretch-mechanism splitting on the absolute σ cap. Warm-start from the
@@ -270,6 +280,9 @@ case "$CASE" in
   scr_p026s9_ctrl_fs)     export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true ;;   # fs arm: + SIGMA_FLOOR_FRAC + WAKE_SPLIT_FRAC_ELONGATE at submission
   scr_p026s9_exp_floor)   export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true ;;
   scr_p026s9_exp_split)   export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true ;;
+  # merge-discriminator twin (§21 first A/B): identical to exp_split but with
+  # the overlap merge gate; distinct case name = distinct RUN_NAME/data dir.
+  scr_p026s9_exp_split_mo35)   export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true; export MERGE_OVERLAP=3.5 ;;
   scr_p026s9_exp_fs)      export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_EXPINT=true; export WAKE_SPLIT_STRETCH=true ;;   # fs arm: + SIGMA_FLOOR_FRAC + WAKE_SPLIT_FRAC_ELONGATE at submission
   scr_p026s9_ctrllg_floor) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss ;;
   scr_p026s9_ctrllg_split) export OVERLAP=2.4; export P_PER_STEP=21; export MERGE_R_FACTOR=0.00275; export NWAKEROWS=1; export DAS_UNIFORM_DSIGMA=3.4; export WAKE_HEALTH_DTZ=true; export WAKE_HEALTH_ATTRIBUTION=true; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export FLOWPANEL_FILAMENT_REG=linegauss; export WAKE_SPLIT_STRETCH=true ;;

@@ -803,13 +803,16 @@ maybe_split = wake_split_active ?
             elongate_m_max = wake_split_elongate_m_max,
             use_stretch_axis = wake_split_stretch_axis);
         every = wake_split_every, verbose = wake_split_verbose),) : ()
+# NaN-valued knobs print as "off": the GPU launcher's log gate greps for
+# word NaN, and an unbounded clamp is a configuration, not a numerical fault.
+_split_knob(x) = isnan(x) ? "off" : string(x)
 wake_split_active && println("Resolution splitting ACTIVE: " *
     "viscous=$(wake_split_viscous) stretch=$(wake_split_stretch) " *
-    "f_visc=$(wake_split_f_visc) f_comp=$(wake_split_f_comp) " *
-    "f_elong=$(wake_split_f_elong) " *
-    "elongate_overlap=$(wake_split_elongate_overlap) " *
+    "f_visc=$(_split_knob(wake_split_f_visc)) f_comp=$(_split_knob(wake_split_f_comp)) " *
+    "f_elong=$(_split_knob(wake_split_f_elong)) " *
+    "elongate_overlap=$(_split_knob(wake_split_elongate_overlap)) " *
     "elongate_m_max=$(wake_split_elongate_m_max) " *
-    "clamp=[$(wake_split_sigma_min), $(wake_split_sigma_max)] " *
+    "clamp=[$(_split_knob(wake_split_sigma_min)), $(_split_knob(wake_split_sigma_max))] " *
     "stretch_axis=$(wake_split_stretch_axis) every=$(wake_split_every)")
 
 # The two conversions need mutually exclusive wake options, so build the
