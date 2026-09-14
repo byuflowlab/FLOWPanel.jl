@@ -255,24 +255,44 @@ function cold_assert_threads()
 end
 
 function cold_packages()
+    expected = isempty(get(ENV, "CAMPAIGN_PINS", "")) ? nothing :
+        TOML.parsefile(ENV["CAMPAIGN_PINS"])["packages"]
     packages = Dict{String,Any}()
     for (name, mod) in (("FLOWPanel", pnl), ("FastMultipole", pnl.FastMultipole), ("FLOWVPM", pnl.FLOWVPM))
         path = pkgdir(mod)
-        packages[name] = Dict("path" => path, "sha" => readchomp(`git -C $path rev-parse HEAD`),
-            "status" => readchomp(`git -C $path status --porcelain`),
-            "tags" => split(readchomp(`git -C $path tag --points-at HEAD`), '\n'))
+        pin = expected === nothing ? nothing : expected[name]
+        if pin !== nothing && get(pin, "deployment", "git_worktree") == "rsync"
+            manifest = pin["content_manifest"]
+            isabspath(manifest) && isfile(manifest) || error("Missing rsync content manifest for $name")
+            bytes2hex(sha256(read(manifest))) == pin["content_manifest_sha256"] ||
+                error("Rsync content manifest hash mismatch for $name")
+            success(Cmd(`sha256sum --quiet -c $manifest`; dir=path)) ||
+                error("Rsync deployed content mismatch for $name")
+            packages[name] = Dict("path" => path, "sha" => pin["sha"],
+                "status" => "rsync_content_verified", "tags" => [pin["tag"]],
+                "deployment" => "rsync",
+                "content_manifest" => manifest,
+                "content_manifest_sha256" => pin["content_manifest_sha256"])
+        else
+            packages[name] = Dict("path" => path,
+                "sha" => readchomp(`git -C $path rev-parse HEAD`),
+                "status" => readchomp(`git -C $path status --porcelain`),
+                "tags" => split(readchomp(`git -C $path tag --points-at HEAD`), '\n'),
+                "deployment" => "git_worktree")
+        end
     end
-    if !isempty(get(ENV, "CAMPAIGN_PINS", ""))
-        expected = TOML.parsefile(ENV["CAMPAIGN_PINS"])["packages"]
+    if expected !== nothing
         for (name, facts) in packages
             pin = expected[name]
             path, tag = facts["path"], pin["tag"]
-            realpath(path) == realpath(pin["path"]) || error("Loaded $name outside pinned worktree")
-            facts["sha"] == pin["sha"] && isempty(facts["status"]) || error("Dirty or wrong $name commit")
-            readchomp(`git -C $path cat-file -t refs/tags/$tag`) == "tag" || error("Campaign tag must be annotated")
-            revision = tag * "^{commit}"
-            readchomp(`git -C $path rev-parse $revision`) == facts["sha"] || error("Execution tag mismatch")
-            isfile(joinpath(path,".git")) || error("$name is not a git worktree")
+            realpath(path) == realpath(pin["path"]) || error("Loaded $name outside pinned deployment")
+            if facts["deployment"] == "git_worktree"
+                facts["sha"] == pin["sha"] && isempty(facts["status"]) || error("Dirty or wrong $name commit")
+                readchomp(`git -C $path cat-file -t refs/tags/$tag`) == "tag" || error("Campaign tag must be annotated")
+                revision = tag * "^{commit}"
+                readchomp(`git -C $path rev-parse $revision`) == facts["sha"] || error("Execution tag mismatch")
+                isfile(joinpath(path,".git")) || error("$name is not a git worktree")
+            end
         end
     end
     return packages
