@@ -1820,7 +1820,8 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
         reverse_pass=solver.reverse_pass,
         verbose=solver.verbose,
         final_update=false,
-        callback=counting_callback
+        callback=counting_callback,
+        diagnostics=get(optargs, :diagnostics, nothing)
     )
 
     solver.solved = last_residual[] <= solver.tolerance

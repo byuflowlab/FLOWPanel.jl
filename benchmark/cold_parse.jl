@@ -7,6 +7,7 @@ end
 
 files = ["common.jl", "phase1_case.jl", "fgs_cold_common.jl",
     "cold_precompile.jl", "cold_parse.jl", "rotor_hover_solver_cold.jl",
+    "fgs_r4_diagnostics.jl",
     "rotor_hover_solver_cold_smoke.jl", "rotor_hover_solver_phase2_profile.jl",
     "../test/runtests_benchmark_cold.jl"]
 for file in files

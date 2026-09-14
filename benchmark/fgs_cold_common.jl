@@ -456,10 +456,11 @@ function cold_calibrate!(c, dir)
     end
 end
 
-function cold_trial(solver; setup_seconds=0.0, setup_bytes=0, setup_gc=0.0, crosscheck=false)
+function cold_trial(solver; setup_seconds=0.0, setup_bytes=0, setup_gc=0.0,
+                    crosscheck=false, diagnostics=nothing)
     cold_assert_threads()
     cold_reset!(solver)
-    timed = @timed pnl._solve!(rotor, solver)
+    timed = @timed pnl._solve!(rotor, solver; diagnostics)
     cold_assert_threads()
     x = copy(rotor.strength[:,2])
     # summarysize traverses the tuple once, deduplicating body/solver references.

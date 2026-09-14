@@ -127,6 +127,15 @@ The Slurm driver also supports `COLD_PILOT_STAGE=controls_smoke` for a
 non-preemptible test allocation, followed by `COLD_PILOT_STAGE=timing_profiles`
 with the preserved absolute `CONFIG_FILE`. All three timing settings and both
 profile processes still execute sequentially on the same node in the second job.
+
+`benchmark/run_r4_diagnostics.slurm.sh` is the pinned R4 follow-up diagnostic
+launcher. It runs the retained lexicographic configuration at Julia thread
+counts 1, 4, 8, 16, 32, and 64 with BLAS=1 on explicit physical-core lists.
+Each arm alternates two ten-trial uninstrumented and two ten-trial instrumented
+batches, checks solution and convergence-history equivalence, writes exclusive
+stage timers and an actual nonself GEMV census, samples per-thread CPU ticks,
+and retains a thread/task-complete profile. Prepared timing excludes fixture and
+solver construction; validation and reset remain outside each timed region.
 The default `all` mode runs every stage in one allocation.
 # Saved bases for staged screens (v9)
 
