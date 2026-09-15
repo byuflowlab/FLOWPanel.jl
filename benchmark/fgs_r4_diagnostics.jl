@@ -8,16 +8,58 @@ function diag_seconds(d, key)
     Float64(get(d, key, 0)) * 1e-9
 end
 
+function dependency_census(fgs)
+    # Same write/read conflict definition as FastMultipole.color_leaves.
+    # This describes a possible schedule; it does not change the solver.
+    ranges = [fgs.targets_by_branch[b] for b in fgs.source_tree.leaf_index]
+    starts = first.(ranges)
+    @assert issorted(starts) && all(!isempty(r) for r in ranges)
+    @assert all(last(ranges[i]) + 1 == first(ranges[i+1]) for i in 1:length(ranges)-1)
+    writes_to = [Set{Int}() for _ in ranges]
+    adjacency = [Set{Int}() for _ in ranges]
+    for i in eachindex(ranges), index in fgs.index_map[i]
+        target, _ = fgs.direct_list[index]
+        rows = fgs.targets_by_branch[target]
+        isempty(rows) && continue
+        lo = max(searchsortedlast(starts, first(rows)), 1)
+        hi = max(searchsortedlast(starts, last(rows)), 1)
+        for j in lo:hi
+            i == j && continue
+            push!(writes_to[i], j)
+            push!(adjacency[i], j)
+            push!(adjacency[j], i)
+        end
+    end
+    colors = zeros(Int, length(ranges))
+    for i in eachindex(ranges)
+        used = Set(colors[j] for j in adjacency[i])
+        c = 1
+        while c in used
+            c += 1
+        end
+        colors[i] = c
+    end
+    @assert all(colors[i] != colors[j] for i in eachindex(adjacency) for j in adjacency[i])
+    return writes_to, adjacency, colors
+end
+
 function write_census(solver, out)
     fgs = solver.fgs
     T = eltype(fgs.nonself_matrices.data)
+    writes_to, adjacency, potential_colors = dependency_census(fgs)
+    edges = [(; source_leaf=i, dependent_leaf=j)
+        for i in eachindex(writes_to) for j in sort!(collect(writes_to[i]))]
+    cold_csv(joinpath(out, "dependency_edges.csv"), edges)
     rows = NamedTuple[]
     for i in eachindex(fgs.nonself_matrices.sizes)
         m, n = fgs.nonself_matrices.sizes[i]
         push!(rows, (; leaf=i, m, n, matrix_elements=m*n,
             matrix_bytes=m*n*sizeof(T), scatter_entries=m,
             target_interactions=length(fgs.index_map[i]),
-            source_strengths=length(fgs.strengths_by_leaf[i])))
+            source_strengths=length(fgs.strengths_by_leaf[i]),
+            dependent_leaves=length(writes_to[i]),
+            conflict_degree=length(adjacency[i]),
+            potential_color=potential_colors[i]))
     end
     cold_csv(joinpath(out, "gemv_census.csv"), rows)
     color_sizes = [length(x) for x in fgs.leaves_by_color]
@@ -34,7 +76,13 @@ function write_census(solver, out)
         "sweep_order" => string(fgs.sweep_order),
         "cached_leaf_lu" => fgs.leaf_lu_cache !== nothing,
         "color_count" => length(color_sizes),
-        "color_sizes" => color_sizes))
+        "color_sizes" => color_sizes,
+        "directed_dependency_count" => length(edges),
+        "undirected_conflict_count" => sum(length, adjacency) ÷ 2,
+        "potential_color_sizes" => [count(==(c), potential_colors)
+            for c in 1:maximum(potential_colors)],
+        "potential_color_matrix_bytes" => [sum(r.matrix_bytes for r in rows
+            if r.potential_color == c) for c in 1:maximum(potential_colors)]))
 end
 
 function thread_snapshot()
@@ -60,7 +108,7 @@ function timed_row(solver, batch, trial, instrumented, reference, activity)
             cpu_ticks=a[1]-b[1], cpu_before=b[2], cpu_after=a[2]))
     end
     agreement = norm(x-reference) / max(norm(reference), eps())
-    cold_require(row.eligible && agreement <= 1e-8,
+    cold_require(row.eligible && row.authoritative_evaluator == "certified_fmm" && agreement <= 1e-8,
         "Diagnostic timing trial failed correctness/agreement gate")
     d = diagnostics === nothing ? Dict{Symbol,UInt64}() : diagnostics
     stage_sum = sum(get(d, k, 0) for k in
@@ -105,7 +153,7 @@ function history_control(solver, out, reference)
         x = copy(rotor.strength[:,2])
         e = cold_validate(x; crosscheck=true)
         agreement = norm(x-reference)/max(norm(reference), eps())
-        cold_require(solver.solved && e.accepted && agreement <= 1e-8,
+        cold_require(solver.solved && e.accepted && e.authoritative_evaluator == "certified_fmm" && agreement <= 1e-8,
             "Instrumentation history control failed acceptance")
         push!(histories, residuals); push!(solutions, x)
         push!(records, (; instrumented, iterations=solver.niter,
@@ -127,6 +175,12 @@ end
 
 function main()
     configs, out, stage = cold_initialize!()
+    # Initialization includes the fixture and defines its methods dynamically.
+    # Enter the latest world once, outside every timed solve (as cold_main does).
+    Base.invokelatest(run_diagnostics, configs, out, stage)
+end
+
+function run_diagnostics(configs, out, stage)
     length(configs) == 1 || error("R4 diagnostics requires exactly one retained config")
     c = copy(only(configs))
     c["kind"] == "fgs" || error("R4 diagnostics requires FGS")
@@ -134,9 +188,9 @@ function main()
     cold_write_toml(joinpath(out, "config.toml"), c)
     reset_cold!(); solver = cold_make(c)
     compile_row, _ = cold_trial(solver)
-    cold_require(compile_row.eligible, "Compilation solve failed")
+    cold_require(compile_row.eligible && compile_row.authoritative_evaluator == "certified_fmm", "Compilation solve failed")
     warm, reference = cold_trial(solver; crosscheck=true)
-    cold_require(warm.eligible, "Warmup failed")
+    cold_require(warm.eligible && warm.authoritative_evaluator == "certified_fmm", "Warmup failed")
     write_census(solver, out)
     history_control(solver, out, reference)
 
