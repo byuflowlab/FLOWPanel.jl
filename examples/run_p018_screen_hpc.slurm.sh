@@ -65,6 +65,9 @@ export FREESTREAM_RAMP_REVS=0
 export FREESTREAM_HOLD_REVS=0
 export FREESTREAM_WITHDRAW_REVS=0
 export SETTLE_REVS=0
+# NREVS is exported UNCONDITIONALLY here, so sbatch --export/ambient NREVS is
+# CLOBBERED by design (2026-09-15 finding: the p026 de-risk trio submitted with
+# NREVS=20/12 all ran the default 8+1 revs). Set run length in the case arm.
 export NREVS=8
 export CONVERGENCE_REVS=2
 export CONVERGENCE_MEAN_TOL=0.005
@@ -258,7 +261,7 @@ case "$CASE" in
   # point must be RE-DERIVED against the §5 adequacy table before launch
   # (pick it so splits fire before particles sit long at the clamp).
   # LAUNCHES ARE RYAN-GATED (plan commit 7) — arms defined here only.
-  scr_p026sp_nt144_cap030) export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_SIGMA_MAX=0.030 ;;   # + WAKE_SPLIT_FRAC_COMPRESS=<re-derive> at submission
+  scr_p026sp_nt144_cap030) export NWAKEROWS=5; export NT=144; export NREVS=17; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_SIGMA_MAX=0.030 ;;   # + WAKE_SPLIT_FRAC_COMPRESS=<re-derive> at submission
   scr_p026sp_nt144_cap018) export NWAKEROWS=5; export NT=144; export P_PER_STEP=3; export RELAX_RLXF=0.08539; export OVERLAP=2.75; export MERGE_R_FACTOR=0.0055; export SIGMA_CHORD_FRACTION=0.313; export SIGMA_FLOOR_R=0; export DAS_SIGMA_LAMBDA=2.4; export DAS_ARC_PLACED=true; export DAS_ARC_HELIX_SOURCE=steady; export DAS_ARC_TABLE=data/p018_cs_l3p4_rs1_te_downwash_te.csv; export CORE_SPREADING_ACTIVE=true; export WAKE_CORE_BETA=1e9; export WAKE_SPLIT_STRETCH=true; export WAKE_SPLIT_SIGMA_MAX=0.018 ;;   # + WAKE_SPLIT_FRAC_COMPRESS=<re-derive> at submission
 
   # ---- 026 Phase 2 shrink-side §9 s020v matrix (floor / split / floor+split)
