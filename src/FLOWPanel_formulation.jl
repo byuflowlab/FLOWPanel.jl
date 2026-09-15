@@ -947,6 +947,15 @@ function solve_formulation!(f::VelocityThroughSources, state, systems,
         # (solve!'s own verbose path). Env-gated, default off: each verbose
         # residual measurement costs ~one influence sweep per outer iteration.
         gs_verbose = lowercase(get(ENV, "GS_VERBOSE", "false")) in ("true", "1")
+        # The tuple solve! reads each body's entry potential as an external
+        # incident potential (phi_ext, matching BackslashCoupled). VTS has no
+        # external potential — all incident data enters through velocity — so
+        # the stale evaluated potential left by the previous step must not
+        # leak into the Dirichlet RHS (the legacy single-body solve! zeroes
+        # its potential workspace).
+        for body in systems
+            body.potential .= zero(eltype(body.potential))
+        end
         solve!(systems, body_solvers; backend=backend_solve,
             max_outer_iterations=f.max_outer_iterations,
             outer_tolerance=f.outer_tolerance,
