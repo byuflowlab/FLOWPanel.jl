@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
-"""Exercise perf's installed FIFO control protocol from Julia before fixture work."""
+# Exercise perf's installed FIFO control protocol from Julia before fixture work.
 using Test
 
 length(ARGS) == 2 || error("usage: r4_perf_control_smoke.jl CONTROL_FIFO ACK_FIFO")
