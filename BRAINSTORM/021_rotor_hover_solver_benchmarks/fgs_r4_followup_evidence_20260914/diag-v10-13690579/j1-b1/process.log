@@ -1,0 +1,41 @@
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/phase1_case.jl:92
+ERROR: LoadError: MethodError: no method matching reset_cold!()
+The applicable method may be too new: running in world age 26781, while current world is 27018.
+
+Closest candidates are:
+  reset_cold!() (method too new to be called from this world context.)
+   @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/phase1_case.jl:217
+
+Stacktrace:
+ [1] main()
+   @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/fgs_r4_diagnostics.jl:135
+ [2] top-level scope
+   @ ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/fgs_r4_diagnostics.jl:167
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/fgs_r4_diagnostics.jl:167
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 1
+#   blas_threads   = 1
+#   commit         = unknown
+#   fm_commit      = unknown
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=unknown fm=unknown vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-3-14
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-14 17:52:47
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862221 (direct source assembly 2049.5 s)
+

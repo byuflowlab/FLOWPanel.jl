@@ -1,0 +1,29 @@
+# BRAINSTORM 021 R4 tuning bases (handoff step 7, stage A: leaf axis).
+# Two median winners from opt-13657404 inner screen; tolerances are their
+# calibrated values (harness resets to 0 and recalibrates every roster point).
+
+[[configs]]
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+inner = 3
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "lexicographic"
+tolerance = 3.479128881193055e-7
+
+[[configs]]
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+inner = 5
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "lexicographic"
+tolerance = 2.5712316195808637e-7

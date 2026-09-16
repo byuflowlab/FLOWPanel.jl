@@ -1,0 +1,4 @@
+PASS parsed_ast nodes=1787
+PASS actual_main new_invokelatest=true removed_invokelatest_fails=true
+PASS dependency_census asymmetric/nonleaf/duplicate/empty cases match brute-force overlap
+PASS bash_n launcher=true

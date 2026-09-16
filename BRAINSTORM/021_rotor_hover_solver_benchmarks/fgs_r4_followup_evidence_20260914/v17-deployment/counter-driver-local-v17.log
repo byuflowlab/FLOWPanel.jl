@@ -1,0 +1,5 @@
+Command:
+JULIA_NUM_THREADS=2 JULIA_DEPOT_PATH=/private/tmp/p021-r4-counters-verify-v1/depot julia --project=/private/tmp/p021-r4-counters-verify-v1 /private/tmp/flowpanel-p021-r4-counters-v17/test/runtests_r4_counters_driver.jl
+
+Result:
+PASS counter driver parse, dynamic initialization, stage pairing, protocol, and launcher

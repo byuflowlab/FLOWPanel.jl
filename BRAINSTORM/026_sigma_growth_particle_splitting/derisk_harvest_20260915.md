@@ -98,3 +98,32 @@ metric in stdout. 5. NREVS env silently ignored.
 Harvest method: two harvester subagents over ssh (read-only), ad-hoc
 grep/python; sources = slurm-fp-p026dr-*.{out,err} + monitor02/04 +
 CT_vs_rev/CT_per_rev CSVs + case_metadata.toml.
+
+## Extension harvest: cap030 steps 1296–2591 (job 13694747, 2026-09-15)
+
+Chained restart COMPLETED (gate_rc=0, gpu_gemv=1296/cpu 0/nan 0), banner
+nrevs:17 + RESTART MODE confirmed; 18,294 s wall = 14.1 s/step mean.
+
+**Cliff observed: NO.** s/step rises smoothly 10.2→18.5 across the segment
+(median 13.9; a programmatic 2×-local-median jump test found 0 jumps over
+all 1295 timed steps; the single 91.9 s outlier is the restart-step JIT).
+The historically suspect 2200–2248 window shows nothing: 15–16 s/step on
+trend, n_particles 318k→325k smooth, min_sigma ~0.0013 flat, max_γ/σ²
+~47–50 in-band. Cost growth is plain N-scaling (212k→369,036 particles).
+
+- Splits (segment): viscous **0** (still zero through step 2591 — f_visc
+  0.587 has never fired in the cap030 regime), compress 375, elongate
+  63,480 (children 184,734), zero capacity/mech_disabled skips, monotonic
+  third-over-third growth. Gap noted: only 1,167/1,296 steps carry a
+  split_particles! line.
+- CT_bernoulli: 0.0733 (rev 10) → 0.0757 (rev 18); headline cycle-mean
+  **0.07484 ± 0.000252 (±0.34%, 2 revs)**; per-rev-mean spread 0.00238
+  passes (tol 0.005) but within-rev p-p/mean 0.0326 FAILS tol 0.02 →
+  Phase-2e CONVERGED=false (periodic within-rev content, not drift).
+- CSV continuity: CT_vs_rev/CT_per_rev carry the FULL 0–2592 series across
+  the restart; monitor04_wake_health was RESTARTED (rows 1296–2591 only —
+  prior segment's history lives in the 09-12..15 harvest above). Gotcha
+  for future chains: wake-health monitor does not append.
+
+**De-risk acceptance now fully PASS including the cliff criterion** —
+cap030 clean through rev 18 at 6–18 s/step with sane telemetry.

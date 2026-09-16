@@ -1,0 +1,7 @@
+# Bounded v15 harvest verification
+# Remote and local inventories were computed with the same relative paths.
+# 43 regular files harvested: 24 root files + 19 j1-b1 files.
+# All 43 local SHA256 values matched the corresponding remote SHA256 values.
+# No fixture-j1, fixture-j4, or j4-b1 content was copied.
+# Remote source: /home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910/diag-v15-13694724
+# Local destination: BRAINSTORM/021_rotor_hover_solver_benchmarks/fgs_r4_followup_evidence_20260914/diag-v15-13694724

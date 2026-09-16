@@ -1,0 +1,13 @@
+# BRAINSTORM 021 cold-opt v9 execution pins (2026-09-12)
+[packages.FLOWPanel]
+path = "/home/rander39/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl"
+tag = "campaign/p021-cold-exec-20260912-v9"
+sha = "f03ab18a7841e9a38876603a48b1799d83fd1e41"
+[packages.FastMultipole]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FastMultipole"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "ef10643a401d6da16e28be87805b67d11bdf1fb5"
+[packages.FLOWVPM]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FLOWVPM.jl"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "05c658f7804ec5f9b68d4cb9826a9f97cfecb373"

@@ -1,0 +1,8 @@
+
+Currently Loaded Modules:
+  1) lmod            4) miniforge3/25.3.1-0          7) glibc/2.34-k45r4mc
+  2) defaultenv/10   5) cuda/12.8.1-zkkfiog          8) julia/1.11.7-6bmogfl
+  3) python/3.12     6) gcc-runtime/13.2.0-g4hc7ev
+
+ 
+

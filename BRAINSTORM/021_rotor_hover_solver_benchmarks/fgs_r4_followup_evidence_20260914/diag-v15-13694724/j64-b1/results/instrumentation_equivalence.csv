@@ -1,0 +1,3 @@
+instrumented,iterations,history_length,solution_delta,accepted,authoritative_evaluator,authoritative_rel_l2,direct_rel_l2,direct_fmm_delta,counterpart_history_identical,counterpart_solution_rel_l2
+false,27,28,0,true,certified_fmm,4.77952513e-07,4.78150591e-07,5.4676859e-09,true,0
+true,27,28,0,true,certified_fmm,4.77952513e-07,4.78150591e-07,5.4676859e-09,true,0

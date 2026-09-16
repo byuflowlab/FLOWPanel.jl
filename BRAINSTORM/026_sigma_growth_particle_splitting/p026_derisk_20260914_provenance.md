@@ -101,3 +101,14 @@ Run: chained restart, `RESTART_STEP=1295` from the retained state in
 the worktree's data symlink; restart mode preserves the run dir and appends
 to the same VTK series), same common split/floor env as §Arms, m13h H200.
 Expected +1297 steps at 10–14 s/step ≈ 4–6 h.
+
+Extension submission: job **13694747** (m13h H200, 2026-09-15), cwd =
+campaign FLOWPanel worktree @ `campaign/p026-derisk-ext-20260915` (1b59af5),
+`RESTART_STEP=1295` + §Arms common split/floor env, wrapper =
+`~/projects/FLOWPanel.jl/examples/run_p018_screen_gpu052.slurm.sh h200
+scr_p026sp_nt144_cap030`.
+
+Extension outcome (2026-09-15): job 13694747 COMPLETED, gate_rc=0, steps
+1296–2591 (rev 18). **No cliff** — smooth N-scaling 10→18.5 s/step through
+the 2200–2248 window; wake health flat; CT cycle-mean 0.07484 ±0.34%.
+De-risk acceptance fully PASS. Details: `derisk_harvest_20260915.md`.

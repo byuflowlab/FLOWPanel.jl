@@ -1,0 +1,11 @@
+MAC = 0.4
+P = 6
+cache_leaf_lu = true
+inner = 3
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "lexicographic"
+tolerance = 0.0

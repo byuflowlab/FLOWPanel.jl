@@ -1,0 +1,38 @@
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/phase1_case.jl:92
+┌ Warning: There were no samples collected in one or more groups.
+│ This may be due to idle threads, or you may need to run your
+│ program longer (perhaps by running it multiple times),
+│ or adjust the delay between samples with `Profile.init()`.
+└ @ Profile /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Profile/src/Profile.jl:1240
+┌ Warning: There were no samples collected in one or more groups.
+│ This may be due to idle threads, or you may need to run your
+│ program longer (perhaps by running it multiple times),
+│ or adjust the delay between samples with `Profile.init()`.
+└ @ Profile /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Profile/src/Profile.jl:1240
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 1
+#   blas_threads   = 1
+#   commit         = unknown
+#   fm_commit      = unknown
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=unknown fm=unknown vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-2-26
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-15 08:28:40
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862221 (direct source assembly 2047.7 s)
+

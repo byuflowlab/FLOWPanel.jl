@@ -1,0 +1,17 @@
+ERROR: LoadError: ArgumentError: Package Meshes not found in current path.
+- Run `import Pkg; Pkg.add("Meshes")` to install the Meshes package.
+Stacktrace:
+ [1] macro expansion
+   @ ./loading.jl:2296 [inlined]
+ [2] macro expansion
+   @ ./lock.jl:273 [inlined]
+ [3] __require(into::Module, mod::Symbol)
+   @ Base ./loading.jl:2271
+ [4] #invoke_in_world#3
+   @ ./essentials.jl:1089 [inlined]
+ [5] invoke_in_world
+   @ ./essentials.jl:1086 [inlined]
+ [6] require(into::Module, mod::Symbol)
+   @ Base ./loading.jl:2260
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/test/runtests_unit_solver.jl:4
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)

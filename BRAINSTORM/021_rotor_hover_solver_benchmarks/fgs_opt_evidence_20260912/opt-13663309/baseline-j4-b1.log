@@ -1,0 +1,22 @@
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/phase1_case.jl:92
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = f03ab18a7841e9a38876603a48b1799d83fd1e41
+#   fm_commit      = ef10643a401d6da16e28be87805b67d11bdf1fb5
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-cold-source-20260912-v9-wt fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-1-17
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-12 20:08:07
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862221 (direct source assembly 514.2 s)
+
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 3, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 3.479128881193055e-7)
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 2.5712316195808637e-7)

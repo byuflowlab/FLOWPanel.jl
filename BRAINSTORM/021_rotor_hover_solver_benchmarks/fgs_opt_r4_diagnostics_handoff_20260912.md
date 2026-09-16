@@ -1,5 +1,120 @@
 # BRAINSTORM 021: R4 diagnostics handoff
 
+## 2026-09-14 follow-up validation request — current instructions
+
+The original R4 tuning and confirmation sequence is **complete**. Its final
+report is `fgs_opt_r4_diagnostics_package_20260912.md`, corrected on
+2026-09-14. The sections below **Original diagnostics handoff (historical)**
+record the earlier assignment; their undeployed-v9 status and launch/poll
+sequence are superseded. Do not repeat those jobs or the completed parameter
+screens. Read the package and `fgs_opt_v9_provenance_20260912.md` for current
+pins, commands, and durable evidence.
+
+Ryan requested corrections to the report and this test handoff. This update
+specifies the next agent's work; **no follow-up tests have been run by this
+documentation update**.
+
+### Objective and stopping boundary
+
+Determine what limits prepared R4 time before choosing solver optimizations.
+At FastMultipole pin `ef10643a`, the retained lexicographic leaf sweep is
+serial, and BLAS=1 makes its GEMVs serial too. Main-task sample shares are
+not total wall-time shares. Thus weak j4→j64 scaling does not establish
+socket bandwidth saturation, and cross-leaf batching cannot assume independent
+leaf solves.
+
+This pass owns instrumentation, controls, measurements, and an updated
+evidence handoff. Stop with a validated stage budget and a justified next
+experiment. Do not bundle a slice fix, mixed-precision kernel, or new sweep
+algorithm into the baseline instrumentation. Keep inner=3 as the reference;
+inner=5 remains the measured j4 preference, with no consistent j64 winner.
+
+### Required tests, in order
+
+1. **Execution-path audit.** Verify the loaded package pins, actual config
+   `sweep_order`, cached LU, zero-reset semantics, prepared-scope boundaries,
+   and BLAS=1. Record per-thread activity by solve stage and CPU affinity,
+   including socket/NUMA placement. Verify the lexicographic leaf loop is
+   serial in the executed source; do not infer parallelism from Julia's
+   configured thread count or futex samples. Retain thread-complete profile
+   text and sample coverage, not only the main-task view.
+
+2. **Stage timers and instrumentation controls.** Time complete outer FMM
+   calls (including completion of worker work), influence mapping, residual
+   evaluation, leaf solves, nonself products, scatter, and remaining solve
+   work. Record outer counts and actual sweep counts, initialization and
+   final-update work, and an exclusive stage sum plus its difference from
+   total prepared wall time; do not double-count nested timers. Aggregate
+   counters outside hot loops where possible. Compare instrumentation on/off
+   for solution, convergence history, and all acceptance gates at j1/b1 and
+   j4/b1. Run the existing FGS controls, FLOWPanel solver/history tests, and
+   relevant FastMultipole tests for touched paths. Quantify timer overhead
+   on R4 using matched unprofiled batches. If overhead exceeds timing noise,
+   reduce instrumentation or time coarser stages; instrumented timings must
+   not be used for speedup claims.
+
+3. **Block and dependency census.** Export actual GEMV m×n dimensions per
+   source leaf, matrix bytes by type and total, leaf counts, target interaction
+   counts, and scatter sizes. Report percentiles and extremes as well as
+   totals. Document the solve→product→scatter dependency: subsequent leaves
+   consume updated RHS entries. Any proposed fusion/batching must identify
+   which dependencies and accumulation order it preserves. Use actual GEMV
+   blocks, not an assumed matrix per source-target leaf pair.
+
+4. **Controlled scaling and memory measurements.** Run the fixed retained
+   configuration at j∈{1,4,8,16,32,64}, always BLAS=1, on matched exclusive
+   zen3 hardware with pinned physical cores. Record the exact CPU list,
+   sockets, NUMA policy, allocation/first-touch conditions, and per-stage
+   times. Use at least ten unprofiled trials per batch and matched alternating
+   baseline/candidate batches; report medians, spread, and comparison order.
+   Replicate an apparent crossover or small claimed gain independently.
+   In separate diagnostic runs collect active-thread/CPU utilization and
+   available DRAM traffic, cache-miss, and bandwidth counters, scoped to the
+   hot stage where possible. Compare bandwidth with an appropriate measured
+   reference under the same placement before claiming saturation. If counters
+   are unavailable, record that limitation and leave saturation unresolved.
+   Distinguish serial execution, per-core memory limits, NUMA placement, and
+   aggregate bandwidth limits. A whole-solve thread ladder alone cannot do so.
+
+5. **Conditional follow-up experiment selection.** If the stage budget
+   supports it, test the existing colored sweep as a separately calibrated
+   configuration, recording color sizes, synchronization/scatter cost,
+   iterations, and total time to accepted accuracy. It changes the ordering
+   and must pass all gates; fewer seconds per sweep alone is not a win.
+   Otherwise finish the diagnostics with a concrete proposed experiment.
+   For a subsequent isolated slice fix, compare allocation bytes/site,
+   solution/history, and matched wall time. For a subsequent Float32-storage
+   pilot, first validate Float64 accumulation and time representative actual
+   blocks, including conversion/buffer costs; then recalibrate and certify
+   the full R4 solve. Do not infer a speedup from halved storage alone.
+
+### Reproducibility, acceptance, and deliverables
+
+Follow global/repo policies and the original handoff's delegation rules.
+Config-only runs may reuse unchanged clean v9. Instrumentation or any other
+executable change requires a new v10+ generation; commit and annotate all
+needed package pins, create clean campaign worktrees, record loaded paths
+and provenance, and use the campaign environment before execution. Never
+move existing tags or edit queued/running worktrees. Preserve BLAS=1,
+constructor-free prepared scope, zero reset, and separate profiling from
+unprofiled timing. Refresh allocation availability, input assets, and storage
+headroom before any cluster submission; no long R4 jobs on the laptop.
+
+Require convergence, finite solutions, certified FMM as the authoritative
+evaluator, BC rel-L2 ≤1e-6, repeat-solution agreement ≤1e-8, and direct/FMM
+disagreement ≤1e-7 when both are evaluated. Keep all certification controls;
+do not introduce direct fallback into this follow-up comparison or treat an
+unevaluated metric as zero. Retain failed candidates and reasons.
+
+Deliver raw timing/counter/config CSVs and text profiles, pins and reproducible
+commands, control outcomes, instrumentation overhead, a reconciled wall-time
+budget, block census, and thread-ladder results. Revise the package's ranking
+using measured wall time; distinguish observed limits from unresolved
+hypotheses. Claim speedups only from matched uninstrumented accepted solves.
+No notebook entry without Ryan's approval. Stop after the evidence handoff.
+
+## Original diagnostics handoff (historical)
+
 Prepared 2026-09-12. This is the current handoff, superseding the next-action
 sequence in `fgs_opt_v8_reset_prompt_20260912.md`.
 

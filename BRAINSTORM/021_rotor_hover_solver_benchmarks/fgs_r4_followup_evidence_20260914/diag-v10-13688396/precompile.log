@@ -1,0 +1,38 @@
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+fatal: not a git repository (or any parent up to mount point /home)
+Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+Precompiling project...
+   8992.6 ms  ✓ FastMultipole
+   9727.3 ms  ✓ FLOWVPM
+  19525.2 ms  ✓ FLOWVPM → FLOWVPMCUDAExt
+  23938.4 ms  ✓ FLOWPanel
+  4 dependencies successfully precompiled in 81 seconds. 296 already precompiled.
+ERROR: LoadError: Rsync content manifest hash mismatch for FLOWPanel
+Stacktrace:
+ [1] error(s::String)
+   @ Base ./error.jl:35
+ [2] cold_packages()
+   @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/fgs_cold_common.jl:267
+ [3] top-level scope
+   @ ~/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/cold_precompile.jl:8
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FLOWPanel.jl/benchmark/cold_precompile.jl:8
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = unknown
+#   fm_commit      = unknown
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=unknown fm=unknown vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-2-30
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-14 16:08:09
+######################################################################

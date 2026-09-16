@@ -1,0 +1,8 @@
+Read-only SSH observation: 2026-09-16 02:19:05 UTC
+Command: TZ=UTC /apps/slurm/latest/bin/sacct -j 13694724 --format=JobID,State,ExitCode,Elapsed,Start,End -P
+JobID|State|ExitCode|Elapsed|Start|End
+13694724|COMPLETED|0:0|08:52:49|2026-09-15T14:17:32|2026-09-15T23:10:21
+13694724.batch|COMPLETED|0:0|08:52:49|2026-09-15T14:17:32|2026-09-15T23:10:21
+13694724.extern|COMPLETED|0:0|08:52:49|2026-09-15T14:17:32|2026-09-15T23:10:21
+Remote existence confirmed: COMPLETED and j{1,4,8,16,32,64}-b1/results/status.toml.
+Full numerical/provenance audit pending for j4+; no new submission.

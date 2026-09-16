@@ -1,0 +1,18 @@
+R4 bounded evidence SHA256 verification
+generated: 2026-09-15
+
+Mapping rules:
+- run manifest path RUN/relative/path maps to diag-v10-RUN/relative/path.
+- silo FLOWPanel.jl/logs/slurm/path maps to pre-v15-silo-provenance/logs/slurm/path.
+- silo env/path maps to pre-v15-silo-provenance/silo-pins-env/env/path.
+- other silo top-level path maps to pre-v15-silo-provenance/silo-pins-env/path.
+
+Results:
+- canonical five-run evidence: files=91, mismatches=0, status=PASS
+- pre-v15 silo logs/pins/manifests/env: files=19, mismatches=0, status=PASS
+- mismatch list: empty
+
+Source manifests retained:
+- remote-small-sha256.txt and local-small-sha256.txt
+- pre-v15-silo-provenance/remote-sha256.txt and local-sha256.txt
+- original path-only diffs retained unchanged; they are not verification results.

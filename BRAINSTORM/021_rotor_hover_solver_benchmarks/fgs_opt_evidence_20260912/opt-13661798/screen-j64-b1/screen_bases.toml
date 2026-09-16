@@ -1,0 +1,17 @@
+# BRAINSTORM 021 R4 tuning stage B (handoff step 7): P/MAC neighbors around
+# retained stage-A base inner=5/leaf=100 (opt-13660643 median runner-up,
+# 11.2826077 s prepared j64/b1). Tolerance is its stage-A calibrated value
+# (harness resets to 0 and recalibrates every roster point).
+
+[[configs]]
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+inner = 5
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "lexicographic"
+tolerance = 2.5712316195808637e-7

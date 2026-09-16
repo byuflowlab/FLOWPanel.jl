@@ -1,0 +1,26 @@
+R4 diagnostic audit: /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/BRAINSTORM/021_rotor_hover_solver_benchmarks/fgs_r4_followup_evidence_20260914/diag-v15-13694724
+data_audit_only=true (provenance is not verified)
+root_COMPLETED=FAIL
+hardware_counter_capability=hardware_counter_capability.txt
+
+| arm | rows | batches | uninstrumented median s | instrumented median s | overhead s | overhead % | result |
+|---|---:|---|---:|---:|---:|---:|---|
+| j1/b1 | 40 | 1:10,2:10,3:10,4:10 | 37.5594 | 37.4689 | -0.0905107 | -0.24098 | PASS |
+| j4/b1 | 0 | 1:0,2:0,3:0,4:0 | missing | missing | missing | missing | FAIL |
+| j8/b1 | 0 | 1:0,2:0,3:0,4:0 | missing | missing | missing | missing | FAIL |
+| j16/b1 | 0 | 1:0,2:0,3:0,4:0 | missing | missing | missing | missing | FAIL |
+| j32/b1 | 0 | 1:0,2:0,3:0,4:0 | missing | missing | missing | missing | FAIL |
+| j64/b1 | 0 | 1:0,2:0,3:0,4:0 | missing | missing | missing | missing | FAIL |
+
+Checks:
+  j1: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=37.461/37.4483/0.0126784; solve-total_stage=0.00787745; b1 median/spread=37.5386/0.270752; b2 median/spread=37.5275/1.15667; b3 median/spread=37.5687/0.202124; b4 median/spread=37.4598/0.429039; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j4: profile + equivalence=missing; stage=missing; b1 median/spread=missing/missing; b2 median/spread=missing/missing; b3 median/spread=missing/missing; b4 median/spread=missing/missing; census=unavailable; counters=unavailable
+    FAIL: arm directory j4-b1/results absent
+  j8: profile + equivalence=missing; stage=missing; b1 median/spread=missing/missing; b2 median/spread=missing/missing; b3 median/spread=missing/missing; b4 median/spread=missing/missing; census=unavailable; counters=unavailable
+    FAIL: arm directory j8-b1/results absent
+  j16: profile + equivalence=missing; stage=missing; b1 median/spread=missing/missing; b2 median/spread=missing/missing; b3 median/spread=missing/missing; b4 median/spread=missing/missing; census=unavailable; counters=unavailable
+    FAIL: arm directory j16-b1/results absent
+  j32: profile + equivalence=missing; stage=missing; b1 median/spread=missing/missing; b2 median/spread=missing/missing; b3 median/spread=missing/missing; b4 median/spread=missing/missing; census=unavailable; counters=unavailable
+    FAIL: arm directory j32-b1/results absent
+  j64: profile + equivalence=missing; stage=missing; b1 median/spread=missing/missing; b2 median/spread=missing/missing; b3 median/spread=missing/missing; b4 median/spread=missing/missing; census=unavailable; counters=unavailable
+    FAIL: arm directory j64-b1/results absent

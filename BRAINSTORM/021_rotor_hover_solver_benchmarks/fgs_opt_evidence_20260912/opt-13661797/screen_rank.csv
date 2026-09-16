@@ -1,0 +1,6 @@
+rank,dir,inner,leaf,P,MAC,tolerance,median_seconds,minimum_seconds,maximum_seconds,spread_seconds,repetitions,eligible,outer_iterations,authoritative_rel_l2,fmm_certified,relative_solution_delta,status
+1,fgs_43c0957fd1108d49,3,100,8,0.4,3.479128881193055e-07,11.0144373,10.9351946,11.243838,0.308643431,10,true,28,4.77952513e-07,true,0,completed
+2,fgs_1986c75bfc7c003c,3,100,10,0.4,3.479130058413085e-07,11.9685691,11.7167291,12.1239953,0.407266215,10,true,28,4.49123195e-07,true,0,completed
+3,fgs_06bf28cf18db65be,3,100,8,0.3,4.924606105994385e-07,14.9706686,14.4195788,16.9086529,2.4890741,10,true,27,6.09081208e-07,true,0,completed
+,fgs_b139402530c377cb,3,100,6,0.4,,,,,,,,,,,,failed
+,fgs_26c6c360f62b7979,3,100,8,0.5,,,,,,,,,,,,failed

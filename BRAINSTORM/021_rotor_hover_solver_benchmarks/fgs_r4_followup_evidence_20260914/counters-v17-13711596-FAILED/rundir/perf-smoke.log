@@ -1,0 +1,11 @@
+Events disabled
+ERROR: LoadError: cannot document the following expression:
+
+using Test
+
+Stacktrace:
+ [1] error(::String, ::String)
+   @ Base ./error.jl:44
+ [2] top-level scope
+   @ ~/FLOWPanel-p021-r4-diag-v10-silo/counters-v17/FLOWPanel.jl/test/r4_perf_control_smoke.jl:2
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v17/FLOWPanel.jl/test/r4_perf_control_smoke.jl:2

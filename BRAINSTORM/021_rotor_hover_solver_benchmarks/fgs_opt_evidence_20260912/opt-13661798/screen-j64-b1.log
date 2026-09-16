@@ -1,0 +1,89 @@
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/phase1_case.jl:92
+┌ Error: Recorded failed candidate
+│   dir = "/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910/opt-13661798/screen-j64-b1/R4/fgs_799d55a10c28378b/j64_b1"
+│   exception =
+│    FGS staircase has no certified crossing with a decreasing successor; capped candidate
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_calibrate!(c::Dict{String, Any}, dir::String)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:442
+│      [3] cold_calibrate_selected!
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:397 [inlined]
+│      [4] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:480
+│      [5] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:668
+│      [6] #invokelatest#2
+│        @ ./essentials.jl:1057 [inlined]
+│      [7] invokelatest
+│        @ ./essentials.jl:1052 [inlined]
+│      [8] #cold_main#59
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:650 [inlined]
+│      [9] cold_main()
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:645
+│     [10] top-level scope
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/rotor_hover_solver_cold.jl:3
+│     [11] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [12] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [13] _start()
+│        @ Base ./client.jl:531
+└ @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:682
+┌ Error: Recorded failed candidate
+│   dir = "/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910/opt-13661798/screen-j64-b1/R4/fgs_64a1ce9afb77f9ce/j64_b1"
+│   exception =
+│    FGS staircase has no certified crossing with a decreasing successor; capped candidate
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_calibrate!(c::Dict{String, Any}, dir::String)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:442
+│      [3] cold_calibrate_selected!
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:397 [inlined]
+│      [4] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:480
+│      [5] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:668
+│      [6] #invokelatest#2
+│        @ ./essentials.jl:1057 [inlined]
+│      [7] invokelatest
+│        @ ./essentials.jl:1052 [inlined]
+│      [8] #cold_main#59
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:650 [inlined]
+│      [9] cold_main()
+│        @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:645
+│     [10] top-level scope
+│        @ ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/rotor_hover_solver_cold.jl:3
+│     [11] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [12] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [13] _start()
+│        @ Base ./client.jl:531
+└ @ Main ~/campaigns/p021-cold-opt-20260912-v9/FLOWPanel.jl/benchmark/fgs_cold_common.jl:682
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 64
+#   blas_threads   = 1
+#   commit         = f03ab18a7841e9a38876603a48b1799d83fd1e41
+#   fm_commit      = ef10643a401d6da16e28be87805b67d11bdf1fb5
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-cold-source-20260912-v9-wt fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-1-25
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-12 18:09:53
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862221 (direct source assembly 34.4 s)
+
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 0.0)
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 6, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 0.0)
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 10, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.4, "tolerance" => 0.0)
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.3, "tolerance" => 0.0)
+Cold investigation: Dict{String, Any}("max_iterations" => 300, "rung" => "R4", "P" => 8, "rlx" => 1.0, "cache_leaf_lu" => true, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 100, "kind" => "fgs", "MAC" => 0.5, "tolerance" => 0.0)

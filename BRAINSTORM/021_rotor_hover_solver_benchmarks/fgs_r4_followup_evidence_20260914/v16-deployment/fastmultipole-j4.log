@@ -1,0 +1,23 @@
+[ Info: FastGaussSeidel converged after 1 iterations with MSE = 5.5090491761443284e-17; delta = 0.4529766485553678
+[ Info: FastGaussSeidel converged after 0 iterations with MSE = 1.3176272468652696e-16; delta = 0.0
+Test Summary:                     | Pass  Total  Time
+Fast Gauss Seidel: self influence |  100    100  3.9s
+Test Summary:                             |   Pass   Total  Time
+Fast Gauss Seidel: all influence matrices | 562121  562121  3.9s
+Test Summary:                        | Pass  Total  Time
+Fast Gauss Seidel: various functions | 3066   3066  0.8s
+Iteration 1:	MSE = 0.6449320869898489,	delta = 0.0
+Iteration 2:	MSE = 5.5090491761443284e-17,	delta = 0.4529766485553678
+Test Summary:                 | Pass  Total  Time
+Fast Gauss Seidel: full solve |  100    100  2.7s
+Test Summary:                              |  Pass  Total  Time
+Fast Gauss Seidel: update system strengths | 20000  20000  0.5s
+Iteration 1:	MSE = 1.3176272468652696e-16,	delta = 0.0
+Test Summary:                                         | Pass  Total  Time
+Fast Gauss Seidel: shared source/target tree topology |    9      9  0.5s
+Test Summary:                                 | Pass  Total  Time
+Fast Gauss Seidel: threaded M2L repeatability |    9      9  0.4s
+Test Summary:                                    | Pass  Total  Time
+Fast Gauss Seidel: cached leaf LU factorizations |  157    157  2.0s
+Test Summary:                     | Pass  Total  Time
+Fast Gauss Seidel: colored sweeps | 2216   2216  1.0s

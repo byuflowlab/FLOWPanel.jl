@@ -1,0 +1,35 @@
+Tue Sep 15 14:18:07 UTC 2026
+m12-2-26
+2
+/usr/bin/perf
+perf version 5.14.0-570.136.1.el9_6.x86_64
+
+ Performance counter stats for 'true':
+
+            200842      cycles:u                                                              
+            243465      instructions:u                   #    1.21  insn per cycle            
+             11443      cache-references:u                                                    
+              4364      cache-misses:u                   #   38.14% of all cache refs         
+
+       0.012704545 seconds time elapsed
+
+       0.000000000 seconds user
+       0.002213000 seconds sys
+
+
+perf_probe_exit=0
+
+ Performance counter stats for 'true':
+
+            191396      cycles:u                                                              
+            243442      instructions:u                   #    1.27  insn per cycle            
+             11787      cache-references:u                                                    
+              4475      cache-misses:u                   #   37.97% of all cache refs         
+
+       0.003736428 seconds time elapsed
+
+       0.000000000 seconds user
+       0.001766000 seconds sys
+
+
+perf_userspace_probe_exit=0

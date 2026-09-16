@@ -1,0 +1,10 @@
+FLOWPanel_manifest_PASS
+FastMultipole_manifest_PASS
+3b2843a4a449eb54859b997cbb6eff7d159a0e9013a170f1bdfe64e0acc14f9c  p021-r4-diag-flowpanel-v15.sha256
+d65252a830f91fe85dacaedf35ccdd0ea86a55eec222376e49906a89582c8fe6  p021-r4-diag-fastmultipole-v10.sha256
+e73f54e41e1a61324ae28f0b31f6c8ed192a06c06973b95e18fd17772056db98  pins.toml
+fee1e9a6fd61c9dafae713c6e8ddf72d40f8b2be3cbf5b95325c514c7c421e0f  env/Project.toml
+fe33a790baebc4f88f6b3cc422347600a983824554a84058cba4ce94d2ac7f5a  env/Manifest.toml
+/home/rander39/projects/FLOWPanel.jl/data
+05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+Tue Sep 15 12:41:47 UTC 2026

@@ -1,0 +1,21 @@
+R4 diagnostic audit: /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/BRAINSTORM/021_rotor_hover_solver_benchmarks/fgs_r4_followup_evidence_20260914/diag-v15-13694724
+data_audit_only=true (provenance is not verified)
+root_COMPLETED=PASS
+hardware_counter_capability=hardware_counter_capability.txt
+
+| arm | rows | batches | uninstrumented median s | instrumented median s | overhead s | overhead % | result |
+|---|---:|---|---:|---:|---:|---:|---|
+| j1/b1 | 40 | 1:10,2:10,3:10,4:10 | 37.5594 | 37.4689 | -0.0905107 | -0.24098 | PASS |
+| j4/b1 | 40 | 1:10,2:10,3:10,4:10 | 16.9358 | 17.0866 | 0.150799 | 0.890416 | PASS |
+| j8/b1 | 40 | 1:10,2:10,3:10,4:10 | 13.4642 | 13.3843 | -0.0799786 | -0.594008 | PASS |
+| j16/b1 | 40 | 1:10,2:10,3:10,4:10 | 12.1994 | 11.9373 | -0.262043 | -2.148 | PASS |
+| j32/b1 | 40 | 1:10,2:10,3:10,4:10 | 11.3673 | 11.411 | 0.0437285 | 0.384687 | PASS |
+| j64/b1 | 40 | 1:10,2:10,3:10,4:10 | 10.9626 | 10.9483 | -0.014381 | -0.131182 | PASS |
+
+Checks:
+  j1: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=37.461/37.4483/0.0126784; solve-total_stage=0.00787745; b1 median/spread=37.5386/0.270752; b2 median/spread=37.5275/1.15667; b3 median/spread=37.5687/0.202124; b4 median/spread=37.4598/0.429039; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j4: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=17.0828/17.0701/0.012644; solve-total_stage=0.0038367; b1 median/spread=16.9358/0.856061; b2 median/spread=16.9005/0.883192; b3 median/spread=16.7833/0.744107; b4 median/spread=17.0866/0.723236; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j8: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=13.384/13.3716/0.0124428; solve-total_stage=0.0002269; b1 median/spread=13.452/0.607154; b2 median/spread=13.3843/1.28309; b3 median/spread=13.4642/0.562916; b4 median/spread=13.392/0.593168; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j16: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=11.9372/11.9254/0.0121467; solve-total_stage=0.0001189; b1 median/spread=12.0887/0.412361; b2 median/spread=11.9373/1.08395; b3 median/spread=12.2181/0.469149; b4 median/spread=11.9418/0.451218; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j32: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=11.3396/11.3277/0.0120361; solve-total_stage=0.0713813; b1 median/spread=11.3673/0.75943; b2 median/spread=11.453/1.20186; b3 median/spread=11.3309/0.714734; b4 median/spread=11.411/0.803944; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv
+  j64: profile + equivalence=history_identical=true; stage=total/exclusive/unaccounted=10.9356/10.9228/0.0127796; solve-total_stage=0.0126555; b1 median/spread=11.1031/1.08624; b2 median/spread=10.9283/0.814354; b3 median/spread=10.8422/0.341194; b4 median/spread=11.1263/0.794208; census=dependency_edges.csv+gemv_census.csv+gemv_census.toml; counters=thread_activity.csv

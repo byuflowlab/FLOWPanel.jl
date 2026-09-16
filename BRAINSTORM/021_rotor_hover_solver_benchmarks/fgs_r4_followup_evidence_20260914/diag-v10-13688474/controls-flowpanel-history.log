@@ -1,0 +1,9 @@
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+Test Summary:                                                   | Pass  Total   Time
+FGSSolver history & projection                                  |   31     31  12.1s
+  construction with history kwargs                              |    8      8   7.8s
+  save_solution! shifts and writes slot 1                       |   13     13   0.6s
+  project_solution! recovers polynomial                         |    4      4   0.5s
+  project_solution! disabled when project_solution=false        |    1      1   0.0s
+  allocation-free hot path                                      |    2      2   0.0s
+  save_step_solution! is the step-boundary writer (021 Phase 3) |    3      3   3.3s

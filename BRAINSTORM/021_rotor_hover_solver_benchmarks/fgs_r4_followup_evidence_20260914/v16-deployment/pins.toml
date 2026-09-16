@@ -1,0 +1,21 @@
+[packages.FLOWPanel]
+path = "/home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v16/FLOWPanel.jl"
+tag = "campaign/p021-r4-counters-source-20260915-v16"
+sha = "546037672ac7e41eba5c64cedf6a2e4d6b7394e6"
+deployment = "rsync"
+content_manifest = "/home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v16/flowpanel.sha256"
+content_manifest_sha256 = "1bd61e1fc87281ba2c4e9d30429d22eedaa32fb3158a61adee189f1b33032ee7"
+
+[packages.FastMultipole]
+path = "/home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v16/FastMultipole"
+tag = "campaign/p021-r4-activity-source-20260915-v11"
+sha = "adb9967d5b696cf9ab05c557aa2a649e100004dc"
+deployment = "rsync"
+content_manifest = "/home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v16/fastmultipole.sha256"
+content_manifest_sha256 = "93ac52068a66db5aad376e4e03556b50f6626e4fab901d7f1202c3570413341b"
+
+[packages.FLOWVPM]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FLOWVPM.jl"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "05c658f7804ec5f9b68d4cb9826a9f97cfecb373"
+deployment = "git_worktree"

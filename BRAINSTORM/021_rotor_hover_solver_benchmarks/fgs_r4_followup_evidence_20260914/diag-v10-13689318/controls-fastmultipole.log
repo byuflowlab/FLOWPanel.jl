@@ -1,0 +1,10 @@
+ERROR: LoadError: UndefVarError: `@testset` not defined in `Main`
+Stacktrace:
+ [1] top-level scope
+   @ :0
+ [2] include(fname::String)
+   @ Main ./sysimg.jl:38
+ [3] top-level scope
+   @ none:1
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FastMultipole/test/solve_test.jl:34
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FastMultipole/test/solve_test.jl:34

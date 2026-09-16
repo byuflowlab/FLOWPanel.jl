@@ -1,0 +1,9 @@
+ERROR: LoadError: UndefVarError: `Gravitational` not defined in `Main`
+Stacktrace:
+ [1] top-level scope
+   @ ~/FLOWPanel-p021-r4-diag-v10-silo/FastMultipole/test/solve_test.jl:11
+ [2] include(fname::String)
+   @ Main ./sysimg.jl:38
+ [3] top-level scope
+   @ none:1
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/FastMultipole/test/solve_test.jl:11
