@@ -1627,19 +1627,20 @@ struct PreparedFrameBox{T,TO,TR} <: AbstractParticleTrimPolicy
     xmax::SVector{3,T}
 end
 
-struct MergeParticles{TR,TH,TM} <: AbstractParticleFunctionalPolicy
+struct MergeParticles{TR,TH,TM,TIO<:Union{Nothing,IO}} <: AbstractParticleFunctionalPolicy
     every::Int
     r::TR
     r_hash::TH
     sigma_relative::Bool
     max_sigma_ratio::TM
     skip_static::Bool
+    event_io::TIO   # per-event merge telemetry sink (026 wave-2), or nothing
 end
 
 MergeParticles(; every, r=0.5, r_hash=-1.0, sigma_relative=true,
-    max_sigma_ratio=2.0, skip_static=true) =
+    max_sigma_ratio=2.0, skip_static=true, event_io=nothing) =
     MergeParticles(Int(every), r, r_hash, sigma_relative, max_sigma_ratio,
-                   skip_static)
+                   skip_static, event_io)
 
 """
     ResolutionSplit(opts::FLOWVPM.ResolutionSplitOpts; every=1, verbose=false)
@@ -1739,6 +1740,8 @@ function apply_particle_policy!(policy::MergeParticles, pfield, ctx::ParticleMai
             max_sigma_ratio=policy.max_sigma_ratio,
             skip_static=policy.skip_static,
             on_representative=on_representative,
+            event_io=policy.event_io,
+            event_tag=ctx.step,
         )
     end
     return nothing

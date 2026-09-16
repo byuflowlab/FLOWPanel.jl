@@ -3603,7 +3603,7 @@ mutable struct WakeHealthMonitor{TF} <: AbstractMonitor
     verbose::Bool
     t_last::Float64                       # wall-clock stamp of the previous call
     wall_s::Float64                       # seconds since the previous call
-    stats::Vector{NTuple{6, Float64}}     # per-wake cache, filled each step
+    stats::Vector{NTuple{8, Float64}}     # per-wake cache, filled each step
     attr::Vector{NTuple{4, Float64}}      # per-wake (p1 sigma ratio, argmin x/y/z)
     sigma_buf::Vector{Float64}            # reusable scratch for the p1 percentile
 end
@@ -3613,7 +3613,7 @@ function WakeHealthMonitor(; sigma_ref=NaN, dtz::Bool=false,
                            verbose::Bool=false)
     sr = float(sigma_ref)
     return WakeHealthMonitor{typeof(sr)}(sr, dtz, attribution, file, verbose,
-                                         NaN, NaN, NTuple{6, Float64}[],
+                                         NaN, NaN, NTuple{8, Float64}[],
                                          NTuple{4, Float64}[], Float64[])
 end
 
@@ -3642,7 +3642,8 @@ _wake_health_fg(::Any) = nothing
     _wake_health_stats(pfield, sigma_ref, dt)
 
 Single pass over the particle field returning
-`(np, max|u|, min sigma, min sigma/sigma_ref, max |Gamma|/sigma^2, max dt*Z)`,
+`(np, max|u|, min sigma, min sigma/sigma_ref, max |Gamma|/sigma^2, max dt*Z,
+mean sigma, max sigma)` (the last two are the 026 wave-2 sigma census),
 where `Z` is the same strain projection (`MM4`) FLOWVPM's Euler step uses in
 `sigma -= dt*sigma*Z` — see the `WakeHealthMonitor` docstring. `max dt*Z` runs
 over non-static particles only (statics are skipped by the sigma update); it is
@@ -3654,6 +3655,8 @@ function _wake_health_stats(pfield, sigma_ref, dt)
     np = pfield.np
     max_u2 = 0.0
     min_sigma = Inf
+    max_sigma = -Inf
+    sigma_sum = 0.0
     max_gos2 = 0.0
     fg = _wake_health_fg(pfield.formulation)
     zeta0 = pfield.kernel.zeta(0)
@@ -3665,6 +3668,8 @@ function _wake_health_stats(pfield, sigma_ref, dt)
         u2 > max_u2 && (max_u2 = u2)
         s = FLOWVPM.get_sigma(pfield, i)[1]
         s < min_sigma && (min_sigma = s)
+        s > max_sigma && (max_sigma = s)
+        sigma_sum += s
         g = FLOWVPM.get_Gamma(pfield, i)
         gnorm2 = g[1]^2 + g[2]^2 + g[3]^2
         if s > 0
@@ -3696,14 +3701,16 @@ function _wake_health_stats(pfield, sigma_ref, dt)
             dtZ > max_dtZ && (max_dtZ = dtZ)
         end
     end
-    np == 0 && (min_sigma = NaN)
+    np == 0 && (min_sigma = NaN; max_sigma = NaN)
     if isnothing(fg)
         max_dtZ = np == 0 ? NaN : 0.0
     elseif !isfinite(max_dtZ)
         max_dtZ = NaN
     end
     ratio = (isnan(sigma_ref) || sigma_ref <= 0) ? NaN : min_sigma / sigma_ref
-    return (Float64(np), sqrt(max_u2), min_sigma, ratio, max_gos2, max_dtZ)
+    mean_sigma = np == 0 ? NaN : sigma_sum / np
+    return (Float64(np), sqrt(max_u2), min_sigma, ratio, max_gos2, max_dtZ,
+            mean_sigma, max_sigma)
 end
 
 function (monitor::WakeHealthMonitor)(systems, wakes, frames, uinf,
@@ -3720,7 +3727,7 @@ function (monitor::WakeHealthMonitor)(systems, wakes, frames, uinf,
     for (i_wake, wake) in enumerate(wake_tuple)
         pfield = _wake_health_pfield(wake)
         monitor.stats[i_wake] = isnothing(pfield) ?
-            (NaN, NaN, NaN, NaN, NaN, NaN) :
+            (NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN) :
             _wake_health_stats(pfield, _wake_health_sigma_ref(monitor, wake), dt)
         if monitor.attribution
             monitor.attr[i_wake] = isnothing(pfield) ?
@@ -3751,7 +3758,8 @@ function write_monitor_csv!(m::WakeHealthMonitor, dir::AbstractString,
     isempty(m.stats) && return nothing
     header = "step,time,n_particles,max_u,min_sigma,min_sigma_ratio," *
              "max_gamma_over_sigma2,wall_s" * (m.dtz ? ",max_dtZ" : "") *
-             (m.attribution ? ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z" : "")
+             (m.attribution ? ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z" : "") *
+             ",mean_sigma,max_sigma,floor_clamp_cum"
     t = monitor_time(ctx, i_step, dt)
     for (i_wake, s) in enumerate(m.stats)
         path = _monitor_csv_path(dir, name, i_monitor, "wake_health", i_wake)
@@ -3764,6 +3772,9 @@ function write_monitor_csv!(m::WakeHealthMonitor, dir::AbstractString,
                     (NaN, NaN, NaN, NaN)
                 row *= "," * join(a, ",")
             end
+            # 026 wave-2 telemetry: sigma census + cumulative (per-process)
+            # sigma_guard floor-clamp engagement count
+            row *= "," * join((s[7], s[8], FLOWVPM.SIGMA_FLOOR_HITS[]), ",")
             println(io, row)
         end
     end

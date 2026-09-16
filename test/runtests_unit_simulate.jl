@@ -1152,16 +1152,20 @@ end
     dt = 1e-3
     legacy_header = "step,time,n_particles,max_u,min_sigma,min_sigma_ratio," *
                     "max_gamma_over_sigma2,wall_s"
+    # 026 wave-2 telemetry columns, appended after all legacy/optional columns
+    telemetry_suffix = ",mean_sigma,max_sigma,floor_clamp_cum"
 
     pf = make_dtz_pfield()
     stats = pnl._wake_health_stats(pf, NaN, dt)
-    @test length(stats) == 6
+    @test length(stats) == 8
     @test stats[1] == 3.0
     @test stats[2] ≈ 3.0                      # max|u|
     @test stats[6] ≈ dt * 5.0 / 5 rtol=1e-12  # analytic dt*Z of particle 1
     @test isfinite(stats[6]) && abs(stats[6]) < 1
+    @test stats[7] ≈ (0.05 + 0.04 + 0.03) / 3  # mean sigma
+    @test stats[8] ≈ 0.05                      # max sigma
 
-    # (a) dtz=false: CSV bit-identical structure to the legacy monitor
+    # (a) dtz=false: legacy columns unchanged, telemetry columns appended
     mktempdir() do dir
         m = pnl.WakeHealthMonitor()           # default dtz=false
         @test m.dtz == false
@@ -1169,8 +1173,8 @@ end
         m.wall_s = 0.5
         pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, dt)
         lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
-        @test lines[1] == legacy_header
-        @test count(==(','), lines[2]) == 7   # 8 columns, unchanged
+        @test lines[1] == legacy_header * telemetry_suffix
+        @test count(==(','), lines[2]) == 10  # 8 legacy + 3 telemetry columns
     end
 
     # (b) dtz=true: column present, finite, benign magnitude
@@ -1180,12 +1184,15 @@ end
         m.wall_s = 0.5
         pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, dt)
         lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
-        @test lines[1] == legacy_header * ",max_dtZ"
+        @test lines[1] == legacy_header * ",max_dtZ" * telemetry_suffix
         cols = split(lines[2], ',')
-        @test length(cols) == 9
-        val = parse(Float64, cols[end])
+        @test length(cols) == 12
+        val = parse(Float64, cols[9])         # max_dtZ column
         @test isfinite(val) && abs(val) < 1
         @test val ≈ stats[6]
+        @test parse(Float64, cols[10]) ≈ stats[7]  # mean_sigma
+        @test parse(Float64, cols[11]) ≈ stats[8]  # max_sigma
+        @test parse(Int, cols[12]) >= 0            # floor_clamp_cum
     end
 
     # (c) cross-check against FLOWVPM's own sigma update: the Euler step
@@ -1232,14 +1239,15 @@ end
         pnl.write_monitor_csv!(m, dir, "t", 1, pnl.MonitorContext(), (), 0, 1e-3)
         lines = readlines(joinpath(dir, "t_monitor01_wake_health_system1.csv"))
         @test lines[1] == legacy_header *
-                          ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z"
+                          ",p1_sigma_ratio,argmin_x,argmin_y,argmin_z" *
+                          ",mean_sigma,max_sigma,floor_clamp_cum"
         cols = split(lines[2], ',')
-        @test length(cols) == 12
+        @test length(cols) == 15
         @test parse(Float64, cols[9]) ≈ 0.302 rtol=1e-12
         @test parse(Float64, cols[10]) == 2.0
     end
-    # (default attribution=false bit-identity is asserted by the dtz testset
-    # above: legacy header, 8 columns.)
+    # (default attribution=false column layout is asserted by the dtz testset
+    # above: legacy header + telemetry columns.)
 end
 
 @testset "WakeInventoryMonitor banded inventory (BRAINSTORM 018 phase 15)" begin

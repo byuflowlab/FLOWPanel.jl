@@ -870,6 +870,24 @@ else
     error("Unknown VPM_ARRAYTYPE=$(repr(vpm_arraytype_name)); use array or cuarray")
 end
 
+# 026 wave-2 telemetry: per-event merge log (one CSV row per accepted merge
+# pair: step,np,sigma_i,sigma_j,dist). Append mode so restarts extend the
+# file (unlike the monitor CSVs, which truncate). Default on; costs one
+# buffered println per merge event.
+merge_event_log = parse(Bool, get(ENV, "MERGE_EVENT_LOG", "true"))
+merge_event_io = if merge_event_log && merge_particles && save_path !== nothing
+    mkpath(save_path)
+    path = joinpath(save_path, "merge_events.csv")
+    io = open(path, "a")
+    position(io) == 0 && println(io, "step,np,sigma_i,sigma_j,dist")
+    flush(io)
+    println("Merge event log: $(path)")
+    io
+else
+    nothing
+end
+println("Sigma telemetry: MERGE_EVENT_LOG=$(merge_event_io !== nothing), wake-health mean/max sigma + floor_clamp_cum columns active")
+
 wake_rotor = pnl.PanelParticleWake(rotor;
     nwakerows, max_particles=parse(Int, get(ENV, "MAX_PARTICLES", "500000")), core_size=wake_core_size,
     wake_pfield_kwargs...,
@@ -887,7 +905,8 @@ wake_rotor = pnl.PanelParticleWake(rotor;
                 every=merge_particles ? 1 : 0,
                 r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
                 r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
-                sigma_relative=merge_sigma_relative),
+                sigma_relative=merge_sigma_relative,
+                event_io=merge_event_io),
             maybe_split...,
         ))
     )
