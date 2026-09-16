@@ -51,10 +51,36 @@ function activity_observer(rows)
     end
 end
 
-function counter_command(control, acknowledgement, command)
+struct CounterPollFD
+    fd::Cint
+    events::Int16
+    revents::Int16
+end
+
+function counter_command(control, acknowledgement, command; timeout_seconds=15.0)
     println(control, command)
     flush(control)
-    readline(acknowledgement) == "ack" || error("perf did not acknowledge $command")
+    applicable(fd, acknowledgement) || begin
+        readline(acknowledgement) == "ack" || error("perf did not acknowledge $command")
+        return nothing
+    end
+    descriptor = reinterpret(Cint, fd(acknowledgement))
+    deadline = time_ns() + ceil(Int, 1e9 * timeout_seconds)
+    response = UInt8[]
+    for _ in 1:4
+        remaining_nanoseconds = deadline - time_ns()
+        remaining_nanoseconds > 0 || error("perf acknowledgement timed out: $command")
+        timeout_milliseconds = max(Cint(1), ceil(Cint, remaining_nanoseconds * 1e-6))
+        pollfd = Ref(CounterPollFD(descriptor, Int16(0x0001), Int16(0)))
+        ready = ccall(:poll, Cint, (Ref{CounterPollFD}, Culong, Cint), pollfd, 1, timeout_milliseconds)
+        ready == 1 && (pollfd[].revents & Int16(0x0001)) != 0 ||
+            error("perf acknowledgement timed out: $command")
+        byte = Ref{UInt8}(0)
+        ccall(:read, Cssize_t, (Cint, Ref{UInt8}, Csize_t), descriptor, byte, 1) == 1 ||
+            error("perf did not acknowledge $command")
+        push!(response, byte[])
+    end
+    String(response) == "ack\n" || error("perf did not acknowledge $command")
     nothing
 end
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Follow BYU_ORC_AGENTS.md; this job measures only its own child processes.
-#SBATCH --job-name=p021-r4-counters-v16
+#SBATCH --job-name=p021-r4-counters-v17
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
@@ -9,15 +9,15 @@
 #SBATCH --exclusive
 #SBATCH --qos=normal
 #SBATCH --time=06:00:00
-#SBATCH --output=logs/slurm/r4-counters-v16-%j.out
-#SBATCH --error=logs/slurm/r4-counters-v16-%j.err
+#SBATCH --output=logs/slurm/r4-counters-v17-%j.out
+#SBATCH --error=logs/slurm/r4-counters-v17-%j.err
 set -euo pipefail
 set +u
 source /etc/profile
 set -u
 module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
-run="$COLD_DATA_ROOT/counters-v16-$SLURM_JOB_ID"
+run="$COLD_DATA_ROOT/counters-v17-$SLURM_JOB_ID"
 mkdir "$run"
 cp "$CAMPAIGN_PINS" "$run/campaign_pins.toml"
 cp "$COLD_PROJECT/Manifest.toml" "$run/Manifest.toml"
@@ -38,7 +38,8 @@ mkfifo "$run/smoke-control.fifo" "$run/smoke-ack.fifo"
 perf stat -D -1 --control="fifo:$run/smoke-control.fifo,$run/smoke-ack.fifo" \
     -x, -o "$run/perf-smoke.csv" \
     -e '{cycles:u,instructions:u,cache-references:u,cache-misses:u}' -e task-clock \
-    -- python3 test/r4_perf_control_smoke.py "$run/smoke-control.fifo" "$run/smoke-ack.fifo" \
+    -- env JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+        julia --startup-file=no --project="$COLD_PROJECT" test/r4_perf_control_smoke.jl "$run/smoke-control.fifo" "$run/smoke-ack.fifo" \
     > "$run/perf-smoke.log" 2>&1
 rm "$run/smoke-control.fifo" "$run/smoke-ack.fifo"
 python3 - "$run" <<'PY'
