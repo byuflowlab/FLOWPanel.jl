@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=p021-r4-diag-v15
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=500G
+#SBATCH --constraint=zen3
+#SBATCH --exclusive
+#SBATCH --qos=normal
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/slurm/r4-diag-v15-%j.out
+#SBATCH --error=logs/slurm/r4-diag-v15-%j.err
+set -euo pipefail
+set +u
+source /etc/profile
+set -u
+module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
+: "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
+
+run="$COLD_DATA_ROOT/diag-v15-$SLURM_JOB_ID"
+mkdir "$run"
+cp "$CAMPAIGN_PINS" "$run/campaign_pins.toml"
+cp "$COLD_PROJECT/Manifest.toml" "$run/Manifest.toml"
+module list > "$run/modules.txt" 2>&1
+lscpu > "$run/lscpu.txt"
+getconf CLK_TCK > "$run/clock_ticks_per_second.txt"
+lscpu --extended=CPU,NODE,SOCKET,CORE,ONLINE > "$run/lscpu_extended.txt"
+numactl --hardware > "$run/numactl_hardware.txt" 2>&1 || true
+
+# Capability probe only; these are not workload performance measurements.
+# Follow BYU_ORC_AGENTS.md and ai-docs/agent-performance.md: never change PMU
+# permissions. If access succeeds, collect workload counters separately.
+{
+    date -u
+    hostname
+    cat /proc/sys/kernel/perf_event_paranoid
+    for tool in perf likwid-perfctr AMDuProfPcm; do
+        command -v "$tool" || true
+    done
+    if command -v perf >/dev/null 2>&1; then
+        perf --version
+        perf stat -e cycles,instructions,cache-references,cache-misses -- true
+        printf 'perf_probe_exit=%s\n' "$?"
+        perf stat -e cycles:u,instructions:u,cache-references:u,cache-misses:u -- true
+        printf 'perf_userspace_probe_exit=%s\n' "$?"
+    else
+        printf 'perf_unavailable\n'
+    fi
+} > "$run/hardware_counter_capability.txt" 2>&1 || true
+
+python3 - "$run" <<'PY'
+import os, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+allowed = os.sched_getaffinity(0)
+by_socket = {}
+seen = set()
+for cpu in sorted(allowed):
+    p = pathlib.Path('/sys/devices/system/cpu') / f'cpu{cpu}' / 'topology'
+    socket = int((p/'physical_package_id').read_text())
+    core = int((p/'core_id').read_text())
+    if (socket, core) not in seen:
+        by_socket.setdefault(socket, []).append(cpu)
+        seen.add((socket, core))
+ordered = [cpu for socket in sorted(by_socket) for cpu in by_socket[socket]]
+assert len(ordered) >= 64, 'fewer than 64 physical cores in allocation'
+for n in (1,4,8,16,32,64):
+    (out/f'cpu_affinity_j{n}.txt').write_text(','.join(map(str,ordered[:n]))+'\n')
+PY
+
+export RUNG=R4 CONFIGS=fgs STAGE=verify COLD_PREPARED_ONLY=1
+export CONFIG_FILE="$PWD/benchmark/retained_r4_diagnostics.toml"
+export COLD_DIAG_REPS=${COLD_DIAG_REPS:-10}
+allcpus=$(<"$run/cpu_affinity_j64.txt")
+export OUTDIR="$run/parse" BENCH_CASE_ROOT="$run/fixture-controls"
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 1 1 \
+    test/runtests_r4_diagnostics_driver.jl > "$run/controls-diagnostics-driver.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 1 1 \
+    benchmark/cold_parse.jl > "$run/parse.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    benchmark/cold_precompile.jl > "$run/precompile.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 1 1 \
+    test/runtests_benchmark_cold.jl > "$run/controls-benchmark-j1.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_benchmark_cold.jl > "$run/controls-benchmark-j4.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_unit_solver.jl > "$run/controls-flowpanel-solver.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 \
+    test/runtests_unit_fgs_history.jl > "$run/controls-flowpanel-history.log" 2>&1
+taskset -c "$allcpus" bash benchmark/run_cold_process.sh 4 1 -e \
+    'using FastMultipole, Test; fm=pkgdir(FastMultipole); include(joinpath(fm,"test","gravitational.jl")); include(joinpath(fm,"test","solve_test.jl")); include(joinpath(fm,"test","fgs_coloring_test.jl"))' \
+    > "$run/controls-fastmultipole.log" 2>&1
+for jt in 1 4 8 16 32 64; do
+    cpulist=$(<"$run/cpu_affinity_j$jt.txt")
+    out="$run/j$jt-b1"
+    mkdir "$out"
+    taskset -c "$cpulist" numactl --show > "$out/numactl_show.txt" 2>&1 || true
+    export OUTDIR="$out/results" BENCH_CASE_ROOT="$run/fixture-j$jt"
+    taskset -c "$cpulist" bash benchmark/run_cold_process.sh "$jt" 1 \
+        benchmark/fgs_r4_diagnostics.jl > "$out/process.log" 2>&1
+done
+printf 'completed\n' > "$run/COMPLETED"

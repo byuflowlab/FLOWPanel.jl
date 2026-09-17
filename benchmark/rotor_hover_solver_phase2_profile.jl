@@ -22,6 +22,9 @@ mid-ladder on the pinned HPC node, both modes):
 =###############################################################################
 
 using Profile
+# Imports must precede the conditional: macros in both branches expand before
+# either branch executes, including the legacy Allocs.@profile below.
+import Profile.Allocs
 if get(ENV, "COLD_INVESTIGATION", "0") == "1"
     include(joinpath(@__DIR__, "fgs_cold_common.jl"))
     cold_main(; profile=true)
@@ -30,7 +33,6 @@ include(joinpath(@__DIR__, "common.jl"))
 include(joinpath(@__DIR__, "phase1_case.jl"))
 
 using Profile
-import Profile.Allocs
 
 target_rel = 1e-6
 include(joinpath(@__DIR__, "phase1_knobs.jl"))

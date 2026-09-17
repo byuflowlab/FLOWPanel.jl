@@ -55,6 +55,9 @@ function assert_and_banner(io::IO=stdout)
     expected_blas = parse(Int, get(ENV, "BENCH_BLAS_THREADS", string(default_blas)))
     expected_blas > 0 || error("BENCH_BLAS_THREADS must be a positive integer")
     LinearAlgebra.BLAS.set_num_threads(expected_blas)
+    # OpenMP-backed OpenBLAS may reset thread settings on the first real work.
+    probe = ones(64, 64)
+    LinearAlgebra.mul!(similar(probe), probe, probe)
     blas_threads = LinearAlgebra.BLAS.get_num_threads()
     blas_threads == expected_blas || error(
         "BLAS thread pinning failed: got $blas_threads threads, expected " *
