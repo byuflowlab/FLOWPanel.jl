@@ -61,7 +61,8 @@ function counter_command(control, acknowledgement, command; timeout_seconds=15.0
     println(control, command)
     flush(control)
     applicable(fd, acknowledgement) || begin
-        readline(acknowledgement) == "ack" || error("perf did not acknowledge $command")
+        strip(readline(acknowledgement), '\0') == "ack" ||
+            error("perf did not acknowledge $command")
         return nothing
     end
     # fd(::IOStream) returns Int on Julia ≤1.11 but RawFD (32-bit) on ≥1.12
@@ -70,7 +71,12 @@ function counter_command(control, acknowledgement, command; timeout_seconds=15.0
         reinterpret(Cint, raw_descriptor) : Cint(raw_descriptor)
     deadline = time_ns() + ceil(Int, 1e9 * timeout_seconds)
     response = UInt8[]
-    for _ in 1:4
+    # perf writes the ack tag with its NUL terminator ("ack\n\0", 5 bytes, e.g.
+    # perf 5.14 EL9); skip NULs so both that and a bare "ack\n" parse, with the
+    # trailing NUL left in the FIFO for the next command's reader to skip.
+    attempts = 0
+    while length(response) < 4
+        (attempts += 1) <= 16 || error("perf did not acknowledge $command")
         remaining_nanoseconds = deadline - time_ns()
         remaining_nanoseconds > 0 || error("perf acknowledgement timed out: $command")
         timeout_milliseconds = max(Cint(1), ceil(Cint, remaining_nanoseconds * 1e-6))
@@ -81,6 +87,7 @@ function counter_command(control, acknowledgement, command; timeout_seconds=15.0
         byte = Ref{UInt8}(0)
         ccall(:read, Cssize_t, (Cint, Ref{UInt8}, Csize_t), descriptor, byte, 1) == 1 ||
             error("perf did not acknowledge $command")
+        byte[] == 0x00 && continue
         push!(response, byte[])
     end
     String(response) == "ack\n" || error("perf did not acknowledge $command")
