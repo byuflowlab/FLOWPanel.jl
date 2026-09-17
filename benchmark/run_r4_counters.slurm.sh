@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Follow BYU_ORC_AGENTS.md; this job measures only its own child processes.
-#SBATCH --job-name=p021-r4-counters-v18
+#SBATCH --job-name=p021-r4-counters-v19
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
@@ -9,15 +9,15 @@
 #SBATCH --exclusive
 #SBATCH --qos=normal
 #SBATCH --time=06:00:00
-#SBATCH --output=logs/slurm/r4-counters-v18-%j.out
-#SBATCH --error=logs/slurm/r4-counters-v18-%j.err
+#SBATCH --output=logs/slurm/r4-counters-v19-%j.out
+#SBATCH --error=logs/slurm/r4-counters-v19-%j.err
 set -euo pipefail
 set +u
 source /etc/profile
 set -u
 module load cuda/12.8.1-zkkfiog julia/1.11.7-6bmogfl
 : "${COLD_PROJECT:?}" "${CAMPAIGN_PINS:?}" "${COLD_DATA_ROOT:?}"
-run="$COLD_DATA_ROOT/counters-v18-$SLURM_JOB_ID"
+run="$COLD_DATA_ROOT/counters-v19-$SLURM_JOB_ID"
 mkdir "$run"
 cp "$CAMPAIGN_PINS" "$run/campaign_pins.toml"
 cp "$COLD_PROJECT/Manifest.toml" "$run/Manifest.toml"

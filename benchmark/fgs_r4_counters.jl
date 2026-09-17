@@ -64,7 +64,10 @@ function counter_command(control, acknowledgement, command; timeout_seconds=15.0
         readline(acknowledgement) == "ack" || error("perf did not acknowledge $command")
         return nothing
     end
-    descriptor = reinterpret(Cint, fd(acknowledgement))
+    # fd(::IOStream) returns Int on Julia ≤1.11 but RawFD (32-bit) on ≥1.12
+    raw_descriptor = fd(acknowledgement)
+    descriptor = raw_descriptor isa Base.RawFD ?
+        reinterpret(Cint, raw_descriptor) : Cint(raw_descriptor)
     deadline = time_ns() + ceil(Int, 1e9 * timeout_seconds)
     response = UInt8[]
     for _ in 1:4
