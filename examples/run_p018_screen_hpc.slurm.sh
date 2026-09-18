@@ -301,7 +301,10 @@ case "$CASE" in
   *) echo "ERROR: unknown screen case '$CASE'" >&2; exit 2 ;;
 esac
 
-export RUN_NAME="$CASE"
+# RUN_NAME_OVERRIDE (026 §22.3 rerun slate, 2026-09-18): same case def, new
+# code generation — override the run/data-dir name so reruns don't collide
+# with earlier generations of the same case at harvest into the shared root.
+export RUN_NAME="${RUN_NAME_OVERRIDE:-$CASE}"
 # Restart chaining (Ryan 2026-08-29, after 13508968 hit its 12 h wall at step
 # 423/1475). With RESTART_STEP >= 0 the driver resumes from the on-disk state at
 # that step and APPENDS to the same VTK series, so the existing run dir MUST
