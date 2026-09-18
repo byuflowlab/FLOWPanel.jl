@@ -1378,3 +1378,112 @@ host mirror (`_apply_particle_maintenance_device!`,
 the trigger/direction state and its D2H sync. Handoff:
 `gpu_split_merge_reset_prompt_20260911.md` (this directory). Campaign
 launches remain Ryan-gated.
+
+# §22 Merged-σ redesign + growth-ledger lineage (Ryan rulings 2026-09-16/17)
+
+Context: wave-2 verdicts (full record in `p026_derisk_20260914_provenance.md`
+§Wave-2 banner verification / §Wave-2 harvest). Short form: all 8 arms
+correctly armed; exp family died at ceilings (2× dt*|L| blow-up, 2×
+500k particle overflow with FMM sigma-adequacy at 0.999); ALL THREE ctrl
+arms blew up at steps 259–294 — ctrllg_floor via a merge frenzy
+(~1500 pairs/step, np 246k→54k collapse, CT →270); cap018 was the only
+fully healthy run (CT 0.07395 ± 0.07%, zero floor clamps). Autopsy
+identified TWO merge-system defects, ruled on below.
+
+## 22.1 Defect A — volume-conserving merged σ is a pump
+
+Current rule (`FLOWVPM_merging.jl:166`): σ_new = cbrt(σ_i³ + σ_j³) —
++26% per equal pair REGARDLESS of overlap. Coincident identical
+particles (a redundant representation of one blob) merge to 1.26σ
+instead of σ: the growth is bookkeeping, not physics. Compounding at
+1.26×/generation is the σ-pump (max σ at exp-arm death = 2.5–3.4× shed
+= 4–5 generations). Confirmed on this branch that merging IS pairs-only
+per pass (`paired[]` marking at :525/:537/:576 — the union-find/CSR
+plumbing never builds >2-member clusters).
+
+**RULING (Ryan 2026-09-16): adopt second-moment matching.** With
+weights $w_i = |\alpha_i|$ and $\bar{x}$ the weighted centroid:
+
+$$\sigma_{\mathrm{new}}^2 = \langle \sigma^2 \rangle_w + \tfrac{1}{3}\,\langle |x_i-\bar{x}|^2 \rangle_w$$
+
+Rationale: total strength (0th moment) and centroid (1st) are already
+conserved exactly; a single isotropic Gaussian's one free parameter can
+then match the TRACE of the pair's vorticity second moment — this is
+the moment-optimal single-isotropic replacement (error begins at the
+irreducible deviatoric/quadrupole term, which the mo35 overlap gate
+keeps small). The 1/3 is isotropic distribution of the one-axis
+separation variance. Coincident limit → σ (pump eliminated). Under the
+Φ_merge=3.5 gate, growth/event ≈ 0.1–0.4% (vs 26%). Equal pair at
+distance d: σ_new² = σ² + d²/12 (unit-test value). Enclosing-sphere was
+considered and set aside as the conservative bracket (linear in d);
+revisit only if under-smoothing appears in the A/B.
+
+## 22.2 Defect B — merge resets launder growth from the split triggers
+
+`_finalize_...` calls `_rsplit_reset_slot!` (merge path,
+`FLOWVPM_merging.jl:188`): σ₀ := merged σ, accumulators := 0. So
+merge-driven growth is INVISIBLE to the fractional triggers — a
+merge-pumped particle must grow another f_comp=73% from its merged
+baseline before anything fires. The split system bounds smooth channels
+(viscous, rVPM) but not the merge channel; only SIGMA_CEIL (=Inf
+everywhere) or FMM adequacy remained, hence the ctrllg_floor runaway.
+
+**RULING (Ryan 2026-09-17): coincident-limit lineage.** On merge,
+replace the reset with the SAME weighted mean applied to every ledger
+line, with the separation term deleted (as if the pair were coincident):
+
+$$\sigma_{0,\mathrm{new}}^2 = \langle \sigma_0^2 \rangle_w, \qquad \Delta\sigma_{k,\mathrm{new}}^2 = \langle \Delta\sigma_k^2 \rangle_w \;\; \forall k$$
+
+All quantities are σ²-additive, so identical weighted means preserve
+the ledger identity; the separation term (1/3)⟨|Δx|²⟩_w lands in σ² but
+NOT σ₀² and therefore registers as genuine coarsening progress toward
+the compress trigger. Invariants this buys: merging equals is
+maturity-NEUTRAL (two particles 40% toward trigger merge to one at 40%
+— no reset-undercount, no jump-overcount); merging unequals inherits
+weighted-mean maturity; only real resolution loss (viscous, rVPM
+compression, merge separation) advances the split clock. Split children
+still re-seed σ₀ at emitted σ (a split genuinely re-resolves — keep).
+Anti-livelock fence already ruled: child overlap 2.4 < Φ_merge 3.5.
+
+Default micro-decisions (overridable at implementation review):
+- Credit the separation term to `drvpm` (routes to the compress/tri3
+  split — it is grow-side coarsening; avoids new accumulator plumbing;
+  merge_events.csv already attributes merge activity separately). A
+  dedicated `dmerge` accumulator is the fallback if attribution
+  telemetry proves worth the plumbing.
+- Weights w=|α| in ALL the means above (σ², σ₀², Δσ²_k, |Δx|²), one
+  weight definition everywhere so the ledger identity survives exactly.
+- `max_sigma_ratio=2.0` pair gate and gamma-align gate unchanged.
+
+Implementation-review rulings (Ryan 2026-09-18):
+- **Stretch-axis lineage (RULED: do it).** The axis/weight direction
+  state inherits the same |α|-weighted mean on merge, with member axis
+  sums sign-aligned to the running sum (the `_rsplit_accumulate!`
+  convention) before averaging: axis_new = ⟨±a_i⟩_w, weight_new =
+  ⟨weight_i⟩_w. Rationale: axis never gates WHETHER a split fires
+  (coherence below `axis_coherence_min` falls back to Γ̂, never refuses),
+  but under ledger lineage a merge-matured particle can fire within a
+  few steps of merging — zeroing (the old behavior) would put exactly
+  those splits in the empty-axis Γ̂-fallback window. Coincident identical
+  members preserve axis and coherence exactly.
+- **Merged vol (RULED: leave for now).** Merges keep vol = Σvol
+  (volume-conserving) even though σ no longer preserves Σσ³. Traced: vol
+  does not enter the integrator/SFS (σ³ is used directly); it feeds only
+  PSE (inactive in production, and its recalculate_vols overwrites vol
+  from σ anyway), the smooth-conversion initial guess Γ≈ω·vol (production
+  uses legacy conversion), and filament-edge bookkeeping. Revisit if PSE
+  or smooth conversion is armed.
+- **Zero-total-|Γ| fallback (reviewed, fine).** When Σ|Γ| ≤ sqrt(eps)
+  the pre-existing placement guard switches to unweighted means; the new
+  σ/ledger/axis means key off the same branch (w=1), staying consistent
+  with placement.
+
+## 22.3 Companion rulings for the rerun slate (carried from 2026-09-16)
+
+- Caps specified as MULTIPLES OF SHED σ per family (s9 shed σ =
+  0.00237 m ≈ 0.02R; NT144 family 0.00476 m): σ_max and SIGMA_CEIL at
+  the same k so in-step guard and child clamp agree. s9 FMM adequacy
+  limit ≈ 0.008 m → binding s9 caps sit at k ≈ 2–3, NOT 0.018 abs.
+- Rerun slate design (s9 with caps armed + cap ladder rung below 0.018)
+  parked until the merge redesign lands — the redesign may remove the
+  pump the caps were compensating for; re-derive slate after A/B.
