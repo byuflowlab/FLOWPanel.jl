@@ -1477,6 +1477,7 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     multipole_acceptance::Float64
     cache_leaf_lu::Bool
     sweep_order::Symbol
+    chunks::Int                         # chunk count for sweep_order=:chunked (ignored otherwise)
     max_iterations::Int
     inner_iterations::Int
     tolerance::Float64
@@ -1505,7 +1506,8 @@ function FGSSolver(body::AbstractBody;
         multipole_acceptance=0.4,
         leaf_size=10,
         cache_leaf_lu::Bool=true,
-        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b; changes the GS iteration)
+        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); both change the GS iteration
+        chunks::Int=64,                      # chunk count for sweep_order=:chunked (ignored otherwise)
         shrink=false,
         recenter=false,
         verbose=false,
@@ -1528,13 +1530,13 @@ function FGSSolver(body::AbstractBody;
     TF = numtype(body)
     bodies = (body,)
     fgs = build_fgs ?
-        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
         nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
 end
 
 ################################################################################
@@ -1906,6 +1908,7 @@ function FGSPreconditioner(body::AbstractBody;
         leaf_size=10,
         cache_leaf_lu::Bool=true,
         sweep_order::Symbol=:lexicographic,
+        chunks::Int=64,
         shrink=false,
         recenter=false,
     )
@@ -1913,7 +1916,7 @@ function FGSPreconditioner(body::AbstractBody;
     fgssolver = FGSSolver(body;
         max_iterations=sweeps, inner_iterations, tolerance=0.0, rlx,
         reverse_pass=false, verbose=false, expansion_order,
-        multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, shrink, recenter)
+        multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter)
 
     TF = numtype(body)
     return FGSPreconditioner{typeof(fgssolver),typeof(body),TF}(

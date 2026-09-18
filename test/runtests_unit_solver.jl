@@ -1434,6 +1434,19 @@ end
             expansion_order=6, multipole_acceptance=0.4, leaf_size=50,
             sweep_order=:colored)
         @test pnl._preconditioner_metadata_dict(P)["sweep_order"] == "colored"
+
+        # :chunked (021 v22) constructs, solves, and reports chunks
+        solver_chk = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false, sweep_order=:chunked, chunks=4)
+        @test solver_chk.sweep_order === :chunked
+        @test solver_chk.chunks == 4
+        @test length(solver_chk.fgs.chunk_ranges) >= 1     # premise: chunk map built
+        pnl.solve!(body, solver_chk)
+        @test any(abs.(body.strength[:, 1]) .> 0)
+        md = pnl._solver_metadata_dict(solver_chk)
+        @test md["sweep_order"] == "chunked"
+        @test md["chunks"] == 4
     end
 
     @testset "KrylovCoupled warmstart" begin

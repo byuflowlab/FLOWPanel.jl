@@ -41,7 +41,7 @@ function cold_check_config(c; selected=false)
     get(c, "kind", nothing) in ("fgs", "krylov_ilu") || error("Invalid kind")
     haskey(COLD_SEEDS, get(c, "rung", nothing)) || error("Invalid rung")
     seed = cold_seed(c["rung"], c["kind"])
-    Set(keys(c)) ⊆ union(Set(keys(seed)), Set(["diagnostic"])) || error("Unknown configuration field")
+    Set(keys(c)) ⊆ union(Set(keys(seed)), Set(["diagnostic", "chunks"])) || error("Unknown configuration field")
     Set(keys(seed)) ⊆ Set(keys(c)) || error("Missing configuration field")
     for (key, default) in seed
         value = c[key]
@@ -52,12 +52,20 @@ function cold_check_config(c; selected=false)
         valid || error("Invalid type/value for $key")
     end
     get(c, "diagnostic", false) isa Bool || error("diagnostic must be Boolean")
-    for key in ("P", "leaf", "inner", "max_iterations", "memory", "itmax", "ilu_leaf", "pattern_entries_per_panel")
+    for key in ("P", "leaf", "inner", "max_iterations", "memory", "itmax", "ilu_leaf", "pattern_entries_per_panel", "chunks")
         haskey(c, key) && !(0 < c[key] <= typemax(Int) ÷ 419276) && error("Invalid $key range")
     end
     0 < c["MAC"] <= 1 || error("Invalid MAC")
     if c["kind"] == "fgs"
-        c["sweep_order"] in ("lexicographic", "colored") || error("Invalid sweep_order")
+        c["sweep_order"] in ("lexicographic", "colored", "chunked") || error("Invalid sweep_order")
+        if c["sweep_order"] == "chunked"
+            # cold_make applies the same 64 default; an explicit key is still
+            # required to be a positive integer
+            chunks = get(c, "chunks", 64)
+            (chunks isa Integer && !(chunks isa Bool) && chunks >= 1) || error("Invalid chunks")
+        else
+            haskey(c, "chunks") && error("chunks requires sweep_order=chunked")
+        end
         0 < c["rlx"] < 2 || error("Invalid rlx")
         c["tolerance"] >= 0 || error("Invalid tolerance")
         selected && c["tolerance"] <= 0 && error("Selected FGS requires calibrated positive tolerance")
@@ -138,7 +146,7 @@ function cold_configs(rung, kinds, stage; file="")
             "MAC" => [seed["MAC"]-0.1, seed["MAC"]+0.1],
             "leaf" => [max(10, seed["leaf"]÷2), 2seed["leaf"]],
             "inner" => [max(1, seed["inner"]÷2), 2seed["inner"]],
-            "sweep_order" => ["colored"]) : (
+            "sweep_order" => ["chunked"]) : (
             "P" => [seed["P"]-1, seed["P"]+1],
             "MAC" => [0.6, 0.7], "leaf" => [4, 8], "memory" => [100],
             "cache_nearfield" => [true])
@@ -341,7 +349,7 @@ function cold_make(c; history=false)
             leaf_size=c["leaf"], inner_iterations=c["inner"], max_iterations=c["max_iterations"],
             tolerance=c["tolerance"], rlx=c["rlx"], shrink=true, recenter=false,
             reverse_pass=false, cache_leaf_lu=c["cache_leaf_lu"],
-            sweep_order=Symbol(c["sweep_order"]), verbose=false,
+            sweep_order=Symbol(c["sweep_order"]), chunks=get(c, "chunks", 64), verbose=false,
             project_solution=false, solution_history_length=0)
         cold_assert_threads()
         return solver
