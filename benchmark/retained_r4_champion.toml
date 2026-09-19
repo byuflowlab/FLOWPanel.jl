@@ -1,0 +1,25 @@
+# Accepted R4 FGS production champion (BRAINSTORM 021 v23, promoted by Ryan
+# 2026-09-19): dagteam split dual-layout executor, full-F32 sweep precision.
+# Calibrated and evaluator-certified (BC rel-L2 <= 1e-6) in jobs
+# 13773687/13773689; A/B verdict 4.475 s median at j16 = 2.26x vs the v21
+# accepted colored@j16 baseline (10.116 s). Run at 16 Julia threads, BLAS 1,
+# under `numactl --interleave=0-3 --cpunodebind=0-3` (single-socket, memory
+# interleaved across NUMA nodes 0-3) — the placement is part of the champion
+# and is worth ~1.6x by itself (it also takes the colored fallback to
+# 7.243 s; adopt it there too). Fallback ladder: colored (tolerance
+# 5.223162079893313e-7) -> lexicographic (retained_r4_diagnostics.toml).
+# Provenance: BRAINSTORM/021_rotor_hover_solver_benchmarks/
+# fgs_acceleration_provenance_20260919d.md; evidence
+# fgs_r4_followup_evidence_20260914/dagteam-v23-13773689/.
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+dagteam_precision = "f32full"
+inner = 3
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "dagteam"
+tolerance = 3.4309419310610173e-7
