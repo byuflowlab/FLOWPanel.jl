@@ -1,178 +1,234 @@
-# FGS thread-efficiency: top 5 ideas, ranked (2026-09-18)
+# FGS thread-efficiency: top 5 ideas, ranked (2026-09-18, rev. b)
 
-Synthesis of `thread_efficiency_proposals_20260918.md` (A1–A9, B1–B5) and
-`fgs_split_dual_layout_ideas_20260918.md` (split source/target-major cache +
-its ranked five). Analysis only. All impact figures are measured against the
-colored@j16 = 10.116 s operating point and bounded by the measured ceilings:
-29.4 GB/s one core, ~164 GB/s socket, ~330 GB/s two sockets; 8.6 GB streamed
-per iteration (3 sweeps × 2.86 GB) at 27 outer iterations.
+Synthesis of `thread_efficiency_proposals_20260918.md` (A1–A9, B1–B5),
+`fgs_split_dual_layout_ideas_20260918.md` (split source/target-major cache),
+and — in this revision — `fgs_acceleration_recommendation_20260918.md` (the
+independent code review). Analysis only. Baseline for all impact claims:
+colored@j16 = **10.116 s** accepted (26 iterations; lex ran 27). Ceilings:
+29.4 GB/s one core, ~164 GB/s socket, ~330 GB/s two sockets; the 81-sweep
+solve streams 231.9 GB of Float64 coefficients (115.9 GB in Float32).
 
-## Assessment of the split dual layout note
+**Revision note (rev. b):** after reading the acceleration recommendation I
+swapped the order of the two schedule candidates (source-major row
+parallelism now precedes the pull-DAG split), corrected the threaded-residual
+claim (shared scratch in `residual!` — a threaded leaf loop races without
+worker-private scratch, and the 0.06 s remainder is not all residual time),
+replaced my ~3–3.5 s projection with that note's explicit traffic budget
+(planning range **4.5–5.9 s** for ideas 1+2), and adopted its correctness
+caveats (mixed-precision container change, versioned backward accumulators,
+warm-start initialization, colored scatter ordering, handoff budget). Its
+quantified handoff budget — 1,068 leaf handoffs/sweep × 81 sweeps = 86,508;
+10 µs average costs 0.865 s; staying under 0.5 s added coordination requires
+< ~5.8 µs — is the single most decision-relevant number added here and gates
+ideas 2 and 3 alike.
 
-The core design is sound and I consider it the strongest large idea on the
-table. Its three load-bearing observations hold up against the code and the
-R4 census:
+## Assessment of the split dual layout note (retained from rev. a, amended)
 
-1. A target-major *aggregated* pull (one block per solve leaf, not per direct
-   pair) keeps ~1,068 large GEMVs per sweep and reads the lexicographic GS
-   strength mixture directly — same mathematics, no chunked-style Jacobi lag,
-   no expected iteration inflation.
-2. The pure-pull disadvantage (stale RHS → an extra 2.86 GB residual stream,
-   or a 15.7% averaged reread penalty) is real, and the triangular split
-   ($j<i$ pulled, $j>i$ pushed as deltas) eliminates it exactly: every
-   directed interaction read once per sweep, full RHS current at sweep end.
-3. The forward half (52.86% of bytes) becomes race-free target-owned reads;
-   the backward half (47.14%) is off the current sweep's dependency path.
+The core design is sound: the aggregated target-major pull preserves the
+lexicographic block-GS recurrence
 
-One weakness, and it matters at j64: **the note's sweep schedule (pull leaf
-i → solve i → enqueue backward → next leaf) serializes the forward half into
-~1,068 leaf-by-leaf full-team bursts per sweep** — 6.8× more sync points than
-colored's 79 colors × 2 phases, whose barrier cost is what made colored lose
-at j64. The fix is already latent in the design and is the improvement I
-propose below (idea 2): because forward pulls have *no shared writes*, the
-write-ordering problem that made barrier-free lexicographic scheduling hard
-(proposal A9's per-row ascending-source machinery) disappears entirely, and
-the forward sweep pipelines with plain per-leaf dependency counters.
+$$
+D_i x_i^{s+1}=b_i^{k}-\sum_{j<i}A_{ij}x_j^{s+1}-\sum_{j>i}A_{ij}x_j^{s},
+$$
 
-The note's own top-five ranking is close to mine. I differ in three places:
-its #2 (persistent adaptive threaded GEMV on the unchanged source-major
-layout) should be explicitly subordinated to the split design as the
-gate-failure fallback, not a peer; its #3 (both sockets) is strongest *as a
-mode of the split layout* (the two halves give a coherence-free socket
-decomposition) and folds into idea 2 rather than standing alone; and the
-split layout itself belongs in the five, not only in the closing paragraph.
+the triangular split (forward $j<i$ pulled at 52.86% of bytes, backward
+$j>i$ pushed as deltas at 47.14%) removes pure pull's stale-RHS penalty
+exactly, and every directed interaction is read once per sweep. Two
+weaknesses temper it: (a) its published schedule serializes the forward half
+into ~1,068 leaf-by-leaf full-team bursts per sweep — the same handoff budget
+problem as any per-leaf scheme, and pipelining pulls (below) mitigates but
+does not remove the lexicographic critical path; (b) a typical target block
+exposes only ~39 output rows, so *intra-block* pull parallelism needs
+dot-product reductions, whereas a typical source block exposes thousands of
+independently writable rows. The pull design's real parallelism argument is
+therefore *inter-leaf* (many pulls in flight), which is unproven until the
+DAG's weighted longest path and ready-width are measured. Both points move
+the split design behind the source-major candidate, not off the list.
 
 ## Top 5, in order
 
-### 1. Float32 cache + consumer-aligned first touch (+ the free exact riders)
+### 1. Float32 coefficient storage with Float64 arithmetic + consumer-aligned first touch
 
-Unchanged from both prior docs; still first. Store the nonself operator in
-Float32 (strengths, accumulators, self/LU stay Float64 initially); build each
-page with the thread that will consume it (measured: chunk-affine first touch
-164 GB/s vs 74 serial-touch, and it beats interleave's 154). Halves the
-dominant stream and multiplies every scheduling idea below; a complete *dual*
-Float32 layout also costs no more memory than today's single Float64 cache,
-which makes idea 2's prototype cheap. Ride along the bit-identical
-micro-fixes from the first proposals doc: threaded max-abs `residual!`,
-threaded per-iteration vector ops (A4), and descending-cost/tail-serial color
-scheduling (A5) for whatever life colored mode has left. Numerics change →
-standard tolerance staircase + accepted-accuracy certification.
-**Impact ~2× alone (10.1 → ~5 s); effort moderate; risk low; unconditional.**
+Still first: it halves the dominant stream (231.9 → 115.9 GB per solve) and
+multiplies every schedule below. Implementation realities from the code
+review, adopted: `Matrices{TF}` uses one type for coefficients and
+products/RHS, and `FastGaussSeidel` couples self and nonself precision — this
+is an explicit container/dispatch change (separate coefficient type from
+accumulator type), **not** a cast plus an assumed fast mixed BLAS call.
+Convert coefficient tiles on load and accumulate in Float64; do **not**
+round strengths to Float32 to unlock `sgemv` — that is a different numerical
+experiment. Keep strengths, products, RHS, residual, self matrices, and leaf
+LU in Float64 initially. If specific blocks prove precision-sensitive, retain
+them in Float64 (traffic reduction $1-f/2$ for converted fraction $f$)
+rather than silently relaxing the gate; the independent BC-accuracy evaluator
+remains authoritative because the internal residual of the rounded operator
+can be small while the true BC residual fails.
 
-### 2. Pull-DAG split dual layout (improved form of the split design) — the big one
+Pair with consumer-aligned first touch: pages placed by whoever will read
+them. Placement must match the *selected schedule* — a source-affine fill is
+wrong for blocks consumed by several row workers (idea 2); page-aware row
+tiling is the eventual owner mapping, with interleave as the experimental
+control. Verify placement (numastat) rather than assuming it.
 
-Triangular split exactly as in `fgs_split_dual_layout_ideas_20260918.md`,
-with a different forward-half schedule:
+Riders (small, kept honest): threaded `residual!` **after fixing the shared
+scratch** — every leaf currently reuses `view(residual_vector, 1:length(rhs))`,
+so a naive threaded loop races; use worker-private scratch, and treat the
+saving as unattributed until profiled (the 0.06 s/it remainder is not all
+residual). Descending-cost/tail-serial color scheduling stays as a
+colored-mode control experiment only.
 
-- **Forward ($j<i$, 52.86%): dependency-counter pipelined pulls, no
-  barriers.** Task graph per sweep: `pull(i)` becomes ready when every
-  earlier neighbor $j<i$ of leaf $i$ has been solved this sweep; `solve(i)`
-  follows `pull(i)`. Pulls only read strengths (stable after the producing
-  solve) and write leaf $i$'s own rows, so there is **no write ordering to
-  enforce anywhere** — the property that made A9 expensive. Many leaves'
-  pulls run concurrently, each on one or a few workers, saturating bandwidth
-  without team-wide handoffs. Deterministic at any thread count because each
-  target row's sum is formed in one place with a fixed column order.
-- **Backward ($j>i$, 47.14%): work-stealing filler.** After `solve(j)`,
-  enqueue the $\Delta x_j$ source-major products; idle workers drain the
-  queue between pull dependencies. Applied to the per-target accumulators by
-  their owners in ascending source order at the single sweep-boundary sync
-  (3 syncs per iteration, total).
-- **Two-socket extension (absorbs the note's idea 3):** the halves are
-  nearly equal by bytes and touch disjoint matrix data — forward team on
-  socket 0, backward on socket 1, meeting only at the boundary through the
-  small accumulators and the ~MB-scale strength vector. This is an unusually
-  coherence-free dual-socket decomposition (~330 GB/s aggregate) and is the
-  *only* proposal on the table that uses socket 1 without paying cross-socket
-  barrier latency inside the sweep.
+**Impact: required bandwidth to halve wall time drops from 112.7 GB/s
+(Float64) to 56.3 GB/s (74.4 with H=0.5 s of coordination) — this is why
+mixed storage leads. Effort moderate; risk low-moderate (certification);
+unconditional.**
 
-Same lexicographic block-GS iterate as today up to floating-point regrouping
-(recalibration needed — but idea 1 already forces that). Supersedes colored,
-chunked, the by-target scatter (A3), and the DAG-with-ordering (A9).
+### 2. Persistent, adaptive row-parallel execution of the existing source-major cache
 
-Risks, honestly: transposed/target-major GEMV bandwidth on zen3 is unproven
-(store $T_i$ with the long source dimension contiguous and it should stream,
-but measure it); the critical path through the leaf-dependency chain could be
-long in adversarial orderings (mitigating evidence: chunked sustained 38.8
-active threads on the same conflict structure, so parallel width exists);
-direct-list target branches spanning several solve leaves must be split at
-assembly; constructor and transform/reuse paths must carry two
-representations. **Gate before committing** (the note's own gate, extended):
-an R4-shaped microbenchmark of aggregated transposed pulls vs source-major
-pushes at equal precision/placement, plus a toy pipelined-pull scheduler. If
-pull bandwidth ≥ push bandwidth, build it.
-**With idea 1: products ~0.026 s/it at one socket (~0.013 at two), one sync
-per sweep → projected wall ~3–3.5 s (~3×); effort high; risk moderate,
-front-loaded into a cheap gate.**
+Promoted above the split layout (was #4), adopting the code review's
+first-candidate design: keep the cache, the lexicographic leaf sequence, the
+far-field refresh, and the RHS semantics. Per leaf: coordinator solves the
+diagonal block and publishes strengths; a persistent worker team computes
+disjoint *row tiles* of that source's tall matrix (contiguous rows within
+each column — column-major streaming, never one strided dot per output row).
+Each tile accumulates in private scratch, retaining its old product locally
+(which can remove the old-product copy on this path), then applies `+= old`,
+`-= new` to its owned target rows — disjoint within one active source, so no
+races and no coloring. Small blocks run serial, medium on a compact team,
+large across more memory controllers; no allocations or task creation inside
+the leaf loop.
 
-### 3. Joint staircase retune at the new operating point (byte-shedding included)
+Why it now leads: it retains large aggregated GEMVs, contiguous source
+strengths, one matrix stream per sweep, and a current RHS for the existing
+residual; it exposes thousands of parallel rows on typical blocks (vs ~39 on
+target-major); and it is the cheapest implementation of the bandwidth story.
+Its go/no-go risk is the **handoff budget**: 86,508 leaf handoffs per solve
+must average < ~5.8 µs to keep added coordination under 0.5 s. Gate with a
+real-shape sequence benchmark (actual block-size distribution and source
+order, including row-to-target maps, old/new bookkeeping, handshakes, and
+the small-block policy) before any solver rewrite — multithreaded BLAS on
+every small product is not an adequate implementation. Row-tiled custom
+kernels are mathematically equivalent, not automatically bit-identical
+(tiling/SIMD/FMA change rounding): check, else certify accepted accuracy.
 
-The note's idea 4 = prior doc's A6, kept at full strength and run *after*
-ideas 1–2 change the cost balance: leaf=100 / MAC=0.4 / P=8 / inner=3 were
-selected when sweeps ran serially at 29.4 GB/s. Retune all four axes jointly;
-in particular test whether higher P buys a looser MAC that moves marginal
-direct blocks out of the streamed cache entirely (bytes removed beat bytes
-accelerated — this is the only Tier-A entry not bounded by the 164 GB/s
-arithmetic). No code change; standard calibration protocol.
-**Impact unknown a priori, historically tens of percent; effort one staircase
-campaign; risk nil; unconditional.**
+**Impact with idea 1, using the review's budget
+$T_{32}\approx 3.0 + 115.9/B + H$: planning range 4.5–5.9 s (1.7–2.3×) at
+measured useful B = 40–80 GB/s; meeting the strong 5.058 s target needs
+~56–74 GB/s depending on H. Effort moderate; risk = measurable handoff/kernel
+efficiency, resolved cheaply by the gate.**
 
-### 4. Persistent-team adaptive threaded GEMV on the existing source-major layout — the fallback
+### 3. Pull-DAG split dual layout — the promotion path
 
-The note's idea 2, subordinated: if the idea-2 gate shows target-major pulls
-cannot match source-major push bandwidth, keep the current cache and
-parallelize *within* each source GEMV with a persistent spinning worker team
-(atomic per-leaf handoffs, not fork/join), small blocks serial, large blocks
-tiled across workers, pages striped across the participating workers' nodes.
-Improve it with the bit-identical parallel-by-target scatter (A3) so the
-serial scatter doesn't become the new critical section. Preserves the
-incremental RHS semantics almost exactly. The same ~1,068 handoffs/sweep
-concern applies as to the note's original split schedule — the persistent
-team makes each handoff ~µs instead of a fork/join, which is what makes this
-viable where colored's barriers were not. The idea-2 microbenchmark answers
-this one for free.
-**Impact with idea 1: perhaps 2–2.5× total; effort moderate; risk low;
-conditional on the gate.**
+Demoted from #2 but kept, in the improved (pipelined) form: triangular split
+with the forward $j<i$ half executed as dependency-counter tasks —
+`pull(i)` ready when leaf $i$'s earlier neighbors are solved, `solve(i)`
+after `pull(i)`; pulls read stable strengths and write only their own rows,
+so no write-ordering machinery exists anywhere (the property that made the
+exact-GS DAG A9 expensive). Backward $j>i$ delta products run as
+work-stealing filler and are owner-applied at the sweep boundary. The two
+halves are nearly equal by bytes and touch disjoint matrix data, giving the
+only coherence-free two-socket decomposition on the table (forward on socket
+0, backward on socket 1, meeting through MB-scale accumulators).
 
-### 5. Anderson/FGMRES acceleration of the outer fixed point
+Correctness details adopted from the code review: backward products **must
+not overwrite the frozen accumulator $u^s=Ux^s$ while any target still needs
+it** — use pending buffers or versions; initialize $Ux^0$ for nonzero warm
+starts; keep the fixed external RHS separate from the per-iteration
+farfield; split direct-list target-branch row ranges at solve-leaf
+boundaries before classifying triangles; do not silently change the
+reverse-flag behavior. Honest limits, also adopted: the backward stream
+leaves the dependency path but still competes for bandwidth (overlap pays
+only when controllers would idle — the two-socket form is what makes it
+real); per-leaf publication remains ("one sweep boundary" describes the
+deferred backward phase, not all synchronization); and inter-leaf pipelining
+is hypothesis until the weighted DAG longest path and ready-width are
+measured (supporting evidence: chunked sustained 38.8 active threads on the
+same conflict structure).
 
-After ideas 1–2, per-iteration cost approaches its floor (~0.08–0.1 s/it,
-increasingly FMM- and sync-dominated) and the 27 outer iterations × 3 sweeps
-= 81 cache streams become the dominant multiplier. Anderson mixing or FGMRES
-with one FGS sweep as preconditioner plausibly cuts 27 → 12–18, multiplying
-*everything* — kernels, placement, FMM calls, syncs — where the second socket
-would shave only the products term (~15% of a post-idea-2 iteration).
-Algorithm-changing: new convergence/memory/accuracy tuning, and it is
-currently parked — un-park it only once the post-idea-2 profile confirms
-iteration count is the binding term.
-**Impact up to ~1.5–2× on top of 1+2 (toward ~2 s); effort moderate-high;
-risk moderate (restart/window tuning).**
+**Promote if and only if:** idea 2's handoff budget fails or its sequence
+benchmark stalls below target, AND the same benchmark shows the lower-pull +
+batched-upper schedule winning at equal precision and placement, AND the DAG
+width measurement supports pipelining. Prototype the Float64 algebra on
+small fixtures first (never conflate layout and precision changes in one
+experiment); prefer split triangular storage in production — full duplication
+has no sustained byte advantage.
+**Impact: unlocks the two-socket ceiling and removes shared-RHS coordination;
+effort high; risk moderate, front-loaded into gates shared with idea 2.**
+
+### 4. Joint staircase retune at the new operating point (byte-shedding included)
+
+Unchanged in substance: leaf=100 / MAC=0.4 / P=8 / inner=3 were selected for
+the serial Float64 cost balance; retune all four axes jointly after the
+schedule/precision work lands, testing in particular whether higher P buys a
+looser MAC that moves marginal direct blocks out of the streamed cache
+(bytes removed beat bytes accelerated — the one lever here not bounded by
+the 164 GB/s arithmetic). Two amendments from the review: report it
+separately from exact-iterate improvements (it changes the approximate
+operator/partition/schedule), and a looser MAC needs independent accuracy
+checks — higher P may compensate but is not guaranteed to. The review's
+remainder analysis motivates this strongly: after mixed storage, a ~3 s
+non-product remainder caps bandwidth-only gains (free products at 80 GB/s
+would still leave ~4.45 s → only 1.48× more), so beyond ~2× the wins must
+come from less work — this idea and idea 5.
+**Impact tens of percent historically; effort one campaign; risk nil;
+unconditional.**
+
+### 5. Safeguarded Anderson acceleration of the outer FGS map
+
+Kept fifth, enriched by the review (which independently ranks it first among
+algorithm-changing options, above FGMRES): small history (3–8), restart on
+ill-conditioned history, accept extrapolated iterates only under a residual
+safeguard. The integration cost it flagged is the one that matters: after
+mixing, the incremental nonself products and farfield state are stale —
+**mixing strengths while retaining stale incremental products is wrong** —
+so each acceptance may add an operator pass; compare *total streams and FMM
+calls*, not iteration counts. 27 → 12–18 is a hypothesis to be tested, not a
+forecast. FGMRES with the existing `FGSPreconditioner`
+(`src/FLOWPanel_solver.jl:1873–1972`) is the fallback within this slot: use
+the existing path for correctness, but note its apply performs a complete
+fixed-iteration FGS solve with save/restore — a cheaper inner apply must be
+justified, and a lower Krylov count can conceal more total FGS work.
+Un-park only when the post-idea-1/2 profile shows iteration work, not
+bandwidth, as the binding term. If a hypothetical 27→15 held at the
+optimized per-update cost, 4.5–5.9 s → roughly 2.5–3.3 s *before* added
+acceleration costs — the route to ~3–4×, conditional on convergence
+evidence.
+**Effort moderate-high; risk moderate; conditional on the profile.**
 
 ## Cut from the five (and why)
 
-- **Both sockets as a standalone item** — folded into idea 2, where the
-  forward/backward split gives it a coherence-free form; standalone (on
-  colored or lex) it inherits cross-socket barrier costs and is bounded to
-  tens of percent after Float32.
-- **A9 dependency-DAG exact-GS with write ordering** — superseded by idea 2,
-  which gets the same barrier-free schedule without the per-row ordering
-  machinery, at the price of a recalibration idea 1 forces anyway.
-- **Chunked rescue (fewer chunks + under-relaxation)** — only worth revisiting
-  if both idea 2 and idea 4 fail their gates; the 27→44 inflation is a
-  structural majority-Jacobi cost the split layout avoids by construction.
-- **THP/huge pages, FMM-sweep overlap, true-reverse SSOR, ACA compression** —
-  each ≤~5% or high-effort/low-confidence; keep as opportunistic notes in the
-  first proposals doc.
+- **Both sockets as a standalone item** — folded into idea 3, its only
+  coherence-free form; standalone it is more than a launcher change
+  (ownership/pinning must already be correct) and source-level handshakes
+  plus remote data can erase the gain.
+- **Exact-GS dependency DAG with write ordering (A9)** — superseded by idea
+  3's pull form; and per the review, removing barriers does not remove the
+  lexicographic critical path — measure before believing.
+- **Parallel-by-target scatter (A3) as its own item** — absorbed: idea 2's
+  row-tile ownership does the same job within one active source. If applied
+  to colored mode, the order to preserve is color-major then ascending
+  source *within* the color, and the `+= old` / `-= new` operations must stay
+  separate for bit identity.
+- **Chunked rescue, THP, FMM-overlap (extra stale farfield), true-reverse
+  SSOR, low-rank compression** — each small, high-risk, or dominated: the
+  measured FMM cost is too small for overlap to meet any target; compression
+  saves only if $r(m+n) \ll mn$ against a ~39-wide small dimension; MAC/P
+  retuning (idea 4) is the cheaper byte-shedder. GPU is a separate platform
+  project, not a near-term recommendation from these CPU results.
 
 ## Recommendation
 
-Run ideas 1 and 2 as one program: idea 1's Float32 + affine-touch work is
-needed by every branch, and the dual-Float32 prototype it enables is exactly
-the vehicle for idea 2's gate. Decision tree: microbenchmark pull-vs-push
-bandwidth (cheap, local-scale first, one m12 job if promising) → pull ≥ push
-⇒ build the pull-DAG split (idea 2), else ⇒ persistent-team source-major
-(idea 4). Retune (idea 3) after the winner lands; un-park Anderson/FGMRES
-(idea 5) if the post-landing profile shows iterations, not bandwidth, as the
-binding term. Honest composite ceiling: ~3–3.5 s via 1+2, ~2 s if idea 5
-also pays — nothing on this list can beat the bandwidth arithmetic without
-cutting bytes (1, 3) or iterations (5), and the projections respect that.
+Run ideas 1 and 2 as one program with the review's gate sequence: (i)
+correctness model on small fixtures in Float64 first (nonzero starts,
+multiple systems, branch-spanning targets, rigid transforms); (ii) the
+real-shape sequence benchmark — serial BLAS vs persistent source rows vs
+split lower/upper kernels at equal precision and placement, measuring useful
+bandwidth, handoff latency, and verified page placement — which
+simultaneously prices idea 2's handoff budget and idea 3's promotion
+condition; (iii) independent Float32 certification with recalibrated
+tolerance; (iv) end-to-end interleaved A/B against the unchanged champion,
+requiring ≥1.5× accepted throughput (≤6.744 s) and designing for ≥2×
+(≤5.058 s). Planning range for 1+2: **4.5–5.9 s**. Then use the new profile
+to pick among idea 3 (if handoffs bound), idea 4 (if bytes bound), or idea 5
+(if iterations bound) — beyond ~2× the arithmetic says the wins come from
+less work, not more scheduling machinery. All implementation, submissions,
+and campaign ceremony remain Ryan-gated; local checks ≤4 threads.
