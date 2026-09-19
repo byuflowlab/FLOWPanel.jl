@@ -97,6 +97,91 @@ include(joinpath(@__DIR__, "data", "legacy_wake_conversion_reference.jl"))
         @test pnl._station_method(m, 1, 3, 4) === m
     end
 
+    @testset "OmitStations root-shed omission (BRAINSTORM 032)" begin
+        ov = 0.7
+        base = pnl.SigmaOverlap(0.2, ov)
+
+        # Station resolution: masked stations route to the accounting sink,
+        # unmasked stations resolve through the wrapped method; a filament
+        # touching one unmasked station still sheds.
+        m = pnl.OmitStations(base, [BitVector([false, true, true])])
+        @test pnl._station_method(m, 1, 1, 1) === base
+        @test pnl._station_method(m, 1, 2, 2) isa pnl.OmittedStationSink
+        @test pnl._station_method(m, 1, 2, 3) isa pnl.OmittedStationSink
+        @test pnl._station_method(m, 1, 1, 2) === base   # spans the boundary
+
+        # The sink deletes and accounts; exact zeros are not counted.
+        sink = pnl._station_method(m, 1, 2, 2)
+        pnl._shed_particles!(nothing, SVector(0.0, 0.0, 0.0),
+            SVector(0.5, 0.0, 0.0), 2.0, sink)
+        @test m.omitted_circulation[] ≈ 1.0
+        @test m.omitted_filaments[] == 1
+        pnl._shed_particles!(nothing, SVector(0.0, 0.0, 0.0),
+            SVector(0.5, 0.0, 0.0), 0.0, sink)
+        @test m.omitted_filaments[] == 1
+
+        # All-false mask is bit-identical to the bare method (knob-off regression).
+        for wrap in (false, true)
+            ref = make_conversion_fixture(; nwakerows=1, wrap,
+                method_trailing=base, method_unsteady=base)
+            pnl._convert_to_particles!(ref)
+            ncols1 = size(ref.panel_wake.nodes[1], 3)
+            off = make_conversion_fixture(; nwakerows=1, wrap,
+                method_trailing=pnl.OmitStations(base, [falses(ncols1)]),
+                method_unsteady=base)
+            pnl._convert_to_particles!(off)
+            np = ref.pfield.np
+            @test off.pfield.np == np
+            @test off.pfield.particles[:, 1:np] == ref.pfield.particles[:, 1:np]
+            @test off.method_trailing.omitted_filaments[] == 0
+        end
+
+        # Masking the terminal (root) station of the non-wrapping chain deletes
+        # exactly the chain-closing filament (deposited last: 2 particles at
+        # station y=3, Γ=-1 over Δl=0.5); everything else -- including the
+        # unsteady filament spanning masked+unmasked stations -- is
+        # bit-identical to a same-method unmasked run.
+        refT = make_conversion_fixture(; nwakerows=1, wrap=false,
+            method_trailing=base, method_unsteady=base)
+        pnl._convert_to_particles!(refT)
+        ncols1 = 4
+        omit = falses(ncols1); omit[end] = true
+        masked = make_conversion_fixture(; nwakerows=1, wrap=false,
+            method_trailing=pnl.OmitStations(base, [omit]),
+            method_unsteady=pnl.OmitStations(base, [omit]))
+        pnl._convert_to_particles!(masked)
+        # terminal filament Δl=0.5 sheds ceil(ov*0.5/0.2) = 2 particles under `base`
+        @test masked.pfield.np == refT.pfield.np - 2
+        @test masked.pfield.particles[:, 1:masked.pfield.np] ==
+              refT.pfield.particles[:, 1:masked.pfield.np]
+        # the deleted particles are the terminal-station ones (y = 3)
+        @test all(refT.pfield.particles[2, masked.pfield.np+1:refT.pfield.np] .≈ 3.0)
+        mt = masked.method_trailing
+        @test mt.omitted_filaments[] == 1
+        @test mt.omitted_circulation[] ≈ 1.0 * 0.5   # |Γ_root| * filament length
+        # The unsteady wrapper saw no fully-masked spans.
+        @test masked.method_unsteady.omitted_filaments[] == 0
+
+        # Wrong-length mask fails loudly at conversion, not mid-loop.
+        bad = make_conversion_fixture(; nwakerows=1, wrap=false,
+            method_trailing=pnl.OmitStations(base, [BitVector([true, false])]),
+            method_unsteady=pnl.NoShed())
+        @test_throws ErrorException pnl._convert_to_particles!(bad)
+
+        # Constructor validation + Bool-vector convenience conversion.
+        @test_throws ArgumentError pnl.OmitStations(base, BitVector[])
+        @test_throws ArgumentError pnl.OmitStations(pnl.NoShed(), [falses(3)])
+        @test_throws ArgumentError pnl.OmitStations(
+            pnl.OmitStations(base, [falses(3)]), [falses(3)])
+        conv = pnl.OmitStations(base, [[true, false, false]])
+        @test conv.omit == [BitVector([true, false, false])]
+
+        # Unresolved direct shedding is an error.
+        @test_throws ArgumentError pnl._shed_particles!(nothing,
+            SVector(0.0, 0.0, 0.0), SVector(1.0, 0.0, 0.0), 1.0,
+            pnl.OmitStations(base, [falses(3)]))
+    end
+
     @testset "Viscous scheme actually runs under the euler stepper (018 erratum)" begin
         # FLOWPanel steps its particle wake with FLOWVPM._euler (see step!), so
         # the pfield must DECLARE integration=euler: viscousdiffusion branches

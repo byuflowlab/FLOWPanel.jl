@@ -1409,6 +1409,62 @@ function build_shedding_from_trace(nodes::AbstractMatrix, cells::AbstractMatrix{
 end
 
 """
+    shedding_edge_midpoint(nodes, cells, shedding, j)
+
+Midpoint of the `j`-th shedding edge (column of `shedding`) as an `SVector{3}`,
+computed from the shedding panel's cell-local node slots. `nodes` and `cells`
+must be the arrays the `shedding` matrix was derived from (for a constructed
+body, *that body's* `.nodes`/`.cells`; see the winding warning in
+[`RigidWakeBody`](@ref)).
+"""
+function shedding_edge_midpoint(nodes::AbstractMatrix, cells::AbstractMatrix{Int},
+                                shedding::AbstractMatrix{Int}, j::Integer)
+    p, nia, nib = shedding[1, j], shedding[2, j], shedding[3, j]
+    na, nb = cells[nia, p], cells[nib, p]
+    return SVector{3}((nodes[1, na] + nodes[1, nb]) / 2,
+                      (nodes[2, na] + nodes[2, nb]) / 2,
+                      (nodes[3, na] + nodes[3, nb]) / 2)
+end
+
+"""
+    filter_shedding(shedding, keep::AbstractVector{Bool})
+    filter_shedding(keep_edge, nodes, cells, shedding)
+
+Omit shedding edges from a `6 x N` shedding matrix before constructing a
+[`RigidWakeBody`](@ref), returning a new matrix with only the retained columns
+(column order preserved). The first form keeps column `j` when `keep[j]` is
+true; the second keeps column `j` when `keep_edge(midpoint, j)` returns true,
+where `midpoint` is [`shedding_edge_midpoint`](@ref)`(nodes, cells, shedding, j)`.
+
+Omitted trailing-edge panels shed no wake at all: no attached/semi-infinite
+wake influence enters the solve there and no wake panels or particles are shed
+from those edges (BRAINSTORM 032 uses this to drop root-most rotor shedding of
+dubious physicality — root cutout / hub interference).
+
+!!! warning "Conservation consequence"
+    Omitting edges at the end of a chain does not delete the chain-closing
+    trailing filament — it relocates it to the new terminal station, whose
+    strength becomes the full wake-column circulation *there* (see
+    `_convert_to_particles!`). Interior gaps split one chain into two shedding
+    chains' worth of closing filaments; pass the pieces as separate matrices
+    if that is intended. The winding invariant still applies: derive
+    `shedding` from the *constructed* body's cells, filter, then rebuild.
+"""
+function filter_shedding(shedding::AbstractMatrix{Int}, keep::AbstractVector{Bool})
+    size(shedding, 1) == 6 || error("shedding must be a 6 x N matrix; got size $(size(shedding))")
+    length(keep) == size(shedding, 2) ||
+        error("keep mask length $(length(keep)) does not match $(size(shedding, 2)) shedding edges")
+    return Matrix{Int}(shedding[:, findall(keep)])
+end
+
+function filter_shedding(keep_edge, nodes::AbstractMatrix, cells::AbstractMatrix{Int},
+                         shedding::AbstractMatrix{Int})
+    keep = Bool[keep_edge(shedding_edge_midpoint(nodes, cells, shedding, j), j)
+                for j in axes(shedding, 2)]
+    return filter_shedding(shedding, keep)
+end
+
+"""
 Check whether triangle `inds` = (n1, n2, n3) contains the directed edge
 `pair` = (a, b) in its winding order.
 """

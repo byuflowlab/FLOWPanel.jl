@@ -820,6 +820,98 @@ function _validate_station_method(m::StationSigmaOverlap, i_surf, n_node_cols)
 end
 
 """
+    OmitStations(method, omit)
+
+Station-masked particle shedding (BRAINSTORM 032): wraps any station-resolvable
+`WakeSheddingMethod` and suppresses particle shedding at masked wake-node
+columns. `omit[i_surf][j]` is `true` to omit station `j` of shedding surface
+`i_surf` (one `BitVector` per surface, each of length `n_cols + 1`, in wake
+node-column order: station `j` = edge `j`'s nib vertex, station `n_cols + 1` =
+the last edge's nia vertex — the same ordering as [`StationSigmaOverlap`](@ref)
+and `Das`).
+
+A trailing filament at station `j` is omitted when `omit[j]` is true; the
+unsteady filament spanning columns `j → j+1` is omitted only when BOTH
+stations are masked. Omission happens at the panel→particle handoff only: the
+panel solve, Das/Kutta closure, and free wake-panel rows are untouched, so
+masking root-most stations deletes the strong chain-closing root filament
+from the particle field instead of relocating it (contrast the shedding-edge
+omission of `filter_shedding`).
+
+!!! warning "Deliberate circulation deletion"
+    Masked circulation is *removed from the simulation* at the handoff — shed
+    vortex lines end at the omission boundary (a ∇·ω source the VPM tolerates
+    but never repairs). This is a modeling choice (hub/root-cutout diffusion
+    of an unphysically concentrated root vortex), not bookkeeping. The deleted
+    amount is measured, not hidden: the wrapper accumulates
+    `omitted_circulation[]` (cumulative Σ|Γ|·Δl over all omitted filaments)
+    and `omitted_filaments[]` (count of omitted nonzero-strength filaments).
+
+Only [`LegacyEdgeJumpConversion`](@ref) resolves stations; calling
+`_shed_particles!` with this method directly is an error, and
+`SurfaceVorticityConversion` rejects explicit line policies altogether.
+"""
+struct OmitStations{M<:WakeSheddingMethod} <: WakeSheddingMethod
+    method::M
+    omit::Vector{BitVector}
+    omitted_circulation::Array{Float64,0}
+    omitted_filaments::Array{Int,0}
+
+    function OmitStations(method::M, omit::Vector{BitVector}) where {M<:WakeSheddingMethod}
+        method isa OmitStations && throw(ArgumentError(
+            "OmitStations cannot wrap another OmitStations"))
+        method isa NoShed && throw(ArgumentError(
+            "OmitStations wrapping NoShed is redundant"))
+        isempty(omit) && throw(ArgumentError(
+            "OmitStations needs at least one per-surface omit mask"))
+        circulation = Array{Float64,0}(undef); circulation[] = 0.0
+        count = Array{Int,0}(undef); count[] = 0
+        return new{M}(method, omit, circulation, count)
+    end
+end
+
+# Convenience: accept any vector of Bool-vectors (Vector{Vector{Bool}}, views,
+# comprehension output) by converting to the canonical Vector{BitVector}.
+OmitStations(method::WakeSheddingMethod, omit::AbstractVector{<:AbstractVector{Bool}}) =
+    OmitStations(method, BitVector[BitVector(o) for o in omit])
+
+function _shed_particles!(pfield, r1, r2, Γ, ::OmitStations)
+    throw(ArgumentError("OmitStations must be resolved to a station " *
+                        "(via _station_method) before shedding"))
+end
+
+"Accumulates the strength of omitted filaments instead of shedding particles."
+struct OmittedStationSink <: WakeSheddingMethod
+    omitted_circulation::Array{Float64,0}
+    omitted_filaments::Array{Int,0}
+end
+
+function _shed_particles!(pfield, r1, r2, Γ, sink::OmittedStationSink)
+    if Γ != 0
+        sink.omitted_circulation[] += abs(Γ) * LA.norm(r2 - r1)
+        sink.omitted_filaments[] += 1
+    end
+    return nothing
+end
+
+@inline function _station_method(m::OmitStations, i_surf, j1, j2)
+    if m.omit[i_surf][j1] && m.omit[i_surf][j2]
+        return OmittedStationSink(m.omitted_circulation, m.omitted_filaments)
+    end
+    return _station_method(m.method, i_surf, j1, j2)
+end
+
+function _validate_station_method(m::OmitStations, i_surf, n_node_cols)
+    i_surf <= length(m.omit) || error(
+        "OmitStations: no omit mask for shedding surface $(i_surf) " *
+        "(have $(length(m.omit)))")
+    length(m.omit[i_surf]) == n_node_cols || error(
+        "OmitStations: omit mask for surface $(i_surf) has length " *
+        "$(length(m.omit[i_surf])), expected n_cols + 1 = $(n_node_cols)")
+    return _validate_station_method(m.method, i_surf, n_node_cols)
+end
+
+"""
 Sentinel used as the *implementation* default of `PanelParticleWake`'s
 `method_trailing` and `method_unsteady` keywords, so the constructor can tell
 "caller said nothing" from "caller explicitly asked for the legacy default".

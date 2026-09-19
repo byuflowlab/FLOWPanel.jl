@@ -54,6 +54,14 @@ export RUN_KJ=false
 export SAVE_VTK=true                 # false suppresses ALL monitors/CSVs
 export TRUNCATION_DEPTH_R=4
 export PARTICLE_SHEDDING=sigma_overlap
+# Root-shed omission knob (BRAINSTORM 032): TE shedding edges with midpoint
+# |r/R| below this are omitted. 0.1 = stock/018-comparable (inert on the stock
+# blade, which sheds from r/R 0.111). Override via sbatch --export for A/Bs.
+export SHEDDING_R_OVER_R="${SHEDDING_R_OVER_R:-0.1}"
+# Particle-side root omission (BRAINSTORM 032): TE stations with |r/R| below
+# this shed NO particles (solve/Das/Kutta untouched; deleted circulation is
+# logged). 0.0 = off, bit-identical. Override via sbatch --export for A/Bs.
+export PARTICLE_OMIT_ROOT_R_OVER_R="${PARTICLE_OMIT_ROOT_R_OVER_R:-0.0}"
 export DAS_KINEMATIC_ARC=false
 # Screen schedule: 1-rev spinup, NO freestream pulse, 8 revs total.
 export SPINUP_REVS=1

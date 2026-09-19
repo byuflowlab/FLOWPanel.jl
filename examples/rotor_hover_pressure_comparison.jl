@@ -35,6 +35,12 @@ R = 0.119
 # meshes, whose blade root is outboard of it. NOT cap protection -- see the
 # end_node anchoring below.
 shedding_r_over_R = parse(Float64, get(ENV, "SHEDDING_R_OVER_R", "0.1"))
+# BRAINSTORM 032: omit particle shedding at TE stations with |r|/R below this,
+# at the panel->particle handoff ONLY (solve, Das/Kutta, and wake-panel rows
+# untouched). Deletes the chain-closing root filament from the particle field
+# instead of relocating it (contrast SHEDDING_R_OVER_R, which removes the
+# shedding edges themselves). 0.0 = off (bit-identical). Legacy conversion only.
+particle_omit_root_r_over_R = parse(Float64, get(ENV, "PARTICLE_OMIT_ROOT_R_OVER_R", "0.0"))
 # 052c (Ryan 2026-08-26): this launcher defaults the particle .vtp series to
 # Float32 (visualization-focused; halves io time and disk). The package-level
 # default stays f64 — the production choice for replay-exact warm restarts.
@@ -384,14 +390,9 @@ shedding2_full = pnl.calc_shedding_from_seed(rotor.nodes, rotor.cells, te_indice
 # bbox test (edge MIDPOINT radius), so the retained set -- and hence stock
 # behavior -- is unchanged; it is only applied after tracing instead of during.
 function clip_shedding_root(nodes, shedding, cells, radial_dimension, R, clip_r_over_R)
-    keep = Int[]
-    for j in axes(shedding, 2)
-        p, nia, nib = shedding[1, j], shedding[2, j], shedding[3, j]
-        na, nb = cells[nia, p], cells[nib, p]
-        mid = (nodes[radial_dimension, na] + nodes[radial_dimension, nb]) / 2
-        abs(mid) / R >= clip_r_over_R && push!(keep, j)
+    return pnl.filter_shedding(nodes, cells, shedding) do mid, _
+        abs(mid[radial_dimension]) / R >= clip_r_over_R
     end
-    return shedding[:, keep]
 end
 shedding1 = clip_shedding_root(rotor.nodes, shedding1_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
 shedding2 = clip_shedding_root(rotor.nodes, shedding2_full, rotor.cells, radial_dimension, R, shedding_r_over_R)
@@ -663,6 +664,36 @@ if !isnan(sigma_chord_fraction)
             "(s* = $(sigma_chord_fraction), floor $(sigma_floor_r)R binds at " *
             "$(n_floored)/$(length(sig)) stations)")
     end
+end
+
+# BRAINSTORM 032: root-station particle-shed omission. Wraps the resolved
+# trailing method so masked stations route to an accounting sink instead of
+# shedding particles; the wake solve is untouched. method_unsteady is NoShed
+# in the legacy config, so wrapping the trailing method covers everything.
+particle_omit_masks = nothing
+if particle_omit_root_r_over_R > 0
+    conversion_mode == "legacy" || error(
+        "PARTICLE_OMIT_ROOT_R_OVER_R requires CONVERSION=legacy: the smooth " *
+        "conversion owns its own shedding and takes no line policies")
+    0 < particle_omit_root_r_over_R < 1 || error(
+        "PARTICLE_OMIT_ROOT_R_OVER_R must be in (0, 1), got $(particle_omit_root_r_over_R)")
+    particle_omit_masks = [
+        BitVector(station_radii(rotor.nodes, shed, rotor.cells, radial_dimension) ./ R
+                  .< particle_omit_root_r_over_R)
+        for shed in rotor.shedding]
+    for (k, mask) in enumerate(particle_omit_masks)
+        n_omit = count(mask)
+        # An armed-but-inert omission arm is a silent A/B confound (018 clip
+        # history); a fully masked chain sheds nothing at all. Refuse both.
+        0 < n_omit < length(mask) || error(
+            "PARTICLE_OMIT_ROOT_R_OVER_R=$(particle_omit_root_r_over_R) masks " *
+            "$(n_omit)/$(length(mask)) stations of shedding$(k) -- must mask " *
+            "at least one and not all (innermost station r/R = " *
+            "$(round(minimum(station_radii(rotor.nodes, rotor.shedding[k], rotor.cells, radial_dimension)) / R, digits=4)))")
+        println("Particle root-shed omission ACTIVE: shedding$(k) omits " *
+            "$(n_omit)/$(length(mask)) stations (|r|/R < $(particle_omit_root_r_over_R))")
+    end
+    method_trailing = pnl.OmitStations(method_trailing, particle_omit_masks)
 end
 
 tip_sigma_default = 2 * pi * R / nt * overlap / p_per_step
@@ -1558,6 +1589,16 @@ end
 sim_wall_seconds = time() - sim_wall_start
 println("\nTime marching wall time: $(round(sim_wall_seconds, digits=1)) s")
 
+# BRAINSTORM 032: report deleted root circulation so the omission cost is in
+# every .out log, not just the (save_path-gated) metadata TOML. Restart note:
+# in-memory accumulator, covers only this segment.
+if !isnothing(particle_omit_masks)
+    m = wake_rotor.method_trailing
+    println("Particle root-shed omission totals: deleted Σ|Γ|·Δl = " *
+        "$(m.omitted_circulation[]) m³/s over $(m.omitted_filaments[]) filaments " *
+        "($(count.(particle_omit_masks)) stations masked per blade)")
+end
+
 # BRAINSTORM/016: external conservation evidence for the smooth conversion.
 # Sibling file (same shape as the SSW driver's conversion_diagnostics.csv);
 # legacy runs carry `conversion_diagnostics === nothing` and emit nothing, so
@@ -1751,6 +1792,23 @@ if save_path !== nothing
         println(io, "te_seed_source = \"$(te_seed_source)\"")
         println(io, "te_indices_1 = $(collect(te_indices_1))")
         println(io, "te_indices_2 = $(collect(te_indices_2))")
+        println(io, "shedding_r_over_R = $(shedding_r_over_R)")
+        println(io, "blade_root_r_over_R = $(blade_root_r_over_R)")
+        println(io, "shedding1_edges = $(size(shedding1, 2))")
+        println(io, "shedding2_edges = $(size(shedding2, 2))")
+        println(io, "shedding1_edges_traced = $(size(shedding1_full, 2))")
+        println(io, "shedding2_edges_traced = $(size(shedding2_full, 2))")
+        println(io, "particle_omit_root_r_over_R = $(particle_omit_root_r_over_R)")
+        if !isnothing(particle_omit_masks)
+            for (k, mask) in enumerate(particle_omit_masks)
+                println(io, "particle_omit_stations_$(k) = $(count(mask))")
+            end
+            # Cumulative over the whole run (metadata is written post-march):
+            # deleted circulation Σ|Γ|·Δl [m²/s · m] and omitted filament count.
+            omit_method = wake_rotor.method_trailing
+            println(io, "particle_omit_circulation_total = $(omit_method.omitted_circulation[])")
+            println(io, "particle_omit_filaments_total = $(omit_method.omitted_filaments[])")
+        end
         println(io, "ncells = $(size(rotor.cells, 2))")
         println(io, "RPM = $(RPM)")
         println(io, "R = $(R)")

@@ -207,6 +207,45 @@ using StaticArrays: SVector, SMatrix
         end
     end
 
+    @testset "shedding omission (BRAINSTORM 032)" begin
+        nodes, cells = make_seeded_te_mesh()
+        final_cells = pnl.ensure_consistent_winding(nodes, cells; watertight=false)
+        bbox = ([0.8, -0.1, -0.1], [1.1, 2.1, 0.1])
+        shedding = pnl.calc_shedding_from_seed(nodes, final_cells, 1, 2; bbox=bbox, end_node=3)
+
+        # midpoints resolve through the shedding panel's cell-local node slots
+        @test pnl.shedding_edge_midpoint(nodes, final_cells, shedding, 1) ≈ SVector(1.0, 0.5, 0.0)
+        @test pnl.shedding_edge_midpoint(nodes, final_cells, shedding, 2) ≈ SVector(1.0, 1.5, 0.0)
+
+        # all-keep is the identity (knob-off regression)
+        @test pnl.filter_shedding(shedding, [true, true]) == shedding
+        @test pnl.filter_shedding((mid, j) -> true, nodes, final_cells, shedding) == shedding
+
+        # mask form drops the requested column, preserving order and eltype
+        kept = pnl.filter_shedding(shedding, [false, true])
+        @test kept == shedding[:, 2:2]
+        @test kept isa Matrix{Int}
+
+        # predicate form: omit the root-most edge (largest y in this fixture)
+        clipped = pnl.filter_shedding((mid, j) -> mid[2] < 1.0, nodes, final_cells, shedding)
+        @test clipped == shedding[:, 1:1]
+
+        # omitted edges must not reappear on the constructed body
+        body = pnl.RigidWakeBody{pnl.VortexRing}(nodes, final_cells, clipped;
+                                                 check_mesh=false, watertight=false,
+                                                 ensure_winding=false)
+        @test body.nsheddings == 1
+        @test body.shedding[1] == clipped
+        @test size(body.Das[1]) == (3, 2)
+        for p in (shedding[1, 2], shedding[4, 2])  # both panels of the omitted edge
+            @test body.shedding_full[3, p] == -1
+        end
+
+        # validation
+        @test_throws ErrorException pnl.filter_shedding(shedding, [true])
+        @test_throws ErrorException pnl.filter_shedding(shedding[1:5, :], [true, true])
+    end
+
     @testset "seeded shedding validation" begin
         nodes, cells = make_seeded_te_mesh()
         @test_throws ErrorException pnl.calc_shedding_from_seed(nodes, cells, 4, 2)

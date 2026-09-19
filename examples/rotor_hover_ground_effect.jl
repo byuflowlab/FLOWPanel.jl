@@ -437,14 +437,10 @@ te_end_2 = length(te_indices_2) >= 3 ? te_indices_2[3] : nothing  # seeds give o
 # bbox test (edge MIDPOINT radius), so the retained set -- and hence stock
 # behavior -- is unchanged; it is only applied after tracing instead of during.
 function clip_shedding_root(nodes, shedding, cells, radial_dimension, R, clip_r_over_R)
-    keep = Int[]
-    for j in axes(shedding, 2)
-        p, nia, nib = shedding[1, j], shedding[2, j], shedding[3, j]
-        na, nb = cells[nia, p], cells[nib, p]
-        mid = (nodes[radial_dimension, na] + nodes[radial_dimension, nb]) / 2
-        abs(mid) / R >= clip_r_over_R && push!(keep, j)
+    # BRAINSTORM 032: delegates to the package-level shedding omission
+    return pnl.filter_shedding(nodes, cells, shedding) do mid, _
+        abs(mid[radial_dimension]) / R >= clip_r_over_R
     end
-    return shedding[:, keep]
 end
 
 # Regression net: no shed edge may run CIRCUMFERENTIALLY. A trailing-edge edge
