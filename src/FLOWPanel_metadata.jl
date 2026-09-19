@@ -166,6 +166,7 @@ function _preconditioner_metadata_dict(preconditioner)
             "cache_leaf_lu" => fgssolver.cache_leaf_lu,
             "sweep_order" => String(fgssolver.sweep_order),
             "chunks" => fgssolver.chunks,
+            "dagteam_precision" => String(fgssolver.dagteam_precision),
         )
     elseif preconditioner isa FastMultipole.JacobiPreconditioner
         return Dict{String, Any}("type" => "JacobiPreconditioner")
@@ -229,6 +230,7 @@ function _solver_metadata_dict(solver)
             "cache_leaf_lu" => solver.cache_leaf_lu,
             "sweep_order" => String(solver.sweep_order),
             "chunks" => solver.chunks,
+            "dagteam_precision" => String(solver.dagteam_precision),
             "max_iterations" => solver.max_iterations,
             "inner_iterations" => solver.inner_iterations,
             "tolerance" => solver.tolerance,

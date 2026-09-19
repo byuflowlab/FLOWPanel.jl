@@ -1478,6 +1478,7 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     cache_leaf_lu::Bool
     sweep_order::Symbol
     chunks::Int                         # chunk count for sweep_order=:chunked (ignored otherwise)
+    dagteam_precision::Symbol           # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
     max_iterations::Int
     inner_iterations::Int
     tolerance::Float64
@@ -1506,8 +1507,9 @@ function FGSSolver(body::AbstractBody;
         multipole_acceptance=0.4,
         leaf_size=10,
         cache_leaf_lu::Bool=true,
-        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); both change the GS iteration
+        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagteam = split dual-layout pull-DAG executor (021 gate 2d); all change the GS iteration
         chunks::Int=64,                      # chunk count for sweep_order=:chunked (ignored otherwise)
+        dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
         shrink=false,
         recenter=false,
         verbose=false,
@@ -1529,14 +1531,18 @@ function FGSSolver(body::AbstractBody;
     # generate solver
     TF = numtype(body)
     bodies = (body,)
+    # dagteam_precision is only forwarded when :dagteam is requested so that a
+    # FastMultipole checkout predating the kwarg keeps working for every other
+    # sweep order
+    dagteam_kwargs = sweep_order === :dagteam ? (; dagteam_precision) : (;)
     fgs = build_fgs ?
-        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies))) :
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), dagteam_kwargs...) :
         nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
 end
 
 ################################################################################
@@ -1909,6 +1915,7 @@ function FGSPreconditioner(body::AbstractBody;
         cache_leaf_lu::Bool=true,
         sweep_order::Symbol=:lexicographic,
         chunks::Int=64,
+        dagteam_precision::Symbol=:f64,
         shrink=false,
         recenter=false,
     )
@@ -1916,7 +1923,7 @@ function FGSPreconditioner(body::AbstractBody;
     fgssolver = FGSSolver(body;
         max_iterations=sweeps, inner_iterations, tolerance=0.0, rlx,
         reverse_pass=false, verbose=false, expansion_order,
-        multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter)
+        multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, dagteam_precision, shrink, recenter)
 
     TF = numtype(body)
     return FGSPreconditioner{typeof(fgssolver),typeof(body),TF}(
