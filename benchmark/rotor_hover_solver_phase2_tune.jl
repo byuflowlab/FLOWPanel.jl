@@ -68,10 +68,16 @@ Env:
   RUNG                required
   MEM_BUDGETS         colon/comma list of TOTAL memory budgets in GiB
                       (body + solver state + FMM plan + cache), default
-                      "4:8:16:32:64:128:256:500" (top = the pinned --mem=500G
+                      "0:16:32:64:128:500" (top = the pinned --mem=500G
                       on 512 GB zen3 nodes). NOT cache size — a budget is
                       what a node must hold. Whether a candidate is cached is
-                      decided per candidate by what fits.
+                      decided per candidate by what fits. Each budget carries
+                      a MAX THREAD COUNT (Ryan 2026-09-19, ~2 GiB/thread,
+                      capped at 64; budget 0 uncapped) — a budget whose cap
+                      is below this process's julia thread count is SKIPPED,
+                      so a thread-ladder campaign submits one job per
+                      (budget, -t) pair and each job tunes only the budgets
+                      that machine class could actually run.
   TUNE_REPS           min-of-reps per candidate (default 5 at R1-R4, 2 above;
                       asserted <= 5, Ryan's cap)
   TUNE_ABANDON_FACTOR default 1.3
@@ -222,19 +228,35 @@ const FLOOR_LEAVES = [parse(Int, x) for x in
 #          tuned knobs at all, since at R1-R5 every real machine can afford a
 #          cache and no budget would ever return an uncached winner.
 #     16   laptop
+#     32   high-end laptop
+#     64   desktop
 #     128  workstation
 #     500  supercomputer node (the pinned --mem=500G on 512 GB zen3)
 #
 # What the classes MEAN varies by rung, which is the point (W0 map, ledger.md):
-#   R1-R3  all three saturate — the whole near field fits anywhere
+#   R1-R3  all classes saturate — the whole near field fits anywhere
 #   R4-R5  laptop constrained, workstation and node saturate
 #   R6-R7  laptop cannot cache AT ALL (floors 24 and 79 GiB), workstation
 #          constrained, node saturates
+#
+# Each machine class also carries a MAX THREAD COUNT (Ryan 2026-09-19): a
+# machine with X GiB of RAM is modelled as having X/2 hardware threads, capped
+# at 64 — the ~2 GiB/thread ratio of shipping hardware (16 GB MacBook Pro M4
+# ~8-10 cores; 64 GB Ryzen 9 9950X = 32 threads; 128 GB Threadripper
+# workstation = 64 threads; the 512 GB zen3 node sits at 4 GiB/core so the 64
+# cap is never binding there). Budget 0 is a method endpoint, not a machine,
+# and is uncapped. The cap is a MAXIMUM: campaigns tune each class at a thread
+# LADDER (powers of two up to the cap) and save parameters per (budget,
+# julia_threads) — the trace files, resume identity, and skip logic below all
+# key on that pair.
 const MACHINE_LABEL = Dict(0.0 => "matrix-free endpoint (cache forbidden)",
-                           16.0 => "laptop", 128.0 => "workstation",
+                           16.0 => "laptop", 32.0 => "high-end laptop",
+                           64.0 => "desktop", 128.0 => "workstation",
                            500.0 => "supercomputer node")
+machine_max_threads(bgib) =
+    bgib == 0 ? typemax(Int) : min(64, floor(Int, bgib / 2))
 budgets_gib = [parse(Float64, x) for x in
-               split(get(ENV, "MEM_BUDGETS", "0:16:128:500"), r"[:,]")]
+               split(get(ENV, "MEM_BUDGETS", "0:16:32:64:128:500"), r"[:,]")]
 
 n = rotor.ncells
 dense_bytes = 8 * n^2
@@ -244,6 +266,13 @@ println("budgets (GiB): $budgets_gib   reps=$tune_reps  " *
 
 outdir = joinpath(@__DIR__, "results", "phase2", banner.threading_mode)
 get(ENV, "PER_RUNG_DIR", "0") == "1" && (outdir = joinpath(outdir, rung))
+# PHASE2_OUTDIR (2026-09-19): full override, for campaigns whose jobs run
+# concurrently against one checkout (e.g. the R4 thread-scaling array — five
+# tasks appending to one NFS tune_phase2.csv is the append hazard that
+# destroyed R1's rows on 2026-08-18) and for routing outputs to the data root.
+# rotor_hover_solver_phase2.jl honours the same variable, so its knob reads
+# resolve against what the tuner wrote here.
+outdir = get(ENV, "PHASE2_OUTDIR", outdir)
 mkpath(outdir)
 csv_path = joinpath(outdir, "tune_phase2.csv")
 header = "rung,mesh_file,n_panels,mem_budget_gib,cached,expansion_order," *
@@ -259,15 +288,24 @@ if !fresh
         "$csv_path has a pre-W2 schema; move it aside before appending")
 end
 
-# ---- resume: (rung, mem_budget_gib) is the row identity ---------------------
+# ---- resume: (rung, mem_budget_gib, julia_threads) is the row identity ------
 # standby QOS + --requeue restarts a preempted job from scratch, which would
-# otherwise append duplicates of whatever had already landed.
+# otherwise append duplicates of whatever had already landed. julia_threads
+# joined the identity 2026-09-19 (per-thread-ladder tuning): the same budget
+# tuned at a different -t is a DIFFERENT operating point, never a duplicate.
+# Column 27 = julia_threads; safe to index because only notes (the last
+# column) can contain commas.
+# Both sides of the key go through parse(Float64, ·): _csv_cell writes 16.0
+# as "16" (%.9g) while string(16.0) is "16.0", so raw-string comparison never
+# matches and a requeue would re-tune (and duplicate) every landed budget.
+landed_tag(b, j) = string(Float64(b)) * "|j" * string(j)
 landed = Set{String}()
 if !fresh
     for line in Iterators.drop(eachline(csv_path), 1)
         isempty(strip(line)) && continue
         c = split(line, ",")
-        length(c) >= 4 && String(c[1]) == rung && push!(landed, String(c[4]))
+        length(c) >= 27 && String(c[1]) == rung &&
+            push!(landed, landed_tag(parse(Float64, c[4]), strip(String(c[27]))))
     end
 end
 
@@ -295,7 +333,12 @@ hardware_tag = get(ENV, "HARDWARE_TAG", banner.hardware_tag)
 const TRACE_HEADER = "expansion_order,multipole_acceptance,leaf_size,t," *
     "success,abandoned,rung,mem_budget_gib,tune_reps,tune_abandon_factor," *
     "hardware_tag,fm_commit,filament_reg"
-trace_path(bgib) = joinpath(outdir, "tune_trace_$(rung)_b$(bgib).csv")
+# Per-thread trace files (2026-09-19): a memoized t measured at -t 16 must
+# never replay into a -t 64 descent — threads change the objective just like
+# hardware does, so the thread count lives in the filename. Old
+# tune_trace_<rung>_b<budget>.csv files simply stop matching and are ignored.
+trace_path(bgib) = joinpath(outdir,
+    "tune_trace_$(rung)_b$(bgib)_j$(banner.julia_threads).csv")
 
 _tnum(x) = @sprintf("%.17g", x)   # full precision: a truncated t would make the
                                   # replayed descent differ from the original
@@ -491,9 +534,19 @@ end
 # ---- sweep ------------------------------------------------------------------
 prev_signature = Ref{Any}(nothing)
 for bgib in budgets_gib
-    tag = string(bgib)
+    tag = landed_tag(bgib, banner.julia_threads)
     if tag in landed
-        println("\n=== budget $(bgib) GiB: already landed, skipping ===")
+        println("\n=== budget $(bgib) GiB @ j$(banner.julia_threads): " *
+                "already landed, skipping ===")
+        continue
+    end
+    # Machine-class thread cap (Ryan 2026-09-19): a 16 GiB laptop does not run
+    # 64 threads. Skip rather than error so one thread-ladder job can pass the
+    # full MEM_BUDGETS list and tune only the classes its -t fits.
+    if banner.julia_threads > machine_max_threads(bgib)
+        println("\n=== budget $(bgib) GiB: max $(machine_max_threads(bgib)) " *
+                "threads for this machine class < $(banner.julia_threads) " *
+                "running — skipping ===")
         continue
     end
     # budget 0 is the FORCED-UNCACHED sentinel, not a 0-byte machine: the

@@ -79,6 +79,9 @@ want = split(get(ENV, "CONFIGS",
 # at phase1/ for the frozen knob CSVs)
 outdir = joinpath(@__DIR__, "results", "phase2", banner.threading_mode)
 get(ENV, "PER_RUNG_DIR", "0") == "1" && (outdir = joinpath(outdir, rung))
+# PHASE2_OUTDIR: full override (see rotor_hover_solver_phase2_tune.jl) — the
+# tuner's rows and this driver's knob reads must resolve to the SAME directory.
+outdir = get(ENV, "PHASE2_OUTDIR", outdir)
 mkpath(outdir)
 write(joinpath(outdir, "banner.txt"), banner.text * "\n")
 
