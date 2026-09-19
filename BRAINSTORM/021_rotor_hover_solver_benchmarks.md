@@ -35,16 +35,23 @@
 > width cap; evidence `fgs_r4_followup_evidence_20260914/colored-v21-13738665/`.
 >
 > **Staged next (Ryan 2026-09-17, updated 09-18):**
-> 0. **NUMA-placement investigation FIRST (Ryan 2026-09-18, submission
->    pre-approved):** the v22 postmortem points at first-touch page
->    placement (all 2.86 GB of influence cache on one NPS4 node, ~40–50
->    GB/s ceiling shared by 64 threads) as why products sped up only
->    ~1.3×. Fastest path = local code check → standalone dgemv-stream
->    microbenchmark on m12 (~3 min compute, go/no-go) → in-situ j64
->    activity pair under `--interleave=0-3` if confirmed. Entry =
->    [`numa_bandwidth_reset_prompt_20260918.md`](021_rotor_hover_solver_benchmarks/numa_bandwidth_reset_prompt_20260918.md).
->    If confirmed: chunk-affine first-touch could put chunked@j64 at
->    ~7–8 s (×Float32 → ~4–5 s).
+> 0. ~~NUMA-placement investigation~~ — **DONE 2026-09-18: mechanism
+>    CONFIRMED, magnitude 2.2× (below the ≥~3× step-2 gate) → STOPPED
+>    after the microbenchmark; in-situ pair NOT submitted.** Step 0: the
+>    FGS influence cache IS single-thread first-touched (sequential fill
+>    `nonself_influence_matrices`, FastMultipole `src/solve.jl:256-321`,
+>    calloc'd lazily at :6-11; built at :673). Job 13763831 dgemv
+>    microbenchmark (3.06 GB, v22 pinning): 1T 29.4 GB/s (matches the
+>    bandwidth math exactly); 64T serial-touch 74.0 GB/s with **93% of
+>    pages on ONE node (numastat-shown)**; interleave=0-3 153.8 (2.08×);
+>    chunk-affine first-touch 164.4 (2.22×, ≈ socket ceiling — no 4×
+>    exists within cpubind 0-3). Placement ≈ 2× multiplier, only pays if
+>    chunked's iteration inflation is also fixed; chunked@j64 projects
+>    ~9.5–11 s at best vs colored@j16 10.116 s. Findings =
+>    [`numa_placement_findings_20260918.md`](021_rotor_hover_solver_benchmarks/numa_placement_findings_20260918.md);
+>    entry prompt `numa_bandwidth_reset_prompt_20260918.md`. Next lever
+>    per that gate = Float32 (below) + optional chunk-affine assembly
+>    (Ryan-gated code change).
 > 1. ~~Chunked hybrid sweep~~ — DONE (v22, above); result negative on the
 >    ranking metric. Any chunked follow-up = new decision for Ryan.
 > 2. **Float32 nearfield storage (mixed precision)** — store cached nearfield
@@ -354,6 +361,21 @@ Completing a phase does not authorize the next phase.
   `numa_bandwidth_reset_prompt_20260918.md`. Also flagged to Ryan: new
   full-suite failure (WeakKeyDict × immutable `WarmstartNoopSolver`, from
   `7fbd68a`, unrelated to v22; fix Ryan-pending).
+- 2026-09-18 — **NUMA-placement verdict: mechanism CONFIRMED, magnitude
+  2.2× → in-situ pair NOT submitted** (its pre-approval was conditioned on
+  the microbenchmark showing ≥~3×). Step 0: FGS influence cache is
+  single-thread first-touched (sequential `nonself_influence_matrices`
+  fill, FastMultipole `src/solve.jl:256-321`; calloc lazy pages :6-11;
+  ctor call :673). Step 1 (job 13763831, m12, v22 pinning, 3.06 GB
+  streamed/pass): 1T serial-touch 29.4 GB/s (bandwidth math validated);
+  64T serial-touch 74.0 GB/s with 93% of pages numastat-shown on one NPS4
+  node; interleave=0-3 153.8 (2.08×); chunk-affine first-touch 164.4
+  (2.22×, ≈ socket ceiling). No ~4× exists within cpubind 0-3; placement
+  is a ~2× multiplier that only pays alongside iteration-count fixes.
+  Findings: `numa_placement_findings_20260918.md`; evidence
+  `data/p021-cold-20260910/numa-bench-13763831/` (cluster). Decision back
+  to Ryan: Float32 next (already approved) ± chunk-affine first-touch
+  assembly in FastMultipole (code change, arm d beat interleave).
 - 2026-08-25 — Sentinel cleanup: `phase1_agreement.jl` and `phase1_solvetime.jl`
   were the last two drivers hard-coding `niter = -1` for non-Krylov solvers; both
   now mirror `unsteady.jl`. Takes effect on future re-runs only (R1–R7 were

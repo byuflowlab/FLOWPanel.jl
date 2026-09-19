@@ -4,7 +4,39 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
-### 2026-09-18 (latest) — chunked hybrid v22: implemented, run, and LOST; coloring kept
+### 2026-09-18b (latest) — NUMA-placement investigation: mechanism confirmed, only 2.2× available → stopped at the microbenchmark gate
+
+Executed `numa_bandwidth_reset_prompt_20260918.md` (fastest path; two-job
+submission pre-approved by Ryan, second job conditional). **Step 0 (local
+code check):** the FGS influence cache IS single-thread first-touched —
+`FastGaussSeidel` ctor calls `nonself_influence_matrices` (FastMultipole
+`c18e4b46`, `src/solve.jl:673`); `Matrices` allocates via `Libc.calloc`
+(`src/solve.jl:6-11`, lazy zero pages) and the fill loop
+(`src/solve.jl:256-321`) is sequential, so placement is decided by one
+thread. The parallel `NearfieldInfluenceCache` build is a different,
+unused-by-FGS path. **Step 1 (job 13763831, m12 exclusive, ~4 min):** new
+diagnostic pair `benchmark/numa_dgemv_bench.jl` +
+`benchmark/run_numa_dgemv.slurm.sh` (1068 × 650×550 Float64 blocks =
+3.06 GB, dgemv sweep, BLAS=1, `@threads :static`, v22 core pinning,
+numastat/numa_maps captured in-process). Results: a) 1T serial-touch
+29.4 GB/s — exactly the postmortem's bandwidth math; b) 64T serial-touch
+74.0 GB/s, numastat shows 93% of pages on ONE NPS4 node; c) 64T under
+`numactl --interleave=0-3` 153.8 GB/s (2.08×); d) 64T chunk-affine
+first-touch 164.4 GB/s (2.22×, best, ≈ socket ceiling). **Gate: 2.22× <
+≥~3× → in-situ j64 interleave pair NOT submitted; stopped and reported.**
+Why no 4×: one node under load delivers 74 GB/s (not the assumed 40–50)
+and the socket tops out ~164 — both ends of the hypothesized ratio moved.
+Caveat noted (auto-NUMA balancing may inflate arm b; doesn't change the
+achievable-improvement ratio). Implication: placement ≈ 2× bandwidth
+multiplier — real but insufficient alone given chunked's 27→44 iteration
+inflation (projected chunked@j64 ~9.5–11 s vs colored@j16 10.116 s).
+Findings doc: `numa_placement_findings_20260918.md`; evidence
+`data/p021-cold-20260910/numa-bench-13763831/` on the cluster. Decision to
+Ryan: proceed with Float32 (approved) ± chunk-affine first-touch assembly
+(code change; arm d needs no numactl wrapper). Notebook entries still owed
+(now 4: v21, diagnostics ladder, v22, NUMA) — offered, not written.
+
+### 2026-09-18 — chunked hybrid v22: implemented, run, and LOST; coloring kept
 
 Two sessions. **Session 1 (implementation/submission, 09-17):** Ryan's
 chunked hybrid sweep (`sweep_order=:chunked`) implemented per the approved
