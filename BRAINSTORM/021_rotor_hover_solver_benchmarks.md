@@ -59,6 +59,18 @@
 >    and acceptance path stay Float64. Halves the ~230 GB/solve streamed;
 >    multiplies with (1) on the bandwidth cap. Certified-FMM acceptance gate
 >    still measures true accuracy.
+> 3. ~~Thread-efficiency ideation~~ — **DONE 2026-09-18 (analysis only, no
+>    code/jobs):** ranked proposals in
+>    [`thread_efficiency_proposals_20260918.md`](021_rotor_hover_solver_benchmarks/thread_efficiency_proposals_20260918.md).
+>    Recommendation: (1st) one coherent FastMultipole change bundling
+>    parallel sweep-affine first-touch assembly (A1, bit-identical, ×2.2
+>    measured) + Float32 storage (A2, approved) + bit-identical
+>    parallel-by-target scatter (A3) + threaded max-abs residual (A4) —
+>    honest projection 10.1 → ~4-5 s; (2nd) staircase re-tune (leaf/MAC/
+>    inner) at the threaded operating point (A6, no code). Big follow-ons
+>    held: dependency-DAG exact-GS scheduling (A9, bit-identical to lex,
+>    kills all barriers) vs un-parking the Krylov outer loop (B1) — choose
+>    from the post-A1/A2 profile. All implementation Ryan-gated.
 > - Parked unless expedient: Krylov-accelerated outer loop (FGS-preconditioned
 >   FGMRES).
 

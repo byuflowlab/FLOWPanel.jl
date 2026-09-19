@@ -4,7 +4,32 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
-### 2026-09-18b (latest) — NUMA-placement investigation: mechanism confirmed, only 2.2× available → stopped at the microbenchmark gate
+### 2026-09-18c (latest) — Thread-efficiency ideation: ranked proposals delivered (analysis only)
+
+Executed `thread_efficiency_reset_prompt_20260918.md`. Read the FGS
+implementation directly (FastMultipole `c18e4b46` `src/solve.jl` end-to-end,
+`containers.jl` struct, `nearfield_cache.jl` parallel-build pattern; FLOWPanel
+`FGSSolver` plumbing + `retained_r4_diagnostics.toml`: inner=3,
+reverse_pass=false confirmed). No code edits, no submissions, no local jobs
+needed. Key code facts surfaced: lex sweeps are 100% serial (the 0.346 s/it
+chain is single-core); the serial scatter applies per-target-row
+contributions in ascending source order → a parallel-by-target scatter can be
+BIT-IDENTICAL; `residual!` is a max-abs reduction → threadable bit-identically;
+the `nearfield_cache.jl` atomic-chunk-pool worker pattern (private buffer
+copies) is directly reusable for a parallel sweep-affine first-touch fill.
+Deliverable: `thread_efficiency_proposals_20260918.md` — 9 algorithm-
+preserving proposals (A1 affine assembly ×2.2 measured, A2 Float32, A3
+by-target scatter, A4 threaded residual, A5 color-schedule engineering, A6
+staircase re-tune at the threaded operating point, A7 THP, A8 both sockets,
+A9 dependency-DAG exact-GS = bit-identical-to-lex barrier-free scheduling) +
+5 algorithm-changing (B1 Krylov outer un-park, B2 chunked rescue, B3 ACA,
+B4 FMM-sweep overlap, B5 true-reverse SSOR), each ranked against the
+164 GB/s socket ceiling. Recommendation: bundle A1+A2+A3+A4 as one
+FastMultipole change (projection 10.116 → ~4-5 s, best-case), then A6;
+hold A9 vs B1 for the post-fix profile. All implementation Ryan-gated;
+notebook entries (4 owed) still pending Ryan approval.
+
+### 2026-09-18b — NUMA-placement investigation: mechanism confirmed, only 2.2× available → stopped at the microbenchmark gate
 
 Executed `numa_bandwidth_reset_prompt_20260918.md` (fastest path; two-job
 submission pre-approved by Ryan, second job conditional). **Step 0 (local
