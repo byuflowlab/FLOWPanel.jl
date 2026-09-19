@@ -35,6 +35,16 @@
 > width cap; evidence `fgs_r4_followup_evidence_20260914/colored-v21-13738665/`.
 >
 > **Staged next (Ryan 2026-09-17, updated 09-18):**
+> 0. **NUMA-placement investigation FIRST (Ryan 2026-09-18, submission
+>    pre-approved):** the v22 postmortem points at first-touch page
+>    placement (all 2.86 GB of influence cache on one NPS4 node, ~40–50
+>    GB/s ceiling shared by 64 threads) as why products sped up only
+>    ~1.3×. Fastest path = local code check → standalone dgemv-stream
+>    microbenchmark on m12 (~3 min compute, go/no-go) → in-situ j64
+>    activity pair under `--interleave=0-3` if confirmed. Entry =
+>    [`numa_bandwidth_reset_prompt_20260918.md`](021_rotor_hover_solver_benchmarks/numa_bandwidth_reset_prompt_20260918.md).
+>    If confirmed: chunk-affine first-touch could put chunked@j64 at
+>    ~7–8 s (×Float32 → ~4–5 s).
 > 1. ~~Chunked hybrid sweep~~ — DONE (v22, above); result negative on the
 >    ranking metric. Any chunked follow-up = new decision for Ryan.
 > 2. **Float32 nearfield storage (mixed precision)** — store cached nearfield
@@ -334,6 +344,16 @@ Completing a phase does not authorize the next phase.
   and any chunked follow-ups (fewer chunks / under-relaxation /
   parallel-by-target scatter) return to Ryan as new decisions. Evidence:
   `fgs_r4_followup_evidence_20260914/chunked-v22-13749231/analysis/ab_summary.md`.
+- 2026-09-18 — Ryan: post-v22 direction. Float32 stays staged/approved, but
+  **investigate bigger speedups first: NUMA-aware placement**, fastest path
+  (code check → m12 microbenchmark → in-situ interleave pair), **submission
+  pre-approved** for those two diagnostic jobs. Basis: v22 products speedup
+  ≤~1.3× despite 38.8 active threads; lex single core already at ~29 GB/s;
+  chunked aggregate ~37 GB/s vs socket ~160–200; node is NPS4 with
+  first-touch default and the job pinned to nodes 0–3. Staged plan + gates:
+  `numa_bandwidth_reset_prompt_20260918.md`. Also flagged to Ryan: new
+  full-suite failure (WeakKeyDict × immutable `WarmstartNoopSolver`, from
+  `7fbd68a`, unrelated to v22; fix Ryan-pending).
 - 2026-08-25 — Sentinel cleanup: `phase1_agreement.jl` and `phase1_solvetime.jl`
   were the last two drivers hard-coding `niter = -1` for non-Krylov solvers; both
   now mirror `unsteady.jl`. Takes effect on future re-runs only (R1–R7 were
