@@ -1,0 +1,10 @@
+colored_iterations = [26]
+colored_median_solve_seconds = 9.4344238145
+colored_min_solve_seconds = 9.353952081
+cross_order_solution_rel_l2 = 2.0202553463988424e-6
+dagteam_iterations = [27]
+dagteam_median_solve_seconds = 5.950567546
+dagteam_min_solve_seconds = 5.894883177
+dagteam_precision = "f32full"
+dagteam_speedup_median = 1.5854662167211033
+trials_per_order = 40

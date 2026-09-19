@@ -1,0 +1,15 @@
+# Campaign pins for p021 R4 dagteam A/B (v23). Written before submission.
+[packages.FLOWPanel]
+path = "/home/rander39/campaigns/p021-r4-dagteam-20260919-v23/FLOWPanel.jl"
+tag = "campaign/p021-r4-dagteam-exec-20260919-v23"
+sha = "4b4418f76697bfe2887056486ee94c50d4eb5104"
+
+[packages.FastMultipole]
+path = "/home/rander39/campaigns/p021-r4-dagteam-20260919-v23/FastMultipole"
+tag = "campaign/p021-r4-dagteam-fm-20260919-v23"
+sha = "f4d6b671b3afc5f7404e0d9b324b09bf77ddde43"
+
+[packages.FLOWVPM]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FLOWVPM.jl"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "05c658f7804ec5f9b68d4cb9826a9f97cfecb373"

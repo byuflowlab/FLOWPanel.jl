@@ -1,0 +1,8 @@
+colored_confirmation_repeat_delta = 0.0
+colored_iterations = 26
+colored_tolerance = 5.223162079893313e-7
+dagteam_confirmation_repeat_delta = 0.0
+dagteam_iterations = 27
+dagteam_precision = "f32full"
+dagteam_tolerance = 3.4309419310610173e-7
+lexicographic_tolerance = 3.479128881193055e-7

@@ -1,0 +1,3 @@
+sweep_order,diagnostic_seconds,iterations,relative_solution_delta,solved,fmm_rel_l2,fmm_rel_max,fmm_certified,fmm_seconds,epsilon_requested,direct_rel_l2,evaluator_delta,direct_seconds,authoritative_evaluator,authoritative_rel_l2,accepted
+colored,8.09001191,26,0,true,5.8478723e-07,3.48633234e-05,true,10.4190328,1.22339544e-09,NaN,NaN,0,certified_fmm,5.8478723e-07,true
+dagteam,5.39989873,27,0,true,7.61408607e-07,2.20781076e-05,true,10.411398,1.22339544e-09,NaN,NaN,0,certified_fmm,7.61408607e-07,true

@@ -1,0 +1,12 @@
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+dagteam_precision = "f32full"
+inner = 3
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "dagteam"
+tolerance = 3.4309419310610173e-7
