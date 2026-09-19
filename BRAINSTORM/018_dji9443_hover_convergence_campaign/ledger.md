@@ -3195,3 +3195,15 @@ gates at QUIET_HOURS=24h, so superseding a run quiet 2-24h without
 supersede refusal gate should use QUIET_HOURS unless --include-recent. Also:
 "0 runs exceed 288 steps" step-distribution baseline is stale (csarc runs
 reached 2159 restartable steps).
+
+- **2026-09-17 21:07–22:0x UTC — hpc-storage cycle ahead of p021 v22 (chunked A/B) submission:**
+  archived 15 finished runs (projects_FLOWPanel.jl checkout only) to
+  /nobackup/archive/usr/rander39/FLOWPanel_runs/projects_FLOWPanel.jl/ — 272.3 GiB tarballed,
+  375.6 GiB freed from VTK on /home (newest 5 restartable steps retained per run).
+  /home/rander39: 725.9G -> 359.1G of 400G cap (743318 -> 367711 MB).
+  Archive quota: 4.027T -> 4.287T, 93,345 -> 93,374 files (of 20 TiB / 1 M).
+  0 STALE, 0 VERIFY-FAIL. 3 runs RECENT (quiet 17–23 h, 208.0 GiB VTK) left untouched,
+  pending Ryan's --include-recent --only approval: p018_csarc_l3p0_3r_g25_s2,
+  p018_csarc_n2_nt72_l3p0_3r_srlx_g25_s2, p018_csarc_n2_nt72_l3p0_3r_srlx_nv_g25.
+  Restart-set integrity spot-verified (ARCHIVED.txt + non-zero tarballs, 3 of 15).
+  Queue empty throughout; protect list and queue untouched.

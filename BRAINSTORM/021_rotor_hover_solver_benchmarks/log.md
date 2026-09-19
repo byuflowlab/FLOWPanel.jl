@@ -4,7 +4,46 @@ Newest first. Narrative only — results go to the phase files and `ledger.md`.
 
 ## Dated entries
 
-### 2026-08-24 (latest) — campaign ladder set to machine classes; HPC launch handoff written
+### 2026-09-18 (latest) — chunked hybrid v22: implemented, run, and LOST; coloring kept
+
+Two sessions. **Session 1 (implementation/submission, 09-17):** Ryan's
+chunked hybrid sweep (`sweep_order=:chunked`) implemented per the approved
+`fgs_chunked_hybrid_plan_20260918.md` — FastMultipole `c18e4b46` (tag
+`campaign/p021-r4-chunked-fm-20260918-v22`: cost-balanced contiguous chunk
+map, GS-within-chunk / deferred-Jacobi-across-chunks with serial ascending
+cross-chunk scatter, `fgs_chunked_test.jl` 1723 cases incl. bitwise
+guarantees), FLOWPanel `67d570f` (tag
+`campaign/p021-r4-chunked-source-20260918-v22`: pass-through + v22 harness
+trio). Local §7 gate ALL PASS; deployed per §8; **job 13749231** on m12.
+Provenance:
+`fgs_r4_followup_evidence_20260914/v22-deployment/submission-provenance-13749231.md`.
+
+**Session 2 (watch → harvest → analysis, 09-18):** job COMPLETED (10:59 h),
+`COMPLETED` sentinel + all six `status.toml` = completed; harvested
+SHA256-verified 103/103 to
+`fgs_r4_followup_evidence_20260914/chunked-v22-13749231/`. All §6 gates
+green: 320/320 trials accepted, repeat deltas exactly 0, BC rel-L2 lex
+4.780e-7 / chunked 7.868e-7, iterations arm-invariant (lex 27, chunked 44),
+calibration certified tolerance 5.348662427942506e-7 matching the local
+gate. **Verdict: chunked loses at every arm** — medians (lex vs chunked)
+j1 38.39/60.76, j4 17.33/24.34, j16 12.48/15.89, j64 10.95/14.26 s. Best
+chunked point (j64, 14.26 s) is +30% vs lex@j64 and **+41% vs colored@j16
+10.116 s**, so the §5 conditional coloring revert did NOT fire — coloring
+keeps its production role and colored@j16 remains the global best.
+Mechanism (j64 activity pair): the parallel design WORKS per iteration —
+nearfield span/iteration shrank 0.346 → 0.277 s at 38.8 avg active threads
+(colored had engaged 42.65 threads with NO span shrink) — but iteration
+count inflated 27 → 44 (+63%), the plan's §1.4 majority-Jacobi risk
+realized, which dominates the ranking metric (total time to accepted
+accuracy). Full tables: `chunked-v22-13749231/analysis/ab_summary.md`.
+Post-result both repos' full test suites rerun (keep path — no code
+changes; results in the session wrap). Follow-up options (fewer chunks,
+under-relaxation, deterministic parallel-by-target scatter) are NEW
+experiments awaiting Ryan; Ryan-pending also: origin pushes (branches +
+v21/v22 tags), 3 notebook entries (v21 A/B, diagnostics ladder, v22),
+RECENT-VTK archiving (208 GiB / 3 runs).
+
+### 2026-08-24 — campaign ladder set to machine classes; HPC launch handoff written
 
 Ryan set the memory ladder in terms of machines people actually have rather
 than an arbitrary sweep: *"16G for a laptop, 128 for a workstation, and 500 for

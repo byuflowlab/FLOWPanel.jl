@@ -1,0 +1,12 @@
+MAC = 0.4
+P = 8
+cache_leaf_lu = true
+chunks = 64
+inner = 3
+kind = "fgs"
+leaf = 100
+max_iterations = 300
+rlx = 1.0
+rung = "R4"
+sweep_order = "chunked"
+tolerance = 5.348662427942506e-7

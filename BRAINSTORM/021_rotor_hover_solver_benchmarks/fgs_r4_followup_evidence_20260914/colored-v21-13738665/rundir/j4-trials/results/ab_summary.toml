@@ -1,0 +1,8 @@
+colored_iterations = [26]
+colored_median_solve_seconds = 15.534214986
+colored_min_solve_seconds = 15.048554934
+cross_order_solution_rel_l2 = 1.5342097881993424e-6
+lexicographic_iterations = [27]
+lexicographic_median_solve_seconds = 17.580489031
+lexicographic_min_solve_seconds = 16.831205987
+trials_per_order = 40

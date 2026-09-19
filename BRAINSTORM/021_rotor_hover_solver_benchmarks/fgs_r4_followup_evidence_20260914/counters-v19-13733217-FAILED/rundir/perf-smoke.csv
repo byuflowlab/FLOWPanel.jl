@@ -1,0 +1,7 @@
+# started on Wed Sep 16 19:12:43 2026
+
+4404414871,,cycles:u,1474163855,100.00,,
+7782142088,,instructions:u,1474163855,100.00,1.77,insn per cycle
+335306057,,cache-references:u,1474163855,100.00,,
+80781930,,cache-misses:u,1474163855,100.00,24.09,of all cache refs
+1474.16,msec,task-clock:u,1474163855,100.00,0.273,CPUs utilized

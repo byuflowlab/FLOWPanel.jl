@@ -1,0 +1,4 @@
+mode,diagnostic_seconds,solved,finite_solution,retained_bytes,process_peak_rss_bytes,iterations,relative_solution_delta,identical_history,fmm_rel_l2,fmm_rel_max,fmm_certified,fmm_seconds,epsilon_requested,direct_rel_l2,evaluator_delta,direct_seconds,authoritative_evaluator,authoritative_rel_l2,accepted
+baseline,17.5654151,true,true,3221617552,4552568832,27,0,true,4.77952513e-07,2.32095749e-05,true,40.7721695,1.22339544e-09,4.78150591e-07,5.4676859e-09,512.094009,certified_fmm,4.77952513e-07,true
+activity,18.353887,true,true,3221617552,4552568832,27,0,true,4.77952513e-07,2.32095749e-05,true,40.7472749,1.22339544e-09,NaN,NaN,0,certified_fmm,4.77952513e-07,true
+counters,17.4006144,true,true,3221617552,4558913536,27,0,true,4.77952513e-07,2.32095749e-05,true,40.750129,1.22339544e-09,NaN,NaN,0,certified_fmm,4.77952513e-07,true

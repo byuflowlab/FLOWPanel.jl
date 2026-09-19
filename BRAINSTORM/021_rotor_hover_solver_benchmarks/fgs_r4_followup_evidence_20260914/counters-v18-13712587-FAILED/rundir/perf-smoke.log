@@ -1,0 +1,25 @@
+Events disabled
+Events disabled
+ERROR: LoadError: bitcast: argument size does not match size of target type
+Stacktrace:
+  [1] reinterpret
+    @ ./essentials.jl:730 [inlined]
+  [2] counter_command(control::IOStream, acknowledgement::IOStream, command::String; timeout_seconds::Float64)
+    @ Main.PerfSmokeProbe ./none:67
+  [3] counter_command
+    @ ./none:60 [inlined]
+  [4] (::var"#6#8"{IOStream})(acknowledgement::IOStream)
+    @ Main ~/FLOWPanel-p021-r4-diag-v10-silo/counters-v18/FLOWPanel.jl/test/r4_perf_control_smoke.jl:27
+  [5] open(::var"#6#8"{IOStream}, ::String, ::Vararg{String}; kwargs::@Kwargs{})
+    @ Base ./io.jl:410
+  [6] open
+    @ ./io.jl:407 [inlined]
+  [7] #5
+    @ ~/FLOWPanel-p021-r4-diag-v10-silo/counters-v18/FLOWPanel.jl/test/r4_perf_control_smoke.jl:26 [inlined]
+  [8] open(::var"#5#7", ::String, ::Vararg{String}; kwargs::@Kwargs{})
+    @ Base ./io.jl:410
+  [9] open(::Function, ::String, ::String)
+    @ Base ./io.jl:407
+ [10] top-level scope
+    @ ~/FLOWPanel-p021-r4-diag-v10-silo/counters-v18/FLOWPanel.jl/test/r4_perf_control_smoke.jl:25
+in expression starting at /home/rander39/FLOWPanel-p021-r4-diag-v10-silo/counters-v18/FLOWPanel.jl/test/r4_perf_control_smoke.jl:25

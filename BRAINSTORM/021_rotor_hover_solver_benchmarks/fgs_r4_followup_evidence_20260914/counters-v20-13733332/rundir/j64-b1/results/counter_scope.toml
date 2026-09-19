@@ -1,0 +1,6 @@
+activity_limitations = "proc snapshots are sequential and quantized to CLK_TCK; short stages may resolve to zero; incomplete endpoints have cpu_ticks=-1"
+activity_scope = "separate solve with coarse stage boundaries; nearfield_update groups leaf/product/scatter and updates"
+bandwidth_saturation = "not established by generic cache counters"
+perf_boundary_overhead = "enable acknowledgement return and disable command handling included"
+performance_trial = false
+scope = "one zero-reset prepared solve; reset, setup and validation excluded"

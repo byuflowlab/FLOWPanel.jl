@@ -1,0 +1,75 @@
+Precompiling project...
+   5585.9 ms  ✓ Statistics
+   4146.0 ms  ✓ Tables
+   2133.7 ms  ✓ StructUtils → StructUtilsTablesExt
+   2468.5 ms  ✓ BangBang → BangBangTablesExt
+   3820.4 ms  ✓ StructArrays
+   7903.7 ms  ✓ StaticArrays
+   2040.7 ms  ✓ StructArrays → StructArraysSparseArraysExt
+   1953.3 ms  ✓ StructArrays → StructArraysLinearAlgebraExt
+   1865.7 ms  ✓ Accessors → StructArraysExt
+   1787.7 ms  ✓ BangBang → BangBangStructArraysExt
+   1726.0 ms  ✓ FillArrays → FillArraysStaticArraysExt
+   2362.2 ms  ✓ StaticArrays → StaticArraysChainRulesCoreExt
+   1155.7 ms  ✓ ConstructionBase → ConstructionBaseStaticArraysExt
+   4412.0 ms  ✓ Transducers
+   2710.7 ms  ✓ FLOWMath
+   1546.5 ms  ✓ BangBang → BangBangStaticArraysExt
+   2212.5 ms  ✓ Accessors → StaticArraysExt
+   2550.9 ms  ✓ Rotations
+   1433.0 ms  ✓ StructArrays → StructArraysStaticArraysExt
+   1758.9 ms  ✓ ForwardDiff → ForwardDiffStaticArraysExt
+   3185.2 ms  ✓ HCubature
+  15274.5 ms  ✓ Unitful
+   1040.8 ms  ✓ Unitful → InverseFunctionsUnitfulExt
+   1304.9 ms  ✓ Accessors → UnitfulExt
+   1871.8 ms  ✓ Unitful → ForwardDiffExt
+   2389.2 ms  ✓ Unitful → ConstructionBaseUnitfulExt
+   2334.7 ms  ✓ Unitful → NaNMathExt
+  13363.1 ms  ✓ Statistics → SparseArraysExt
+   2039.0 ms  ✓ Roots → RootsUnitfulExt
+   2619.1 ms  ✓ Unitful → PrintfExt
+   8260.5 ms  ✓ StaticArrays → StaticArraysStatisticsExt
+  14104.5 ms  ✓ FillArrays → FillArraysStatisticsExt
+  14406.8 ms  ✓ Distances
+  13422.0 ms  ✓ CSV
+   1123.0 ms  ✓ Distances → DistancesSparseArraysExt
+  15819.6 ms  ✓ FixedPointNumbers
+   1608.0 ms  ✓ Distances → DistancesChainRulesCoreExt
+   3616.2 ms  ✓ StatsBase
+   8132.9 ms  ✓ FastMultipole
+   2725.7 ms  ✓ ColorTypes
+   4872.0 ms  ✓ NearestNeighbors
+   2016.8 ms  ✓ ColorVectorSpace
+   1394.5 ms  ✓ ColorVectorSpace → SpecialFunctionsExt
+  20784.2 ms  ✓ PrettyTables
+   3860.1 ms  ✓ Colors
+   8668.4 ms  ✓ FLOWVPM
+   4610.4 ms  ✓ ColorSchemes
+   1280.7 ms  ✓ Colorfy
+  16010.4 ms  ✓ ReverseDiff
+   1521.4 ms  ✓ Colorfy → ColorfyUnitfulExt
+   4845.0 ms  ✓ ImplicitAD
+   5969.7 ms  ✓ CCBlade
+   8988.8 ms  ✓ Meshes
+  30834.6 ms  ✓ DataFrames
+   4552.2 ms  ✓ BangBang → BangBangDataFramesExt
+   4763.4 ms  ✓ Transducers → TransducersDataFramesExt
+   5152.4 ms  ✓ VSPGeom
+  23672.2 ms  ✓ FLOWPanel
+  58 dependencies successfully precompiled in 97 seconds. 172 already precompiled.
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = 5f87a0e7df97f178c98d93019f2d845c942ff97f
+#   fm_commit      = c6185cdde2fe9714a6e60f506dc4a7115e28d8cc
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-r4-colored-source-20260917-v21-wt fm=FastMultipole@campaign-p021-r4-colored-fm-20260917-v21-wt vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-4-11
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-17 00:58:29
+######################################################################

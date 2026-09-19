@@ -1,0 +1,97 @@
+Precompiling project...
+   4245.1 ms  ✓ StructUtils
+   3267.5 ms  ✓ Preferences
+    830.6 ms  ✓ StructUtils → StructUtilsStaticArraysCoreExt
+    815.9 ms  ✓ StructUtils → StructUtilsLazilyInitializedFieldsExt
+   1086.6 ms  ✓ StructUtils → StructUtilsTablesExt
+    846.8 ms  ✓ JLLWrappers
+   1491.7 ms  ✓ MPIPreferences
+   1409.7 ms  ✓ PrecompileTools
+   2560.4 ms  ✓ OpenSSL_jll
+   2464.9 ms  ✓ Xorg_libpciaccess_jll
+   2116.2 ms  ✓ Git_LFS_jll
+   2034.7 ms  ✓ OpenSpecFun_jll
+   2613.4 ms  ✓ LLVMOpenMP_jll
+   2219.0 ms  ✓ Libiconv_jll
+   9220.2 ms  ✓ Krylov
+   3051.4 ms  ✓ libaec_jll
+   2926.3 ms  ✓ xfoil_light_jll
+   3189.7 ms  ✓ Expat_jll
+   3070.5 ms  ✓ MicrosoftMPI_jll
+   2371.6 ms  ✓ CommonSolve
+   1631.2 ms  ✓ XML2_jll
+   4001.1 ms  ✓ MPItrampoline_jll
+   1979.1 ms  ✓ OpenSSH_jll
+   1770.9 ms  ✓ Git_jll
+   4281.4 ms  ✓ StringManipulation
+   1757.7 ms  ✓ LightXML
+   3858.0 ms  ✓ SpecialFunctions
+   1651.4 ms  ✓ Hwloc_jll
+   1483.1 ms  ✓ Git
+   5542.3 ms  ✓ ColorSchemes
+   6816.9 ms  ✓ Parsers
+   4233.6 ms  ✓ Roots
+   8101.0 ms  ✓ StaticArrays
+   3810.9 ms  ✓ ColorVectorSpace → SpecialFunctionsExt
+   8299.3 ms  ✓ Xfoil
+   3133.0 ms  ✓ InlineStrings → ParsersExt
+   4299.7 ms  ✓ WriteVTK
+   4099.7 ms  ✓ ReadVTK
+   3393.4 ms  ✓ Colorfy
+   3961.3 ms  ✓ LegendrePolynomials
+   3792.9 ms  ✓ OpenMPI_jll
+   3698.9 ms  ✓ MPICH_jll
+   2780.1 ms  ✓ Roots → RootsChainRulesCoreExt
+   2570.9 ms  ✓ Roots → RootsUnitfulExt
+   4068.3 ms  ✓ SpecialFunctions → SpecialFunctionsChainRulesCoreExt
+   3048.5 ms  ✓ StaticArrays → StaticArraysChainRulesCoreExt
+   4516.0 ms  ✓ ForwardDiff
+   4634.2 ms  ✓ JSON
+   1949.1 ms  ✓ Colorfy → ColorfyUnitfulExt
+   2085.3 ms  ✓ WeakRefStrings
+   1938.5 ms  ✓ StructArrays → StructArraysStaticArraysExt
+   1924.8 ms  ✓ BangBang → BangBangStaticArraysExt
+   2036.7 ms  ✓ Accessors → StaticArraysExt
+   2728.0 ms  ✓ FLOWMath
+   2707.5 ms  ✓ StaticArrays → StaticArraysStatisticsExt
+   2516.3 ms  ✓ ConstructionBase → ConstructionBaseStaticArraysExt
+   3585.8 ms  ✓ FillArrays → FillArraysStaticArraysExt
+   3421.5 ms  ✓ Rotations
+   2776.1 ms  ✓ ForwardDiff → ForwardDiffStaticArraysExt
+   3193.4 ms  ✓ HDF5_jll
+   2467.0 ms  ✓ Roots → RootsForwardDiffExt
+   3620.7 ms  ✓ HCubature
+   3276.2 ms  ✓ Unitful → ForwardDiffExt
+   4503.3 ms  ✓ NearestNeighbors
+   7691.2 ms  ✓ HDF5
+   8476.8 ms  ✓ FastMultipole
+  18795.2 ms  ✓ PrettyTables
+  13036.9 ms  ✓ CSV
+  15086.5 ms  ✓ ReverseDiff
+   8402.2 ms  ✓ Meshes
+   5089.9 ms  ✓ ImplicitAD
+  22833.7 ms  ✓ Documenter
+   1272.8 ms  ✓ EllipticFunctions
+   5393.9 ms  ✓ CCBlade
+   9066.0 ms  ✓ FLOWVPM
+  30203.9 ms  ✓ DataFrames
+   4970.4 ms  ✓ BangBang → BangBangDataFramesExt
+   5316.9 ms  ✓ Transducers → TransducersDataFramesExt
+   5568.6 ms  ✓ VSPGeom
+  22254.7 ms  ✓ FLOWPanel
+  80 dependencies successfully precompiled in 107 seconds. 151 already precompiled.
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = 67d570f576e8698e82a07a889aeaac72c0c9d8d4
+#   fm_commit      = c18e4b46116825a201a0cf459b7596242191dcae
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign/p021-r4-chunked-source-20260918-v22-wt fm=FastMultipole@campaign/p021-r4-chunked-fm-20260918-v22-wt vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-3-31
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-17 23:24:03
+######################################################################

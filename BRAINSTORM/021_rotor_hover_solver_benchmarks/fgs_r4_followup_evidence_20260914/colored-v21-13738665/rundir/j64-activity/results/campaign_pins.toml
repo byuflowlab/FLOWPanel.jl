@@ -1,0 +1,17 @@
+[packages.FLOWPanel]
+path = "/home/rander39/campaigns/p021-r4-colored-20260917-v21/FLOWPanel.jl"
+tag = "campaign/p021-r4-colored-source-20260917-v21"
+sha = "5f87a0e7df97f178c98d93019f2d845c942ff97f"
+deployment = "git_worktree"
+
+[packages.FastMultipole]
+path = "/home/rander39/campaigns/p021-r4-colored-20260917-v21/FastMultipole"
+tag = "campaign/p021-r4-colored-fm-20260917-v21"
+sha = "c6185cdde2fe9714a6e60f506dc4a7115e28d8cc"
+deployment = "git_worktree"
+
+[packages.FLOWVPM]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FLOWVPM.jl"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "05c658f7804ec5f9b68d4cb9826a9f97cfecb373"
+deployment = "git_worktree"

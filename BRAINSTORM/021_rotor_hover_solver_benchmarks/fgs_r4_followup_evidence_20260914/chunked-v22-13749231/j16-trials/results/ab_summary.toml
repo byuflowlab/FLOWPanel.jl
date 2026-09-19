@@ -1,0 +1,8 @@
+chunked_iterations = [44]
+chunked_median_solve_seconds = 15.893076258
+chunked_min_solve_seconds = 15.79945041
+cross_order_solution_rel_l2 = 3.1221726607011864e-6
+lexicographic_iterations = [27]
+lexicographic_median_solve_seconds = 12.477726301
+lexicographic_min_solve_seconds = 11.86532668
+trials_per_order = 40

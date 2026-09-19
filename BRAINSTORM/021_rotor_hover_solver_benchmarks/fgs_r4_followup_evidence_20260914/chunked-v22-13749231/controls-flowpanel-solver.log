@@ -1,0 +1,78 @@
+┌ Info: trace_trailing_edge
+│   ordered_nodes =
+│    3-element Vector{Int64}:
+│     1
+│     2
+│     3
+│   edge_keys =
+│    2-element Vector{Tuple{Int64, Int64}}:
+│     (1, 2)
+└     (2, 3)
+┌ Info: trace_trailing_edge
+│   ordered_nodes =
+│    3-element Vector{Int64}:
+│     1
+│     2
+│     3
+│   edge_keys =
+│    2-element Vector{Tuple{Int64, Int64}}:
+│     (1, 2)
+└     (2, 3)
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+Solving body...
+Solving body...
+Solving body...
+Test Summary:                                                  | Pass  Total     Time
+Solvers                                                        |  495    495  4m14.6s
+  Backslash construction                                       |    2      2     6.4s
+  Backslash Neumann construction and solve                     |    6      6     1.9s
+  Backslash Glu write-back on update_G (regression)            |    3      3     2.5s
+  Backslash Neumann RigidWakeBody (single ConstantDoublet)     |    3      3     4.5s
+  Backslash Dirichlet construction and solve                   |    5      5     3.5s
+  Backslash Dirichlet construction and solve                   |    7      7     3.0s
+  KrylovSolver solve                                           |    2      2     4.0s
+  KrylovSolver Dirichlet solve                                 |    4      4     1.7s
+  Backslash Dirichlet VortexRing operator diagnostics          |    5      5     2.8s
+  Dirichlet VortexRing interior perturbation potential limit   |    3      3     1.0s
+  KrylovSolver + JacobiPreconditioner                          |    6      6     3.2s
+  KrylovSolver fgmres matches gmres                            |    2      2     1.3s
+  KrylovSolver persistent workspace                            |    4      4     0.0s
+  FGSPreconditioner linearity and side effects                 |   14     14    13.7s
+  KrylovSolver fgmres + FGSPreconditioner (config 1f)          |    4      4     1.2s
+  FMM-direct-list ILU(0) construction and apply                |   45     45    10.7s
+  ILU(0) sparse pattern, guard, scaling, and Krylov routing    |   21     21     2.3s
+  ILU(0) construction ladder remains linear                    |    4      4     0.1s
+  ILU(0) direct list agrees with fmm!                          |    3      3     1.0s
+  KrylovSolver history capture                                 |    6      6     0.1s
+  KrylovSolver warmstart (Neumann)                             |    5      5     0.0s
+  KrylovSolver warmstart (Dirichlet)                           |    3      3     0.0s
+  Warmstart extrapolation coefficients (021 Phase 3)           |   12     12     0.1s
+  FGSSolver project_solution! (021 Phase 3)                    |    8      8     2.0s
+  FGSSolver niter/solved capture (021 Phase 3)                 |    9      9     1.3s
+  KrylovSolver warmstart_order (021 Phase 3)                   |   14     14     0.0s
+  Block-GS solver_optargs forwarding (021 Phase 3)             |    5      5     5.1s
+  Per-step solve lifecycle (021 Phase 3)                       |   51     51     1.9s
+  KrylovSolver cache_tree (021 Phase 2b)                       |   11     11  1m12.9s
+  KrylovSolver cache_nearfield (021 Phase 2b)                  |   21     21    15.9s
+  assemble_influence_block! opt-in (030 Phase 2)               |   24     24     6.0s
+  KrylovSolver persistent_plan + rigid motion (021 tree reuse) |   25     25     4.2s
+  FGSSolver sweep_order plumbing (021 Phase 2b)                |   13     13     6.9s
+  KrylovCoupled warmstart                                      |    5      5     2.6s
+  FGSSolver construction                                       |   13     13     0.0s
+  FGSSolver boundary-condition preparation                     |    3      3     5.8s
+  FGSSolver Neumann RigidWakeBody (VortexRing, 1 column)       |    1      1     4.6s
+  Multi-body solve                                             |    4      4     1.8s
+  Tuple solve validation and status lifetime (052b)            |   11     11     4.8s
+  Dirichlet block-GS matches coupled oracle (052b)             |   17     17    11.9s
+  Block-GS implicit warm start across steps (052b)             |    7      7     3.5s
+  Lifting-body block-GS matches coupled oracle (052b)          |    6      6     6.4s
+  Backslash shared operator reuse (052b)                       |   16     16     0.9s
+  KrylovCoupled nonlifting                                     |    5      5     0.0s
+  numtype                                                      |    2      2     0.7s
+  BackslashCoupled nonlifting                                  |    5      5     0.9s
+  Coupled Dirichlet rhs idempotence (regression)               |    5      5     1.8s
+  backslashcoupled                                             |    9      9     3.9s
+  backslash                                                    |    7      7     3.6s
+  backslash_meshes                                             |    1      1     7.4s
+  Backslash source-potential matrix S (051 Stage 3)            |   17     17     0.7s
+  KrylovSolver nearfield_cache_donor (retarget across solvers) |   11     11    11.9s

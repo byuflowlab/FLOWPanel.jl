@@ -1,0 +1,91 @@
+Precompiling project...
+   6851.9 ms  ✓ Statistics
+   6139.3 ms  ✓ InlineStrings
+   5519.3 ms  ✓ Tables
+   3994.8 ms  ✓ OpenSSL_jll
+   5211.8 ms  ✓ TestEnv
+   2897.5 ms  ✓ WriteVTK
+   3281.8 ms  ✓ FillArrays → FillArraysStatisticsExt
+   4020.5 ms  ✓ LegendrePolynomials
+   3532.4 ms  ✓ Distances
+   2917.8 ms  ✓ ReadVTK
+   2136.9 ms  ✓ StructUtils → StructUtilsTablesExt
+   3878.8 ms  ✓ Statistics → SparseArraysExt
+   4127.1 ms  ✓ FixedPointNumbers
+   2608.1 ms  ✓ StructArrays
+   2457.3 ms  ✓ BangBang → BangBangTablesExt
+   1798.1 ms  ✓ OpenSSH_jll
+   1293.5 ms  ✓ Distances → DistancesChainRulesCoreExt
+   1463.6 ms  ✓ Git_jll
+   7836.5 ms  ✓ Parsers
+   1111.4 ms  ✓ StructArrays → StructArraysLinearAlgebraExt
+   8275.1 ms  ✓ StaticArrays
+   2058.3 ms  ✓ Distances → DistancesSparseArraysExt
+   2921.2 ms  ✓ Accessors → StructArraysExt
+   3263.7 ms  ✓ StructArrays → StructArraysSparseArraysExt
+   3075.3 ms  ✓ BangBang → BangBangStructArraysExt
+   3998.6 ms  ✓ HDF5_jll
+   2351.8 ms  ✓ Git
+   3466.7 ms  ✓ ColorTypes
+   2077.9 ms  ✓ InlineStrings → ParsersExt
+   4474.6 ms  ✓ StatsBase
+   2791.4 ms  ✓ StaticArrays → StaticArraysChainRulesCoreExt
+   2200.3 ms  ✓ FillArrays → FillArraysStaticArraysExt
+   2457.9 ms  ✓ FLOWMath
+   1356.1 ms  ✓ ConstructionBase → ConstructionBaseStaticArraysExt
+   4245.3 ms  ✓ Transducers
+   2915.4 ms  ✓ StaticArrays → StaticArraysStatisticsExt
+   1967.4 ms  ✓ BangBang → BangBangStaticArraysExt
+   1252.0 ms  ✓ WeakRefStrings
+   1516.6 ms  ✓ StructArrays → StructArraysStaticArraysExt
+   2348.0 ms  ✓ ForwardDiff → ForwardDiffStaticArraysExt
+   4674.0 ms  ✓ JSON
+   2550.3 ms  ✓ Rotations
+   3403.4 ms  ✓ Accessors → StaticArraysExt
+   2712.0 ms  ✓ ColorVectorSpace
+  16135.6 ms  ✓ Unitful
+   3976.2 ms  ✓ HCubature
+   1120.1 ms  ✓ Unitful → ConstructionBaseUnitfulExt
+   1102.5 ms  ✓ Unitful → InverseFunctionsUnitfulExt
+   1466.4 ms  ✓ ColorVectorSpace → SpecialFunctionsExt
+   1402.0 ms  ✓ Unitful → NaNMathExt
+   1246.1 ms  ✓ Accessors → UnitfulExt
+   4683.8 ms  ✓ Colors
+   1907.4 ms  ✓ Roots → RootsUnitfulExt
+   2261.2 ms  ✓ Unitful → PrintfExt
+   2213.8 ms  ✓ Unitful → ForwardDiffExt
+   4812.4 ms  ✓ NearestNeighbors
+   8304.0 ms  ✓ HDF5
+   4644.5 ms  ✓ ColorSchemes
+   8616.6 ms  ✓ FastMultipole
+   1329.6 ms  ✓ Colorfy
+   1469.4 ms  ✓ Colorfy → ColorfyUnitfulExt
+  20904.1 ms  ✓ PrettyTables
+  14009.2 ms  ✓ CSV
+  15505.5 ms  ✓ ReverseDiff
+   5015.4 ms  ✓ ImplicitAD
+   8663.0 ms  ✓ Meshes
+  23535.6 ms  ✓ Documenter
+   5462.3 ms  ✓ CCBlade
+   9132.4 ms  ✓ FLOWVPM
+  30961.3 ms  ✓ DataFrames
+   4219.7 ms  ✓ BangBang → BangBangDataFramesExt
+   4261.2 ms  ✓ Transducers → TransducersDataFramesExt
+   4572.9 ms  ✓ VSPGeom
+  22172.6 ms  ✓ FLOWPanel
+  74 dependencies successfully precompiled in 104 seconds. 156 already precompiled.
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = 5f87a0e7df97f178c98d93019f2d845c942ff97f
+#   fm_commit      = c6185cdde2fe9714a6e60f506dc4a7115e28d8cc
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign-p021-r4-colored-source-20260917-v21-wt fm=FastMultipole@campaign-p021-r4-colored-fm-20260917-v21-wt vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-4-11
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-17 00:22:06
+######################################################################

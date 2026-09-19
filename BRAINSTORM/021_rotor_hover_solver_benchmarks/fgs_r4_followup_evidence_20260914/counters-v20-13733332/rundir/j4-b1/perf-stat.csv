@@ -1,0 +1,7 @@
+# started on Wed Sep 16 19:34:41 2026
+
+119647448660,,cycles:u,37562312818,100.00,,
+429941766403,,instructions:u,37562312818,100.00,3.59,insn per cycle
+11162174910,,cache-references:u,37562312818,100.00,,
+643295318,,cache-misses:u,37562312818,100.00,5.76,of all cache refs
+37562.31,msec,task-clock:u,37562312818,100.00,0.022,CPUs utilized

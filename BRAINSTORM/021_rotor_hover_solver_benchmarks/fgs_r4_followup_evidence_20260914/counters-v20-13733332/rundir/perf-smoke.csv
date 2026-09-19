@@ -1,0 +1,7 @@
+# started on Wed Sep 16 19:27:31 2026
+
+9685,,cycles:u,19527,100.00,,
+5134,,instructions:u,19527,100.00,0.53,insn per cycle
+1174,,cache-references:u,19527,100.00,,
+387,,cache-misses:u,19527,100.00,32.96,of all cache refs
+0.02,msec,task-clock:u,19527,100.00,0.000,CPUs utilized

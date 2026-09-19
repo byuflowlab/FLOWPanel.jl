@@ -1,0 +1,5 @@
+chunked_chunks = 64
+chunked_iterations = 44
+chunked_tolerance = 5.348662427942506e-7
+confirmation_repeat_delta = 0.0
+lexicographic_tolerance = 3.479128881193055e-7

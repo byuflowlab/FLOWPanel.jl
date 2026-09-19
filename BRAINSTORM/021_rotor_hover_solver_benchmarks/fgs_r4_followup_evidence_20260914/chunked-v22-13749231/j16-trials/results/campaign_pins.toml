@@ -1,0 +1,15 @@
+# Campaign pins for p021 R4 chunked-sweep A/B (v22). Written before submission.
+[packages.FLOWPanel]
+path = "/home/rander39/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl"
+tag = "campaign/p021-r4-chunked-source-20260918-v22"
+sha = "67d570f576e8698e82a07a889aeaac72c0c9d8d4"
+
+[packages.FastMultipole]
+path = "/home/rander39/campaigns/p021-r4-chunked-20260918-v22/FastMultipole"
+tag = "campaign/p021-r4-chunked-fm-20260918-v22"
+sha = "c18e4b46116825a201a0cf459b7596242191dcae"
+
+[packages.FLOWVPM]
+path = "/home/rander39/campaigns/p021-cold-20260910-v1/FLOWVPM.jl"
+tag = "campaign/p021-cold-exec-20260910-v1"
+sha = "05c658f7804ec5f9b68d4cb9826a9f97cfecb373"

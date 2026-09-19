@@ -1,0 +1,275 @@
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_EiGcdW/R1/krylov_ilu_d569863eedc13014/j4_b1"
+│   exception =
+│    injected selected solve failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:218
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:697
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#125#129"{String, Bool})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237
+│      [8] mktempdir(fn::var"#125#129"{String, Bool}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:235 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:234
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_sihd81/R1/krylov_ilu_d569863eedc13014/j4_b1"
+│   exception =
+│    injected selected solve failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:218
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:697
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#125#129"{String, Bool})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237
+│      [8] mktempdir(fn::var"#125#129"{String, Bool}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:235 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:234
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_h1Mhf7/R1/krylov_ilu_d569863eedc13014/j4_b1"
+│   exception =
+│    injected profile verification failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_profile(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:217
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:695
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#125#129"{String, Bool})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237
+│      [8] mktempdir(fn::var"#125#129"{String, Bool}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:235 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:234
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_u8ya6R/R1/krylov_ilu_d569863eedc13014/j4_b1"
+│   exception =
+│    injected profile verification failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_profile(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:217
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:695
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#125#129"{String, Bool})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:237
+│      [8] mktempdir(fn::var"#125#129"{String, Bool}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:235 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:234
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_8uFsNE/R1/fgs_c91b9cdfa3d9d708/j4_b1"
+│   exception =
+│    injected screen candidate failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:227
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:697
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:677 [inlined]
+│      [6] (::var"#133#142"{Dict{String, Any}, Dict{String, Any}})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:252
+│      [7] mktempdir(fn::var"#133#142"{Dict{String, Any}, Dict{String, Any}}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [8] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│      [9] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:251 [inlined]
+│     [10] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [11] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:248
+│     [12] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [13] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [14] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_GrvZYo/R1/fgs_c91b9cdfa3d9d708/j4_b1"
+│   exception =
+│    injected screen candidate failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:227
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:697
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:262 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#137#146"{Dict{String, Any}, Dict{String, Any}})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:262
+│      [8] mktempdir(fn::var"#137#146"{Dict{String, Any}, Dict{String, Any}}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:260 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:248
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+┌ Error: Recorded failed candidate
+│   dir = "/tmp/jl_GrvZYo/R1/fgs_d15bb3db7dcf6fd2/j4_b1"
+│   exception =
+│    injected screen candidate failure
+│    Stacktrace:
+│      [1] error(s::String)
+│        @ Base ./error.jl:35
+│      [2] cold_benchmark(c::Dict{String, Any}, dir::String; selected::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:227
+│      [3] cold_run(configs::Vector{Dict{String, Any}}, out::String, stage::String; profile::Bool)
+│        @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:697
+│      [4] cold_run
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:683 [inlined]
+│      [5] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:262 [inlined]
+│      [6] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:774 [inlined]
+│      [7] (::var"#137#146"{Dict{String, Any}, Dict{String, Any}})(dir::String)
+│        @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:262
+│      [8] mktempdir(fn::var"#137#146"{Dict{String, Any}, Dict{String, Any}}, parent::String; prefix::String)
+│        @ Base.Filesystem ./file.jl:819
+│      [9] mktempdir(fn::Function, parent::String)
+│        @ Base.Filesystem ./file.jl:815
+│     [10] macro expansion
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:260 [inlined]
+│     [11] macro expansion
+│        @ /vapps/rhel9/x86_64/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/julia-1.11.7-6bmogflhr2w6mi2zerinukr2gpnpr2rs/juliaup/julia-1.11.7+0.x64.linux.gnu/share/julia/stdlib/v1.11/Test/src/Test.jl:1709 [inlined]
+│     [12] top-level scope
+│        @ ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/test/runtests_benchmark_cold.jl:248
+│     [13] include(mod::Module, _path::String)
+│        @ Base ./Base.jl:562
+│     [14] exec_options(opts::Base.JLOptions)
+│        @ Base ./client.jl:323
+│     [15] _start()
+│        @ Base ./client.jl:531
+└ @ Main.ColdScreenFailureHarness ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/fgs_cold_common.jl:711
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+Test Summary:                           | Pass  Total  Time
+BLAS control persists after actual work |   12     12  2.9s
+Test Summary:                                     | Pass  Total  Time
+Configuration contracts and selected immutability |  536    536  5.9s
+Test Summary:              | Pass  Total  Time
+SCREEN_SET explicit roster |   19     19  0.5s
+Test Summary:                                           | Pass  Total  Time
+Screen around saved winners recalibrates every neighbor |    9      9  0.7s
+Test Summary:                           | Pass  Total  Time
+Invalid input has no filesystem effects |   77     77  1.3s
+Test Summary:                                | Pass  Total  Time
+Evaluator acceptance and failure propagation |   20     20  0.0s
+Cold investigation: Dict{String, Any}("ilu_leaf" => 10, "cache_tree" => true, "rung" => "R1", "P" => 17, "ilu_MAC" => 1.0, "rtol" => 1.0e-6, "memory" => 50, "diagonal_shift" => 0.0, "cache_nearfield" => false, "kind" => "krylov_ilu", "MAC" => 0.65, "itmax" => 500, "equilibrate" => false, "atol" => 1.0e-14, "pattern_entries_per_panel" => 8192, "persistent_plan" => true, "leaf" => 6)
+Cold investigation: Dict{String, Any}("ilu_leaf" => 10, "cache_tree" => true, "rung" => "R1", "P" => 17, "ilu_MAC" => 1.0, "rtol" => 1.0e-6, "memory" => 50, "diagonal_shift" => 0.0, "cache_nearfield" => false, "kind" => "krylov_ilu", "MAC" => 0.65, "itmax" => 500, "equilibrate" => false, "atol" => 1.0e-14, "pattern_entries_per_panel" => 8192, "persistent_plan" => true, "leaf" => 6)
+Cold investigation: Dict{String, Any}("ilu_leaf" => 10, "cache_tree" => true, "rung" => "R1", "P" => 17, "ilu_MAC" => 1.0, "rtol" => 1.0e-6, "memory" => 50, "diagonal_shift" => 0.0, "cache_nearfield" => false, "kind" => "krylov_ilu", "MAC" => 0.65, "itmax" => 500, "equilibrate" => false, "atol" => 1.0e-14, "pattern_entries_per_panel" => 8192, "persistent_plan" => true, "leaf" => 6)
+Cold investigation: Dict{String, Any}("ilu_leaf" => 10, "cache_tree" => true, "rung" => "R1", "P" => 17, "ilu_MAC" => 1.0, "rtol" => 1.0e-6, "memory" => 50, "diagonal_shift" => 0.0, "cache_nearfield" => false, "kind" => "krylov_ilu", "MAC" => 0.65, "itmax" => 500, "equilibrate" => false, "atol" => 1.0e-14, "pattern_entries_per_panel" => 8192, "persistent_plan" => true, "leaf" => 6)
+Test Summary:                                       | Pass  Total  Time
+Failed requested execution cannot report completion |   20     20  3.1s
+Cold investigation: Dict{String, Any}("tolerance" => 0.0, "max_iterations" => 300, "rung" => "R1", "P" => 6, "rlx" => 1.0, "cache_leaf_lu" => true, "kind" => "fgs", "MAC" => 0.3, "sweep_order" => "lexicographic", "inner" => 3, "leaf" => 50)
+Cold investigation: Dict{String, Any}("tolerance" => 0.0, "max_iterations" => 300, "rung" => "R1", "P" => 6, "rlx" => 1.0, "cache_leaf_lu" => true, "kind" => "fgs", "MAC" => 0.3, "sweep_order" => "lexicographic", "inner" => 10, "leaf" => 50)
+Cold investigation: Dict{String, Any}("tolerance" => 0.0, "max_iterations" => 300, "rung" => "R1", "P" => 6, "rlx" => 1.0, "cache_leaf_lu" => true, "kind" => "fgs", "MAC" => 0.3, "sweep_order" => "lexicographic", "inner" => 3, "leaf" => 50)
+Cold investigation: Dict{String, Any}("tolerance" => 0.0, "max_iterations" => 300, "rung" => "R1", "P" => 6, "rlx" => 1.0, "cache_leaf_lu" => true, "kind" => "fgs", "MAC" => 0.3, "sweep_order" => "lexicographic", "inner" => 5, "leaf" => 50)
+Test Summary:                                  | Pass  Total  Time
+Screen records failed candidates and continues |    7      7  2.3s

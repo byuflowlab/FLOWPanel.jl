@@ -8,19 +8,42 @@
 
 ## Current status
 
-> **STALE BELOW — last revised 2026-08-13.** Fresh agent: start from
-> [`phase_20_context_reset_prompt.md`](021_rotor_hover_solver_benchmarks/phase_20_context_reset_prompt.md)
-> (2026-08-25), which chains to `phase_18` for cluster state. As of 2026-08-22
-> the campaign is in Phase 2, not "Phase 1 starting". Read
-> `021_rotor_hover_solver_benchmarks/log.md` (newest first) for true state; the
-> narrative below is kept for Phase-0 provenance only. Live summary: Phase 1
-> ladder frozen and tuned through R6 (R7 tune + R6 table failed, causes
-> diagnosed 2026-08-22); Phase 2 active since 08-17 with the near-field cache,
-> rigid-motion tree reuse and the FGS unsteady staleness fix landed; the
-> Phase-2b HPC campaign was 0/8 and awaits relaunch. Note also that
-> `fgs_wake_plateau_handoff_prompt.md` is SUPERSEDED — the plateau it stages a
-> hunt for was root-caused the same day as H3 (lifecycle ordering), not
-> H1/H2/H4.
+> **Revised 2026-09-18 (chunked A/B v22 COMPLETE — chunked LOSES, coloring
+> KEPT).** Job 13749231 (m12, 10:59 h, all §6 gates green, 320/320 trials
+> accepted, repeat deltas exactly 0): chunked loses at EVERY arm — best
+> certified point j64 median 14.264 s vs lex@j64 10.951 s (+30%) and vs
+> colored@j16 **10.116 s** (+41%). Root cause: iteration inflation 27 → 44
+> (+63%, the §1.4 majority-Jacobi risk realized) more than consumes a real
+> but modest per-iteration parallel win (nearfield span/iter 0.346 → 0.277 s,
+> 38.8 avg active threads at j64 — unlike colored, the span DID shrink).
+> The §5 conditional coloring revert therefore did NOT fire: **coloring keeps
+> its production role; colored@j16 = 10.116 s remains the global best
+> operating point.** Follow-ups (fewer chunks, under-relaxation,
+> parallel-by-target deferred scatter) are NEW experiments awaiting Ryan.
+> Evidence `fgs_r4_followup_evidence_20260914/chunked-v22-13749231/`
+> (SHA256-verified; read `analysis/ab_summary.md`); pins in
+> `v22-deployment/submission-provenance-13749231.md`. Plan of record:
+> [`fgs_chunked_hybrid_plan_20260918.md`](021_rotor_hover_solver_benchmarks/fgs_chunked_hybrid_plan_20260918.md).
+> Narrative below this block is Phase-0 provenance only; true chronology is
+> `021_rotor_hover_solver_benchmarks/log.md`.
+>
+> **Prior live summary:** R4 FGS diagnostics CLOSED (serial `nearfield_update`
+> chain proven, ~85% of j64 wall; `fgs_opt_r4_diagnostics_package_20260912.md`
+> §7). Colored-sweep A/B v21 COMPLETE (job 13738665, all §6 gates green):
+> colored wins j4 (−11.6%) and j16 (−17.7%, best point 10.12 s) but LOSES j64
+> (+6.7%) — barrier spin (79 colors × 81 sweeps) plus the median-16 color
+> width cap; evidence `fgs_r4_followup_evidence_20260914/colored-v21-13738665/`.
+>
+> **Staged next (Ryan 2026-09-17, updated 09-18):**
+> 1. ~~Chunked hybrid sweep~~ — DONE (v22, above); result negative on the
+>    ranking metric. Any chunked follow-up = new decision for Ryan.
+> 2. **Float32 nearfield storage (mixed precision)** — store cached nearfield
+>    influence matrices + leaf LU in Float32, accumulate in Float64, far field
+>    and acceptance path stay Float64. Halves the ~230 GB/solve streamed;
+>    multiplies with (1) on the bandwidth cap. Certified-FMM acceptance gate
+>    still measures true accuracy.
+> - Parked unless expedient: Krylov-accelerated outer loop (FGS-preconditioned
+>   FGMRES).
 
 **Phase 0 TECHNICALLY COMPLETE 2026-08-13 (W1–W6).** W6 (sparse near-field ILU) was
 implemented directly by Ryan (Barba direct-list pattern + `ILUZero.jl`; the staged
@@ -262,6 +285,55 @@ Completing a phase does not authorize the next phase.
   chaotic and small differences compound. Ryan accepted the ~1.4× wall-time
   inflation ("run it twice, or use the replay function"). Full rules in
   `decision_rules.md` → *BC satisfaction guard*.
+- 2026-09-17 — Ryan: post-v21 direction. Colored-sweep A/B landed (split verdict:
+  wins j4/j16, loses j64; see Current status). **Staged: (1) chunked hybrid
+  sweep** — j contiguous leaf chunks, one thread each, GS within chunk /
+  double-buffered Jacobi across chunks, one barrier per sweep — **then
+  (2) Float32 nearfield storage** (mixed precision, halves streamed bytes,
+  multiplies with 1). Krylov-accelerated outer loop noted but parked unless
+  expedient. **Coloring revert question raised** (code bloat vs the only
+  proven win). Ryan ruling later 2026-09-17 (supersedes an initial
+  defer-until-A/B stance): the chunked-hybrid **plan itself must assess**
+  whether the hybrid is more or less effective with the coloring code
+  present (algorithmic composition value vs structural drag on the
+  implementation) and, if more effective without it, include the revert of
+  `sweep_order=:colored` + its machinery/tests in the implementation (new
+  commits only; v21 tags preserve the colored evidence's reproducibility).
+  Default expectation: revert, since the hybrid needs no conflict graph or
+  color schedule.
+- 2026-09-17 — Ryan APPROVED the chunked-hybrid plan
+  (`fgs_chunked_hybrid_plan_20260918.md`), including its two flagged items:
+  (a) deferred cross-chunk scatter realizes the double-buffered Jacobi with
+  NO strength-vector copy (semantically identical to the top-of-sweep
+  snapshot); (b) coloring verdict = REVERT, executed as the final
+  implementation step conditional on chunked's certified best point beating
+  colored@j16 10.116 s (keep-and-report otherwise). Also fixed: chunks=64
+  j-invariant (one j64 calibration), snapshot-per-inner-sweep, cost-balanced
+  contiguous chunk map, two-way v22 A/B (chunked vs lex; colored cited from
+  v21). Implementation entry = `fgs_r4_context_reset_20260918.md`.
+- 2026-09-18 — Chunked hybrid IMPLEMENTED + v22 A/B SUBMITTED per the approved
+  plan: FastMultipole `c18e4b46` (tag `campaign/p021-r4-chunked-fm-20260918-v22`;
+  `sweep_order=:chunked`, `chunks=64`, cost-balanced contiguous chunk map,
+  intra/cross scatter partition with serial deferred cross-chunk scatter;
+  `fgs_chunked_test.jl` 1723 cases incl. nchunks=1 ≡ lex bitwise and -t1/-t4
+  cross-process bitwise), FLOWPanel `67d570f` (tag
+  `campaign/p021-r4-chunked-source-20260918-v22`; pass-through + v22 harness
+  trio). Local §7 gate ALL PASS; deployed per §8 (worktrees + env + pins at
+  `/home/rander39/campaigns/p021-r4-chunked-20260918-v22/`); job 13749231
+  (m12). Provenance:
+  `fgs_r4_followup_evidence_20260914/v22-deployment/submission-provenance-13749231.md`.
+- 2026-09-18 — **v22 verdict: chunked LOSES everywhere; coloring KEPT** (the
+  §5 conditional revert did not fire). Job 13749231 COMPLETED, all §6 gates
+  green (320/320 trials, repeat deltas exactly 0, iterations arm-invariant:
+  lex 27 / chunked 44). Medians (lex vs chunked): j1 38.39/60.76, j4
+  17.33/24.34, j16 12.48/15.89, j64 10.95/14.26 s. Chunked best (j64,
+  14.26 s) is +41% vs colored@j16 10.116 s. Mechanism: per-iteration
+  nearfield span DID shrink (0.346→0.277 s/it, 38.8 avg active threads at
+  j64) but iteration inflation 27→44 (+63%, majority-Jacobi) dominates.
+  Colored@j16 10.116 s remains the global best; the coloring-revert question
+  and any chunked follow-ups (fewer chunks / under-relaxation /
+  parallel-by-target scatter) return to Ryan as new decisions. Evidence:
+  `fgs_r4_followup_evidence_20260914/chunked-v22-13749231/analysis/ab_summary.md`.
 - 2026-08-25 — Sentinel cleanup: `phase1_agreement.jl` and `phase1_solvetime.jl`
   were the last two drivers hard-coding `niter = -1` for non-Krylov solvers; both
   now mirror `unsteady.jl`. Takes effect on future re-runs only (R1–R7 were

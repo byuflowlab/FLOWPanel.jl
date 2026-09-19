@@ -1,0 +1,6 @@
+[deps]
+FLOWPanel = "6be8c882-484d-4309-b349-d23112750151"
+FLOWVPM = "6e19019d-7c31-4940-9d16-c3f15dfe6020"
+FastMultipole = "ce07d0d3-2b9f-49ba-89eb-12c800257c85"
+Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"

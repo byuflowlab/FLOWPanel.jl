@@ -1,0 +1,20 @@
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/campaigns/p021-r4-chunked-20260918-v22/FLOWPanel.jl/benchmark/phase1_case.jl:92
+FLOWPanel: filament regularization = LineGaussRegularization (pinned by FLOWPANEL_FILAMENT_REG)
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 64
+#   blas_threads   = 1
+#   commit         = 67d570f576e8698e82a07a889aeaac72c0c9d8d4
+#   fm_commit      = c18e4b46116825a201a0cf459b7596242191dcae
+#   vpm_commit     = 05c658f7804ec5f9b68d4cb9826a9f97cfecb373
+#   worktrees      = fp=FLOWPanel.jl@campaign/p021-r4-chunked-source-20260918-v22-wt fm=FastMultipole@campaign/p021-r4-chunked-fm-20260918-v22-wt vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-3-31
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-18 09:31:53
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862221 (direct source assembly 35.9 s)
+

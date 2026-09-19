@@ -248,7 +248,7 @@ given (job-1's selected.toml); the profile process's single unprofiled trial
 (17.28 s) exceeds the 10-rep median (11.1 s) — first-solve/cold-cache effect,
 use the rep medians for speed claims.
 
-## 7. Measured thread-ladder update (2026-09-15, jobs 13694724 + pending 13711596)
+## 7. Measured thread-ladder update (2026-09-15/16, jobs 13694724 + 13733332)
 
 Follow-up tests 1–4 of the 2026-09-14 request are complete (v15 generation,
 FLOWPanel `39ec4e36` tag `campaign/p021-cold-source-20260915-v15`, FastMultipole
@@ -308,14 +308,61 @@ color barriers per solve). It changes accumulation ordering, so
 it must be run as a separately calibrated configuration passing all §6 gates,
 ranked by total time to accepted accuracy (iteration count may move off 27).
 
-Still pending before implementation work: job **13711596** (v17 generation,
-FLOWPanel `b0b6eec` tag `campaign/p021-r4-counters-source-20260915-v17`,
-FastMultipole `adb9967d` tag `campaign/p021-r4-activity-source-20260915-v11`;
-provenance `fgs_r4_followup_evidence_20260914/v17-deployment/submission-provenance-13711596.md`)
-collects workload-scoped hardware counters (cycles/instructions/cache
-refs+misses, perf FIFO-gated around one warmed solve) and coarse /proc-based
-per-stage thread activity at j4 and j64. **Bandwidth saturation remains
-unresolved** — generic cache counters cannot establish DRAM saturation, and
-the coarse `nearfield_update` span mixes leaf/product/scatter; if counters
-stay inconclusive, record the limitation and proceed on the serial-execution
-evidence, which is already sufficient to justify the colored-sweep test.
+### Counters + stage activity (2026-09-16, job 13733332, v20 generation)
+
+The counters/activity run completed on the fourth attempt: **13711596 (v17)**
+died at the smoke gate (docstring-above-`using` parse error), **13712587
+(v18)** at `reinterpret(Cint, fd(io))` (`fd(::IOStream)` returns 64-bit `Int`
+on the cluster's Julia 1.11.7 vs 32-bit `RawFD` on ≥1.12), and **13733217
+(v19)** at ack parsing (cluster perf 5.14 EL9 writes each control-FIFO ack as
+5 bytes `ack\n\0`, NUL terminator included — measured by `od`; the fixed
+4-byte reader de-synced on the second command). Each failure is harvested at
+`fgs_r4_followup_evidence_20260914/counters-v{17,18,19}-*-FAILED/` with its
+postmortem in the next version's `v*-deployment/submission-provenance-*.md`.
+Job **13733332** (v20, FLOWPanel `5c1123b` tag
+`campaign/p021-r4-counters-source-20260916-v20`, FastMultipole `adb9967d` tag
+`campaign/p021-r4-activity-source-20260915-v11`) passed every gate: smoke
+PASS, all four controls PASS, both arms solved/finite, 27 iterations, BC
+rel-L2 4.78e-7, repeat delta 0 with identical history, certified FMM
+authoritative, BLAS=1, zero-reset counter scope. Evidence: 46/46 files
+SHA256-verified at `fgs_r4_followup_evidence_20260914/counters-v20-13733332/`
+(tables: `analysis/counters_summary.md`). Not performance trials
+(perf-boundary + instrumentation overhead; baseline diagnostic walls 17.57 s
+j4 / 11.92 s j64 vs §7 uninstrumented medians 16.94 / 10.96).
+
+**Direct thread-activity measurement confirms the serial leaf-sweep chain.**
+/proc-based per-stage activity (CLK_TCK=100, no incomplete endpoints, summed
+over all 27 iterations):
+
+| Arm | Stage | Σ span s | busy CPU s | avg active threads |
+|---|---|---:|---:|---:|
+| j4 | fmm (28 passes) | 6.90 | 26.98 | 3.91 |
+| j4 | nearfield_update (27) | 9.46 | 9.44 | **1.00** |
+| j64 | fmm (28 passes) | 1.10 | 34.04 | 30.96 |
+| j64 | nearfield_update (27) | 9.59 | 9.63 | **1.00** |
+
+The `nearfield_update` span (which contains the nonself-product / scatter /
+leaf-solve chain) executes at almost exactly one active thread at BOTH j4 and
+j64, and its span does not scale (9.46→9.59 s) — while `fmm` runs at
+3.9/31 active threads and its span shrinks 6.3× (6.90→1.10 s, matching §7's
+6.88→1.11 s wall medians). This is the direct activity-level proof of the §7
+inference that ≈85% of j64 wall is a serially executed chain; the coarse span
+totals reconcile with §7's per-stage sums (chain ≈9.1–9.3 s) within the
+declared span-mixing granularity.
+
+**Hardware counters (one warmed, FIFO-gated prepared solve; user-space; no
+multiplexing):** j4 — 119.6e9 cycles, 429.9e9 instructions (IPC 3.59), 11.16e9
+cache refs, 5.76% miss ratio, task-clock 37.6 s; j64 — 139.9e9 cycles,
+456.7e9 instructions (IPC 3.26), 11.17e9 refs, 5.97% misses, task-clock
+44.8 s. Cache-reference volume is essentially arm-invariant; the extra j64
+cycles/task-clock are parallel overhead, not extra work.
+
+**Bandwidth saturation remains unresolved — recorded as the pre-declared
+limitation.** Generic cache counters cannot establish DRAM saturation
+(uncore/IMC events are not process-attributable on this node), and the coarse
+`nearfield_update` span mixes leaf/product/scatter, so no per-stage IPC can be
+attributed. The whole-solve aggregate IPC of 3.3–3.6 argues against the solve
+being memory-stall-dominated overall, but says nothing dispositive about the
+serial chain's window. Per the follow-up plan, the colored-sweep experiment
+proceeds on the serial-execution evidence, which the activity data now
+establishes directly.

@@ -1,0 +1,129 @@
+CPU NODE SOCKET CORE ONLINE
+  0    0      0    0    yes
+  1    0      0    1    yes
+  2    0      0    2    yes
+  3    0      0    3    yes
+  4    0      0    4    yes
+  5    0      0    5    yes
+  6    0      0    6    yes
+  7    0      0    7    yes
+  8    0      0    8    yes
+  9    0      0    9    yes
+ 10    0      0   10    yes
+ 11    0      0   11    yes
+ 12    0      0   12    yes
+ 13    0      0   13    yes
+ 14    0      0   14    yes
+ 15    0      0   15    yes
+ 16    1      0   16    yes
+ 17    1      0   17    yes
+ 18    1      0   18    yes
+ 19    1      0   19    yes
+ 20    1      0   20    yes
+ 21    1      0   21    yes
+ 22    1      0   22    yes
+ 23    1      0   23    yes
+ 24    1      0   24    yes
+ 25    1      0   25    yes
+ 26    1      0   26    yes
+ 27    1      0   27    yes
+ 28    1      0   28    yes
+ 29    1      0   29    yes
+ 30    1      0   30    yes
+ 31    1      0   31    yes
+ 32    2      0   32    yes
+ 33    2      0   33    yes
+ 34    2      0   34    yes
+ 35    2      0   35    yes
+ 36    2      0   36    yes
+ 37    2      0   37    yes
+ 38    2      0   38    yes
+ 39    2      0   39    yes
+ 40    2      0   40    yes
+ 41    2      0   41    yes
+ 42    2      0   42    yes
+ 43    2      0   43    yes
+ 44    2      0   44    yes
+ 45    2      0   45    yes
+ 46    2      0   46    yes
+ 47    2      0   47    yes
+ 48    3      0   48    yes
+ 49    3      0   49    yes
+ 50    3      0   50    yes
+ 51    3      0   51    yes
+ 52    3      0   52    yes
+ 53    3      0   53    yes
+ 54    3      0   54    yes
+ 55    3      0   55    yes
+ 56    3      0   56    yes
+ 57    3      0   57    yes
+ 58    3      0   58    yes
+ 59    3      0   59    yes
+ 60    3      0   60    yes
+ 61    3      0   61    yes
+ 62    3      0   62    yes
+ 63    3      0   63    yes
+ 64    4      1   64    yes
+ 65    4      1   65    yes
+ 66    4      1   66    yes
+ 67    4      1   67    yes
+ 68    4      1   68    yes
+ 69    4      1   69    yes
+ 70    4      1   70    yes
+ 71    4      1   71    yes
+ 72    4      1   72    yes
+ 73    4      1   73    yes
+ 74    4      1   74    yes
+ 75    4      1   75    yes
+ 76    4      1   76    yes
+ 77    4      1   77    yes
+ 78    4      1   78    yes
+ 79    4      1   79    yes
+ 80    5      1   80    yes
+ 81    5      1   81    yes
+ 82    5      1   82    yes
+ 83    5      1   83    yes
+ 84    5      1   84    yes
+ 85    5      1   85    yes
+ 86    5      1   86    yes
+ 87    5      1   87    yes
+ 88    5      1   88    yes
+ 89    5      1   89    yes
+ 90    5      1   90    yes
+ 91    5      1   91    yes
+ 92    5      1   92    yes
+ 93    5      1   93    yes
+ 94    5      1   94    yes
+ 95    5      1   95    yes
+ 96    6      1   96    yes
+ 97    6      1   97    yes
+ 98    6      1   98    yes
+ 99    6      1   99    yes
+100    6      1  100    yes
+101    6      1  101    yes
+102    6      1  102    yes
+103    6      1  103    yes
+104    6      1  104    yes
+105    6      1  105    yes
+106    6      1  106    yes
+107    6      1  107    yes
+108    6      1  108    yes
+109    6      1  109    yes
+110    6      1  110    yes
+111    6      1  111    yes
+112    7      1  112    yes
+113    7      1  113    yes
+114    7      1  114    yes
+115    7      1  115    yes
+116    7      1  116    yes
+117    7      1  117    yes
+118    7      1  118    yes
+119    7      1  119    yes
+120    7      1  120    yes
+121    7      1  121    yes
+122    7      1  122    yes
+123    7      1  123    yes
+124    7      1  124    yes
+125    7      1  125    yes
+126    7      1  126    yes
+127    7      1  127    yes
