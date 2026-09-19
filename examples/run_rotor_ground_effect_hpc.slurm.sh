@@ -279,7 +279,7 @@ echo "BRAINSTORM/022 rotor hover ground effect — case $CASE"
 echo "  repo:$PWD threads:$THREADS host:$(hostname) job:${SLURM_JOB_ID:-none}"
 echo "  mesh:$RHPC_MESH RPM:$RPM rho:$RHO R:$ROTOR_R NT:$NT depth:${TRUNCATION_DEPTH_R}R trunc_radius:${TRUNC_RADIUS_R}R rlxf:$RELAX_RLXF"
 echo "  ground:${GROUND_ENABLE} h/R:${GROUND_H_R:-na} disc:${GROUND_RADIUS_R:-na}R panel:${GROUND_PANEL_LENGTH_R:-na}R policy:${GROUND_PARTICLE_POLICY:-na} damp_band:${GROUND_DAMP_BAND_R:-0}R"
-echo "  overlap:$OVERLAP pps:$P_PER_STEP merge_r:$MERGE_R_FACTOR nrows:$NWAKEROWS das_uniform:$DAS_UNIFORM_DSIGMA visc:$CORE_SPREADING_ACTIVE settle:$SETTLE_REVS"
+echo "  overlap:$OVERLAP pps:$P_PER_STEP merge_r:$MERGE_R_FACTOR nrows:$NWAKEROWS das_uniform:$DAS_UNIFORM_DSIGMA visc:$CORE_SPREADING_ACTIVE settle:$SETTLE_REVS omit_root:${PARTICLE_OMIT_ROOT_R_OVER_R:-0.0}"
 echo "  gs_log:$GS_LOG gs_cap:$GS_MAX_OUTER gs_tol:$GS_TOL"
 echo "  started $(date '+%F %T')"
 

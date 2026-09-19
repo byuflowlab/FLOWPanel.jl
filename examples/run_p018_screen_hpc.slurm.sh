@@ -29,6 +29,10 @@ THREADS=64
 # checkout must not receive (pair with P018_PROJECT/P018_JULIA below, and give
 # the worktree a `data` symlink to the shared data root).
 EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+# p032 re-open (2026-09-19): accept the GPU052 override names so pinned-
+# worktree submissions use one convention across the CPU and GPU launchers.
+export P018_REPO="${P018_REPO_OVERRIDE:-${P018_REPO:-}}"
+export P018_PROJECT="${P018_PROJECT_OVERRIDE:-${P018_PROJECT:-.}}"
 [[ "$PWD" == "$EXPECTED_REPO" || "$PWD" == "${P018_REPO:-}" ]] || { echo "ERROR: submit from $EXPECTED_REPO; current dir is $PWD" >&2; exit 2; }
 
 CASE="${1:-}"

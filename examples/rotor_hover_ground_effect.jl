@@ -45,6 +45,13 @@ R = parse(Float64, get(ENV, "ROTOR_R", "0.1195"))
 # meshes, whose blade root is outboard of it. NOT cap protection -- see the
 # end_node anchoring below.
 shedding_r_over_R = parse(Float64, get(ENV, "SHEDDING_R_OVER_R", "0.1"))
+# BRAINSTORM 032: omit particle shedding at TE stations with |r|/R below this,
+# at the panel->particle handoff ONLY (solve, Das/Kutta, and wake-panel rows
+# untouched). Deletes the chain-closing root filament from the particle field
+# instead of relocating it (contrast SHEDDING_R_OVER_R, which removes the
+# shedding edges themselves). 0.0 = off (bit-identical). Legacy conversion,
+# single rotor only (station radii are measured on the rotor-1 node set).
+particle_omit_root_r_over_R = parse(Float64, get(ENV, "PARTICLE_OMIT_ROOT_R_OVER_R", "0.0"))
 nrevs = parse(Float64, get(ENV, "NREVS", "10"))
 nt = parse(Int, get(ENV, "NT", "36"))
 dt = 60 / RPM / nt
@@ -695,6 +702,39 @@ if !isnan(sigma_chord_fraction)
             "(s* = $(sigma_chord_fraction), floor $(sigma_floor_r)R binds at " *
             "$(n_floored)/$(length(sig)) stations)")
     end
+end
+
+# BRAINSTORM 032: root-station particle-shed omission. Wraps the resolved
+# trailing method so masked stations route to an accounting sink instead of
+# shedding particles; the wake solve is untouched. method_unsteady is NoShed
+# in the legacy config, so wrapping the trailing method covers everything.
+particle_omit_masks = nothing
+if particle_omit_root_r_over_R > 0
+    conversion_mode == "legacy" || error(
+        "PARTICLE_OMIT_ROOT_R_OVER_R requires CONVERSION=legacy: the smooth " *
+        "conversion owns its own shedding and takes no line policies")
+    nrotors == 1 || error(
+        "PARTICLE_OMIT_ROOT_R_OVER_R requires NROTORS=1: station radii are " *
+        "measured on the rotor-1 node set, which is wrong for offset rotors")
+    0 < particle_omit_root_r_over_R < 1 || error(
+        "PARTICLE_OMIT_ROOT_R_OVER_R must be in (0, 1), got $(particle_omit_root_r_over_R)")
+    particle_omit_masks = [
+        BitVector(station_radii(rotor.nodes, shed, rotor.cells, radial_dimension) ./ R
+                  .< particle_omit_root_r_over_R)
+        for shed in rotor.shedding]
+    for (k, mask) in enumerate(particle_omit_masks)
+        n_omit = count(mask)
+        # An armed-but-inert omission arm is a silent A/B confound (018 clip
+        # history); a fully masked chain sheds nothing at all. Refuse both.
+        0 < n_omit < length(mask) || error(
+            "PARTICLE_OMIT_ROOT_R_OVER_R=$(particle_omit_root_r_over_R) masks " *
+            "$(n_omit)/$(length(mask)) stations of shedding$(k) -- must mask " *
+            "at least one and not all (innermost station r/R = " *
+            "$(round(minimum(station_radii(rotor.nodes, rotor.shedding[k], rotor.cells, radial_dimension)) / R, digits=4)))")
+        println("Particle root-shed omission ACTIVE: shedding$(k) omits " *
+            "$(n_omit)/$(length(mask)) stations (|r|/R < $(particle_omit_root_r_over_R))")
+    end
+    method_trailing = pnl.OmitStations(method_trailing, particle_omit_masks)
 end
 
 tip_sigma_default = 2 * pi * R / nt * overlap / p_per_step
