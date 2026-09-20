@@ -73,6 +73,13 @@ the end (judge by outputs, never sacct). Known risk, accepted: dagteam at
 j=1 is uncovered by any gate — a failure there is a scaling finding recorded
 by `STATUS_fgs_calibrate=FAILED`, and the iLU arm still runs.
 
+## Submission
+
+Submitted 2026-09-19: **job 13777133** (array _0–_4 → j=1/8/16/32/64), after
+a clean `sbatch --test-only` (13777129, immediate start on m12). Local
+pre-submit smoke of the new tuner paths ran at R1/j4 on macOS (cap-skip,
+landed-skip, PHASE2_OUTDIR all exercised; zero duplicate rows on rerun).
+
 ## Decision rules
 
 - Scaling curves = median accepted solve time vs j per family (FGS dagteam,

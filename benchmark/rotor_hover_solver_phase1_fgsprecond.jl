@@ -106,7 +106,7 @@ for tau in sort(collect(keys(ladder)); rev=true)     # coarse → fine
         P = pnl.FGSPreconditioner(rotor; sweeps=cfg.sweeps,
             inner_iterations=cfg.inner, rlx=1.0, expansion_order=cfg.p,
             multipole_acceptance=cfg.mac, leaf_size=cfg.leaf,
-            shrink=true, recenter=false)
+            shrink=true, recenter=false, fgs_order_kw()...)
         solver = pnl.KrylovSolver(rotor; method=:fgmres, itmax=500,
             atol=1e-14, rtol=target_rel, memory=50, backend=backend_apply,
             preconditioner=P)

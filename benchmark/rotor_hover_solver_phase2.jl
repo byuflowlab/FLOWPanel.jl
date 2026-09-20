@@ -382,13 +382,13 @@ function run_fgs!(winner, tol_abs)
         expansion_order=winner.p, multipole_acceptance=winner.mac,
         leaf_size=winner.leaf, inner_iterations=winner.inner,
         max_iterations=300, tolerance=tol_abs, rlx=1.0, shrink=true,
-        recenter=false, reverse_pass=false, verbose=false)
+        recenter=false, reverse_pass=false, verbose=false, fgs_order_kw()...)
     cache = solver.fgs.leaf_lu_cache
     setup = cache === nothing ? (; total=t_total) :
         (; total=t_total, leaf_lu=cache.build_time, leaf_lu_bytes=cache.bytes)
     measure_and_emit!("fgs", solver, setup,
         "p=$(winner.p);mac=$(winner.mac);leaf=$(winner.leaf);" *
-        "inner=$(winner.inner);tol_abs=$tol_abs",
+        "inner=$(winner.inner);tol_abs=$tol_abs;" * fgs_order_note(),
         "shared set = Stage 3 winner tau=$(winner.tau); tree/leaf-matrix " *
         "split not exposed by the FGS ctor; " * common_note;
         history_solve! = () -> (h = pnl.ConvergenceHistory(:fgs_maxabs);
@@ -401,7 +401,7 @@ function run_fgmres_fgs!(winner)
     t_precond = @elapsed P = pnl.FGSPreconditioner(rotor;
         sweeps=winner.sweeps, inner_iterations=winner.inner, rlx=1.0,
         expansion_order=winner.p, multipole_acceptance=winner.mac,
-        leaf_size=winner.leaf, shrink=true, recenter=false)
+        leaf_size=winner.leaf, shrink=true, recenter=false, fgs_order_kw()...)
     t_ctor = @elapsed solver = pnl.KrylovSolver(rotor; method=:fgmres,
         krylov_kw..., preconditioner=P)
     cache = P.solver.fgs.leaf_lu_cache
@@ -410,7 +410,7 @@ function run_fgmres_fgs!(winner)
               (; leaf_lu=cache.build_time, leaf_lu_bytes=cache.bytes))...)
     measure_and_emit!("fgmres_fgs", solver, setup,
         "sweeps=$(winner.sweeps);inner=$(winner.inner);p=$(winner.p);" *
-        "mac=$(winner.mac);leaf=$(winner.leaf);rtol=1e-6",
+        "mac=$(winner.mac);leaf=$(winner.leaf);rtol=1e-6;" * fgs_order_note(),
         "shared set = Stage 3 winner tau=$(winner.tau); " * common_note;
         niter_from=() -> solver.niter,
         history_solve! = () -> (pnl._solve!(rotor, solver); solver.history))
@@ -435,7 +435,7 @@ function run_fgmres_fgs_nfcache!(winner; budget_gib=0.0)
     t_precond = @elapsed P = pnl.FGSPreconditioner(rotor;
         sweeps=winner.sweeps, inner_iterations=winner.inner, rlx=1.0,
         expansion_order=winner.p, multipole_acceptance=winner.mac,
-        leaf_size=winner.leaf, shrink=true, recenter=false)
+        leaf_size=winner.leaf, shrink=true, recenter=false, fgs_order_kw()...)
     t_ctor = @elapsed solver = pnl.KrylovSolver(rotor; method=:fgmres,
         krylov_kw..., preconditioner=P, backend=backend_nf,
         cache_nearfield=true, persistent_plan=true,
@@ -448,7 +448,7 @@ function run_fgmres_fgs_nfcache!(winner; budget_gib=0.0)
     measure_and_emit!("fgmres_fgs_nfcache", solver, setup,
         "sweeps=$(winner.sweeps);inner=$(winner.inner);p=$(winner.p);" *
         "mac=$(winner.mac);leaf=$(winner.leaf);rtol=1e-6;cache_nearfield;" *
-        "persistent_plan",
+        "persistent_plan;" * fgs_order_note(),
         "shared set = Stage 3 winner tau=$(winner.tau) (precond knobs " *
         "unchanged; only the operator apply is cached); WARM cache built once " *
         "in setup, build reported separately as nfcache_build_time; " *

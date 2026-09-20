@@ -1,0 +1,73 @@
+# Provenance: p021 R1–R2 champion-scheme re-run (2026-09-19)
+
+Ryan approved (2026-09-19, this session): re-run the 021 FGS characterization
+under the promoted approach — re-tuned per thread count with per-thread saved
+parameters, new accuracy recorded, then the new benchmarks — restricted to
+**R1–R2** for now (larger rungs wait on the R4 thread-scaling study, job
+13777133, which may prune thread tiers).
+
+## What "the new scheme" means here
+
+- **FGS family runs dagteam** via new env plumbing (`FGS_SWEEP_ORDER`,
+  `FGS_DAGTEAM_PRECISION` in `benchmark/phase1_case.jl`, splatted into every
+  `FGSSolver`/`FGSPreconditioner` ctor in fgstune, fgsprecond, and phase2).
+  Precision = **f64**, the safe off-R4 rung (mathematically the
+  lexicographic iterate); f32full only after a case's own staircase
+  certifies it (resubmit with `FGS_DAGTEAM_PRECISION=f32full` later if
+  wanted). Defaults everywhere remain lexicographic/f64 — adoption is per
+  launcher, never silent.
+- **Per-(rung, j) re-tuning**: fgstune knob descent + tolerance staircase,
+  fgsprecond sweep ladder, and the phase-2 apply-knob descent all re-run at
+  each thread count; nothing carries across j (021 v23 trap). The staircase
+  and phase-2 `bc_rel_l2`/`bc_certified` columns are the recorded new
+  accuracy.
+- **Full machine-class ladder**: tuner budgets 0/16/32/64/128/500 GiB with
+  the 2 GiB/thread caps (a budget whose cap < j is skipped); phase2.jl
+  measures the full default CONFIGS table (backslash, krylov family, fgs,
+  fgmres_fgs, nfcache variants) and skips budgets with no tuned row.
+- **Champion placement** (`numactl --interleave=0-3 --cpunodebind=0-3`,
+  socket 0) in every stage; `HARDWARE_TAG=orc-m12-zen3-socket0-ilv0-3`
+  keeps rows/traces unmixable with historical both-socket data. **BLAS =
+  julia threads** (historical phase-1/2 multi convention, kept so
+  backslash_ldiv rows stay comparable; deviation from the R4 champion's
+  BLAS-1 is deliberate and recorded per row in blas_threads).
+- **Isolation**: per-task `BENCH_CASE_ROOT` + `PHASE2_OUTDIR` under the data
+  root — the phase-1 knob CSVs have no sweep_order column and
+  `stage3_winner`/`staircase_for` select on rung+knobs only, so per-run
+  directories are the correctness boundary; also avoids the 2026-08-18 NFS
+  concurrent-append hazard.
+
+Not plumbed (unchanged, still lexicographic): the downstream
+`*margin_verify.jl` verification scripts — not part of this pipeline.
+
+## Pins
+
+Same campaign root and pins as the thread-scaling study
+(`/home/rander39/campaigns/p021-thread-scaling-20260919/`,
+`thread_scaling_provenance_20260919.md`), with the FLOWPanel worktree
+fast-forwarded to the R1–R2 commit and the exec tag
+`campaign/p021-thread-scaling-exec-20260919b` (SHA recorded at submission
+below). FastMultipole pin unchanged (`f4d6b671`, v23 worktree); FLOWVPM
+unchanged (`05c658f7`, v1 worktree).
+
+## The job
+
+`benchmark/run_r12_champion_rerun.slurm.sh`: array 0–13 = (R1, R2) × j
+(1/2/4/8/16/32/64) — the full per-class thread ladder (budget 0 uncapped
+gets every point; positive budgets pruned by cap inside the tuner). One
+exclusive 128-core zen3 500G node per task, qos=normal, 24 h. Stages per
+task, sequential, each with its own STATUS_* verdict: fgstune → fgsprecond
+(SWEEP_LADDER_1E6=1) → phase2 tuner (MEM_BUDGETS=0:16:32:64:128:500,
+TUNE_MAX_SECONDS=14400) → phase2 (MEM_BUDGETS=16:32:64:128:500, full
+CONFIGS). K_REPS=3. Run dirs
+`r12-champion-<rung>-j<j>-<arrayjobid>/` under
+`COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910`.
+
+Local pre-submit smoke (macOS, ≤4 threads, R1 @ j2, dagteam f64):
+fgstune 16 candidates → τ=1e-6 winner p8/MAC0.3/leaf150/inner10,
+verification PASS (bc 2.2e-8); fgsprecond ladder PASS (niter=1, bc 2.5e-7
+MEETS 1e-6); tuner + phase2 chain smoke recorded below at submission.
+
+## Submission
+
+(to be filled at sbatch)

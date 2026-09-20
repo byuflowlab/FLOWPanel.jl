@@ -103,7 +103,8 @@ function run_candidate(p::Int, mac::Float64, leaf::Int, inner::Int)
     t_setup = @elapsed solver = pnl.FGSSolver(rotor; expansion_order=p,
         multipole_acceptance=mac, leaf_size=leaf, inner_iterations=inner,
         max_iterations=maxit, tolerance=0.1 * target_rel * rms_b, rlx=1.0,
-        shrink=true, recenter=false, reverse_pass=false, verbose=false)
+        shrink=true, recenter=false, reverse_pass=false, verbose=false,
+        fgs_order_kw()...)
 
     snaps = Vector{Float64}[]
     ts = Float64[]; mses = Float64[]; its = Int[]
@@ -264,7 +265,7 @@ for tau in TAUS
         multipole_acceptance=mac, leaf_size=Int(leaf),
         inner_iterations=Int(inner), max_iterations=maxit,
         tolerance=tol_abs, rlx=1.0, shrink=true, recenter=false,
-        reverse_pass=false, verbose=false)
+        reverse_pass=false, verbose=false, fgs_order_kw()...)
     hist = pnl.ConvergenceHistory(:fgs_maxabs)
     reset_cold!()
     t_solve = @elapsed pnl._solve_history!(rotor, solver, hist)

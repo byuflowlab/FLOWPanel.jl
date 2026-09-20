@@ -103,6 +103,34 @@ haskey(LADDER, rung) || error("RUNG must be one of $(sort(collect(keys(LADDER)))
 msh_name, n_expected = LADDER[rung]
 k_reps = parse(Int, get(ENV, "K_REPS", "1"))
 
+# ---- FGS sweep order (Ryan 2026-09-19, champion adoption) -------------------
+# FGS_SWEEP_ORDER / FGS_DAGTEAM_PRECISION drive EVERY FGS-family construction
+# in the Phase-1/2 harness (fgstune, fgsprecond, phase2 fgs + fgmres_fgs).
+# Default = lexicographic/f64, the historical behaviour. Off-R4 the safe
+# dagteam rung is f64 (mathematically the lexicographic iterate); f32full only
+# after the case's own staircase/evaluator certifies it (021 v23 rule).
+# A run with a non-default order MUST use its own BENCH_CASE_ROOT: the phase-1
+# knob CSVs carry no sweep_order column and stage3_winner/staircase_for select
+# on rung + knobs only, so mixed-order rows in one knobs_dir would
+# cross-select silently.
+const FGS_SWEEP_ORDER = Symbol(get(ENV, "FGS_SWEEP_ORDER", "lexicographic"))
+FGS_SWEEP_ORDER in (:lexicographic, :colored, :chunked, :dagteam) ||
+    error("FGS_SWEEP_ORDER must be lexicographic/colored/chunked/dagteam; " *
+          "got $(FGS_SWEEP_ORDER)")
+const FGS_DAGTEAM_PRECISION = Symbol(get(ENV, "FGS_DAGTEAM_PRECISION", "f64"))
+FGS_DAGTEAM_PRECISION in (:f64, :f32conv, :f32full) ||
+    error("FGS_DAGTEAM_PRECISION must be f64/f32conv/f32full; " *
+          "got $(FGS_DAGTEAM_PRECISION)")
+# dagteam_precision is only meaningful (and only passed) under :dagteam
+fgs_order_kw() = FGS_SWEEP_ORDER === :dagteam ?
+    (; sweep_order=FGS_SWEEP_ORDER, dagteam_precision=FGS_DAGTEAM_PRECISION) :
+    (; sweep_order=FGS_SWEEP_ORDER)
+fgs_order_note() = "sweep_order=$(FGS_SWEEP_ORDER)" *
+    (FGS_SWEEP_ORDER === :dagteam ?
+     ";dagteam_precision=$(FGS_DAGTEAM_PRECISION)" : "")
+FGS_SWEEP_ORDER === :lexicographic ||
+    println("FGS family: $(fgs_order_note())")
+
 # ---- Dirichlet case (RHPC: rotor_hover_pressure_comparison conventions) ----
 magVinf = 0.0001; rho = 1.179; RPM = 6000; R = 0.119
 Vinf = magVinf * [1.0, 0.0, 0.0]
