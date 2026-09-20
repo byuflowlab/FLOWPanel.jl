@@ -42,13 +42,23 @@ Not plumbed (unchanged, still lexicographic): the downstream
 
 ## Pins
 
-Same campaign root and pins as the thread-scaling study
-(`/home/rander39/campaigns/p021-thread-scaling-20260919/`,
-`thread_scaling_provenance_20260919.md`), with the FLOWPanel worktree
-fast-forwarded to the R1–R2 commit and the exec tag
-`campaign/p021-thread-scaling-exec-20260919b` (SHA recorded at submission
-below). FastMultipole pin unchanged (`f4d6b671`, v23 worktree); FLOWVPM
-unchanged (`05c658f7`, v1 worktree).
+Own campaign root `/home/rander39/campaigns/p021-r12-champion-20260919/`
+(worktree + `env/` + `pins.toml`) — a separate worktree because the
+thread-scaling jobs (13777133) are running from the
+`p021-thread-scaling-20260919` worktree and a live campaign worktree is
+never edited (concurrency rule).
+
+| Package | Worktree | Tag | SHA |
+|---|---|---|---|
+| FLOWPanel | `<root>/FLOWPanel.jl` | `campaign/p021-r12-champion-exec-20260919` | `f85ac25557c27f5724ab2149fc2d553c06cae599` |
+| FastMultipole | `.../p021-r4-dagteam-20260919-v23/FastMultipole` | `campaign/p021-r4-dagteam-fm-20260919-v23` | `f4d6b671b3afc5f7404e0d9b324b09bf77ddde43` |
+| FLOWVPM | `.../p021-cold-20260910-v1/FLOWVPM.jl` | `campaign/p021-cold-exec-20260910-v1` | `05c658f7804ec5f9b68d4cb9826a9f97cfecb373` |
+
+Source tag `campaign/p021-r12-champion-source-20260919` (`d3ae35e` on
+`fastmultipole`); exec = source + data-symlink/site-policy commit. Env copied
+from the v23 campaign env with the FLOWPanel dev path rewritten (no
+dependency changes). Branch `p021-thread-scaling-20260919` on the orc unified
+repo carries both commits; origin pushes remain Ryan-pending.
 
 ## The job
 
@@ -63,11 +73,15 @@ CONFIGS). K_REPS=3. Run dirs
 `r12-champion-<rung>-j<j>-<arrayjobid>/` under
 `COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910`.
 
-Local pre-submit smoke (macOS, ≤4 threads, R1 @ j2, dagteam f64):
-fgstune 16 candidates → τ=1e-6 winner p8/MAC0.3/leaf150/inner10,
-verification PASS (bc 2.2e-8); fgsprecond ladder PASS (niter=1, bc 2.5e-7
-MEETS 1e-6); tuner + phase2 chain smoke recorded below at submission.
+Local pre-submit smoke (macOS, ≤4 threads, R1 @ j2, dagteam f64), full
+4-stage chain PASSED: fgstune 16 candidates → τ=1e-6 winner
+p8/MAC0.3/leaf150/inner10, verification PASS (bc 2.2e-8); fgsprecond ladder
+PASS (niter=1, bc 2.5e-7 MEETS 1e-6); tuner budgets 0+16 certified winners;
+phase2 full CONFIGS table incl. additivity check, fgs/fgmres_fgs rows carry
+`sweep_order=dagteam;dagteam_precision=f64` in their config strings.
 
 ## Submission
 
-(to be filled at sbatch)
+Submitted 2026-09-19: **job 13778533** (array _0–_13 → (R1,R2) ×
+j=1/2/4/8/16/32/64), after a clean `sbatch --test-only` (13778532, start
+estimate 22:16 on m12).
