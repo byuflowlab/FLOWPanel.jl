@@ -85,3 +85,17 @@ phase2 full CONFIGS table incl. additivity check, fgs/fgmres_fgs rows carry
 Submitted 2026-09-19: **job 13778533** (array _0–_13 → (R1,R2) ×
 j=1/2/4/8/16/32/64), after a clean `sbatch --test-only` (13778532, start
 estimate 22:16 on m12).
+
+**BLAS-threads ruling (Ryan question, same day):** the pipeline runs
+uniformly at BLAS = j within each task (staircase and phase-2 share one BLAS
+environment — no cross-BLAS tolerance carry). Measured sensitivity check
+(local, R1 @ j4, dagteam f64, champion-style knobs): BLAS 1/2/4
+indistinguishable (0.5505/0.5518/0.5519 s min over 5 reps, same iterations) —
+the sweep's BLAS calls are per-leaf gemvs on ~leaf-sized blocks, below any
+BLAS threading threshold, so the setting is inert for the FGS family while
+BLAS = j keeps backslash_ldiv rows honest. Note for the record: the v23 R4
+champion was certified and timed at BLAS 1 by harness convention and BLAS > 1
+was never swept there; expected null for the same reason (leaf=100 blocks),
+zen3 confirmation would be a cheap qos=test AB-trials rider if ever needed.
+Tasks _0–_4 started before the estimate; _5–_13 were briefly user-held during
+this check and released unchanged.
