@@ -7,7 +7,7 @@
 #SBATCH --constraint=zen3
 #SBATCH --exclusive
 #SBATCH --qos=normal
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --array=0-13
 #SBATCH --output=logs/slurm/r12-champion-%A_%a.out
 #SBATCH --error=logs/slurm/r12-champion-%A_%a.err
@@ -77,8 +77,22 @@ else
   echo "WARNING: flock(1) not found; skipping shared precompile"
 fi
 
-run="$COLD_DATA_ROOT/r12-champion-$RUNG_SEL-j$J-$SLURM_ARRAY_JOB_ID"
-mkdir "$run"
+# Warm-start resume (2026-09-21, six 24 h-wall timeouts in 13778533): with
+# RESUME_FROM_JOB_ID set, reuse that job's run dir instead of a fresh one —
+# STATUS_*=ok stages are skipped below, and the phase-2 tuner's row-level
+# resume (keyed rung+budget+julia_threads) skips landed budgets, so only the
+# unfinished tail re-runs. Prior top-level logs/pins are preserved in
+# logs.before.<new job id>/.
+run="$COLD_DATA_ROOT/r12-champion-$RUNG_SEL-j$J-${RESUME_FROM_JOB_ID:-$SLURM_ARRAY_JOB_ID}"
+if [ -n "${RESUME_FROM_JOB_ID:-}" ] && [ -d "$run" ]; then
+    prev="$run/logs.before.$SLURM_ARRAY_JOB_ID"
+    mkdir -p "$prev"
+    mv "$run"/*.log "$run/campaign_pins.toml" "$run/Manifest.toml" \
+       "$prev"/ 2>/dev/null || true
+    rm -f "$run/COMPLETED"
+else
+    mkdir "$run"
+fi
 cp "$CAMPAIGN_PINS" "$run/campaign_pins.toml"
 cp "$COLD_PROJECT/Manifest.toml" "$run/Manifest.toml"
 module list > "$run/modules.txt" 2>&1
@@ -101,6 +115,7 @@ HEARTBEAT_PID=$!
 trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
 
 status() { printf '%s\n' "$2" > "$run/STATUS_$1"; }
+stage_ok() { [ "$(cat "$run/STATUS_$1" 2>/dev/null || true)" = ok ]; }
 
 # Shared env for every julia stage. BENCH_CASE_ROOT is per-task; KNOBS_MODE
 # stays the default (= threading_mode), so writers and readers agree inside
@@ -122,14 +137,18 @@ jrun() { # jrun <logname> <extra env...> -- <script>
 }
 
 ok=1
-if jrun fgstune -- benchmark/rotor_hover_solver_phase1_fgstune.jl; then
+if stage_ok fgstune; then
+    echo "resume: fgstune already ok — skipping"
+elif jrun fgstune -- benchmark/rotor_hover_solver_phase1_fgstune.jl; then
     status fgstune ok
 else
     status fgstune FAILED; ok=0
 fi
 
 if [ "$ok" = 1 ]; then
-    if jrun fgsprecond SWEEP_LADDER_1E6=1 -- \
+    if stage_ok fgsprecond; then
+        echo "resume: fgsprecond already ok — skipping"
+    elif jrun fgsprecond SWEEP_LADDER_1E6=1 -- \
             benchmark/rotor_hover_solver_phase1_fgsprecond.jl; then
         status fgsprecond ok
     else
@@ -137,6 +156,9 @@ if [ "$ok" = 1 ]; then
     fi
 fi
 
+# p2tune has NO stage_ok skip: its row-level resume (rung+budget+julia_threads
+# against $run/phase2/tune_phase2.csv) makes a re-run of landed budgets a
+# no-op, and a prior "ok" can still hide budgets skipped by an earlier crash.
 if [ "$ok" = 1 ]; then
     if jrun p2tune MEM_BUDGETS=0:16:32:64:128:500 PHASE2_OUTDIR="$run/phase2" \
             TUNE_MAX_SECONDS=14400 -- \
@@ -147,8 +169,12 @@ if [ "$ok" = 1 ]; then
     fi
 fi
 
+# p2 keeps the stage_ok skip: it APPENDS to phase2.csv, so a blind re-run of a
+# completed arm would duplicate measurement rows.
 if [ "$ok" = 1 ]; then
-    if jrun p2 MEM_BUDGETS=16:32:64:128:500 PHASE2_OUTDIR="$run/phase2" -- \
+    if stage_ok p2; then
+        echo "resume: p2 already ok — skipping"
+    elif jrun p2 MEM_BUDGETS=16:32:64:128:500 PHASE2_OUTDIR="$run/phase2" -- \
             benchmark/rotor_hover_solver_phase2.jl; then
         status p2 ok
     else

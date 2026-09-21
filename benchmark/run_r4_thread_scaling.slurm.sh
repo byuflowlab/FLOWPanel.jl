@@ -82,8 +82,22 @@ else
   echo "WARNING: flock(1) not found; skipping shared precompile"
 fi
 
-run="$COLD_DATA_ROOT/thread-scaling-j$J-$SLURM_ARRAY_JOB_ID"
-mkdir "$run"
+# Warm-start resume (2026-09-21, ilu_measure FAILED across 13777133: the
+# budget-0 descent seed no longer certifies under FM f4d6b671): with
+# RESUME_FROM_JOB_ID set, reuse that job's run dir — STATUS_*=ok stages skip
+# below, ilu-tune re-runs but its row-level resume skips landed budgets, so
+# only the missing budget-0 descent + the ilu measurement run live. Prior
+# top-level logs/pins are preserved in logs.before.<new job id>/.
+run="$COLD_DATA_ROOT/thread-scaling-j$J-${RESUME_FROM_JOB_ID:-$SLURM_ARRAY_JOB_ID}"
+if [ -n "${RESUME_FROM_JOB_ID:-}" ] && [ -d "$run" ]; then
+    prev="$run/logs.before.$SLURM_ARRAY_JOB_ID"
+    mkdir -p "$prev"
+    mv "$run"/*.log "$run/campaign_pins.toml" "$run/Manifest.toml" \
+       "$prev"/ 2>/dev/null || true
+    rm -f "$run/COMPLETED"
+else
+    mkdir "$run"
+fi
 cp "$CAMPAIGN_PINS" "$run/campaign_pins.toml"
 cp "$COLD_PROJECT/Manifest.toml" "$run/Manifest.toml"
 module list > "$run/modules.txt" 2>&1
@@ -108,46 +122,58 @@ HEARTBEAT_PID=$!
 trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
 
 status() { printf '%s\n' "$2" > "$run/STATUS_$1"; }
+stage_ok() { [ "$(cat "$run/STATUS_$1" 2>/dev/null || true)" = ok ]; }
 
 # ---- shared cold-harness parse + precompile (thread-count independent) ------
 export RUNG=R4 CONFIGS=fgs STAGE=verify COLD_PREPARED_ONLY=1
 export CONFIG_FILE="$PWD/benchmark/retained_r4_diagnostics.toml"
 export DAGTEAM_PRECISION="${DAGTEAM_PRECISION:-f32full}"
 
-export OUTDIR="$run/parse" BENCH_CASE_ROOT="$run/fixture-controls"
-bash benchmark/run_cold_process.sh 1 1 \
-    benchmark/cold_parse.jl > "$run/parse.log" 2>&1
-bash benchmark/run_cold_process.sh 4 1 \
-    benchmark/cold_precompile.jl > "$run/precompile.log" 2>&1
-
-# ---- FGS arm: calibrate at this j, then A/B trials --------------------------
-fgs_ok=1
-export AB_MODE=calibrate
-export OUTDIR="$run/fgs-calibrate/results" BENCH_CASE_ROOT="$run/fixture-calibrate"
-mkdir -p "$run/fgs-calibrate"
-if numactl $ILV bash benchmark/run_cold_process.sh "$J" 1 \
-        benchmark/fgs_r4_dagteam_ab.jl > "$run/fgs-calibrate/process.log" 2>&1 \
-        && [ -f "$run/fgs-calibrate/results/dagteam_selected.toml" ] \
-        && [ -f "$run/fgs-calibrate/results/colored_selected.toml" ]; then
-    status fgs_calibrate ok
+if stage_ok fgs_calibrate && stage_ok fgs_trials; then
+    # Whole FGS arm (and its cold-harness parse/precompile, which the ilu arm
+    # does not use) already landed — resume skips it.
+    echo "resume: fgs_calibrate + fgs_trials already ok — skipping FGS arm"
+    fgs_ok=1
 else
-    status fgs_calibrate FAILED
-    fgs_ok=0
-fi
+    export OUTDIR="$run/parse" BENCH_CASE_ROOT="$run/fixture-controls"
+    bash benchmark/run_cold_process.sh 1 1 \
+        benchmark/cold_parse.jl > "$run/parse.log" 2>&1
+    bash benchmark/run_cold_process.sh 4 1 \
+        benchmark/cold_precompile.jl > "$run/precompile.log" 2>&1
 
-if [ "$fgs_ok" = 1 ]; then
-    export AB_MODE=trials
-    export COLORED_CONFIG="$run/fgs-calibrate/results/colored_selected.toml"
-    export DAGTEAM_CONFIG="$run/fgs-calibrate/results/dagteam_selected.toml"
-    export OUTDIR="$run/fgs-trials/results" BENCH_CASE_ROOT="$run/fixture-trials"
-    mkdir -p "$run/fgs-trials"
-    if numactl $ILV bash benchmark/run_cold_process.sh "$J" 1 \
-            benchmark/fgs_r4_dagteam_ab.jl > "$run/fgs-trials/process.log" 2>&1 \
-            && [ -f "$run/fgs-trials/results/ab_summary.toml" ]; then
-        status fgs_trials ok
+    # ---- FGS arm: calibrate at this j, then A/B trials ----------------------
+    fgs_ok=1
+    if stage_ok fgs_calibrate; then
+        echo "resume: fgs_calibrate already ok — skipping"
     else
-        status fgs_trials FAILED
-        fgs_ok=0
+        export AB_MODE=calibrate
+        export OUTDIR="$run/fgs-calibrate/results" BENCH_CASE_ROOT="$run/fixture-calibrate"
+        mkdir -p "$run/fgs-calibrate"
+        if numactl $ILV bash benchmark/run_cold_process.sh "$J" 1 \
+                benchmark/fgs_r4_dagteam_ab.jl > "$run/fgs-calibrate/process.log" 2>&1 \
+                && [ -f "$run/fgs-calibrate/results/dagteam_selected.toml" ] \
+                && [ -f "$run/fgs-calibrate/results/colored_selected.toml" ]; then
+            status fgs_calibrate ok
+        else
+            status fgs_calibrate FAILED
+            fgs_ok=0
+        fi
+    fi
+
+    if [ "$fgs_ok" = 1 ] && ! stage_ok fgs_trials; then
+        export AB_MODE=trials
+        export COLORED_CONFIG="$run/fgs-calibrate/results/colored_selected.toml"
+        export DAGTEAM_CONFIG="$run/fgs-calibrate/results/dagteam_selected.toml"
+        export OUTDIR="$run/fgs-trials/results" BENCH_CASE_ROOT="$run/fixture-trials"
+        mkdir -p "$run/fgs-trials"
+        if numactl $ILV bash benchmark/run_cold_process.sh "$J" 1 \
+                benchmark/fgs_r4_dagteam_ab.jl > "$run/fgs-trials/process.log" 2>&1 \
+                && [ -f "$run/fgs-trials/results/ab_summary.toml" ]; then
+            status fgs_trials ok
+        else
+            status fgs_trials FAILED
+            fgs_ok=0
+        fi
     fi
 fi
 unset AB_MODE COLORED_CONFIG DAGTEAM_CONFIG COLD_PREPARED_ONLY CONFIG_FILE
@@ -168,8 +194,16 @@ ilu_env=(RUNG=R4 MEM_BUDGETS=0:500 EXPECT_JULIA_THREADS="$J"
          THREADING_MODE=multi BENCH_BLAS_THREADS=1
          OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 CACHE_B=1
          PHASE2_OUTDIR="$run/ilu" BENCH_CASE_ROOT="$run/ilu-case"
-         TUNE_SEED=15:0.55:32 TUNE_SEED_B0=10:0.6:6
+         # B0 seed = the budget>0 seed: the old (10,0.6,6) is rejected as
+         # error-tolerance-violating under FM f4d6b671 (P=10 no longer
+         # certifies <=1e-6 at R4; the budget-500 winner needed P=12), which
+         # silently dropped the budget-0 row and failed every 13777133
+         # ilu_measure leg.
+         TUNE_SEED=15:0.55:32 TUNE_SEED_B0="${TUNE_SEED_B0:-15:0.55:32}"
          TUNE_MAX_SECONDS=36000)
+# No stage_ok skip for ilu_tune: a prior "ok" can hide a dropped budget (the
+# 13777133 failure mode — tuner warns and continues on a failed budget), and
+# its row-level resume makes re-running landed budgets a no-op.
 if env "${ilu_env[@]}" numactl $ILV \
         julia --project="$COLD_PROJECT" --startup-file=no \
         --compiled-modules=existing -t "$J" \
@@ -181,7 +215,9 @@ else
     ilu_ok=0
 fi
 
-if [ "$ilu_ok" = 1 ]; then
+if [ "$ilu_ok" = 1 ] && stage_ok ilu_measure; then
+    echo "resume: ilu_measure already ok — skipping"
+elif [ "$ilu_ok" = 1 ]; then
     if env RUNG=R4 CONFIGS=krylov_ilu,krylov_ilu_nfcache MEM_BUDGETS=500 \
             EXPECT_JULIA_THREADS="$J" THREADING_MODE=multi \
             BENCH_BLAS_THREADS=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
