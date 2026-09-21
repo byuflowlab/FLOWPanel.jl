@@ -99,3 +99,18 @@ was never swept there; expected null for the same reason (leaf=100 blocks),
 zen3 confirmation would be a cheap qos=test AB-trials rider if ever needed.
 Tasks _0–_4 started before the estimate; _5–_13 were briefly user-held during
 this check and released unchanged.
+
+## Resume rerun 2026-09-21 (24 h-wall timeouts)
+
+Six 13778533 arms hit the 24 h wall mid-p2tune (R1 j1/j2, R2 j1/j2/j4/j8;
+fgstune+fgsprecond ok everywhere). The other 8 arms completed. Fix (source
+tag `campaign/p021-resume-source-20260921` = `946cec2`; this worktree's exec
+= clean pick, tag `campaign/p021-r12-champion-exec-20260921` = `e2b1410`,
+pins.toml updated): wall 24→48 h and warm-start resume —
+`RESUME_FROM_JOB_ID=13778533` reuses the old run dirs, skips the certified
+fgstune/fgsprecond staircases, re-enters p2tune where row-level resume
+(rung, budget, julia_threads) skips landed budgets, then runs p2 (stage-ok
+skip retained there: p2 appends to phase2.csv). Old logs/pins per run dir in
+`logs.before.<new job id>/`. Resubmitted as array 0,1,7,8,9,10 with the same
+env + `RESUME_FROM_JOB_ID=13778533` — **job 13829232**, submitted 2026-09-21
+after a clean `sbatch --test-only` (13829230, immediate start on m12).

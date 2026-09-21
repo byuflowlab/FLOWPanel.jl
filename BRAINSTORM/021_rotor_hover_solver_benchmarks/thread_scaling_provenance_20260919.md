@@ -90,3 +90,26 @@ landed-skip, PHASE2_OUTDIR all exercised; zero duplicate rows on rerun).
   pruning from the general ladder policy (Ryan decides).
 - No physics null needed: these are solver benchmarks (no production physics
   chain consumes FGS — 2026-09-19 inventory).
+
+## Resume rerun 2026-09-21 (ilu budget-0 fix)
+
+All five 13777133 arms landed FGS data but `STATUS_ilu_measure=FAILED`
+uniformly. Root cause: launcher hard-coded `TUNE_SEED_B0=10:0.6:6`; P=10 is
+error-tolerance-violating (>1e-6) at R4 under FM `f4d6b671` (budget-500
+winner needed P=12), the tuner warned-and-continued, no budget-0 row landed,
+and `rotor_hover_solver_phase2.jl` hard-errors on the missing row. The
+krylov_ilu scaling column harvested 2026-09-21 is therefore the tuner's
+budget-500 warm times, not certified measurements.
+
+Fix (source tag `campaign/p021-resume-source-20260921` = `946cec2` on
+`fastmultipole`; this worktree's exec = partial pick, tag
+`campaign/p021-thread-scaling-exec-20260921` = `0c002ae`, pins.toml updated):
+default B0 seed = the budget>0 seed `15:0.55:32` (env-overridable), plus
+warm-start resume — `RESUME_FROM_JOB_ID=13777133` reuses the old run dirs,
+skips `STATUS_*=ok` stages (whole FGS arm), re-runs ilu-tune (row-level
+resume no-ops the landed budget-500 row; only budget 0 descends) and the
+failed ilu measurement. Old top-level logs/pins preserved per run dir in
+`logs.before.<new job id>/`; stale `COMPLETED` removed on resume.
+Resubmitted 2026-09-21 as **job 13829231** (array 0–4, same env +
+`RESUME_FROM_JOB_ID=13777133`), after a clean `sbatch --test-only`
+(13829229, immediate start on m12).
