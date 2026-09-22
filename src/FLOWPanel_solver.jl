@@ -1479,6 +1479,7 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     sweep_order::Symbol
     chunks::Int                         # chunk count for sweep_order=:chunked (ignored otherwise)
     dagteam_precision::Symbol           # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
+    dagteam_workers::Int                # sweep-team size cap for sweep_order=:dagteam; 0 = all threads (ignored otherwise)
     max_iterations::Int
     inner_iterations::Int
     tolerance::Float64
@@ -1510,6 +1511,7 @@ function FGSSolver(body::AbstractBody;
         sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagteam = split dual-layout pull-DAG executor (021 gate 2d); all change the GS iteration
         chunks::Int=64,                      # chunk count for sweep_order=:chunked (ignored otherwise)
         dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
+        dagteam_workers::Int=0,              # sweep-team size cap for sweep_order=:dagteam; 0 = all threads (ignored otherwise)
         shrink=false,
         recenter=false,
         verbose=false,
@@ -1531,10 +1533,15 @@ function FGSSolver(body::AbstractBody;
     # generate solver
     TF = numtype(body)
     bodies = (body,)
-    # dagteam_precision is only forwarded when :dagteam is requested so that a
-    # FastMultipole checkout predating the kwarg keeps working for every other
-    # sweep order
-    dagteam_kwargs = sweep_order === :dagteam ? (; dagteam_precision) : (;)
+    # dagteam_precision/dagteam_workers are only forwarded when :dagteam is
+    # requested so that a FastMultipole checkout predating either kwarg keeps
+    # working for every other sweep order; a default (0) worker cap is also
+    # elided for checkouts predating dagteam_workers
+    dagteam_kwargs = if sweep_order === :dagteam
+        dagteam_workers == 0 ? (; dagteam_precision) : (; dagteam_precision, dagteam_workers)
+    else
+        (;)
+    end
     fgs = build_fgs ?
         FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), dagteam_kwargs...) :
         nothing
@@ -1542,7 +1549,7 @@ function FGSSolver(body::AbstractBody;
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
 end
 
 ################################################################################
