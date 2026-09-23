@@ -861,6 +861,16 @@ $APPLY && mkdir -p "$ARCH_SUB" 2>/dev/null || true
 for dir in "$DATA_DIR"/*/; do
     [[ -d "$dir" ]] || continue
     run="$(basename "$dir")"
+    # A run entry that is itself a symlink (campaign deployments link shared
+    # reference runs back into the projects data root) is owned by the checkout
+    # whose data/ physically holds it.  Archiving it here would file the same
+    # run under a second slug and, worse, DELETE VTK through the symlink in a
+    # tree this pass never classified.  Checkout-level data/ aliases are handled
+    # by ALIAS-SKIP at discovery; this is the per-run analogue.
+    if [[ -L "${dir%/}" ]]; then
+        echo "ALIAS-RUN $run  -- symlink to $(cd "$dir" && pwd -P); archived by its physical checkout"
+        continue
+    fi
     in_only "$run" || continue
 
     if is_protected "$run"; then

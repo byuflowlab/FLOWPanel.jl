@@ -247,6 +247,16 @@ rm ../campaigns/camp1/ARCHIVER_SKIP; touch ../campaigns/camp1/FLOWPanel.jl/ARCHI
 out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
 [ "$(echo "$out" | grep -c '^## checkout ')" = 2 ] && pass "checkout-level marker honoured" || fail "checkout-level marker honoured"
 bash "$S" --root ../campaigns/camp1/FLOWPanel.jl >/dev/null 2>&1; [ $? = 0 ] && pass "explicit --root overrides marker" || fail "explicit --root overrides marker"
+# a PER-RUN symlink inside a campaign data/ points at a run physically owned by
+# another checkout; archiving it here would file it under a second slug and
+# delete VTK through the link.  It must be skipped, never tarred, never deleted.
+rm ../campaigns/camp1/FLOWPanel.jl/ARCHIVER_SKIP
+ln -s "$(cd data/finished_b && pwd -P)" ../campaigns/camp1/FLOWPanel.jl/data/finished_b
+out=$(bash "$S" --root ../campaigns/camp1/FLOWPanel.jl --apply 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "symlinked run: exit 0" || fail "symlinked run exit 0 (got $rc)"
+echo "$out" | grep -q 'ALIAS-RUN finished_b' && pass "symlinked run reported as alias" || fail "symlinked run reported as alias"
+ls arch/*camp1*/finished_b.tar.zst >/dev/null 2>&1 && fail "symlinked run not tarred under campaign slug" || pass "symlinked run not tarred under campaign slug"
+[ "$(nvtk finished_b)" = 15 ] && pass "no deletion through the symlink" || fail "no deletion through the symlink (got $(nvtk finished_b))"
 rm -rf ../campaigns
 
 echo "T14 argument and environment guards"
