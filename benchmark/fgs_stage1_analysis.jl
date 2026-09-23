@@ -151,6 +151,7 @@ println(report, "| j | uninstr s | instr s | overhead % |")
 println(report, "|---|-----------|---------|------------|")
 overhead_ok = true
 for j in js
+    global overhead_ok
     haskey(dmed_by_j, j) || (overhead_ok = false; continue)
     ov = 100 * (dmed_by_j[j] - med_by_j[j]) / med_by_j[j]
     abs(ov) <= 5 || (overhead_ok = false)
@@ -231,21 +232,27 @@ end
 paired_section("Placement A/B @ j=64 (champion socket-0 vs both-socket)",
     "placement-champion", "placement-alt")
 
-capA = filter(p -> p.label == "cap16-arm" && p.dagteam_workers == 0, okproc)
-capB = filter(p -> p.label == "cap16-arm" && p.dagteam_workers == 16, okproc)
-if !(isempty(capA) || isempty(capB))
-    println(report, "\n## Worker-cap A/B @ j=64 (cap=16 vs all-threads, champion placement)\n")
-    println(report, "| pair | workers=0 s | workers=16 s | Δ |")
+for cap in (16, 32)
+    capA = filter(p -> p.label == "cap$cap-arm" && p.dagteam_workers == 0, okproc)
+    capB = filter(p -> p.label == "cap$cap-arm" && p.dagteam_workers == cap, okproc)
+    if isempty(capA) || isempty(capB)
+        cap == 32 && println(report, "\n(cap=32 pairs absent — launcher skipped them because cap=16 did not beat baseline, or the stage failed.)")
+        continue
+    end
+    println(report, "\n## Worker-cap A/B @ j=64 (cap=$cap vs all-threads, champion placement)\n")
+    println(report, "| pair | workers=0 s | workers=$cap s | Δ |")
     println(report, "|------|-------------|--------------|---|")
+    deltas = Float64[]
     for pair in sort(unique(p.block for p in capA))
         a = [p.median_s for p in capA if p.block == pair]
         b = [p.median_s for p in capB if p.block == pair]
         (isempty(a) || isempty(b)) && continue
+        push!(deltas, only(b) - only(a))
         @printf(report, "| %d | %.3f | %.3f | %+.3f |\n", pair, only(a), only(b), only(b) - only(a))
     end
+    isempty(deltas) || @printf(report, "\nPaired mean Δ = %+.3f s; all pairs same sign: %s\n",
+        mean(deltas), all(>(0), deltas) || all(<(0), deltas))
 end
-cap32 = filter(p -> p.label == "cap32-arm", okproc)
-isempty(cap32) && println(report, "\n(cap=32 pairs absent — launcher skipped them because cap=16 did not beat baseline, or the stage failed.)")
 
 # ---- accepted bridge ---------------------------------------------------------
 acc = filter(p -> p.label == "accepted", okproc)
