@@ -43,29 +43,30 @@ diagnostic, plan C (`fgs_scalability_diagnostic_plan_20260921c.md`). Read
    (resume-delete byte-mismatch) exits 9 where the test expects 8 —
    identical before the edits; archiver semantics are Ryan-gated.
 
-## TASK A — collect the hpc-storage apply cycle (launched, outcome UNKNOWN)
+## TASK A — verify the in-flight archive; relay the approval queue
 
-An `hpc-storage` apply cycle was launched at session end 2026-09-22 (home
-was at 365 G / 400 G; campaigns/ = 212 G, dominated by
-`p032-rootomit-20260918` = 193 G of VTK in four p018 rotor runs). The
-session reset before its report landed.
+The hpc-storage cycle DID report before reset (full report + ledger line:
+`archiver_campaigns_support_20260922.md` §"Apply cycle report"). One
+apply worker was left running detached:
 
-- Via `hpc-monitor`: look for detached worker logs
-  `/home/rander39/archiver_worker_*_2026092*.log` (canonical launch in
-  HPC.md) and live `run_archiver.sh` processes; collect every worker's
-  final `STALE_COUNT=`, `VERIFY_FAIL_COUNT=`, and exit status. Do NOT
-  report success without all of them. If no logs/processes exist, the
-  cycle may not have launched — run a fresh `hpc-storage` cycle (context:
-  constraints below).
-- ARCHIVED-STALE ⇒ stop and report to Ryan; never `--resume-delete`
-  without his approval. `RECENT scr_p020r_geom_s020v_om15` (7 GB) is NOT
-  approved — leave it, re-report it.
+- **Verify completion** (via `hpc-monitor`): log
+  `/home/rander39/archiver_worker_p032rootomit_20260922_201936.log`
+  (pid 500292, login03), archiving
+  `p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15` (39.7 GB) from
+  `campaigns/p032-rootomit-20260918/FLOWPanel.jl`. Success =
+  `ARCHIVE_MODE=APPLY`, nonzero `TOTAL_FREED_MB=`, `VERIFY_FAIL_COUNT=0`,
+  `ARCHIVED.txt` breadcrumb in the run dir. A lingering `.partial`
+  tarball with a dead pid = interrupted transfer: nothing was deleted;
+  re-run the same `--only` apply. ARCHIVED-STALE ⇒ stop and ask Ryan.
+- **Awaiting Ryan (do NOT act without his ruling)**: three RECENT
+  p032-rootomit runs (155.2 GB total: `..._sfs3nb_om15_g25` 38 GB,
+  `..._srlx_g25_omi1` 61 GB, `..._srlx_g25_omi1_mo4` 56 GB) — approval
+  command in the status note — and `scr_p020r_geom_s020v_om15` (7 GB,
+  now past 24 h quiet, still held). After the in-flight archive, home
+  ≈326 GiB; the rest is this approval queue, not a sweeper target.
 - Never touch `/home/rander39/campaigns/p021-fgs-stage1-20260922`
   (ARCHIVER_SKIP-marked; job 13858983 loads from it), nor pins/env of any
-  campaign dir a queued/running job uses. 032 arms (`*_m13h`, A1 eng) may
-  be RUNNING — LIVE/RECENT classification is the guard.
-- Append the resulting ledger line where the storage agent indicates, and
-  record before/after in a dated status file in BRAINSTORM/021.
+  campaign dir a queued/running job uses.
 
 ## TASK B — babysit job 13858983, then harvest
 

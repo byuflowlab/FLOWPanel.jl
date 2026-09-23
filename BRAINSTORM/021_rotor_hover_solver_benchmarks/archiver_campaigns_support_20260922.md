@@ -49,9 +49,51 @@ usage) invisible to `run_archiver.sh --all-checkouts`.
   `/home/rander39/projects/FLOWPanel.jl/scripts/` with md5sum verified on
   both sides.
 
-## Follow-up
+## Apply cycle report (hpc-storage, 2026-09-22 ~20:19 UTC)
 
-- `hpc-storage` apply cycle launched 2026-09-22 (this session) — report
-  appended when it returns.
-- Still NOT approved (left, re-reported): RECENT
-  `scr_p020r_geom_s020v_om15` (7 GB).
+- Dry run over 10 checkouts discovered via the new `--all-checkouts`
+  (main clone, flowpanel-021, wt052, 7 campaigns/*/* trees);
+  `ARCHIVER_SKIP` on p021-fgs-stage1-20260922 respected. STALE_COUNT=0,
+  VERIFY_FAIL_COUNT=0, CHECKOUT_LOCKED_COUNT=0 system-wide;
+  `PROTECTED p022lg_hr10` skipped; no LIVE runs in the candidate set
+  (13829231_0 and 13858983 untouched).
+- **Applied (detached, verification pending at session reset)**:
+  `campaigns_p032-rootomit-20260918_FLOWPanel.jl/p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15`
+  (23,764 files, 39,659 MB src, keep steps [2155–2159], expected free
+  ~39,612 MB). Worker pid 500292 on login03, log
+  `/home/rander39/archiver_worker_p032rootomit_20260922_201936.log`;
+  confirmed alive and progressing (`.partial` growing). Completion check:
+  `grep -E 'ARCHIVE_MODE=|TOTAL_FREED_MB=|STALE_COUNT=|VERIFY_FAIL_COUNT='`
+  on that log + `ARCHIVED.txt` breadcrumb in the run dir.
+- Archive quota at cycle start: 4.549 T / 93,402 files (of 20 TiB / 1 M).
+- Full dry-run plan: `/home/rander39/archiver_dryrun_all_20260922_201506.log`.
+
+### Awaiting Ryan (nothing else this cycle can safely do)
+
+| run | class | VTK | quiet |
+|---|---|---|---|
+| p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15_g25 (p032-rootomit) | RECENT | 38,157 MB | 17 h |
+| p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1 (p032-rootomit) | RECENT | 61,283 MB | 16 h |
+| p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1_mo4 (p032-rootomit) | RECENT | 55,788 MB | 16 h |
+| scr_p020r_geom_s020v_om15 (projects) | now ARCHIVE-eligible (~36 h) | 7,010 MB | held per standing instruction |
+
+Approval command (three p032 runs, 155.2 GB):
+`./scripts/run_archiver.sh --include-recent --only p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15_g25,p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1,p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1_mo4 --root /home/rander39/campaigns/p032-rootomit-20260918/FLOWPanel.jl --apply`
+
+After the in-flight archive completes, home lands ~326 GiB — above the
+300 G escalation threshold, but the residual is entirely the RECENT
+approval queue: it needs Ryan's decision, not the sweeper ladder.
+
+### Ledger line
+
+```
+2026-09-22 20:19 UTC — hpc-storage cycle: home 365.0G→(pending, worker still tarring) of 400G cap.
+Archived (apply, detached, pid 500292): campaigns_p032-rootomit-20260918_FLOWPanel.jl/p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15
+  (23764 files, 39659 MB src, keep steps [2155-2159], expected free ~39612 MB) — tarball verification pending.
+Left untouched per explicit instruction: projects_FLOWPanel.jl/scr_p020r_geom_s020v_om15 (7010 MB, now ARCHIVE-eligible, still unapproved).
+Approval queue (RECENT, not archived): p032-rootomit {sfs3nb_om15_g25 38157MB/17h, srlx_g25_omi1 61283MB/16h, srlx_g25_omi1_mo4 55788MB/16h} = 155.2GB, awaiting Ryan.
+STALE_COUNT=0, VERIFY_FAIL_COUNT=0 (10 checkouts, --all-checkouts). Archive quota 4.549T / 93,402 files at start.
+```
+
+(These runs are 032 arms — 032's thread may want this line mirrored into
+its ledger; not written there without Ryan's say-so.)
