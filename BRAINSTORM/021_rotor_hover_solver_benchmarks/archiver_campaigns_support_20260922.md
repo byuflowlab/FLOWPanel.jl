@@ -138,3 +138,38 @@ its ledger; not written there without Ryan's say-so.)
   (2) pid 539720, root projects/FLOWPanel.jl: ARCHIVE-class scr_p020r_geom_s020v_om15 (~7 GB, quiet >=24h, Ryan-approved).
   Both detached (nohup, nice 19, ZSTD_THREADS=2), logs on /home, alive and writing .partial tarballs at check; neither target matched live squeue (13829231_0, 13858983); p021-fgs-stage1-20260922 checkout untouched. Completion/verify PENDING — check logs before claiming freed MB.
 ```
+
+## Update (2026-09-23): second-wave workers VERIFIED COMPLETE
+
+Both detached workers finished clean (hpc-monitor check 2026-09-23
+~06:5x MDT):
+
+- **Worker 1 (pid 537577)**, `ARCHIVE_MODE=APPLY`, `VERIFY_FAIL_COUNT=0`,
+  `STALE_COUNT=0`, `CHECKOUT_LOCKED_COUNT=0`, `TOTAL_FREED_MB≈154,800`
+  (154.8 GB):
+  - `p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15_g25` — 29.8 GB tarball,
+    freed 38.1 GB
+  - `p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1` — 47.6 GB tarball,
+    freed 61.1 GB
+  - `p018_csarc_n2_nt72_l3p0_3r_srlx_g25_omi1_mo4` — 43.6 GB tarball,
+    freed 55.6 GB
+  - `ARCHIVED.txt` breadcrumbs confirmed in all three run dirs.
+- **Worker 2 (pid 539720)**, same clean flags: `scr_p020r_geom_s020v_om15`
+  — 5.4 GB tarball, freed 6.8 GB; breadcrumb confirmed.
+- No `.partial` tarballs anywhere under `/nobackup/archive` (explicit
+  find, zero hits). Home headline: **312 G used of the 400 G cap**
+  (88 G headroom; du-based, excluding .cache/.local) — the RECENT
+  approval queue is now empty. (Worker-log df figures: 209 G free after
+  worker 1, 325 G free after worker 2 — filesystem free space, not quota
+  usage.)
+- 032 ledger mirror for the three p032-rootomit archives offered to Ryan
+  (not written without his say-so).
+
+### Ledger line (completion)
+
+```
+2026-09-23 — second-wave archive workers COMPLETE (verified via logs + breadcrumbs, no .partial remnants):
+  pid 537577: p018_csarc_n2_nt72_l3p0_3r_{sfs3nb_om15_g25 (freed 38.1G), srlx_g25_omi1 (61.1G), srlx_g25_omi1_mo4 (55.6G)} = 154.8 GB freed, VERIFY_FAIL_COUNT=0, STALE_COUNT=0;
+  pid 539720: scr_p020r_geom_s020v_om15 freed 6.8 GB, clean flags.
+  Home: 312 G used of 400 G cap (88 G headroom) post-archive. ARCHIVED.txt breadcrumbs in all four run dirs.
+```
