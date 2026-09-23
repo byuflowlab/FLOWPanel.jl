@@ -43,27 +43,31 @@ diagnostic, plan C (`fgs_scalability_diagnostic_plan_20260921c.md`). Read
    (resume-delete byte-mismatch) exits 9 where the test expects 8 —
    identical before the edits; archiver semantics are Ryan-gated.
 
-## TASK A — verify the in-flight archive; relay the approval queue
+## TASK A — verify the two in-flight Ryan-approved archive workers
 
-The hpc-storage cycle DID report before reset (full report + ledger line:
-`archiver_campaigns_support_20260922.md` §"Apply cycle report"). One
-apply worker was left running detached:
+Storage history so far (full detail:
+`archiver_campaigns_support_20260922.md`): the first worker (pid 500292)
+COMPLETED CLEAN — `p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15` archived,
+`TOTAL_FREED_MB=39612`, `VERIFY_FAIL_COUNT=0`, `STALE_COUNT=0`, home
+342 G after. Ryan then APPROVED (2026-09-22) archiving the three RECENT
+p032-rootomit runs AND `scr_p020r_geom_s020v_om15`; both were launched
+detached and confirmed alive/progressing, **completion NOT yet verified**:
 
-- **Verify completion** (via `hpc-monitor`): log
-  `/home/rander39/archiver_worker_p032rootomit_20260922_201936.log`
-  (pid 500292, login03), archiving
-  `p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15` (39.7 GB) from
-  `campaigns/p032-rootomit-20260918/FLOWPanel.jl`. Success =
-  `ARCHIVE_MODE=APPLY`, nonzero `TOTAL_FREED_MB=`, `VERIFY_FAIL_COUNT=0`,
-  `ARCHIVED.txt` breadcrumb in the run dir. A lingering `.partial`
-  tarball with a dead pid = interrupted transfer: nothing was deleted;
-  re-run the same `--only` apply. ARCHIVED-STALE ⇒ stop and ask Ryan.
-- **Awaiting Ryan (do NOT act without his ruling)**: three RECENT
-  p032-rootomit runs (155.2 GB total: `..._sfs3nb_om15_g25` 38 GB,
-  `..._srlx_g25_omi1` 61 GB, `..._srlx_g25_omi1_mo4` 56 GB) — approval
-  command in the status note — and `scr_p020r_geom_s020v_om15` (7 GB,
-  now past 24 h quiet, still held). After the in-flight archive, home
-  ≈326 GiB; the rest is this approval queue, not a sweeper target.
+| pid | log | targets |
+|---|---|---|
+| 537577 | `/home/rander39/archiver_worker_p032rootomit_20260922_202851.log` | `p018_csarc_n2_nt72_l3p0_3r_{sfs3nb_om15_g25,srlx_g25_omi1,srlx_g25_omi1_mo4}` (155.2 GB, root campaigns/p032-rootomit-20260918/FLOWPanel.jl) |
+| 539720 | `/home/rander39/archiver_worker_scrp020r_20260922_202919.log` | `scr_p020r_geom_s020v_om15` (~7 GB, root projects/FLOWPanel.jl) |
+
+- Verify via `hpc-monitor`: clean finish per log = `ARCHIVE_MODE=APPLY`,
+  `VERIFY_FAIL_COUNT=0`, `STALE_COUNT=0`, per-run `ARCHIVE ... freed=`
+  lines (worker 1 must show THREE), `ARCHIVED.txt` breadcrumbs. Expected
+  end state ≈ well under 200 G on home. Record the final freed figures
+  and home headline in the status note; offer Ryan a ledger mirror for
+  032.
+- A lingering `.partial` tarball with a dead pid = interrupted transfer:
+  nothing was deleted; relaunch the same `--only` apply (the approval
+  stands). `VERIFY-FAIL` or `ARCHIVED-STALE` ⇒ stop, report to Ryan,
+  never `--resume-delete` without his ruling.
 - Never touch `/home/rander39/campaigns/p021-fgs-stage1-20260922`
   (ARCHIVER_SKIP-marked; job 13858983 loads from it), nor pins/env of any
   campaign dir a queued/running job uses.

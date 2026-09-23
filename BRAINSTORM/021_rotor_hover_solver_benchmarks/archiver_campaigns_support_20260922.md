@@ -97,3 +97,44 @@ STALE_COUNT=0, VERIFY_FAIL_COUNT=0 (10 checkouts, --all-checkouts). Archive quot
 
 (These runs are 032 arms — 032's thread may want this line mirrored into
 its ledger; not written there without Ryan's say-so.)
+
+## Update (2026-09-22, later session): first archive VERIFIED, approvals granted
+
+- Worker pid 500292 finished cleanly:
+  `p018_csarc_n2_nt72_l3p0_3r_sfs3nb_om15` archived and stripped,
+  `TOTAL_FREED_MB=39612`, `VERIFY_FAIL_COUNT=0`, `STALE_COUNT=0`,
+  `DF_AFTER=342G`.
+- **Ryan APPROVED (2026-09-22): (1)** archiving the three RECENT
+  p032-rootomit runs (`..._sfs3nb_om15_g25`, `..._srlx_g25_omi1`,
+  `..._srlx_g25_omi1_mo4`; 155.2 GB) via
+  `--include-recent --only ...`, and **(2)** archiving
+  `scr_p020r_geom_s020v_om15` (7 GB, projects checkout). Both launched
+  as detached workers via `hpc-storage`:
+
+| worker | pid | root | targets | log |
+|---|---|---|---|---|
+| 1 | 537577 | campaigns/p032-rootomit-20260918/FLOWPanel.jl | the three RECENT-approved runs (155.2 GB) | `/home/rander39/archiver_worker_p032rootomit_20260922_202851.log` |
+| 2 | 539720 | projects/FLOWPanel.jl | scr_p020r_geom_s020v_om15 (~7 GB) | `/home/rander39/archiver_worker_scrp020r_20260922_202919.log` |
+
+- Both confirmed alive at launch: correct banner (`keep=5 ... apply=true`),
+  growing `.partial` tarballs on the archive side; log 1 shows
+  `RECENT-APPROVED ..._sfs3nb_om15_g25 quiet=17h -- archiving on Ryan's
+  explicit --only`. Pre-launch squeue check: only 13829231_0 and 13858983
+  running, neither matching any target; the p021-fgs-stage1-20260922
+  checkout untouched.
+- Archive quota at this launch: 4.591 T / 93,407 files (no quota limit
+  set on /nobackup/archive per lfs quota).
+- **Completion is NOT yet verified** (61 GB-class tars run long). A clean
+  finish per log = `ARCHIVE_MODE=APPLY`, `VERIFY_FAIL_COUNT=0`,
+  `STALE_COUNT=0`, plus per-run `ARCHIVE ... freed=...MB` lines. Expected
+  end state: home ≈ 342 G − (~155 G + ~7 G − kept-step residue) ≈ well
+  under 200 G.
+
+### Ledger line (launch, second wave)
+
+```
+2026-09-22 20:29 UTC — Ryan-approved archiving, two detached workers on orc (run_archiver.sh, keep=5, apply=true):
+  (1) pid 537577, root campaigns/p032-rootomit-20260918/FLOWPanel.jl: RECENT-approved p018_csarc_n2_nt72_l3p0_3r_{sfs3nb_om15_g25,srlx_g25_omi1,srlx_g25_omi1_mo4} (155.2 GB source, quiet 16-17h, approved per Ryan's explicit --only/--include-recent);
+  (2) pid 539720, root projects/FLOWPanel.jl: ARCHIVE-class scr_p020r_geom_s020v_om15 (~7 GB, quiet >=24h, Ryan-approved).
+  Both detached (nohup, nice 19, ZSTD_THREADS=2), logs on /home, alive and writing .partial tarballs at check; neither target matched live squeue (13829231_0, 13858983); p021-fgs-stage1-20260922 checkout untouched. Completion/verify PENDING — check logs before claiming freed MB.
+```
