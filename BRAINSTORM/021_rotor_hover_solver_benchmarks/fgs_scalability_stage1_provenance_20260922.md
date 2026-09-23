@@ -84,13 +84,18 @@ pre-approved by Ryan for Stage 1 ONLY.
       `deployment = "rsync"` + `content_manifest(_sha256)` per package
       (schema consumed by `cold_packages`,
       `benchmark/fgs_cold_common.jl:276`); tag/sha per the pins table above.
-- [ ] zen3 availability confirmed via slurm-availability (`--cpus 64
-      --mem-gb 500 --eta`) immediately before submission
-- [ ] `sbatch --export` submission of `benchmark/run_r4_fgs_stage1.slurm.sh`
-      from the FLOWPanel campaign worktree top level with
-      COLD_PROJECT / CAMPAIGN_PINS /
-      COLD_DATA_ROOT=`/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910`
-      (job id recorded here)
+- [x] zen3 availability confirmed via slurm-availability (`--cpus 128
+      --mem-gb 500 --time 48:00:00 --eta`, 2026-09-23T01:44Z): m12
+      `access=normal`, 5 nodes fit and idle, estimated start
+      2026-09-23T03:27Z under `--qos=normal`.
+- [x] **Submitted 2026-09-22 (job 13858983, m12, PENDING at submission)**:
+      `sbatch --export=ALL,COLD_PROJECT=.../env,CAMPAIGN_PINS=.../pins.toml,COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910 benchmark/run_r4_fgs_stage1.slurm.sh`
+      from the deployed FLOWPanel tree top level
+      (`/home/rander39/campaigns/p021-fgs-stage1-20260922/FLOWPanel.jl`,
+      `logs/slurm/` pre-created). CALIB_JOB default 13777133; the four
+      calibrated `dagteam_selected.toml` files verified present 2026-09-22.
+      Run dir will be
+      `data/p021-cold-20260910/fgs-stage1-13858983`.
 
 ## Measurement caveats (carried from the reset prompt, binding on analysis)
 
