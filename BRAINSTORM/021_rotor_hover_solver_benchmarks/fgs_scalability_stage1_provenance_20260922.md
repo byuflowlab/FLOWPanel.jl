@@ -49,16 +49,22 @@ pre-approved by Ryan for Stage 1 ONLY.
 
 ## Deployment (fill at submission)
 
-- [ ] Branches + tags pushed to origin — **BLOCKED 2026-09-22: GitHub
-      credentials invalid on this machine (gh token expired, no ssh key);
-      needs Ryan to re-auth (`gh auth login -h github.com`)**
-- [ ] orc worktrees via `git fetch origin --tags` +
-      `scripts/prep_campaign_worktree.sh campaign/p021-fgs-stage1-20260922 <dir>`
-      per repo (paths recorded here when created)
-- [ ] Campaign env (COLD_PROJECT) with Manifest dev-paths at the worktrees
-- [ ] CAMPAIGN_PINS toml (schema consumed by `cold_packages`,
-      `benchmark/fgs_cold_common.jl:272`; annotated-tag check enforced at
-      runtime)
+- **RULING (Ryan 2026-09-22)**: GitHub creds dead on this machine, so the
+  origin push is deferred (still owed once Ryan re-auths). Deployment
+  switches to the harness's `deployment = "rsync"` mode (content-manifest
+  verified at runtime by `cold_packages`), shipping the TAGGED content into
+  fresh dirs under `/home/rander39/campaigns/p021-fgs-stage1-20260922/`.
+  See `fgs_scalability_stage1_reset_prompt_20260922c.md` TASK 1 for the
+  full mechanics.
+- [ ] Branches + tags pushed to origin (deferred; owed after re-auth)
+- [ ] Tagged triple rsync-deployed to
+      `/home/rander39/campaigns/p021-fgs-stage1-20260922/` (fresh dirs;
+      manifest sha256s recorded here when created)
+- [ ] Campaign env (COLD_PROJECT) with Manifest dev-paths at the deployed
+      trees
+- [ ] CAMPAIGN_PINS toml with `deployment = "rsync"` +
+      `content_manifest(_sha256)` per package (schema consumed by
+      `cold_packages`, `benchmark/fgs_cold_common.jl:272`)
 - [ ] zen3 availability confirmed via slurm-availability (`--cpus 64
       --mem-gb 500 --eta`) immediately before submission
 - [ ] `sbatch --export` submission of `benchmark/run_r4_fgs_stage1.slurm.sh`
