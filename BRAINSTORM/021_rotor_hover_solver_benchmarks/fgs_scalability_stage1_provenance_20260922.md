@@ -57,14 +57,33 @@ pre-approved by Ryan for Stage 1 ONLY.
   See `fgs_scalability_stage1_reset_prompt_20260922c.md` TASK 1 for the
   full mechanics.
 - [ ] Branches + tags pushed to origin (deferred; owed after re-auth)
-- [ ] Tagged triple rsync-deployed to
-      `/home/rander39/campaigns/p021-fgs-stage1-20260922/` (fresh dirs;
-      manifest sha256s recorded here when created)
-- [ ] Campaign env (COLD_PROJECT) with Manifest dev-paths at the deployed
-      trees
-- [ ] CAMPAIGN_PINS toml with `deployment = "rsync"` +
-      `content_manifest(_sha256)` per package (schema consumed by
-      `cold_packages`, `benchmark/fgs_cold_common.jl:272`)
+- [x] Tagged triple rsync-deployed 2026-09-22 to
+      `/home/rander39/campaigns/p021-fgs-stage1-20260922/{FLOWPanel.jl,FastMultipole,FLOWVPM.jl}`
+      (fresh dirs, did not exist before; content shipped via
+      `git archive <tag> | ssh orc tar -x`, so exactly the tagged tracked
+      content — no dirty working-tree state). Per-repo sha256sum manifests
+      generated from the same local export, shipped to
+      `<deploy>/MANIFEST.<name>.sha256`, and **verified on orc**:
+      manifest self-hashes match both sides and `sha256sum --quiet -c`
+      passes in all three trees. R4 mesh family
+      `examples/data/dji9443_20260813_*_capped_captess4.msh` confirmed
+      present in the deployed FLOWPanel tree.
+      | manifest | files | sha256 |
+      |---|---|---|
+      | MANIFEST.FLOWPanel.jl.sha256 | 3190 | `dfcf84e3c0033d5f3cf4504d3956951922c4af70c307ab1005027ec530b17aa5` |
+      | MANIFEST.FastMultipole.sha256 | 6478 | `b9aa6449a40fbe2d64ebf467e25efa8ba981e340859d184c002801c0bfc234e4` |
+      | MANIFEST.FLOWVPM.jl.sha256 | 188 | `b4d0fa8d4a66cc76483f8c29c7261593bad7daad67d331d3af37f222215ebd77` |
+- [x] Campaign env (COLD_PROJECT =
+      `/home/rander39/campaigns/p021-fgs-stage1-20260922/env`) built with
+      julia/1.11.7-6bmogfl: Project.toml copied from the
+      p021-r12-champion-20260919 env, `Pkg.develop` on the three deployed
+      trees + `Pkg.instantiate()`; Manifest dev-paths confirmed to resolve
+      to the deploy dirs (satisfies the `cold_packages` realpath gate).
+- [x] CAMPAIGN_PINS at
+      `/home/rander39/campaigns/p021-fgs-stage1-20260922/pins.toml` with
+      `deployment = "rsync"` + `content_manifest(_sha256)` per package
+      (schema consumed by `cold_packages`,
+      `benchmark/fgs_cold_common.jl:276`); tag/sha per the pins table above.
 - [ ] zen3 availability confirmed via slurm-availability (`--cpus 64
       --mem-gb 500 --eta`) immediately before submission
 - [ ] `sbatch --export` submission of `benchmark/run_r4_fgs_stage1.slurm.sh`
