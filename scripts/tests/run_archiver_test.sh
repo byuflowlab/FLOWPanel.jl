@@ -221,6 +221,34 @@ out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
 [ "$(echo "$out" | grep -c '^## checkout ')" = 2 ] && pass "other packages and test/ envs excluded" || fail "other packages and test/ envs excluded (got $(echo "$out" | grep -c '^## checkout '))"
 bash "$S" --all-checkouts --root . >/dev/null 2>&1; [ $? = 2 ] && pass "--all-checkouts + --root rejected" || fail "--all-checkouts + --root"
 
+echo "T13b campaign deployments: campaigns/*/<pkg> discovered, markers and aliases honoured"
+# Deployed trees live three levels down (campaigns/<campaign>/FLOWPanel.jl),
+# which the $HOME/* $HOME/*/* globs cannot reach (gap found 2026-09-22: 209 G
+# of run output invisible to --all-checkouts).
+mkdir -p ../campaigns/camp1/FLOWPanel.jl/data/camprun
+cp Project.toml ../campaigns/camp1/FLOWPanel.jl/Project.toml
+touch ../campaigns/camp1/FLOWPanel.jl/data/camprun/x.csv
+out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
+[ "$(echo "$out" | grep -c '^## checkout ')" = 3 ] && pass "campaign deployment discovered" || fail "campaign deployment discovered (got $(echo "$out" | grep -c '^## checkout '))"
+# a deployment whose data/ symlinks to the shared root is an alias, not a new checkout
+mkdir -p ../campaigns/camp2/FLOWPanel.jl
+cp Project.toml ../campaigns/camp2/FLOWPanel.jl/Project.toml
+ln -s "$(cd data && pwd -P)" ../campaigns/camp2/FLOWPanel.jl/data
+out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
+echo "$out" | grep -q 'ALIAS-SKIP .*camp2' && pass "symlinked-data deployment deduped" || fail "symlinked-data deployment deduped"
+[ "$(echo "$out" | grep -c '^## checkout ')" = 3 ] && pass "alias not counted as a checkout" || fail "alias not counted"
+# ARCHIVER_SKIP in the campaign dir excludes its deployment from discovery
+touch ../campaigns/camp1/ARCHIVER_SKIP
+out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
+echo "$out" | grep -q 'SKIP-MARKED .*camp1' && pass "marker reported" || fail "marker reported"
+[ "$(echo "$out" | grep -c '^## checkout ')" = 2 ] && pass "marked deployment not scanned" || fail "marked deployment not scanned (got $(echo "$out" | grep -c '^## checkout '))"
+# marker in the checkout itself works too, and --root still overrides it
+rm ../campaigns/camp1/ARCHIVER_SKIP; touch ../campaigns/camp1/FLOWPanel.jl/ARCHIVER_SKIP
+out=$(HOME="$(cd .. && pwd -P)" bash "$S" --all-checkouts 2>&1)
+[ "$(echo "$out" | grep -c '^## checkout ')" = 2 ] && pass "checkout-level marker honoured" || fail "checkout-level marker honoured"
+bash "$S" --root ../campaigns/camp1/FLOWPanel.jl >/dev/null 2>&1; [ $? = 0 ] && pass "explicit --root overrides marker" || fail "explicit --root overrides marker"
+rm -rf ../campaigns
+
 echo "T14 argument and environment guards"
 cd ..; fresh
 bash "$S" --only nope                      >/dev/null 2>&1; [ $? = 5 ] && pass "5 bad --only"      || fail "5 bad --only"

@@ -89,7 +89,11 @@ set -euo pipefail
 
 ARCHIVE_DIR="${ARCHIVE_DIR:-/nobackup/archive/usr/$USER/FLOWPanel_runs}"
 DATA_DIR="${DATA_DIR:-data}"
-CHECKOUT_GLOBS="${CHECKOUT_GLOBS:-$HOME/* $HOME/*/*}"   # searched by --all-checkouts
+# searched by --all-checkouts.  $HOME/campaigns/*/* reaches the deployed
+# package trees inside campaign dirs (campaigns/<campaign>/FLOWPanel.jl —
+# three levels down, invisible to the two-level globs); approved by Ryan
+# 2026-09-22 after 209 G of run output accumulated there unseen.
+CHECKOUT_GLOBS="${CHECKOUT_GLOBS:-$HOME/* $HOME/*/* $HOME/campaigns/*/*}"
 PROTECT_FILE="${PROTECT_FILE:-BRAINSTORM/018_dji9443_hover_convergence_campaign/vtk_protect_list.txt}"
 QUIET_HOURS="${QUIET_HOURS:-24}"        # finished => newest mtime older than this
 RECENT_HOT_HOURS="${RECENT_HOT_HOURS:-2}"  # below this, not even Ryan may approve
@@ -243,6 +247,15 @@ if $ALL_CHECKOUTS; then
     for c in $CHECKOUT_GLOBS; do
         [[ -d "$c" ]] || continue
         is_checkout "$c" || continue
+        # An ARCHIVER_SKIP marker in the checkout or its parent (the campaign
+        # dir) keeps discovery out of deployments that are code+env, not run
+        # storage — e.g. a pinned rsync deployment a queued job loads from.
+        # Honoured by --all-checkouts only: an explicit --root is a human
+        # decision and overrides the marker.
+        if [[ -e "$c/ARCHIVER_SKIP" || -e "$(dirname "$c")/ARCHIVER_SKIP" ]]; then
+            echo "SKIP-MARKED $c  -- ARCHIVER_SKIP marker present; not scanned"
+            continue
+        fi
         cdata="$(data_realpath "$c")"
         [[ -n "$cdata" ]] || continue
         dup_of=""; dup_i=-1
