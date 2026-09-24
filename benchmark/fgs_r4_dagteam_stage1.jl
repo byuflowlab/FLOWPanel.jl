@@ -27,6 +27,10 @@ const STAGE1_DIAG_KEYS = (:total_ns, :initialization_ns, :fmm_ns,
     :influence_mapping_ns, :residual_ns, :leaf_solve_ns, :nonself_product_ns,
     :scatter_ns, :remaining_iteration_ns, :final_update_ns,
     :dagteam_spawn_ns, :dagteam_join_ns, :dagteam_wait_ns, :dagteam_reduce_ns,
+    # Stage-2 per-worker drain-loop aggregates (zero on pre-Stage-2 pins)
+    :dagteam_busy_lower_ns, :dagteam_busy_back_ns, :dagteam_lockmgmt_ns,
+    :dagteam_idle_ns, :dagteam_busy_max_ns, :dagteam_busy_min_ns,
+    :dagteam_empty_pops, :dagteam_n_lower, :dagteam_n_back, :dagteam_team_size,
     :outer_count, :sweep_count, :leaf_visit_count)
 
 # -1 sentinels keep one row schema across instrumented and uninstrumented runs
@@ -71,6 +75,8 @@ function run_stage1(out)
     label = get(ENV, "STAGE1_LABEL", "ladder")
     workers = parse(Int, get(ENV, "DAGTEAM_WORKERS", "0"))
     workers >= 0 || error("DAGTEAM_WORKERS must be >= 0")
+    idle = get(ENV, "DAGTEAM_IDLE", "spin")
+    idle in ("spin", "backoff") || error("DAGTEAM_IDLE must be spin or backoff")
 
     if arm == "fixed"
         # plan-C fixed workload: 27 outer x 3 inner, stopping disabled
@@ -79,6 +85,7 @@ function run_stage1(out)
         c["tolerance"] = 0.0
     end
     workers != 0 && (c["dagteam_workers"] = workers)
+    idle != "spin" && (c["dagteam_idle"] = idle)
     cp(file, joinpath(out, "input_dagteam_config.toml"))
     cold_write_toml(joinpath(out, "config.toml"), c)
 
@@ -100,7 +107,7 @@ function run_stage1(out)
     solver = cold_make(c)
     rows = NamedTuple[]
     stamp = (row, phase, solve, agreement) -> (; block, label, arm,
-        dagteam_workers=workers, instrumented=diag, phase, solve,
+        dagteam_workers=workers, dagteam_idle=idle, instrumented=diag, phase, solve,
         relative_solution_delta=agreement, row..., stage1_diag_columns(diagd)...)
 
     compile_row, reference = cold_trial(solver; diagnostics=diagd)
@@ -139,6 +146,7 @@ function run_stage1(out)
     summary = Dict{String,Any}(
         "arm" => arm, "label" => label, "block" => block,
         "instrumented" => diag, "dagteam_workers" => workers,
+        "dagteam_idle" => idle,
         "julia_threads" => Threads.nthreads(),
         "solves" => length(trials),
         "median_solve_seconds" => median(times),
