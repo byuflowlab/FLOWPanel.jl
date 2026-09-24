@@ -41,7 +41,7 @@ function cold_check_config(c; selected=false)
     get(c, "kind", nothing) in ("fgs", "krylov_ilu") || error("Invalid kind")
     haskey(COLD_SEEDS, get(c, "rung", nothing)) || error("Invalid rung")
     seed = cold_seed(c["rung"], c["kind"])
-    Set(keys(c)) ⊆ union(Set(keys(seed)), Set(["diagnostic", "chunks", "dagteam_precision", "dagteam_workers", "dagteam_idle"])) || error("Unknown configuration field")
+    Set(keys(c)) ⊆ union(Set(keys(seed)), Set(["diagnostic", "chunks", "dagteam_precision", "dagteam_workers", "dagteam_idle", "dagedge_theta"])) || error("Unknown configuration field")
     Set(keys(seed)) ⊆ Set(keys(c)) || error("Missing configuration field")
     for (key, default) in seed
         value = c[key]
@@ -57,7 +57,7 @@ function cold_check_config(c; selected=false)
     end
     0 < c["MAC"] <= 1 || error("Invalid MAC")
     if c["kind"] == "fgs"
-        c["sweep_order"] in ("lexicographic", "colored", "chunked", "dagteam") || error("Invalid sweep_order")
+        c["sweep_order"] in ("lexicographic", "colored", "chunked", "dagteam", "dagedge") || error("Invalid sweep_order")
         if c["sweep_order"] == "chunked"
             # cold_make applies the same 64 default; an explicit key is still
             # required to be a positive integer
@@ -66,19 +66,26 @@ function cold_check_config(c; selected=false)
         else
             haskey(c, "chunks") && error("chunks requires sweep_order=chunked")
         end
-        if c["sweep_order"] == "dagteam"
+        if c["sweep_order"] in ("dagteam", "dagedge")
             # cold_make applies the same f64 default; an explicit key must name
             # a supported precision mode
             get(c, "dagteam_precision", "f64") in ("f64", "f32conv", "f32full") || error("Invalid dagteam_precision")
             # sweep-team size cap (Stage 1 worker-cap A/B); 0 = all threads
             workers = get(c, "dagteam_workers", 0)
             (workers isa Integer && !(workers isa Bool) && workers >= 0) || error("Invalid dagteam_workers")
-            # idle policy (Stage 2 waiting-policy A/B); spin = production default
+            # idle/dependency-wait policy (Stage 2 A/B); spin = production default
             get(c, "dagteam_idle", "spin") in ("spin", "backoff") || error("Invalid dagteam_idle")
         else
-            haskey(c, "dagteam_precision") && error("dagteam_precision requires sweep_order=dagteam")
-            haskey(c, "dagteam_workers") && error("dagteam_workers requires sweep_order=dagteam")
-            haskey(c, "dagteam_idle") && error("dagteam_idle requires sweep_order=dagteam")
+            haskey(c, "dagteam_precision") && error("dagteam_precision requires sweep_order=dagteam/dagedge")
+            haskey(c, "dagteam_workers") && error("dagteam_workers requires sweep_order=dagteam/dagedge")
+            haskey(c, "dagteam_idle") && error("dagteam_idle requires sweep_order=dagteam/dagedge")
+        end
+        if c["sweep_order"] == "dagedge"
+            # edge-aggregation byte cutoff (021 L-shortening #1); 0 = split all
+            theta = get(c, "dagedge_theta", 4096)
+            (theta isa Integer && !(theta isa Bool) && theta >= 0) || error("Invalid dagedge_theta")
+        else
+            haskey(c, "dagedge_theta") && error("dagedge_theta requires sweep_order=dagedge")
         end
         0 < c["rlx"] < 2 || error("Invalid rlx")
         c["tolerance"] >= 0 || error("Invalid tolerance")
@@ -366,7 +373,8 @@ function cold_make(c; history=false)
             sweep_order=Symbol(c["sweep_order"]), chunks=get(c, "chunks", 64),
             dagteam_precision=Symbol(get(c, "dagteam_precision", "f64")),
             dagteam_workers=get(c, "dagteam_workers", 0),
-            dagteam_idle=Symbol(get(c, "dagteam_idle", "spin")), verbose=false,
+            dagteam_idle=Symbol(get(c, "dagteam_idle", "spin")),
+            dagedge_theta=get(c, "dagedge_theta", 4096), verbose=false,
             project_solution=false, solution_history_length=0)
         cold_assert_threads()
         return solver
