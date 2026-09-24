@@ -84,14 +84,44 @@ NUMA first-touch repack of split Lmat blocks).
   into fresh dirs under `/home/rander39/campaigns/p021-fgs-dagedge-20260924/`,
   sha256 manifests verified on orc, campaign env with Manifest dev-paths at
   the deploy trees.
-- [ ] Tags created in all three repos (annotated, verified `tag` objects):
-      FLOWPanel `FILL`, FastMultipole `FILL`, FLOWVPM `FILL`.
-- [ ] Tagged triple deployed via `git archive <tag> | ssh orc tar -x`;
-      manifests verified (`sha256sum --quiet -c`) on orc; R4 mesh present.
-- [ ] Campaign env built (julia/1.11.7-6bmogfl; `Pkg.develop` on the three
-      deploy trees + instantiate); `pins.toml` written.
-- [ ] Availability probed; performance run submitted (job FILL).
-- [ ] Profile run submitted after submission 1 (job FILL).
+- [x] Tags created in all three repos (annotated, verified `tag` objects):
+      FLOWPanel `a418f8d6a3456cbb65e4d65c168f2e8d00e0be48` (harness commit,
+      on top of `83b8482`), FastMultipole
+      `90a60cc3576dfcfccfe1db37d1c6eee9e62f2c76`, FLOWVPM
+      `8d4a3b4d3012c42fc7d078629234c105b1e570f7`.
+- [x] Tagged triple deployed 2026-09-24 via `git archive <tag> | ssh orc
+      tar -x` into fresh `/home/rander39/campaigns/p021-fgs-dagedge-20260924/`
+      (ARCHIVER_SKIP marked). Manifests generated from the same local export
+      and `sha256sum --quiet -c` VERIFIED on orc in all three trees; R4 mesh
+      family `dji9443_20260813_*_captess4.msh` confirmed present (24 files).
+      | manifest | files | sha256 |
+      |---|---|---|
+      | MANIFEST.FLOWPanel.jl.sha256 | 3219 | `87910109574c7c1045e113c3092d3b58568b915be49ae12a42c766a41e96198b` |
+      | MANIFEST.FastMultipole.sha256 | 6480 | `76ccfda80a408f9c4030e9bee3f0f9f2c19f1e456709d54b8979c40d08c2c3d6` |
+      | MANIFEST.FLOWVPM.jl.sha256 | 188 | `876441cb17527d06df61daa849d4b10f125ea83e18f41c21b2e6af77b9f355fa` |
+- [x] Campaign env built (julia/1.11.7-6bmogfl; Project.toml from the
+      Stage-2 env, `Pkg.develop` on the three deploy trees + instantiate,
+      111 deps precompiled); Manifest dev-paths verified to resolve to the
+      deploy trees. `pins.toml` written with `deployment = "rsync"` +
+      manifests per the table above.
+- [x] Availability probed 2026-09-24T05:37Z: m12 access=normal, 0 idle /
+      22 mixed / 106 alloc of 136; `sbatch --test-only` (128c/500G/zen3/
+      exclusive/12h) estimated start 2026-09-24T11:59 on m12-2-3 —
+      conservative; the 12 h wall backfills well.
+- [x] **Performance run submitted 2026-09-24 (job 13879622, m12, PENDING at
+      submission)** from the deployed FLOWPanel tree top level (`logs/slurm/`
+      pre-created): `sbatch -p m12 --export=ALL,RUN_MODE=perf,
+      COLD_PROJECT=.../env,CAMPAIGN_PINS=.../pins.toml,
+      COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910
+      benchmark/run_r4_fgs_dagedge.slurm.sh`. Run dir:
+      `data/p021-cold-20260910/fgs-dagedge-perf-13879622`. Resume: resubmit
+      with `RESUME_FROM_JOB_ID=13879622` in the same `--export` list;
+      STATUS_*=ok stages skip.
+- [x] **Profile run submitted 2026-09-24 (job 13879625, m12,
+      `--dependency=afterany:13879622`)** — same submit line with
+      `RUN_MODE=profile`; runs only after the performance job ends (keeps
+      the exclusive-node footprint serial and rankings uncontaminated). Run
+      dir: `data/p021-cold-20260910/fgs-dagedge-profile-13879625`.
 
 ## Measurement caveats (binding on analysis)
 
