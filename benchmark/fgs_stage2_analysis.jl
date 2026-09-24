@@ -50,7 +50,9 @@ for name in sort(readdir(RUN))
     isdir(dir) || continue
     solves = joinpath(dir, "results", "stage1_solves.csv")
     isfile(solves) || continue
-    status = strip(read(joinpath(RUN, "STATUS_$name"), String) |> String)
+    statusf = joinpath(RUN, "STATUS_$name")
+    isfile(statusf) || continue   # interrupted stage: no STATUS, exclude
+    status = strip(read(statusf, String) |> String)
     summaryf = joinpath(dir, "results", "stage1_summary.toml")
     summary = isfile(summaryf) ? TOML.parsefile(summaryf) : Dict{String,Any}()
     j = get(summary, "julia_threads", -1)
@@ -194,11 +196,11 @@ for j in (64, 32)
     println(report, "|------|--------|-----------|-------------------|")
     deltas = Float64[]
     for pair in sort(unique(q.block for q in A))
-        a = [q.median_s for q in A if q.block == pair]
-        b = [q.median_s for q in B if q.block == pair]
-        (isempty(a) || isempty(b)) && continue
-        push!(deltas, only(b) - only(a))
-        @printf(report, "| %d | %.3f | %.3f | %+.3f |\n", pair, only(a), only(b), only(b) - only(a))
+        sa = [q.median_s for q in A if q.block == pair]
+        sb = [q.median_s for q in B if q.block == pair]
+        (isempty(sa) || isempty(sb)) && continue
+        push!(deltas, only(sb) - only(sa))
+        @printf(report, "| %d | %.3f | %.3f | %+.3f |\n", pair, only(sa), only(sb), only(sb) - only(sa))
     end
     isempty(deltas) || @printf(report, "\nPaired mean Δ = %+.3f s; all pairs same sign: %s\n",
         mean(deltas), all(>(0), deltas) || all(<(0), deltas))
