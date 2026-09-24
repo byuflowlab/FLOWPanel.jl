@@ -1447,6 +1447,28 @@ end
         md = pnl._solver_metadata_dict(solver_chk)
         @test md["sweep_order"] == "chunked"
         @test md["chunks"] == 4
+
+        # :dagedge (021 L-shortening #1) constructs the edge plan, solves,
+        # matches a :dagteam solve, and reports theta
+        solver_dt = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false, sweep_order=:dagteam)
+        pnl.solve!(body, solver_dt)
+        strength_dt = copy(body.strength[:, 1])
+        solver_de = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false, sweep_order=:dagedge,
+            dagedge_theta=2048)
+        @test solver_de.sweep_order === :dagedge
+        @test solver_de.fgs.dagteam isa FastMultipole.DagEdgePlan
+        @test solver_de.fgs.dagteam.theta == 2048
+        pnl.solve!(body, solver_de)
+        @test any(abs.(body.strength[:, 1]) .> 0)
+        @test maximum(abs.(body.strength[:, 1] .- strength_dt)) <= 1e-10 *
+              max(1.0, maximum(abs.(strength_dt)))
+        md = pnl._solver_metadata_dict(solver_de)
+        @test md["sweep_order"] == "dagedge"
+        @test md["dagedge_theta"] == 2048
     end
 
     @testset "KrylovCoupled warmstart" begin

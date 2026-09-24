@@ -1,0 +1,63 @@
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/phase1_case.jl:92
+┌ Warning: SKIP_B=1: frozen b NOT assembled for R4 — rms_b is NaN and this case MUST NOT be solved (geometry-only consumers only)
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/phase1_case.jl:220
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 8
+#   commit         = b86d52cb729d43e4d78247a916e2135a937a3bf1-dirty
+#   fm_commit      = 053c8de731a778ac5101d242a5af75a355390e40-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = mecsrs-MacBook-Pro-188.local
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-23 22:12:16
+######################################################################
+R4 Dirichlet case: 58192 panels, rms(b) = NaN (direct source assembly 0.0 s)
+
+Constructing dagteam solver (P=8, MAC=0.4, leaf=100, precision=f32full)...
+  solver constructed in 144.5 s
+
+## DAG structure (R4 champion plan)
+leaves=1068  edges=48167  avg preds=45.1  unit depth=279  mean/max level width=3.8/6
+nof: min/med/max = 1/54/1450  szTM=4 szTS=4
+W_lower+LU=809.167 MB/sweep  (+red: 817.349)  W_upper(filler)=674.778 MB
+
+## Critical paths (MB streamed)
+| variant | L (MB) | W/L | L_node/L (speedup bound) |
+|---|---|---|---|
+| node (today) | 289.462 | 2.8 | 1.0 |
+| edge (theta=0) | 68.148 | 11.9 | 4.25 |
+| edge theta=4KB | 69.166 | 11.7 | 4.19 |
+| edge theta=16KB | 105.272 | 7.7 | 2.75 |
+| edge theta=64KB | 165.344 | 4.9 | 1.75 |
+| edge theta=256KB | 227.956 | 3.5 | 1.27 |
+| edge theta=1024KB | 261.619 | 3.1 | 1.11 |
+| LU-chain floor | 39.533 | 20.5 | 7.32 |
+
+node critical path: 261 leaves; GEMV 265.574 MB vs LU 23.888 MB
+
+## Selective split (top-X% prio leaves edge-split; node tasks otherwise)
+| split frac | L (MB) | L_node/L | tasks/sweep |
+|---|---|---|---|
+| 1% | 264.447 | 1.09 | 1100 |
+| 2% | 256.447 | 1.13 | 1184 |
+| 5% | 242.38 | 1.19 | 1717 |
+| 10% | 216.297 | 1.34 | 3259 |
+| 20% | 200.766 | 1.44 | 6975 |
+| 50% | 120.434 | 2.4 | 20389 |
+| 100% | 68.148 | 4.25 | 49235 |
+
+## Plan-C bounds T_j = max(W/j, L), normalized to node@j64
+| j | node | edge | predicted speedup |
+|---|---|---|---|
+| 16 | 289.462 | 68.148 | 4.25 |
+| 32 | 289.462 | 68.148 | 4.25 |
+| 64 | 289.462 | 68.148 | 4.25 |
+| 128 | 289.462 | 68.148 | 4.25 |
+
+CSVs written to /private/tmp/claude-502/-Users-ryan-Dropbox-research-projects-FLOWPanel-jl/52415d20-f2dc-4cbe-85a1-addd318e8792/scratchpad

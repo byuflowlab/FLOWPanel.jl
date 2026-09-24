@@ -1478,9 +1478,10 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     cache_leaf_lu::Bool
     sweep_order::Symbol
     chunks::Int                         # chunk count for sweep_order=:chunked (ignored otherwise)
-    dagteam_precision::Symbol           # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
-    dagteam_workers::Int                # sweep-team size cap for sweep_order=:dagteam; 0 = all threads (ignored otherwise)
-    dagteam_idle::Symbol                # :spin | :backoff idle policy for sweep_order=:dagteam (ignored otherwise)
+    dagteam_precision::Symbol           # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise)
+    dagteam_workers::Int                # sweep-team size cap for sweep_order=:dagteam/:dagedge; 0 = all threads (ignored otherwise)
+    dagteam_idle::Symbol                # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise)
+    dagedge_theta::Int                  # edge-aggregation byte cutoff for sweep_order=:dagedge (ignored otherwise)
     max_iterations::Int
     inner_iterations::Int
     tolerance::Float64
@@ -1509,11 +1510,12 @@ function FGSSolver(body::AbstractBody;
         multipole_acceptance=0.4,
         leaf_size=10,
         cache_leaf_lu::Bool=true,
-        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagteam = split dual-layout pull-DAG executor (021 gate 2d); all change the GS iteration
+        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagteam = split dual-layout pull-DAG executor (021 gate 2d); :dagedge = edge-level partial pulls on a static schedule (021 L-shortening #1); all change the GS iteration
         chunks::Int=64,                      # chunk count for sweep_order=:chunked (ignored otherwise)
-        dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam (ignored otherwise)
-        dagteam_workers::Int=0,              # sweep-team size cap for sweep_order=:dagteam; 0 = all threads (ignored otherwise)
-        dagteam_idle::Symbol=:spin,          # :spin | :backoff idle policy for sweep_order=:dagteam (ignored otherwise)
+        dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise)
+        dagteam_workers::Int=0,              # sweep-team size cap for sweep_order=:dagteam/:dagedge; 0 = all threads (ignored otherwise)
+        dagteam_idle::Symbol=:spin,          # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise)
+        dagedge_theta::Int=4096,             # edge-aggregation byte cutoff for sweep_order=:dagedge (ignored otherwise)
         shrink=false,
         recenter=false,
         verbose=false,
@@ -1536,13 +1538,15 @@ function FGSSolver(body::AbstractBody;
     TF = numtype(body)
     bodies = (body,)
     # dagteam_precision/dagteam_workers/dagteam_idle are only forwarded when
-    # :dagteam is requested so that a FastMultipole checkout predating any of
-    # the kwargs keeps working for every other sweep order; default values
-    # (workers=0, idle=:spin) are also elided for checkouts predating them
-    dagteam_kwargs = if sweep_order === :dagteam
+    # :dagteam/:dagedge is requested so that a FastMultipole checkout
+    # predating any of the kwargs keeps working for every other sweep order;
+    # default values (workers=0, idle=:spin) are also elided for checkouts
+    # predating them; dagedge_theta is forwarded for :dagedge only
+    dagteam_kwargs = if sweep_order === :dagteam || sweep_order === :dagedge
         kw = (; dagteam_precision)
         dagteam_workers == 0 || (kw = (; kw..., dagteam_workers))
         dagteam_idle === :spin || (kw = (; kw..., dagteam_idle))
+        sweep_order === :dagedge && (kw = (; kw..., dagedge_theta))
         kw
     else
         (;)
@@ -1554,7 +1558,7 @@ function FGSSolver(body::AbstractBody;
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), Int(dagedge_theta), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
 end
 
 ################################################################################

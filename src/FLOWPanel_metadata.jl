@@ -233,6 +233,7 @@ function _solver_metadata_dict(solver)
             "dagteam_precision" => String(solver.dagteam_precision),
             "dagteam_workers" => solver.dagteam_workers,
             "dagteam_idle" => String(solver.dagteam_idle),
+            "dagedge_theta" => solver.dagedge_theta,
             "max_iterations" => solver.max_iterations,
             "inner_iterations" => solver.inner_iterations,
             "tolerance" => solver.tolerance,

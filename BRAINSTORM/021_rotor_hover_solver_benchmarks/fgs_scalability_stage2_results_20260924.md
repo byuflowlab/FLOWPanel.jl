@@ -81,6 +81,29 @@ provenance (same-binary pairs unaffected).
   from the resume job) is pure DAG-width starvation — is answerable from
   the resume data.
 
+## Addendum 2026-09-24: resume job 13878514 j=32 pairs (harvested)
+
+All 4 conditional stages completed `STATUS=ok` (spin/backoff × p1/p2);
+re-analysis over the merged run dir: 147 rows, 0 eligibility failures.
+
+| pair | spin (s) | backoff (s) | Δ backoff−spin (s) |
+|---|---|---|---|
+| 1 | 4.395 | 3.493 | −0.902 |
+| 2 | 4.261 | 3.463 | −0.798 |
+| **median** | **4.328** | **3.478** | **−0.850 (both pairs same sign)** |
+
+Full idle-policy ladder (paired medians): j16 4.399→4.155 (−5.5%),
+j32 4.328→3.478 (−19.6%), j64 6.149→3.262 (−46.9%).
+
+**Answer to the residual question:** backoff does NOT close the 16→32
+plateau. Under backoff the ladder is 4.155 / 3.478 / 3.262 s — 1.19× from
+16→32 and 1.07× from 32→64, saturating toward ~3.2 s. Once the idle-lock
+hammer is removed, added threads buy almost nothing: consistent with the
+sweep being critical-path (L) bound with average effective parallelism ≈ 4,
+i.e. pure DAG-width starvation. This closes Stage 2's last open question and
+motivates the L-shortening slate
+(`fgs_lshortening_reset_prompt_20260924.md`).
+
 ## Harness correction (Ryan 2026-09-23)
 
 "Cold" was always meant as **cold-START solves** (zero initial guess, no
