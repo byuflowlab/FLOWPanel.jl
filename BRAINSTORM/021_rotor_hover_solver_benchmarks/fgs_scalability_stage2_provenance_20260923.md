@@ -84,11 +84,34 @@ All champion placement (socket 0, interleave 0-3), fixed-work arm
   `git archive <tag> | ssh orc tar -x` into fresh dirs under
   `/home/rander39/campaigns/p021-fgs-stage2-20260923/`, sha256 manifests
   verified on orc, campaign env with Manifest dev-paths at the deploy trees.
-- [ ] Tags created in all three repos
-- [ ] Tagged triple deployed + manifests verified
-- [ ] Campaign env built (COLD_PROJECT), pins.toml written
-- [ ] zen3 availability confirmed (slurm-availability, 128c/500G/12h --eta)
-- [ ] Submitted (job id, run dir)
+- [x] Tags created in all three repos (annotated, verified `tag` objects):
+      FLOWPanel `90f7452cb3f7ef08f0edffb06245d18e5eac0cc4`, FastMultipole
+      `053c8de731a778ac5101d242a5af75a355390e40`, FLOWVPM
+      `8d4a3b4d3012c42fc7d078629234c105b1e570f7`.
+- [x] Tagged triple deployed 2026-09-23 via `git archive <tag> | ssh orc tar -x`
+      into fresh `/home/rander39/campaigns/p021-fgs-stage2-20260923/`
+      (ARCHIVER_SKIP marked). Manifests generated from the same local export
+      and `sha256sum --quiet -c` VERIFIED on orc in all three trees; R4 mesh
+      family `dji9443_20260813_*_captess4.msh` confirmed present.
+      | manifest | files | sha256 |
+      |---|---|---|
+      | MANIFEST.FLOWPanel.jl.sha256 | 3200 | `e7eb3a740bddfc306a894ea031150bda1901471f65d8773fb119f0411c05b194` |
+      | MANIFEST.FastMultipole.sha256 | 6478 | `d0902c264af5996b0a688f6b733d8fb6de874acbf68fad512c7e15bda810479c` |
+      | MANIFEST.FLOWVPM.jl.sha256 | 188 | `5bbd187df94eaf1419dc1f55d0a4c6b3712224b6b56ce6fdbc638ac996da51a2` |
+- [x] Campaign env built (julia/1.11.7-6bmogfl; Project.toml from the Stage-1
+      env, `Pkg.develop` on the three deploy trees + instantiate); Manifest
+      dev-paths verified to resolve to the deploy dirs. `pins.toml` written
+      with `deployment = "rsync"` + manifests per the table above.
+- [x] Availability probed 2026-09-24T00:20Z: m12 access=normal, 0 idle /
+      19 mixed / 109 alloc of 136; `sbatch --test-only` (128c/500G/zen3/
+      exclusive/12h) estimated start 2026-09-24T15:41 on m12-1-4 —
+      conservative; the 12 h wall backfills well.
+- [x] **Submitted 2026-09-23 (job 13875511, m12, PENDING at submission)** from
+      the deployed FLOWPanel tree top level (`logs/slurm/` pre-created):
+      `sbatch --export=ALL,COLD_PROJECT=.../env,CAMPAIGN_PINS=.../pins.toml,COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910 benchmark/run_r4_fgs_stage2.slurm.sh`.
+      Run dir will be `data/p021-cold-20260910/fgs-stage2-13875511`.
+      Resume path: resubmit with `RESUME_FROM_JOB_ID=13875511` in the same
+      `--export` list; STATUS_*=ok stages skip.
 
 ## Measurement caveats (binding on analysis)
 
