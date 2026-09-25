@@ -34,19 +34,40 @@ curves are presented, not pre-judged.
   (`*_strength_snapshots.bin`); explicit-knob env overrides;
   `OUTDIR_OVERRIDE` (data-root discipline).
 - **Launcher**: `benchmark/run_r4_fgs_warmstart.slurm.sh` — ONE exclusive
-  128-core zen3 node, arms SEQUENTIAL, one fresh Julia process per arm,
-  j=64, champion placement (`--interleave=0-3 --cpunodebind=0-3`), BLAS=1
-  both families (ILU never BLAS-swept). *Interpretation note for Ryan: the
+  128-core zen3 node, 14 legs SEQUENTIAL (2 ckpt → 5 winA → 7 winB, winB
+  gated on its family checkpoint's STATUS), one fresh Julia process per
+  (arm, leg), j=64, champion placement
+  (`--interleave=0-3 --cpunodebind=0-3`), BLAS=1 both families (ILU never
+  BLAS-swept). *Interpretation note for Ryan: the
   reset prompt says "arms as separate Slurm tasks"; sequential arms on one
   exclusive node was chosen to keep hardware constant across the
   cross-arm comparison (dagedge precedent). Veto if separate array jobs
   (possibly different nodes) are preferred.*
 - **Fixture**: R4 (58,192 panels, production mesh prescription), unsteady
-  wake-on hover via `simulate!`, RHPC frozen settings, NT=36, 144 steps
-  (4 revolutions), no restart, VTK off, Bernoulli CT monitor on.
+  wake-on hover via `simulate!`, RHPC frozen settings, NT=36, Bernoulli CT
+  monitor on.
+- **Checkpoint + restart layout (Ryan 2026-09-24, second ruling)**: TWO
+  restart checkpoints, one per solver family. Legs per (arm, leg) process:
+  - `ckpt` (2): each family's COLD arm marches revs 1–3 (108 steps) from
+    scratch with `SAVE_VTK=true` — doubles as that cold arm's Window A and
+    as the family's shared restart source (VTK to the shared data root via
+    the deploy tree's `data` symlink; restartable under standard retention).
+  - `winA` (5 warm arms): rev 1 (36 steps) from scratch, VTK off.
+  - `winB` (all 7 arms, cold included for symmetric treatment): rev 4
+    restarted from the FAMILY checkpoint at step 108 via
+    `simulate_warmstart!`. Revs 2–3 are thus simulated once per family, and
+    future warm work can restart from the same checkpoints without
+    re-marching.
 - **Windows (harvest-side, BOTH including transients, SKIP_STEPS=0)**:
-  A = steps 1–36 (startup revolution from the very first step);
-  B = steps 109–144 (fourth revolution, from its first step).
+  A = steps 1–36 (startup revolution from the very first step, non-restarted
+  legs); B = steps 109–144 (the winB restart legs).
+  **Reporting note (Ryan 2026-09-24)**: solver warm-start histories are not
+  serialized in the checkpoint, so each restarted WARM leg's first (order+1)
+  steps are effectively cold — this history-fill transient sits inside
+  Window B's transient-included stats by design and is flagged in the
+  harvest, never excluded. Within a family, Window B arms share one
+  checkpoint, so B isolates the initial guess; across families the two
+  checkpoints' wakes differ at the known fixed-point level.
 - **Arms (7)**: fgs_cold, fgs_prev, fgs_proj1, fgs_proj2 (order sweep {1,2}),
   ilu_nfcache_cold, ilu_nfcache_prev, ilu_nfcache_proj1 (optional — Ryan may
   strike; uses the SAME shared extrapolation coefficients as FGS).
@@ -192,10 +213,12 @@ sbatch -p m12 --export=ALL benchmark/run_r4_fgs_cold_newdefault.slurm.sh
 
 Walltime basis (no prior R4 unsteady data exists): R4 j64 cold solve is
 2.4–3.3 s; per step add wake evolution, the certified BC pass, and
-monitors → est. 15–40 s/step × 144 steps ≈ 0.6–1.6 h/arm, 7 arms ≈ 5–12 h;
-`--time=36:00:00` carries ≥2× margin and fits m12's 3-day cap. Job 2's
-8 h/task covers the j=1 rung's slow verify. Resume paths exist in both
-launchers (RESUME_FROM_JOB_ID).
+monitors → est. 15–40 s/step. Checkpoint layout totals 648 simulated steps
+(2×108 ckpt + 5×36 winA + 7×36 winB, vs 1008 for full marches) ≈ 2.7–7.2 h
+plus ~1–2 h of per-process setup across 14 legs; `--time=36:00:00` carries
+large margin and fits m12's 3-day cap. Job 2's 8 h/task covers the j=1
+rung's slow verify. Resume paths exist in both launchers
+(RESUME_FROM_JOB_ID; landed legs skip by STATUS).
 
 Deployment: origin push still deferred (GitHub re-auth owed), so
 `deployment = "rsync"` mode per Ryan's 2026-09-22 ruling, exactly as the
@@ -220,10 +243,16 @@ unsteady fixture warrants a new dated root — decide at staging).
    the binding gate, (b) re-staircase cold on the campaign node first
    (cheap; Job 2's calibration machinery), then use that value. The per-step
    `bcerr_max <= bcerr_tol` column reports compliance either way.
-2. **Walltime confirmation** against prior 021 unsteady runs at R4 before
-   staging (currently `--time=36:00:00` for 7 sequential arms).
+2. **Walltime**: no prior R4 unsteady data exists (verified on-cluster
+   2026-09-24), so `--time=36:00:00` is estimate-based (see the staging
+   section's basis).
 3. Optional arm ilu_nfcache_proj1 — keep or strike.
-4. Sequential-arms-on-one-node interpretation (see Job 1 launcher note).
+4. Sequential-legs-on-one-node interpretation (see Job 1 launcher note).
+
+RULED by Ryan 2026-09-24 (second round): checkpoint+restart layout with TWO
+family checkpoints (implemented as the ckpt/winA/winB legs above);
+history-fill transient in early Window B is fine, noted in reporting;
+per-arm from-scratch Window A kept.
 
 ## Smoke + harvest
 

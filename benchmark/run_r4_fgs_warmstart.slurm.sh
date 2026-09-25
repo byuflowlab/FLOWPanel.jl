@@ -12,13 +12,21 @@
 #SBATCH --error=logs/slurm/r4-fgs-wsr4-%j.err
 # 021 warm-start R4 head-to-head (fgs_warmstart_r4_reset_prompt_20260924.md,
 # Job 1): FGS (dagteam+backoff default) vs krylov_ilu_nfcache
-# (persistent_plan), warm-started, wake-on, 4 revolutions (144 steps @ NT=36),
-# Windows A (steps 1-36) and B (steps 109-144) harvested WITH transients.
+# (persistent_plan), warm-started, wake-on, NT=36, Windows A (steps 1-36) and
+# B (steps 109-144) harvested WITH transients.
 #
-# One exclusive zen3 node; arms run SEQUENTIALLY, one fresh Julia process per
-# arm (constant hardware across the comparison; cold = zero-initial-guess in
-# the same process, Ryan 2026-09-23). Champion placement (socket 0,
-# interleave 0-3) at j=64, BLAS pinned to 1 for BOTH solver families.
+# Checkpoint+restart layout (Ryan 2026-09-24): two family checkpoints (cold
+# arms march revs 1-3 with VTK on), warm arms march rev 1 (winA), every arm's
+# Window B is a rev-4 leg restarted from its FAMILY checkpoint (winB) — revs
+# 2-3 are simulated once per family, not once per arm. Checkpoint VTK lands
+# on the shared data root via the deploy tree's data symlink and stays
+# restartable under the standard retention rules.
+#
+# One exclusive zen3 node; legs run SEQUENTIALLY, one fresh Julia process per
+# (arm, leg) (constant hardware across the comparison; cold =
+# zero-initial-guess in the same process, Ryan 2026-09-23). Champion
+# placement (socket 0, interleave 0-3) at j=64, BLAS pinned to 1 for BOTH
+# solver families.
 #
 # Required env on the submit line:
 #   WSR4_PROJECT      campaign Julia project (Manifest dev-pointed at the
@@ -100,7 +108,9 @@ export MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 BLIS_NUM_THREADS=1
 export EXPECT_JULIA_THREADS="$THREADS" THREADING_MODE=multi
 export FLOWPANEL_FILAMENT_REG="${FLOWPANEL_FILAMENT_REG:-linegauss}"
 export HARDWARE_TAG="${HARDWARE_TAG:-orc-m12-zen3-socket0-ilv0-3-blas1}"
-export RUNG=R4 NT=36 N_STEPS=144 PHASE=phase3wsr4 SNAPSHOT_STRENGTHS=1
+# N_STEPS/SAVE_VTK/RUN_NAME/RESTART_* are per-leg — set by the arm wrapper,
+# never exported here
+export RUNG=R4 NT=36 PHASE=phase3wsr4 SNAPSHOT_STRENGTHS=1
 export FGS_PRECISION="${FGS_PRECISION:-f64}"   # f32full needs re-certification
 
 ( while true; do
@@ -132,23 +142,43 @@ fi
   echo "ERROR: Das arc table not reachable via data/ — jobs die ~1 min in" >&2
   exit 1; }
 
-ARMS="${ARMS:-fgs_cold fgs_prev fgs_proj1 fgs_proj2 ilu_nfcache_cold ilu_nfcache_prev ilu_nfcache_proj1}"
+# Stage list (Ryan 2026-09-24 checkpoint+restart layout): the two cold arms
+# march revs 1-3 with VTK on (ckpt: their Window A + the family restart
+# source), warm arms march rev 1 (winA), then EVERY arm runs a rev-4 leg
+# restarted from its family's checkpoint (winB). A winB leg refuses to run
+# if its family checkpoint leg has not landed.
+STAGES="${STAGES:-fgs_cold:ckpt ilu_nfcache_cold:ckpt \
+fgs_prev:winA fgs_proj1:winA fgs_proj2:winA \
+ilu_nfcache_prev:winA ilu_nfcache_proj1:winA \
+fgs_cold:winB fgs_prev:winB fgs_proj1:winB fgs_proj2:winB \
+ilu_nfcache_cold:winB ilu_nfcache_prev:winB ilu_nfcache_proj1:winB}"
 FAILED_COUNT=0
-for arm in $ARMS; do
-  if [ "$(cat "$run/STATUS_$arm" 2>/dev/null || true)" = ok ]; then
-    echo "resume: $arm already ok — skipping"
+for stage in $STAGES; do
+  arm="${stage%%:*}"; leg="${stage#*:}"
+  armleg="${arm}_${leg}"
+  if [ "$(cat "$run/STATUS_$armleg" 2>/dev/null || true)" = ok ]; then
+    echo "resume: $armleg already ok — skipping"
     continue
   fi
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === ARM=$arm ==="
-  if env ARM="$arm" OUTDIR_OVERRIDE="$run" RUN_NAME="fgs_wsr4_R4_$arm" \
+  if [ "$leg" = winB ]; then
+    case "$arm" in fgs_*) ck=fgs_cold_ckpt ;; *) ck=ilu_nfcache_cold_ckpt ;; esac
+    if [ "$(cat "$run/STATUS_$ck" 2>/dev/null || true)" != ok ]; then
+      FAILED_COUNT=$((FAILED_COUNT + 1))
+      echo "WARNING: $armleg SKIPPED — family checkpoint $ck not ok"
+      printf 'SKIPPED-NO-CHECKPOINT\n' > "$run/STATUS_$armleg"
+      continue
+    fi
+  fi
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === ARM=$arm LEG=$leg ==="
+  if env ARM="$arm" WSR4_LEG="$leg" OUTDIR_OVERRIDE="$run" \
         numactl $ILV \
         julia --project="$WSR4_PROJECT" --startup-file=no -t "$THREADS" \
-        benchmark/fgs_r4_warmstart_ab.jl > "$run/$arm.log" 2>&1 \
-      && [ -f "$run/COMPLETED_$arm" ]; then
-    echo "  $arm ok"
+        benchmark/fgs_r4_warmstart_ab.jl > "$run/$armleg.log" 2>&1 \
+      && [ -f "$run/COMPLETED_$armleg" ]; then
+    echo "  $armleg ok"
   else
     FAILED_COUNT=$((FAILED_COUNT + 1))
-    echo "WARNING: $arm FAILED (continuing; see $run/$arm.log)"
+    echo "WARNING: $armleg FAILED (continuing; see $run/$armleg.log)"
   fi
 done
 

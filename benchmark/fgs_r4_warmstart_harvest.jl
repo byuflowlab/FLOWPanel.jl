@@ -61,32 +61,53 @@ for r in rows
 end
 
 nt = isempty(rows) ? 36 : parse(Int, getcell(rows[1], "nt"))
-winA = 1:nt                      # startup revolution, INCLUDING its transient
-n_steps = maximum(parse(Int, getcell(r, "step")) for r in rows)
-winB = (3nt + 1):min(4nt, n_steps)   # fourth revolution, from its first step
+restart_of(r) = parse(Int, getcell(r, "restart_step"))
+step_of(r) = parse(Int, getcell(r, "step"))
+# Global step index: a restarted (winB) leg's CSV rows are locally numbered
+# 1..n from the restart point.
+gstep(r) = restart_of(r) >= 0 ? restart_of(r) + step_of(r) : step_of(r)
+
+# Window membership under the checkpoint+restart layout (2026-09-24):
+#   A — non-restarted rows in steps 1..NT (ckpt legs' first revolution, winA
+#       legs, or a full-march arm's first revolution);
+#   B — restarted rows (winB legs; the fourth revolution), falling back to a
+#       full-march arm's steps 3NT+1..4NT when no restart legs exist for it.
+inA(r) = restart_of(r) < 0 && step_of(r) <= nt
+function winB_rows(rr)
+    restarted = [r for r in rr if restart_of(r) >= 0]
+    !isempty(restarted) && return restarted
+    [r for r in rr if 3nt < step_of(r) <= 4nt]
+end
 
 statline(v) = isempty(v) ? "—" :
     @sprintf("%.4g ± %.2g (med %.4g)", mean(v), maximum(v) - minimum(v), median(v))
 
 io = open(outmd, "w")
 println(io, "# Warm-start R4 harvest: $(basename(rundir))\n")
-println(io, "Windows (transients INCLUDED, Ryan 2026-09-24): A = steps ",
-        "$(first(winA))-$(last(winA)), B = steps $(first(winB))-$(last(winB)); ",
-        "$n_steps steps total.\n")
+println(io, "Windows (transients INCLUDED, Ryan 2026-09-24): A = steps 1-$nt ",
+        "(from the very first step), B = the fourth revolution (steps ",
+        "$(3nt + 1)-$(4nt), restarted from the family checkpoint at step $(3nt) ",
+        "where restart legs exist).\n")
+println(io, "**Reporting note (Ryan 2026-09-24):** solver warm-start histories ",
+        "are not serialized in the restart checkpoint, so the first ",
+        "(order+1) steps of each restarted WARM leg are effectively cold — ",
+        "that history-fill transient is INSIDE Window B's transient-included ",
+        "statistics by design (never excluded). Interpret the first few ",
+        "Window-B steps of warm arms accordingly; the per-step traces make ",
+        "the refill visible.\n")
 
 trace_io = open(joinpath(rundir, "harvest_traces.csv"), "w")
-println(trace_io, "arm,step,t_solve,niter_first,t_project,ct,solved,bcerr_ok")
+println(trace_io, "arm,global_step,restart_step,t_solve,niter_first,t_project,ct,solved,bcerr_ok")
 
-for win in (("A", winA), ("B", winB))
-    wname, wrange = win
-    println(io, "## Window $wname (steps $(first(wrange))-$(last(wrange)))\n")
+for wname in ("A", "B")
+    println(io, "## Window $wname\n")
     println(io, "| arm | t_solve [s] | niter_first | t_project [s] | ",
             "setup t_setup / t_prime [s] | unconverged | nsolves≠1 | ",
             "bcerr>tol | uncertified |")
     println(io, "|---|---|---|---|---|---|---|---|---|")
     for k in sort(collect(keys(byarm)); by=armname)
         rr = byarm[k]
-        inwin = [r for r in rr if parse(Int, getcell(r, "step")) in wrange]
+        inwin = wname == "A" ? [r for r in rr if inA(r)] : winB_rows(rr)
         isempty(inwin) && continue
         ts = [num(r, "t_solve") for r in inwin]
         nf = [num(r, "niter_first") for r in inwin]
@@ -114,15 +135,22 @@ end
 
 for k in sort(collect(keys(byarm)); by=armname), r in byarm[k]
     m, t = num(r, "bcerr_max"), num(r, "bcerr_tol")
-    println(trace_io, join([armname(k), getcell(r, "step"), getcell(r, "t_solve"),
+    println(trace_io, join([armname(k), gstep(r), restart_of(r),
+        getcell(r, "t_solve"),
         getcell(r, "niter_first"), getcell(r, "t_project"), getcell(r, "CT"),
         getcell(r, "solved"),
         (isnan(m) || isnan(t)) ? "" : string(m <= t)], ","))
 end
 close(trace_io)
 
-# --- cross-arm solution agreement (snapshots) ---------------------------------
-snaps = Dict{String,Matrix{Float64}}()
+# --- cross-arm solution agreement (snapshots, leg-aware) ----------------------
+# One snapshot file per (arm, leg). Keyed by (arm, window): window A snapshots
+# come from non-restarted legs (ckpt/winA/full: columns = global steps 1..n);
+# window B from restarted legs (columns = global steps restart_step+1 ..), or
+# from a full-march leg's columns 3nt+1:4nt as a fallback. References:
+# fgs_cold's matching window.
+snapsA = Dict{String,Matrix{Float64}}()
+snapsB = Dict{String,Matrix{Float64}}()
 for f in filter(f -> endswith(f, "_strength_snapshots.toml"), readdir(rundir))
     meta = TOML.parsefile(joinpath(rundir, f))
     binf = joinpath(rundir, replace(f, ".toml" => ".bin"))
@@ -130,23 +158,37 @@ for f in filter(f -> endswith(f, "_strength_snapshots.toml"), readdir(rundir))
     data = Array{Float64}(undef, meta["ncells"], meta["nsteps"])
     read!(binf, data)
     key = armname((meta["config"], meta["warmstart"], meta["warmstart_order"]))
-    snaps[key] = data
+    rs = get(meta, "restart_step", -1)
+    if rs >= 0
+        snapsB[key] = data                       # winB leg: rev 4 columns
+    else
+        haskey(snapsA, key) || (snapsA[key] = data)  # first NT columns = window A
+        # full-march layout fallback: its rev-4 columns double as window B
+        size(data, 2) >= 4nt && !haskey(snapsB, key) &&
+            (snapsB[key] = data[:, (3nt + 1):(4nt)])
+    end
 end
-if haskey(snaps, "fgs_cold") && length(snaps) > 1
+if (haskey(snapsA, "fgs_cold") || haskey(snapsB, "fgs_cold")) &&
+        length(union(keys(snapsA), keys(snapsB))) > 1
     println(io, "## Cross-arm solution agreement (rel-L2 vs fgs_cold, per step)\n")
     println(io, "| arm | winA mean | winA max | winB mean | winB max |")
     println(io, "|---|---|---|---|---|")
-    ref = snaps["fgs_cold"]
     agree_io = open(joinpath(rundir, "harvest_solution_deltas.csv"), "w")
-    println(agree_io, "arm,step,rel_l2_vs_fgs_cold")
-    for (k, m) in sort(collect(snaps); by=first)
+    println(agree_io, "arm,window,local_step,rel_l2_vs_fgs_cold")
+    deltas(m, ref, cap) = begin
+        ns = min(size(m, 2), size(ref, 2), cap)
+        [sqrt(sum(abs2, m[:, i] .- ref[:, i]) /
+              max(sum(abs2, ref[:, i]), eps())) for i in 1:ns]
+    end
+    f4(x) = @sprintf("%.3e", x)
+    for k in sort(collect(union(keys(snapsA), keys(snapsB))))
         k == "fgs_cold" && continue
-        ns = min(size(m, 2), size(ref, 2))
-        d = [sqrt(sum(abs2, m[:, i] .- ref[:, i]) /
-                  max(sum(abs2, ref[:, i]), eps())) for i in 1:ns]
-        foreach(i -> println(agree_io, "$k,$i,$(d[i])"), 1:ns)
-        dA = d[intersect(winA, 1:ns)]; dB = d[intersect(winB, 1:ns)]
-        f4(x) = @sprintf("%.3e", x)
+        dA = haskey(snapsA, k) && haskey(snapsA, "fgs_cold") ?
+            deltas(snapsA[k], snapsA["fgs_cold"], nt) : Float64[]
+        dB = haskey(snapsB, k) && haskey(snapsB, "fgs_cold") ?
+            deltas(snapsB[k], snapsB["fgs_cold"], nt) : Float64[]
+        foreach(i -> println(agree_io, "$k,A,$i,$(dA[i])"), eachindex(dA))
+        foreach(i -> println(agree_io, "$k,B,$i,$(dB[i])"), eachindex(dB))
         println(io, "| $k | ", isempty(dA) ? "—" : f4(mean(dA)), " | ",
                 isempty(dA) ? "—" : f4(maximum(dA)), " | ",
                 isempty(dB) ? "—" : f4(mean(dB)), " | ",
@@ -155,7 +197,10 @@ if haskey(snaps, "fgs_cold") && length(snaps) > 1
     close(agree_io)
     println(io, "\nKnown context: FGS and Krylov converge to slightly ",
             "different wake-on fixed points (~2e-3, ",
-            "rigid_motion_tree_reuse_item.md §5) — reported, not chased.")
+            "rigid_motion_tree_reuse_item.md §5) — reported, not chased. ",
+            "Window-B deltas within a solver family share the family ",
+            "checkpoint, so they isolate the initial guess; ilu-vs-fgs ",
+            "window-B deltas ALSO carry the two checkpoints' divergence.")
 else
     println(io, "## Cross-arm solution agreement: snapshots missing — ",
             "cannot compute (SNAPSHOT_STRENGTHS off?)")

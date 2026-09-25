@@ -807,7 +807,11 @@ if snapshot_on && !isempty(timed_formulation.snapshots)
             "eltype" => "Float64", "layout" => "column-major, one column per step",
             "strength_column" => pnl._fgs_solved_strength_index(rotor),
             "config" => config, "warmstart" => warmstart,
-            "warmstart_order" => ws_order, "run_name" => run_name))
+            "warmstart_order" => ws_order, "run_name" => run_name,
+            # leg discrimination for the warm-start campaign harvest: a
+            # restarted leg's column i is GLOBAL step restart_step + i
+            "restart_step" => restart_step,
+            "n_steps_env" => n_steps_env))
     end
     println("strength snapshots: $(length(timed_formulation.snapshots)) steps " *
             "-> $(snap_base).bin")
