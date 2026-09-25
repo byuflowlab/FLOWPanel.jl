@@ -126,13 +126,76 @@ curves are presented, not pre-judged.
   "FGS-dagteam+backoff (new default)" column (same results file as the warm
   harvest). Expected ≈3.2–3.3 s @ j64, plateau moving j16 → j64.
 
-## Pins (TO FILL before submission — annotated tags, three repos)
+## Pins (annotated tags created 2026-09-24, all three repos)
 
-| repo | tag | SHA | worktree |
+Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
+
+| repo | branch | SHA | content |
 |---|---|---|---|
-| FLOWPanel.jl | `campaign/p021-fgs-warmstart-20260924` | _pending_ | _pending_ |
-| FastMultipole | `campaign/p021-fgs-warmstart-20260924` | _pending_ | _pending_ |
-| FLOWVPM.jl | `campaign/p021-fgs-warmstart-20260924` | _pending_ | _pending_ |
+| FLOWPanel.jl | `fastmultipole` | `f88e35afcd76eadd9eee45ac25d03fcaa2506594` | campaign harness on top of `08667c2` (dagteam+backoff default + t_project) |
+| FastMultipole | `flowpanel-20260817` | `745af76022ea782146901fd65fc301f8474cbc8c` | dagteam empty-direct-list fix on Stage-2 pin `053c8de7` (+dagedge `90a60cc3`) |
+| FLOWVPM.jl | `flowpanel` | `8d4a3b4d3012c42fc7d078629234c105b1e570f7` | unchanged production pin (new-merge-law default) |
+
+## Deployment (completed 2026-09-24; submission still owed to Ryan)
+
+- [x] Tagged triple deployed via `git archive <tag>` + rsync repair of 25
+  git-tracked `__MACOSX/._*` files that macOS tar folded into xattr headers,
+  into `/home/rander39/campaigns/p021-fgs-warmstart-20260924/`
+  (ARCHIVER_SKIP marked). All three trees `sha256sum -c` VERIFIED on orc
+  against `MANIFEST.<name>.sha256`.
+- [x] `pins.toml` written at the campaign root (deployment="rsync", tag +
+  SHA + manifest hash per repo, hashes:
+  FLOWPanel `5d1c5fb0…`, FastMultipole `b5d11503…`, FLOWVPM `b4d0fa8d…`).
+- [x] Campaign env `…/env` cloned from the dagedge campaign env (same dep
+  versions; no Project.toml changes since) and `Pkg.develop`-repointed at
+  the three deploy trees — Manifest paths verified.
+- [x] `data` symlink → `/home/rander39/projects/FLOWPanel.jl/data` in the
+  FLOWPanel deploy tree; Das arc table confirmed reachable;
+  `logs/slurm/` pre-created.
+- [x] Cluster facts (hpc-monitor 2026-09-24): all five
+  `thread-scaling-j{1,8,16,32,64}-13777133` dagteam_selected.toml exist,
+  P8/MAC0.4/leaf100/dagteam confirmed, tolerance identical at every j
+  (3.4309419310610173e-7 — j-independent on this fixture/env). Certified
+  j64 apply-knob rows: **budget-500 = P12/MAC0.55/leaf48**, budget-0 =
+  P15/MAC0.55/leaf21 (the reset prompt's "P=15/MAC=0.55" parenthetical
+  conflated the budget-0 row; nfcache uses the budget-500 row). No prior
+  R4 unsteady walltime data exists anywhere in the repo — Job 1 walltime is
+  an estimate (see below). /home usage 79 G, far under cap.
+- [x] Availability probed 2026-09-25T04:39Z: m12 access=normal
+  (qos normal/test, maxtime 3-00:00:00), 0 idle / 41 mixed / 87 alloc —
+  submittable, expect queue wait for an exclusive node (dagedge jobs
+  13879622/25 are in the same queue).
+
+## Staged submissions (RYAN'S GO REQUIRED — nothing submitted)
+
+From an orc login shell:
+
+```bash
+DEPLOY=/home/rander39/campaigns/p021-fgs-warmstart-20260924
+cd $DEPLOY/FLOWPanel.jl
+
+# ---- Job 1: warm-start head-to-head (one exclusive zen3 node, 7 arms) ----
+export WSR4_PROJECT=$DEPLOY/env
+export CAMPAIGN_PINS=$DEPLOY/pins.toml
+export WSR4_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910
+export FGS_TOL_ABS=3.4309419310610173e-7   # open item 1: recommended value
+export KNOBS_P=12 KNOBS_MAC=0.55 KNOBS_LEAF=48   # certified budget-500 row
+export CONTENT_MANIFESTS="$DEPLOY/FLOWPanel.jl:$DEPLOY/MANIFEST.FLOWPanel.jl.sha256 $DEPLOY/FastMultipole:$DEPLOY/MANIFEST.FastMultipole.sha256 $DEPLOY/FLOWVPM.jl:$DEPLOY/MANIFEST.FLOWVPM.jl.sha256"
+sbatch -p m12 --export=ALL benchmark/run_r4_fgs_warmstart.slurm.sh
+
+# ---- Job 2: cold R4 FGS under the new default (array j in {1,8,16,32,64}) ----
+export COLD_PROJECT=$DEPLOY/env
+export CAMPAIGN_PINS=$DEPLOY/pins.toml
+export COLD_DATA_ROOT=/home/rander39/projects/FLOWPanel.jl/data/p021-cold-20260910
+sbatch -p m12 --export=ALL benchmark/run_r4_fgs_cold_newdefault.slurm.sh
+```
+
+Walltime basis (no prior R4 unsteady data exists): R4 j64 cold solve is
+2.4–3.3 s; per step add wake evolution, the certified BC pass, and
+monitors → est. 15–40 s/step × 144 steps ≈ 0.6–1.6 h/arm, 7 arms ≈ 5–12 h;
+`--time=36:00:00` carries ≥2× margin and fits m12's 3-day cap. Job 2's
+8 h/task covers the j=1 rung's slow verify. Resume paths exist in both
+launchers (RESUME_FROM_JOB_ID).
 
 Deployment: origin push still deferred (GitHub re-auth owed), so
 `deployment = "rsync"` mode per Ryan's 2026-09-22 ruling, exactly as the
