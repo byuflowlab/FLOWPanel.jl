@@ -117,6 +117,11 @@ step_nsolves(::AbstractSolver) = -1
 "`.niter` of the FIRST per-body solve of the last published step (-1 if unavailable)."
 step_niter_first(::AbstractSolver) = -1
 
+"""Warm-start guess-construction seconds of the LAST raw solve (NaN if the
+solver does not track it). Kernel-level like `solver.niter`: for a one-body
+step (`step_nsolves == 1`) it is the step's projection cost."""
+step_t_project(::AbstractSolver) = NaN
+
 "AND of the inner-solver convergence flags over the last published step."
 step_solved(::AbstractSolver) = true
 
@@ -998,6 +1003,10 @@ mutable struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP,TK
     cache_tree::Bool       # per-solve FMM plan reuse (see docstring)
     cache_nearfield::Bool  # dense near-field cache on the per-solve plan (see docstring)
     persistent_plan::Bool  # cross-solve plan (+cache) persistence (see docstring)
+    t_project::Float64     # seconds building the last raw solve's warm-start
+                           # guess (extrapolation only; 0 for cold and for the
+                           # zero-copy previous-solution path). Kernel-level,
+                           # like `niter`/`solved` — overwritten every launch.
 end
 
 function KrylovSolver(body::AbstractBody;
@@ -1068,7 +1077,7 @@ function KrylovSolver(body::AbstractBody;
         Int(memory), preconditioner, warmstart, x_prev, false,
         warmstart_order, x_history, 0, x0_scratch,
         record_history, history, 0, false, SolveStepStats(),
-        cache_tree, cache_nearfield, persistent_plan)
+        cache_tree, cache_nearfield, persistent_plan, 0.0)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -1146,7 +1155,9 @@ function _krylov_launch!(solver::KrylovSolver)
     # inspection.
     use_x0 = solver.warmstart && solver.have_x_prev
     x0 = solver.x_prev
+    solver.t_project = 0.0
     if use_x0 && solver.warmstart_order >= 1 && solver.x_history_nsaved >= 1
+        t0_project = time_ns()
         order = min(solver.warmstart_order, solver.x_history_nsaved - 1)
         H = solver.x_history
         @views @. solver.x0_scratch = _extrapolation_coefficient(order, 0) * H[:, 1]
@@ -1155,6 +1166,7 @@ function _krylov_launch!(solver::KrylovSolver)
             @views @. solver.x0_scratch += c * H[:, j + 1]
         end
         x0 = solver.x0_scratch
+        solver.t_project = (time_ns() - t0_project) / 1e9
     end
 
     P = solver.preconditioner
@@ -1469,6 +1481,12 @@ end
 
 Matrix-free solver for a single body. Use `solve!(bodies, solvers)` with one
 solver per body for coupled multi-body solves.
+
+The Gauss–Seidel executor defaults to `sweep_order=:dagteam` with
+`dagteam_idle=:backoff` (adopted 2026-09-24 from the 021 cold-executor
+benchmarks; best measured FGS thread scaling at R4). Pass
+`sweep_order=:lexicographic` for the previous serial-sweep behavior.
+`dagteam_precision` remains `:f64`; reduced precision is an explicit opt-in.
 """
 mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     fgs::TFGS
@@ -1498,6 +1516,9 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     niter::Int                              # GS sweeps performed by the last solve (see _solve!)
     solved::Bool                            # whether the last solve met `tolerance`
     stats::SolveStepStats                   # per-step accounting (021 Phase 3; see SolveStepStats)
+    t_project::Float64                      # seconds of the last raw solve's project_solution! warm-start
+                                            # (0 when projection is disabled or history insufficient).
+                                            # Kernel-level, like `niter`/`solved` — overwritten every solve.
 end
 
 function FGSSolver(body::AbstractBody;
@@ -1510,11 +1531,11 @@ function FGSSolver(body::AbstractBody;
         multipole_acceptance=0.4,
         leaf_size=10,
         cache_leaf_lu::Bool=true,
-        sweep_order::Symbol=:lexicographic,  # :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagteam = split dual-layout pull-DAG executor (021 gate 2d); :dagedge = edge-level partial pulls on a static schedule (021 L-shortening #1); all change the GS iteration
+        sweep_order::Symbol=:dagteam,        # :dagteam (default since 2026-09-24, Ryan-approved: dagteam+backoff won the 021 cold-executor ranking) = split dual-layout pull-DAG executor (021 gate 2d); :lexicographic = serial sweeps (previous default); :colored = parallel per-color sweeps (021 Phase 2b); :chunked = hybrid GS-within-chunk/Jacobi-across-chunk sweeps (021 v22); :dagedge = edge-level partial pulls on a static schedule (021 L-shortening #1, LOST vs :dagteam); all change the GS iteration
         chunks::Int=64,                      # chunk count for sweep_order=:chunked (ignored otherwise)
-        dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise)
+        dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise); :f64 stays the default — reduced precision is an accuracy knob and explicit opt-in
         dagteam_workers::Int=0,              # sweep-team size cap for sweep_order=:dagteam/:dagedge; 0 = all threads (ignored otherwise)
-        dagteam_idle::Symbol=:spin,          # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise)
+        dagteam_idle::Symbol=:backoff,       # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise); :backoff default since 2026-09-24 (021 dagedge campaign: backoff ≥ spin at every j)
         dagedge_theta::Int=4096,             # edge-aggregation byte cutoff for sweep_order=:dagedge (ignored otherwise)
         shrink=false,
         recenter=false,
@@ -1540,8 +1561,11 @@ function FGSSolver(body::AbstractBody;
     # dagteam_precision/dagteam_workers/dagteam_idle are only forwarded when
     # :dagteam/:dagedge is requested so that a FastMultipole checkout
     # predating any of the kwargs keeps working for every other sweep order;
-    # default values (workers=0, idle=:spin) are also elided for checkouts
-    # predating them; dagedge_theta is forwarded for :dagedge only
+    # workers=0 and idle=:spin (the FastMultipole-side defaults) are also
+    # elided for checkouts predating them — note that since :dagteam/:backoff
+    # became the FLOWPanel defaults (2026-09-24), the default construction
+    # path requires a FastMultipole with dagteam_idle support;
+    # dagedge_theta is forwarded for :dagedge only
     dagteam_kwargs = if sweep_order === :dagteam || sweep_order === :dagedge
         kw = (; dagteam_precision)
         dagteam_workers == 0 || (kw = (; kw..., dagteam_workers))
@@ -1558,7 +1582,7 @@ function FGSSolver(body::AbstractBody;
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), Int(dagedge_theta), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats())
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), Int(dagedge_theta), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats(), 0.0)
 end
 
 ################################################################################
@@ -1598,6 +1622,7 @@ end
 
 step_nsolves(solver::_StepStatsSolver) = solver.stats.nsolves
 step_niter_first(solver::_StepStatsSolver) = solver.stats.niter_first
+step_t_project(solver::_StepStatsSolver) = solver.t_project
 step_solved(solver::_StepStatsSolver) = solver.stats.solved_all
 
 # FGS keeps the existing rolling-history writer; only its CALL SITE moved out of
@@ -1798,7 +1823,9 @@ function _solve!(body::AbstractBody, solver::FGSSolver; backend = FastMultipoleB
     prior_sigma = dirichlet_bc ? copy(body.strength[:, 1]) : nothing
 
     # warm-start strengths from history (no-op if disabled or insufficient history)
+    t0_project = time_ns()
     projected = project_solution!(body, solver)
+    solver.t_project = projected ? (time_ns() - t0_project) / 1e9 : 0.0
     if dirichlet_bc
         body.strength[:, 1] .= prior_sigma
     end
@@ -1929,7 +1956,7 @@ function FGSPreconditioner(body::AbstractBody;
         multipole_acceptance=0.4,
         leaf_size=10,
         cache_leaf_lu::Bool=true,
-        sweep_order::Symbol=:lexicographic,
+        sweep_order::Symbol=:dagteam,   # default follows FGSSolver (dagteam+backoff, 2026-09-24)
         chunks::Int=64,
         dagteam_precision::Symbol=:f64,
         shrink=false,

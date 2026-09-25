@@ -386,8 +386,9 @@ end
         body.velocity[1, :] .= 1.0
 
         P = pnl.FGSPreconditioner(body; sweeps=1, inner_iterations=2, leaf_size=10000)
+        # cache_leaf_lu=false needs a non-dagteam sweep (dagteam requires the LU cache)
         P_uncached = pnl.FGSPreconditioner(body; sweeps=1, inner_iterations=2,
-            leaf_size=10000, cache_leaf_lu=false)
+            leaf_size=10000, cache_leaf_lu=false, sweep_order=:lexicographic)
 
         @test P.solver.cache_leaf_lu
         @test P.solver.fgs.cache_leaf_lu
@@ -1414,10 +1415,24 @@ end
         body.velocity .= 0
         body.velocity[1, :] .= 1.0
 
-        # default stays lexicographic; :colored constructs, solves, and reports
-        solver_lex = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+        # default is dagteam+backoff (adopted 2026-09-24, Ryan-approved);
+        # it constructs, solves, and reports
+        solver_def = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
             multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
             tolerance=1e-8, verbose=false)
+        @test solver_def.sweep_order === :dagteam
+        @test solver_def.dagteam_idle === :backoff
+        @test solver_def.dagteam_precision === :f64
+        pnl.solve!(body, solver_def)
+        @test any(abs.(body.strength[:, 1]) .> 0)
+        md_def = pnl._solver_metadata_dict(solver_def)
+        @test md_def["sweep_order"] == "dagteam"
+        @test md_def["dagteam_idle"] == "backoff"
+
+        # :lexicographic (previous default) still constructs and reports
+        solver_lex = pnl.FGSSolver(body; expansion_order=6, leaf_size=50,
+            multipole_acceptance=0.4, max_iterations=100, inner_iterations=2,
+            tolerance=1e-8, verbose=false, sweep_order=:lexicographic)
         @test solver_lex.sweep_order === :lexicographic
         @test pnl._solver_metadata_dict(solver_lex)["sweep_order"] == "lexicographic"
 
@@ -1497,7 +1512,9 @@ end
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
         solver1 = pnl.FGSSolver(body1)
-        solver_uncached = pnl.FGSSolver(body2; cache_leaf_lu=false)
+        # cache_leaf_lu=false needs a non-dagteam sweep (dagteam requires the LU cache)
+        solver_uncached = pnl.FGSSolver(body2; cache_leaf_lu=false,
+            sweep_order=:lexicographic)
         @test solver1.max_iterations == 100
         @test solver1.tolerance == 1e-6
         @test solver1.cache_leaf_lu

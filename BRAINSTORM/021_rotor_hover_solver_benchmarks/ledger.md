@@ -856,3 +856,17 @@ resume mechanism demonstrably worked (re-evaluation off the trace in seconds).
 Keep the phase_17 DUPLICATE trap active at full harvest: last row per resume
 key wins. `filament_reg` lives in the trace files only, not the summary CSV —
 trace is canonical. Verdict: full-fleet harvest is turnkey once R4–R7 land.
+
+### 2026-09-24: dagedge LOST; dagteam+backoff adopted as FGS default; scalability PARKED
+
+dagedge (edge-level pulls) lost to dagteam+backoff by +6.4% at j64
+(`fgs_dagedge_benchmark_results_20260924.md`); cross-executor delta 2.24e-7
+(tripwire 1e-5). Per Ryan 2026-09-24: (1) `FGSSolver`/`FGSPreconditioner`
+defaults changed to `sweep_order=:dagteam`, `dagteam_idle=:backoff`
+(`dagteam_precision` stays `:f64`; FastMultipole defaults untouched);
+(2) further FGS thread-scalability work PARKED despite remaining headroom
+(77 s summed idle @ j64; levers: NUMA first-touch + small-block repack,
+coarser-θ ladder, per-worker edge fusing); (3) next campaign = warm-start R4
+head-to-head, FGS(dagteam+backoff) vs krylov_ilu_nfcache
+(`fgs_warmstart_r4_reset_prompt_20260924.md`) — if warm FGS does not compete,
+FGS acceleration goes back to the drawing board.
