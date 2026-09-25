@@ -201,6 +201,7 @@ function _solver_metadata_dict(solver)
             "itmax" => solver.itmax,
             "atol" => solver.atol,
             "rtol" => solver.rtol,
+            "rtol_rhs" => solver.rtol_rhs,
             "memory" => solver.memory,
             "warmstart" => solver.warmstart,
             "warmstart_order" => solver.warmstart_order,

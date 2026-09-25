@@ -985,7 +985,8 @@ mutable struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP,TK
     method::Symbol         # Krylov method to use
     itmax::Int             # Maximum number of iterations
     atol::Float64          # absolute tolerance
-    rtol::Float64          # relative tolerance
+    rtol::Float64          # relative tolerance (vs INITIAL residual; Krylov.jl)
+    rtol_rhs::Float64      # >0: absolute target rtol_rhs*||b|| per solve (see ctor)
     memory::Int            # restart/memory parameter (methods that take one)
     preconditioner::TP     # nothing, JacobiPreconditioner, or FGSPreconditioner
     warmstart::Bool        # seed solves with x_prev (off by default)
@@ -1013,7 +1014,17 @@ function KrylovSolver(body::AbstractBody;
         method::Symbol=:gmres,    # Krylov method to use
         itmax::Int=20,         # Maximum number of iterations
         atol::Real=1e-6,            # Convergence tolerance
-        rtol::Real=1e-6,            # Relative convergence tolerance
+        rtol::Real=1e-6,            # Relative convergence tolerance (Krylov.jl
+                                    # semantics: relative to the INITIAL residual
+                                    # r0 = b - A*x0, so a warm start shrinks the
+                                    # stopping target with it)
+        rtol_rhs::Real=0.0,         # >0: stop at ||r|| <= atol + rtol_rhs*||b||
+                                    # (absolute target anchored to the CURRENT
+                                    # rhs; rtol is ignored at launch). Identical
+                                    # to rtol for cold solves (r0 = b), but keeps
+                                    # the target FIXED under a warm start — use
+                                    # this for warm-start time-to-target
+                                    # comparisons (021 warm-start campaign).
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
         memory::Int=20,             # restart/memory parameter
         preconditioner=nothing,     # preconditioner object (see docstring)
@@ -1074,6 +1085,7 @@ function KrylovSolver(body::AbstractBody;
                         typeof(kop), typeof(A), typeof(workspace)}(
         body, backend, Uext, source_strengths, unabbreviated_strengths,
         kop, A, rhs, workspace, method, itmax, Float64(atol), Float64(rtol),
+        Float64(rtol_rhs),
         Int(memory), preconditioner, warmstart, x_prev, false,
         warmstart_order, x_history, 0, x0_scratch,
         record_history, history, 0, false, SolveStepStats(),
@@ -1145,7 +1157,17 @@ function _krylov_launch!(solver::KrylovSolver)
         callback = ws -> false
     end
 
-    common = (; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax,
+    # rtol_rhs > 0: fixed-accuracy stopping — Krylov.jl's rtol is relative to
+    # the INITIAL residual r0 = b - A*x0, so a warm start would shrink the
+    # target with r0 and the solve would go deeper instead of finishing
+    # earlier. Anchoring to ||b|| keeps the promised accuracy constant across
+    # cold and warm arms (identical for cold, where r0 = b).
+    atol_eff, rtol_eff = if solver.rtol_rhs > 0
+        solver.atol + solver.rtol_rhs * LA.norm(rhs), 0.0
+    else
+        solver.atol, solver.rtol
+    end
+    common = (; atol=atol_eff, rtol=rtol_eff, itmax=solver.itmax,
               history=solver.record_history, callback)
     # Initial guess (021 Phase 3). warmstart_order == 0 keeps the historical
     # previous-solution path bit-for-bit; >=1 builds a polynomial extrapolation

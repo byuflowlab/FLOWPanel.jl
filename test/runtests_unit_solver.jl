@@ -1486,6 +1486,41 @@ end
         @test md["dagedge_theta"] == 2048
     end
 
+    @testset "KrylovSolver rtol_rhs fixed-accuracy stopping (021 warm-start)" begin
+        # Krylov.jl's rtol is relative to the INITIAL residual, so a warm x0
+        # shrinks the stopping target with it; rtol_rhs anchors the target to
+        # ||b|| instead. Cold behavior must be identical (r0 = b).
+        mkbody() = begin
+            b = make_dirichlet_diamond_body(nspan=40)
+            b.velocity .= 0
+            b.velocity[1, :] .= 1.0
+            b
+        end
+        kw = (; method=:gmres, backend=pnl.DirectBackend(), atol=1e-14,
+              itmax=200, warmstart=false)
+        body_r = mkbody()
+        solver_r = pnl.KrylovSolver(body_r; kw..., rtol=1e-8)
+        pnl.solve!(body_r, solver_r)
+        body_a = mkbody()
+        solver_a = pnl.KrylovSolver(body_a; kw..., rtol=1e-8, rtol_rhs=1e-8)
+        pnl.solve!(body_a, solver_a)
+        @test solver_a.niter == solver_r.niter        # cold: identical target
+        @test body_a.strength == body_r.strength
+        @test pnl._solver_metadata_dict(solver_a)["rtol_rhs"] == 1e-8
+
+        # warm start with a fixed target: re-solving the SAME system from its
+        # own solution must terminate (near-)immediately, NOT re-iterate to a
+        # deeper r0-relative target
+        body_w = mkbody()
+        solver_w = pnl.KrylovSolver(body_w; kw..., rtol=1e-8, rtol_rhs=1e-8,
+                                    warmstart=true)
+        pnl.solve!(body_w, solver_w)
+        niter_cold = solver_w.niter
+        pnl.solve!(body_w, solver_w)   # warm, unchanged system
+        @test solver_w.niter < niter_cold
+        @test solver_w.solved
+    end
+
     @testset "KrylovCoupled warmstart" begin
         body1 = make_octa_source_body()
         body2 = translated_nonlifting_target([3.0, 0.0, 0.0])
