@@ -204,10 +204,23 @@ Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
 
 ## Staged submissions — SUBMITTED 2026-09-25
 
-**Job 1 = 13889501** (`run_r4_fgs_warmstart.slurm.sh`, m12),
-**Job 2 = 13889502** (`run_r4_fgs_cold_newdefault.slurm.sh`, m12 array
-j ∈ {1,8,16,32,64}), both from the refreshed deploy tree (FLOWPanel pin
-`0aaceaf1…`) with exactly the env below.
+**Job 1 = 13890195** (`run_r4_fgs_warmstart.slurm.sh`, m12; third
+submission), **Job 2 = 13889502** (`run_r4_fgs_cold_newdefault.slurm.sh`,
+m12 array j ∈ {1,8,16,32,64}; **COMPLETE 2026-09-25**, all 5 rungs
+COMPLETED + certified, j64 cold min 3.24 s — on the expected 3.2–3.3 s),
+both from the refreshed deploy tree (FLOWPanel pin `0aaceaf1…`) with
+exactly the env below.
+
+Second Job 1 submission (13889501) started 04:33, all 14 legs FAILED in
+~19 s each: **deployment defect 3 — the campaign env lacked `VSPGeom`**
+(the fixture example's first import; the env rebuild cloned the dagedge
+env, whose driver chain never loads the pressure-comparison example, and
+the overwritten 1.12.7 env had carried it). Fixed: `VSPGeom v0.6.6` added
+to the env Project under module julia/1.11.7 (Manifest already carried it
+as an indirect dep; load-tested), and the driver chain's full import list
+audited — remaining imports are stdlibs + the three dev-pinned packages.
+winB legs correctly SKIPPED-NO-CHECKPOINT (launcher gating worked); the
+wrapper's failed_count sentinel behaved as designed.
 
 First submission (13889222/13889223, 2026-09-25) died at preflight in
 ~40–95 s on TWO deployment defects, both fixed before resubmitting:
