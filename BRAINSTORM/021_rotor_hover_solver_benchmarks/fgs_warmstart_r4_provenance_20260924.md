@@ -204,11 +204,38 @@ Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
 
 ## Staged submissions — SUBMITTED 2026-09-25
 
-**Job 1 = 13889222** (`run_r4_fgs_warmstart.slurm.sh`, m12),
-**Job 2 = 13889223** (`run_r4_fgs_cold_newdefault.slurm.sh`, m12 array
+**Job 1 = 13889501** (`run_r4_fgs_warmstart.slurm.sh`, m12),
+**Job 2 = 13889502** (`run_r4_fgs_cold_newdefault.slurm.sh`, m12 array
 j ∈ {1,8,16,32,64}), both from the refreshed deploy tree (FLOWPanel pin
-`0aaceaf1…`) with exactly the env below. Expect queue wait for the exclusive
-node (dagedge jobs 13879622/25 share the m12 queue).
+`0aaceaf1…`) with exactly the env below.
+
+First submission (13889222/13889223, 2026-09-25) died at preflight in
+~40–95 s on TWO deployment defects, both fixed before resubmitting:
+
+1. **`data` symlink raced by the archive extraction**: `git archive` had
+   already extracted the tracked `data/` as a real directory, so the
+   original deploy's `ln -s <shared root> data` landed NESTED as
+   `data/data` instead of replacing it — the launcher's Das-arc-table
+   preflight (`data/p018_cs_l3p4_rs1_te_downwash_te.csv`) correctly
+   refused, and relative `data/` ckpt VTK writes would have landed inside
+   the campaign tree. Fixed: deploy `data` is now a real symlink to
+   `/home/rander39/projects/FLOWPanel.jl/data`. Consequence: the content
+   manifest no longer lists `data/` entries (15 dropped, 3240 remain,
+   manifest sha256 `1c36d11789db2784e4a211b280ba6f1204d233f76e276ed70dc2
+   6ceb6bbfcf98`, re-VERIFIED on orc, pins.toml updated) — the shared root
+   is live-mutable BY DESIGN (runs append to
+   `rotor_hover_pressure_comparison.metadata.toml`; 13 tracked
+   `surface_vorticity_conversion_static/*` files were never synced to the
+   orc live clone), so manifest-verifying it would break the first time a
+   run writes.
+2. **Julia version mismatch in the campaign env**: the env's Manifest had
+   been resolved under the login shell's juliaup default (1.12.7) while
+   the launchers `module load julia/1.11.7` (fatal on Job 2:
+   `JuliaSyntaxHighlighting` is a 1.12 stdlib). Fixed: env rebuilt from
+   the dagedge campaign env's 1.11.7 Project/Manifest, dev paths
+   re-pointed at the three warmstart deploy trees under module-loaded
+   1.11.7, `julia_version = "1.11.7"` confirmed, FLOWPanel/FastMultipole/
+   FLOWVPM precompiled clean.
 
 Submitted from an orc login shell as:
 
