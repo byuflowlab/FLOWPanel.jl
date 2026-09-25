@@ -256,8 +256,48 @@ per-arm from-scratch Window A kept.
 
 ## Smoke + harvest
 
-- Local smoke (R1, 4 threads, 8 steps, all 7 arms): _result recorded here
-  when complete._
+- Local smoke (R1, 4 threads, 8 steps, all 7 arms): PASS 2026-09-24 (see the
+  Job 1 section's three-defect list).
+- **Leg smoke (checkpoint+restart layout, R1/NT=4, all 7 stages): PASS
+  2026-09-25** after root-causing the winB restart failure (defect 4 below).
+  Both ckpt legs, both winA legs, and all three winB legs green; every CSV
+  row `solved=true`. Restart fidelity: `fgs_cold_winB` strength checksum
+  60440.053311890275 vs the clean 16-step forward control's
+  60440.05331189029 (~1e-13 relative — the restarted march reproduces the
+  forward march), niter_first flat at 14 matching forward. Warm engagement
+  across restart: `fgs_prev_winB` niter_first 14→5→5→4;
+  `ilu_nfcache_prev_winB` 7→4→4→4 (previously itmax=500 every step).
+- **Defect 4 (winB, root-caused 2026-09-25)**: `simulate_warmstart!` replayed
+  the checkpoint's rigid kinematics (restart_step+1 `propagate_kinematics!`
+  calls) but never mirrored them into persistent solver FMM state the way
+  `simulate!` does per step via `transform_body_solvers!` — FGS trees and the
+  primed persistent Krylov plan+nfcache stayed at construction pose while the
+  body sat 90° away at the first restarted solve, so BOTH families solved a
+  wrong operator (FGS: slow first step then nonfinite residual; ILU: itmax
+  garbage, CF ~1e7). Not NT-dependent — the campaign at NT=36 would have
+  been garbage too. Historical 018 restarts never hit it (Backslash/plain
+  Krylov persist no FMM state; `transform_solver_geometry!` no-ops). Fix:
+  `simulate_warmstart!` now accumulates the net rigid delta across the whole
+  replay (loop + end-of-step propagate) and applies it once via
+  `transform_body_solvers!` after normals/control points are refreshed (same
+  ordering contract as `simulate!`). Attribution control: with the fix, a
+  winB restart from the ORIGINAL Float32 checkpoint also passes cleanly
+  (checksum 60440.05331170113, ~3e-12 relative off the f64 value) — the f32
+  particle series was never the fatal defect, only a replay-exactness cost.
+- **Defect 5 (hygiene, same session)**: the fixture example defaults
+  `FLOWPANEL_PARTICLE_PRECISION=f32` (visualization); campaign checkpoints
+  are restart sources, so the driver now forces the package-level f64
+  default (explicit env still wins).
+- **Defect 6 (harness gap)**: a leg whose steps hit itmax still wrote an
+  `ok` sentinel (observed on the garbage ilu winB leg). The driver now
+  fails the leg when any CSV row reads `solved=false`.
+- Unit suites after the fixes (2026-09-25): `runtests_unit_solver.jl`
+  513/513 PASS; `runtests_unit_warmstart.jl` all testsets PASS (a
+  pre-existing `_publish_block_gs_status!` WeakKeyDict crash on immutable
+  solvers was guarded — status publication now skips immutable solver keys).
+  Coverage note: the warmstart unit suite exercises only no-op/Backslash
+  solvers, so the defect-4 mechanism (persistent solver FMM state across
+  restart) has NO unit pin — the leg smoke is the regression guard for now.
 - Harvest deliverable: `fgs_warmstart_r4_results_<date>.md` — per-arm
   Window A/B tables (iterations + time-to-target mean±spread/median), setup
   cost in its own column, per-step cost traces vs step index (transient

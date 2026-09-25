@@ -2400,7 +2400,12 @@ _empty_block_gs_status() = (iterations=0, final_max_delta=NaN,
     failure=nothing)
 
 function _publish_block_gs_status!(solvers, status)
-    isempty(solvers) || (_BLOCK_GS_STATUS[first(solvers)] = status)
+    isempty(solvers) && return status
+    solver = first(solvers)
+    # WeakKeyDict keys must be mutable (weak refs need finalizers); immutable
+    # solvers (e.g. stateless test no-ops) simply skip status publication and
+    # read back the empty default.
+    ismutable(solver) && (_BLOCK_GS_STATUS[solver] = status)
     return status
 end
 

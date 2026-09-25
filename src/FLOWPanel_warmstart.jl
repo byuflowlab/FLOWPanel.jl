@@ -401,6 +401,17 @@ function _zero_resolution_split_state!(rs)
     return nothing
 end
 
+# Compose one step's per-system rigid deltas (from propagate_kinematics!)
+# onto the accumulated net deltas: x -> R2*(R1*x + t1) + t2.
+function _compose_net_transforms!(net, step)
+    for i in eachindex(net)
+        R1, t1 = net[i]
+        R2, t2 = step[i]
+        net[i] = (R2 * R1, R2 * t1 + t2)
+    end
+    return net
+end
+
 #--- public API ---#
 
 """
@@ -533,9 +544,18 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     # wake row. Loading frames from the manifest alone leaves Das at its
     # construction-time orientation, misplacing the wake buffer row by O(|Das|)
     # and corrupting the Kutta condition at the first continued solve.
+    # Accumulate the NET rigid delta of the whole replay (loop below plus the
+    # section-5 end-of-step propagate) so it can be mirrored into persistent
+    # solver FMM state (FGS trees, persistent Krylov plan + nearfield cache)
+    # exactly as simulate!'s loop does per step via transform_body_solvers!.
+    # Without this mirror, solver state built at construction pose is stale by
+    # the net replayed rotation at the first continued solve — both solver
+    # families then converge to (or diverge on) a wrong operator.
+    net_transforms = _identity_transforms(length(systems_tuple))
     for i in 0:(restart_step - 1)
         maneuver!(frames, systems_tuple, wakes_tuple, t_range[i+1])
-        propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
+        step_transforms = propagate_kinematics!(systems_tuple, frames, t_range[i+2] - t_range[i+1])
+        _compose_net_transforms!(net_transforms, step_transforms)
     end
     maneuver!(frames, systems_tuple, wakes_tuple, t_range[restart_step+1])
 
@@ -667,11 +687,16 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
             propagate!(w, dt_end; step=restart_step, frames)
         end
     end
-    propagate_kinematics!(systems_tuple, frames, dt_end)
+    step_transforms = propagate_kinematics!(systems_tuple, frames, dt_end)
+    _compose_net_transforms!(net_transforms, step_transforms)
     for sys in systems_tuple
         calc_normals!(sys)
         calc_controlpoints!(sys)
     end
+    # Mirror the whole replay's net rigid delta into persistent solver FMM
+    # state, after normals/control points are current (same ordering contract
+    # as simulate!'s per-step transform_body_solvers! call).
+    transform_body_solvers!(body_solvers, systems_tuple, net_transforms)
     for (sys, w) in zip(systems_tuple, wakes_tuple)
         !isnothing(w) && shed_wake!(w, sys)
     end

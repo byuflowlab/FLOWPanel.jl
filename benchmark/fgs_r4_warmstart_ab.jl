@@ -126,6 +126,11 @@ end
 # no settling exclusion anywhere (Ryan 2026-09-24); the summary printed by the
 # unsteady driver then covers all steps, and windows are cut at harvest
 ENV["SKIP_STEPS"] = "0"
+# The fixture example defaults the particle .vtp series to Float32
+# (visualization-focused). Campaign checkpoints are RESTART SOURCES: force the
+# package-level f64 default so winB continuations are replay-faithful (the
+# warm-start loader warns on a Float32 series). Explicit env still wins.
+_setdefault!("FLOWPANEL_PARTICLE_PRECISION", "f64")
 _setdefault!("PHASE", "phase3wsr4")          # phase3* => CT monitor on
 _setdefault!("SNAPSHOT_STRENGTHS", "1")
 if config_arm == "fgs" && !haskey(ENV, "FGS_P")
@@ -145,6 +150,12 @@ _status("running")
 
 try
     include(joinpath(@__DIR__, "rotor_hover_solver_unsteady.jl"))
+    # A leg whose steps hit itmax is NOT ok even though the march completed:
+    # judge convergence, not just survival (2026-09-24 smoke: the ilu winB leg
+    # read ok while every restarted step was unconverged at CF ~1e7).
+    n_unconverged = count(!, timed_formulation.solved)
+    n_unconverged == 0 || error("$(n_unconverged) of $(length(timed_formulation.solved)) " *
+        "steps unconverged (solved=false) — failing leg $armleg")
     _status("ok")
     write(joinpath(outdir_status, "COMPLETED_$armleg"),
           "completed $(time_string())\n")
