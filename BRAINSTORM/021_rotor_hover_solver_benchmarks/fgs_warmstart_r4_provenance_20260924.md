@@ -1,8 +1,12 @@
 # Provenance: 021 warm-start R4 head-to-head + cold rerun under the new FGS default (2026-09-24)
 
 Campaign spec: `fgs_warmstart_r4_reset_prompt_20260924.md` (Jobs 1 and 2).
-**Status: DRAFT — pins unfilled, submission NOT approved. Both sbatch lines
-are staged for one Ryan approval; nothing runs until his explicit go.**
+**Status: SUBMITTED 2026-09-25 under Ryan's 2026-09-24 go ("permission to
+launch on hpc once bugs are fixed") after the winB restart fix (defect 4
+below) and a full 7-stage leg-smoke PASS. Launched with the staged defaults
+for the four open decision points (champion cold tolerance carried;
+36 h walltime; ilu_nfcache_proj1 kept; sequential legs on one exclusive
+node) — Ryan may still veto/rework any of these.**
 
 ## Decision rule (Ryan 2026-09-24)
 
@@ -153,7 +157,7 @@ Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
 
 | repo | branch | SHA | content |
 |---|---|---|---|
-| FLOWPanel.jl | `fastmultipole` | `f88e35afcd76eadd9eee45ac25d03fcaa2506594` | campaign harness on top of `08667c2` (dagteam+backoff default + t_project) |
+| FLOWPanel.jl | `fastmultipole` | `0aaceaf18438db04276f06670d860742fffd8459` | campaign harness + winB restart fix (tag refreshed 2026-09-25; was `f88e35a`) |
 | FastMultipole | `flowpanel-20260817` | `745af76022ea782146901fd65fc301f8474cbc8c` | dagteam empty-direct-list fix on Stage-2 pin `053c8de7` (+dagedge `90a60cc3`) |
 | FLOWVPM.jl | `flowpanel` | `8d4a3b4d3012c42fc7d078629234c105b1e570f7` | unchanged production pin (new-merge-law default) |
 
@@ -167,6 +171,17 @@ Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
 - [x] `pins.toml` written at the campaign root (deployment="rsync", tag +
   SHA + manifest hash per repo, hashes:
   FLOWPanel `5d1c5fb0…`, FastMultipole `b5d11503…`, FLOWVPM `b4d0fa8d…`).
+- [x] **Deployment refreshed 2026-09-25** for the winB restart fix: tag
+  `campaign/p021-fgs-warmstart-20260924` recut at FLOWPanel `0aaceaf1…`
+  (FastMultipole/FLOWVPM pins unchanged), `git archive` re-exported locally
+  (the 26 git-tracked `__MACOSX/._*` files macOS tar folds into xattrs were
+  restored from git before manifesting), whole export rsynced over the orc
+  FLOWPanel tree (the `data/` dir with its shared-root symlink left
+  untouched — no tracked `data/` content changed), manifest regenerated
+  (3255 files, manifest sha256 `4c4dd301f76e7776d1c4bb01f766b4011fd0c8c8
+  9da6efff1624d20edc34d35a`) and `sha256sum --quiet -c` VERIFIED on orc;
+  `pins.toml` FLOWPanel `sha` + `content_manifest_sha256` updated in place.
+  Campaign env unchanged (src-only edits).
 - [x] Campaign env `…/env` cloned from the dagedge campaign env (same dep
   versions; no Project.toml changes since) and `Pkg.develop`-repointed at
   the three deploy trees — Manifest paths verified.
@@ -187,9 +202,15 @@ Tag (all repos): `campaign/p021-fgs-warmstart-20260924`
   submittable, expect queue wait for an exclusive node (dagedge jobs
   13879622/25 are in the same queue).
 
-## Staged submissions (RYAN'S GO REQUIRED — nothing submitted)
+## Staged submissions — SUBMITTED 2026-09-25
 
-From an orc login shell:
+**Job 1 = 13889222** (`run_r4_fgs_warmstart.slurm.sh`, m12),
+**Job 2 = 13889223** (`run_r4_fgs_cold_newdefault.slurm.sh`, m12 array
+j ∈ {1,8,16,32,64}), both from the refreshed deploy tree (FLOWPanel pin
+`0aaceaf1…`) with exactly the env below. Expect queue wait for the exclusive
+node (dagedge jobs 13879622/25 share the m12 queue).
+
+Submitted from an orc login shell as:
 
 ```bash
 DEPLOY=/home/rander39/campaigns/p021-fgs-warmstart-20260924
