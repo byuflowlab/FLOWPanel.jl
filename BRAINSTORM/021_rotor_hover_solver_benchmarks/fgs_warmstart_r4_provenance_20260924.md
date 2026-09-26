@@ -364,3 +364,32 @@ per-arm from-scratch Window A kept.
   cost in its own column, per-step cost traces vs step index (transient
   shape is a deliverable), solution-agreement report, compete/no-compete
   recommendation for Ryan's ruling. Notebook entry: offered, not written.
+
+## Addendum 2026-09-26 — ilu_nfcache_proj2 follow-up (job 13899021)
+
+Ryan directed a quadratic-ILU arm for a proj2-vs-proj2 head-to-head with
+fgs_proj2 (the 14-leg slate had no `ilu_nfcache_proj2`, so best-vs-best
+compared FGS order-2 against ILU order-1).
+
+- **Change**: one `ARM_TABLE` line in `benchmark/fgs_r4_warmstart_ab.jl` —
+  `"ilu_nfcache_proj2" => ("krylov_ilu_nfcache", "extrap", 2)` — FLOWPanel
+  commit `b6a09244`, annotated tag `campaign/p021-fgs-warmstart-20260926`.
+  FastMultipole (`745af760`) and FLOWVPM (`8d4a3b4d`) pins UNCHANGED, still
+  cited by tag `campaign/p021-fgs-warmstart-20260924`.
+- **R1 smoke PASS** (STAGES="ilu_nfcache_cold:ckpt ilu_nfcache_proj2:winA
+  ilu_nfcache_proj2:winB", NT=4, 4 threads): 3/3 legs ok; winB restart from
+  step 12, niter_first 7→4→3→3, all rows extrap/order 2, solved=true.
+- **Deploy refresh (rsync-mode, minimal)**: existing tree verified clean
+  against its manifest FIRST, single changed file scp'd, its manifest line
+  updated, whole tree re-verified (`TREE-REVERIFIED-CLEAN`), `pins.toml`
+  FLOWPanel entry updated (tag `…-20260926`, sha `b6a09244…`, new
+  content_manifest_sha256 `395381be…`).
+- **Submitted 2026-09-26 09:14 MDT as job 13899021** (m12, zen3 exclusive,
+  `--time=08:00:00`), env identical to Job 1 (FGS_TOL_ABS
+  3.4309419310610173e-7; KNOBS P12/MAC0.55/leaf48) plus
+  `STAGES="ilu_nfcache_proj2:winA ilu_nfcache_proj2:winB"` and
+  `RESUME_FROM_JOB_ID=13890195` — the two legs append to run dir
+  `fgs-wsr4-13890195` (landed legs skip by STATUS; winB restarts from the
+  existing `fgs_wsr4_R4_ckpt_ilu` step-108 checkpoint, verified present in
+  all four loader dirs pre-submit). Started RUNNING immediately on m12-2-11.
+- Expected duration ~2.5–3 h (Job 1 ilu legs were ~72–75 min each).
