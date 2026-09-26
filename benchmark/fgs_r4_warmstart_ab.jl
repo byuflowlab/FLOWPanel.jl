@@ -62,6 +62,9 @@ const ARM_TABLE = Dict(
     # optional arm (Ryan may strike): extrapolated x0 reusing the SAME shared
     # extrapolation coefficients as FGS's project_solution!, for comparability
     "ilu_nfcache_proj1" => ("krylov_ilu_nfcache", "extrap",  1),
+    # added 2026-09-26 (Ryan): quadratic ILU arm for a proj2-vs-proj2
+    # head-to-head with fgs_proj2 (closes the best-vs-best asymmetry)
+    "ilu_nfcache_proj2" => ("krylov_ilu_nfcache", "extrap",  2),
 )
 
 arm = get(ENV, "ARM", "")
