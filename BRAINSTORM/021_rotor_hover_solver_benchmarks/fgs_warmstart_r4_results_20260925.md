@@ -14,6 +14,12 @@ Campaign per `fgs_warmstart_r4_provenance_20260924.md` (pins: tag
   (still certified-column true; see harvest summary).
 - **Job 2 = 13889502** (cold R4 FGS under the new dagteam+backoff default):
   all 5 rungs COMPLETED + evaluator-certified.
+- **Follow-up job 13899021** (Ryan-directed `ilu_nfcache_proj2` arm, tag
+  `campaign/p021-fgs-warmstart-20260926`, FLOWPanel `b6a09244`; see the
+  2026-09-26 addendum in the provenance file): COMPLETED 2026-09-26,
+  2:28 elapsed, both legs "ok" (winA + winB restarted from the existing
+  ILU step-108 checkpoint), all rows `solved=true`, zero audit flags.
+  Tables below include this arm (harvest re-run 2026-09-26).
 - Raw harvest outputs (backing data for every table below):
   `fgs_warmstart_r4_results_20260925/harvest_{summary.md,traces.csv,solution_deltas.csv}`
   (copies of the run-dir originals in
@@ -46,6 +52,7 @@ tolerance. Setup costs are NEVER amortized into per-step numbers.
 | ilu_nfcache_cold | 11.10 ± 2.6 (11.06) | 16.25 ± 1 (16) | 0 | 81.67 / 28.22 | 0 | 0 |
 | ilu_nfcache_prev | 10.22 ± 2.8 (10.19) | 11.78 ± 6 (12) | 0 | 79.41 / 28.24 | 0 | 0 |
 | ilu_nfcache_proj1 | 9.92 ± 3.6 (9.90) | 10.31 ± 7 (10) | 0.00033 | 81.86 / 28.13 | 0 | 0 |
+| ilu_nfcache_proj2 | 9.12 ± 3.0 (9.11) | 9.64 ± 8 (9) | 0.00034 | 82.24 / 27.67 | 0 | 0 |
 
 ## Window B (developed wake, steps 109–144, restarted)
 
@@ -58,6 +65,7 @@ tolerance. Setup costs are NEVER amortized into per-step numbers.
 | ilu_nfcache_cold | 10.64 ± 1.3 (10.65) | 15.00 ± 0 (15) | 0 | 81.67 / 28.22 | 0 | 0 |
 | ilu_nfcache_prev | 9.27 ± 3.3 (9.24) | 7.08 ± 9 (7) | 0 | 79.41 / 28.24 | 0 | 0 |
 | ilu_nfcache_proj1 | 8.73 ± 3.4 (8.68) | 5.11 ± 11 (5) | 0.00034 | 81.86 / 28.13 | 0 | 0 |
+| ilu_nfcache_proj2 | 8.25 ± 3.1 (8.22) | 4.42 ± 12 (4) | 0.00032 | 82.24 / 27.67 | 0 | 0 |
 
 ## Per-step traces (full traces in `harvest_traces.csv`)
 
@@ -73,6 +81,7 @@ is exactly the designed (order+1)-step cold transient:
 | ilu_nfcache_cold | 16 16 16 16 17 17 17 17 17 17 17 17 | 15 15 15 15 15 15 15 15 15 15 15 15 |
 | ilu_nfcache_prev | 16 14 14 13 13 12 11 10 10 10 10 11 | 15 **7** 7 7 7 7 7 7 7 7 7 7 |
 | ilu_nfcache_proj1 | 16 14 13 13 12 12 11 10 10 9 9 9 | 15 **7** 5 5 5 5 5 5 5 5 4 4 |
+| ilu_nfcache_proj2 | 16 14 13 14 13 11 10 10 9 8 8 8 | 15 **7** 5 4 4 4 4 4 3 3 4 4 |
 
 Projection engages at step order+2 as designed; in the developed wake
 (winB) FGS proj1/proj2 settle at 2–5 iterations vs 22 cold — an ~8×
@@ -93,17 +102,23 @@ Cumulative through Window A (36 steps), setup INCLUDED:
 | ilu_nfcache_cold | 509.4 |
 | ilu_nfcache_prev | 475.4 |
 | ilu_nfcache_proj1 | 467.0 |
+| ilu_nfcache_proj2 | 438.3 |
 
 - Every ilu_nfcache arm is ahead of every FGS arm from **step 1** (FGS
   setup 315–320 s vs ILU setup+prime 108–110 s) and stays ahead through
   step 144 of this campaign.
-- **Steady-state crossover (Window-B medians):** the best FGS arm
-  (`fgs_proj2`, 8.25 s/step) out-paces the best ILU arm
-  (`ilu_nfcache_proj1`, 8.68 s/step) by 0.435 s/step but pays a
-  209.5 s setup penalty → break-even at **~480 steps** (~13 revolutions at
-  NT=36 per rev), beyond which fgs_proj2 is cumulatively cheaper.
-  With `prev` warm-start the sign is reversed (fgs_prev is 0.62 s/step
-  SLOWER than ilu_nfcache_prev) and there is no crossover.
+- **Steady-state crossover, best-vs-best (Window-B medians, t_solve +
+  t_project): NONE.** With the order-matched head-to-head now measured,
+  `ilu_nfcache_proj2` (8.216 s/step) is *faster* than `fgs_proj2`
+  (8.246 s/step) by 0.031 s/step median (0.384 s/step by means, 8.250 vs
+  8.634) *and* carries the ~210 s cheaper setup — fgs_proj2 never breaks
+  even. The per-step median gap is within noise (~0.4%, spreads ±3.1 vs
+  ±9.7), so the honest statement is: per-step it is a statistical tie,
+  and the setup difference then decides every horizon in ILU's favor.
+- The previous **~480-step crossover** was an artifact of the original
+  slate's order asymmetry (fgs_proj2 vs ilu_nfcache_*proj1*, 8.68 s/step);
+  it is superseded by the row above. With `prev` warm-start the sign was
+  already reversed (fgs_prev 0.62 s/step slower) with no crossover.
 - Note the ILU numbers here exclude nothing: its near-field cache build is
   inside the reported `t_setup`/`t_prime` columns.
 
@@ -120,6 +135,7 @@ From `*_strength_snapshots.bin` (per-step full strength vectors; table in
 | ilu_nfcache_cold | 6.9e-05 / 2.4e-04 | 6.0e-04 / 1.1e-03 |
 | ilu_nfcache_prev | 7.4e-05 / 4.0e-04 | 6.0e-04 / 1.1e-03 |
 | ilu_nfcache_proj1 | 6.4e-05 / 1.9e-04 | 6.0e-04 / 1.1e-03 |
+| ilu_nfcache_proj2 | 6.7e-05 / 3.8e-04 | 6.0e-04 / 1.1e-03 |
 
 Warm-starting does not move the answer: within a solver family every
 warm mode agrees with its cold reference to ≤4e-04. The larger (~6e-04 to
@@ -130,8 +146,8 @@ chased, per the campaign charter.
 
 ## CT traces
 
-- Window A: all seven arms agree to 1e-5 absolute — CT@36 spans
-  0.050952–0.050958 (spread 0.01%). Checkpoint legs continue to step 108
+- Window A: all eight arms (incl. ilu_nfcache_proj2, CT@36 = 0.0509585)
+  agree to 1e-5 absolute — CT@36 spans 0.050952–0.050959 (spread 0.01%). Checkpoint legs continue to step 108
   (CT@108 = 0.014940 fgs / 0.014939 ilu, agreeing to 5e-6 — the low value
   is the usual mid-transient CT dip of this fixture, not a solver effect).
 - **Caveat: every restarted (winB) row logs CT = −0** — the restart path
@@ -170,23 +186,28 @@ dagteam).
 Presented per the campaign charter — medians, spreads, and crossover;
 no pre-judgment:
 
-- **Per-step, developed wake (winB medians):** fgs_proj2 8.25 s is the
-  fastest arm overall; ilu_nfcache_proj1 8.68 s; the FGS spread (±9.7) is
-  ~3× the ILU spread (±3.4).
-- **Cumulative:** ILU's ~210 s setup advantage means FGS-proj2 breaks even
-  only after ~480 steps of developed-wake marching; short runs and
-  startup-heavy work stay ILU-favored under these measurements.
+- **Per-step, developed wake (winB medians):** with the order-matched arm
+  landed, ilu_nfcache_proj2 8.22 s and fgs_proj2 8.25 s are a statistical
+  tie (means favor ILU, 8.25 vs 8.63); the FGS spread (±9.7) is ~3× the
+  ILU spread (±3.1).
+- **Cumulative:** ILU's ~210 s setup advantage plus per-step parity means
+  fgs_proj2 has NO break-even horizon against ilu_nfcache_proj2 under
+  these measurements — the previous ~480-step crossover was vs the
+  order-1 ILU arm and is superseded.
 - **Iteration budget:** warm-start compresses FGS niter_first far more than
-  ILU's (22→2 vs 15→5), so any future per-iteration cost reduction (e.g.
+  ILU's (22→2 vs 15→4), so any future per-iteration cost reduction (e.g.
   the Stage-2 sweep-width work) leverages FGS disproportionately.
 - **Memory:** ilu_nfcache carries ~18 GB of cache+state at R4; FGS is far
   lighter (unchanged from the 2026-09-22 caveats).
-- Solution quality is equivalent across all arms (tables above); the only
-  audit flag in 655 rows is one bcerr>tol step in fgs_cold winB.
+- Solution quality is equivalent across all arms including the follow-up
+  (tables above); the only audit flag across all rows is one bcerr>tol
+  step in fgs_cold winB.
 
 ## Status / gates
 
-- Harvest COMPLETE for both jobs (this file is the deliverable of record).
+- Harvest COMPLETE for both jobs + the 13899021 follow-up (this file is
+  the deliverable of record; backing copies refreshed 2026-09-26 after the
+  follow-up harvest).
 - Storage: run dirs + ckpt trees (`fgs_wsr4_R4_ckpt_{fgs,ilu}`, 847 M each;
   checkpoints confirmed to live INSIDE those run dirs as nested .vtm/.vtu —
   the "0 .vtp" monitor oddity was a wrong-depth glob) handed to the
@@ -194,8 +215,8 @@ no pre-judgment:
 - Notebook entry OFFERED to Ryan (FGS Stages 1+2, gate-0, dagedge, default
   adoption, warm-start campaign + winB restart fix) — verbosity per topic
   pending his call.
-- Origin pushes of the three campaign tags still owed after
-  `gh auth login`.
+- Origin pushes of ALL campaign tags (now incl.
+  `campaign/p021-fgs-warmstart-20260926`) still owed after `gh auth login`.
 - Ryan may still veto the four submission defaults used (champion cold
   tolerance 3.4309419310610173e-7; 36 h walltime; ilu_nfcache_proj1 kept;
   sequential legs on one exclusive node).
