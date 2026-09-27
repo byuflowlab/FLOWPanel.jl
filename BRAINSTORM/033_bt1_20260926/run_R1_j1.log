@@ -1,0 +1,29 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 1
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = mecsrs-MacBook-Pro-188.local
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 21:16:01
+######################################################################
+TUNED[R1] = (17, 0.5, 21) (csv-first precedence; hardcoded R1-R3 are fallback)
+┌ Warning: SKIP_B=1: frozen b NOT assembled for R1 — rms_b is NaN and this case MUST NOT be solved (geometry-only consumers only)
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/phase1_case.jl:220
+R1 Dirichlet case: 8016 panels, rms(b) = NaN (direct source assembly 0.0 s)
+
+┌ Warning: champion TOML is R4; transplanting its knobs onto R1
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/fgs_setup_profile.jl:55
+decomp pass 0: phase_sum = 11.42 s
+decomp pass 1: phase_sum = 8.21 s
+decomp pass 2: phase_sum = 8.2 s
+decomp pass 3: phase_sum = 8.15 s
+full ctor pass 1: 9.25 s
+full ctor pass 2: 8.14 s
+full ctor pass 3: 8.12 s
+CSV written to BRAINSTORM/033_bt1_20260926/fgs_setup_profile_R1_j1.csv

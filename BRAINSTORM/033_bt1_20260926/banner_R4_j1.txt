@@ -1,0 +1,14 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 1
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = mecsrs-MacBook-Pro-188.local
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 21:17:23
+######################################################################

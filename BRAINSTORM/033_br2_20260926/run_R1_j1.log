@@ -1,0 +1,41 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = single
+#   julia_threads  = 1
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = mecsrs-MacBook-Pro-188.local
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 21:50:57
+######################################################################
+TUNED[R1] = (17, 0.5, 21) (csv-first precedence; hardcoded R1-R3 are fallback)
+R1 Dirichlet case: 8016 panels, rms(b) = 0.011505099103103303 (direct source assembly 21.3 s)
+
+┌ Warning: champion TOML is R4; transplanting its knobs onto R1
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/fgs_setup_ab.jl:48
+R1: trees + lists built (4316 direct-list entries)
+arm=old pass=0: nonself 8.27 s, self 0.64 s
+arm=old pass=1: nonself 7.41 s, self 0.5 s
+arm=old pass=2: nonself 7.46 s, self 0.5 s
+arm=old pass=3: nonself 7.4 s, self 0.48 s
+arm=new pass=0: nonself 7.55 s, self 0.57 s
+arm=new pass=1: nonself 7.39 s, self 0.52 s
+arm=new pass=2: nonself 7.39 s, self 0.5 s
+arm=new pass=3: nonself 7.39 s, self 0.51 s
+CERT sorted_list_equal = true
+CERT nonself_sizes_equal = true
+CERT nonself_data_bitwise = true
+CERT nonself_rhs_bitwise = true
+CERT self_sizes_equal = true
+CERT self_data_bitwise = true
+CERT self_rhs_bitwise = true
+CERT nonself max|Δ| = 0.0, self max|Δ| = 0.0
+full ctor (threaded_setup=false): 10.15 s
+full ctor (threaded_setup=true): 8.01 s
+CERT solver_matrices_bitwise = true
+CERT solve: niter old=15 new=15 solved old=true new=true x bitwise=true rel=0.0 (t 4.57 vs 0.67 s)
+CSV written to BRAINSTORM/033_br2_20260926/fgs_setup_ab_R1_j1.csv

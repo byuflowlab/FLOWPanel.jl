@@ -1,0 +1,50 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = tmplab-32-117-31.et.byu.edu
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 19:40:11
+######################################################################
+frozen b loaded from /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/benchmark/results/phase1/multi/bcache_R4.bin
+R4 Dirichlet case: 58192 panels, rms(b) = 0.012233954430862191 (direct source assembly 0.0 s)
+
+solver(coop=4) constructed in 165.2 s
+in-situ h_w: w=2 leaf=677 (39x4345) seq=11.5us coop=6.2us h_w=0.48us speedup=1.85x
+in-situ h_w: w=2 leaf=392 (83x4168) seq=21.0us coop=11.0us h_w=0.52us speedup=1.91x
+in-situ h_w: w=2 leaf=43 (1450x2878) seq=291.9us coop=163.1us h_w=17.12us speedup=1.79x
+in-situ h_w: w=4 leaf=677 (39x4345) seq=11.5us coop=4.5us h_w=1.63us speedup=2.56x
+in-situ h_w: w=4 leaf=392 (83x4168) seq=21.0us coop=8.2us h_w=3.01us speedup=2.54x
+in-situ h_w: w=4 leaf=43 (1450x2878) seq=310.6us coop=104.2us h_w=26.52us speedup=2.98x
+warmup w=1: 10.221 s, iters=27, bc_rel_l2=1.0907428679504685e-6
+warmup w=2: 6.393 s, iters=27, bc_rel_l2=9.802496588332419e-7
+warmup w=4: 6.971 s, iters=27, bc_rel_l2=9.189754397334464e-7
+round 1 w=1: 6.569 s (iters=27, delta=0.0)
+round 1 w=2: 6.273 s (iters=27, delta=3.532183950249257e-7)
+round 1 w=4: 6.863 s (iters=27, delta=4.151310358867167e-7)
+round 2 w=1: 6.226 s (iters=27, delta=0.0)
+round 2 w=2: 6.362 s (iters=27, delta=3.532183950249257e-7)
+round 2 w=4: 6.857 s (iters=27, delta=4.151310358867167e-7)
+round 3 w=1: 6.181 s (iters=27, delta=0.0)
+round 3 w=2: 6.631 s (iters=27, delta=3.532183950249257e-7)
+round 3 w=4: 7.345 s (iters=27, delta=4.151310358867167e-7)
+round 4 w=1: 6.115 s (iters=27, delta=0.0)
+round 4 w=2: 6.375 s (iters=27, delta=3.532183950249257e-7)
+round 4 w=4: 7.173 s (iters=27, delta=4.151310358867167e-7)
+round 5 w=1: 6.273 s (iters=27, delta=0.0)
+round 5 w=2: 6.489 s (iters=27, delta=3.532183950249257e-7)
+round 5 w=4: 6.911 s (iters=27, delta=4.151310358867167e-7)
+┌ Warning: No tuned apply knobs for R4 — run the tune stage first; scripts touching TUNED[rung] will fail
+│   rung_ = "R4"
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/phase1_case.jl:92
+
+== A-R2 local screening summary (rung=R4, j=4, 5 rounds, paired same-process, teamw toggled on one plan) ==
+w=1: min=6.115 s  median=6.226 s  speedup(med, vs w=1)=1.0x
+w=2: min=6.273 s  median=6.375 s  speedup(med, vs w=1)=0.977x
+w=4: min=6.857 s  median=6.911 s  speedup(med, vs w=1)=0.901x

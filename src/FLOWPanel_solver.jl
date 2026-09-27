@@ -1521,6 +1521,7 @@ mutable struct FGSSolver{TFGS,TF} <: AbstractMatrixFreeSolver
     dagteam_precision::Symbol           # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise)
     dagteam_workers::Int                # sweep-team size cap for sweep_order=:dagteam/:dagedge; 0 = all threads (ignored otherwise)
     dagteam_idle::Symbol                # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise)
+    dagteam_coop::Int                   # cooperative team width for sweep_order=:dagteam (033 A-R2 prototype); 1 = solo/production (ignored otherwise)
     dagedge_theta::Int                  # edge-aggregation byte cutoff for sweep_order=:dagedge (ignored otherwise)
     max_iterations::Int
     inner_iterations::Int
@@ -1558,6 +1559,7 @@ function FGSSolver(body::AbstractBody;
         dagteam_precision::Symbol=:f64,      # :f64 | :f32conv | :f32full for sweep_order=:dagteam/:dagedge (ignored otherwise); :f64 stays the default — reduced precision is an accuracy knob and explicit opt-in
         dagteam_workers::Int=0,              # sweep-team size cap for sweep_order=:dagteam/:dagedge; 0 = all threads (ignored otherwise)
         dagteam_idle::Symbol=:backoff,       # :spin | :backoff idle/wait policy for sweep_order=:dagteam/:dagedge (ignored otherwise); :backoff default since 2026-09-24 (021 dagedge campaign: backoff ≥ spin at every j)
+        dagteam_coop::Int=1,                 # cooperative leaf-product team width for sweep_order=:dagteam (BRAINSTORM 033 A-R2 prototype; 1 = solo, the production executor, bit-identical); 2/4 = A-R1 operating points, experimental — do not change the default
         dagedge_theta::Int=4096,             # edge-aggregation byte cutoff for sweep_order=:dagedge (ignored otherwise)
         shrink=false,
         recenter=false,
@@ -1566,6 +1568,11 @@ function FGSSolver(body::AbstractBody;
         solution_history_length::Int=0,      # 0 disables history & projection
         project_solution::Bool=false,        # warm-start next solve via polynomial extrapolation
         project_solution_order::Int=1,       # 1 = linear, 2 = quadratic, ...
+        threaded_setup::Bool=false,          # BRAINSTORM 033 B-R2: parallel FGS influence-matrix
+                                             # population (bitwise-equal blocks); default off —
+                                             # forwarded only when true so checkouts predating
+                                             # the kwarg keep working
+
         build_fgs::Bool=true,                # false skips the FastGaussSeidel build;
                                              # the solver then only carries options
                                              # (e.g. as a formulation green_solver)
@@ -1592,19 +1599,21 @@ function FGSSolver(body::AbstractBody;
         kw = (; dagteam_precision)
         dagteam_workers == 0 || (kw = (; kw..., dagteam_workers))
         dagteam_idle === :spin || (kw = (; kw..., dagteam_idle))
+        dagteam_coop == 1 || (kw = (; kw..., dagteam_coop))
         sweep_order === :dagedge && (kw = (; kw..., dagedge_theta))
         kw
     else
         (;)
     end
+    setup_kwargs = threaded_setup ? (; threaded_setup) : (;)
     fgs = build_fgs ?
-        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), dagteam_kwargs...) :
+        FastMultipole.FastGaussSeidel(bodies; expansion_order, multipole_acceptance, leaf_size, cache_leaf_lu, sweep_order, chunks, shrink, recenter, extra_farfield=any(has_semiinfinite_wake.(bodies)), dagteam_kwargs..., setup_kwargs...) :
         nothing
 
     Uext = zeros(TF, 3, body.ncells)
     phi_ext = zeros(TF, body.ncells)
     solution_history = zeros(TF, body.ncells, size(body.strength, 2), solution_history_length)
-    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), Int(dagedge_theta), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats(), 0.0)
+    return FGSSolver{typeof(fgs), TF}(fgs, Int(expansion_order), Int(leaf_size), Float64(multipole_acceptance), Bool(cache_leaf_lu), Symbol(sweep_order), Int(chunks), Symbol(dagteam_precision), Int(dagteam_workers), Symbol(dagteam_idle), Int(dagteam_coop), Int(dagedge_theta), max_iterations, Int(inner_iterations), Float64(tolerance), Float64(rlx), Bool(reverse_pass), Bool(verbose), Uext, phi_ext, solution_history, solution_history_length, 0, project_solution, project_solution_order, 0, false, SolveStepStats(), 0.0)
 end
 
 ################################################################################

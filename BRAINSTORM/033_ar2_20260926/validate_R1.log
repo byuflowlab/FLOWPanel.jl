@@ -1,0 +1,41 @@
+Precompiling packages...
+   4128.7 ms  ✓ FastMultipole
+   3394.2 ms  ✓ FLOWVPM
+   9232.1 ms  ✓ FLOWPanel
+  3 dependencies successfully precompiled in 17 seconds. 238 already precompiled.
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = tmplab-32-117-31.et.byu.edu
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 19:29:56
+######################################################################
+TUNED[R1] = (17, 0.5, 21) (csv-first precedence; hardcoded R1-R3 are fallback)
+frozen b loaded from /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/benchmark/results/phase1/multi/bcache_R1.bin
+R1 Dirichlet case: 8016 panels, rms(b) = 0.011505099103103303 (direct source assembly 0.0 s)
+
+solver(coop=4) constructed in 12.6 s
+validate start=zero inner=1 w=1: t=0.57 s, iters=40, bc_rel_l2=4.980568456925101e-6, delta_vs_w1=0.0, pass=true
+validate start=zero inner=1 w=2: t=0.61 s, iters=40, bc_rel_l2=4.96354400154402e-6, delta_vs_w1=1.9866363424605268e-7, pass=true
+validate start=zero inner=1 w=4: t=0.59 s, iters=40, bc_rel_l2=4.959055161761431e-6, delta_vs_w1=2.8897801162632694e-7, pass=true
+validate start=nonzero inner=1 w=1: t=0.49 s, iters=31, bc_rel_l2=4.889140352142586e-6, delta_vs_w1=0.0, pass=true
+validate start=nonzero inner=1 w=2: t=0.46 s, iters=31, bc_rel_l2=4.873508515272858e-6, delta_vs_w1=2.1544592684205648e-7, pass=true
+validate start=nonzero inner=1 w=4: t=0.49 s, iters=31, bc_rel_l2=4.866792229988172e-6, delta_vs_w1=2.4238987496954235e-7, pass=true
+validate start=zero inner=3 w=1: t=0.26 s, iters=14, bc_rel_l2=3.1328587404426297e-6, delta_vs_w1=0.0, pass=true
+validate start=zero inner=3 w=2: t=0.27 s, iters=14, bc_rel_l2=3.117404039994496e-6, delta_vs_w1=2.057075499232942e-7, pass=true
+validate start=zero inner=3 w=4: t=0.28 s, iters=14, bc_rel_l2=3.1014115264166345e-6, delta_vs_w1=2.536752797294856e-7, pass=true
+validate start=nonzero inner=3 w=1: t=0.22 s, iters=11, bc_rel_l2=3.0799678782293358e-6, delta_vs_w1=0.0, pass=true
+validate start=nonzero inner=3 w=2: t=0.22 s, iters=11, bc_rel_l2=3.054049803392227e-6, delta_vs_w1=2.0486830215621902e-7, pass=true
+validate start=nonzero inner=3 w=4: t=0.23 s, iters=11, bc_rel_l2=3.0403862414575787e-6, delta_vs_w1=2.4658073722706783e-7, pass=true
+determinism (w=4 repeat bitwise): true
+solver(coop=1) constructed in 8.2 s
+default bit-identity (coop=1 build vs teamw[]=1): true
+
+A-R2 validation: ALL PASS (14 checks, rung=R1, precision=f32full, tol=1.0e-6)

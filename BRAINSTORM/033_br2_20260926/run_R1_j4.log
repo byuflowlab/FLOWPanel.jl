@@ -1,0 +1,46 @@
+Precompiling packages...
+   4029.7 ms  ✓ FastMultipole
+   3270.4 ms  ✓ FLOWVPM
+   8971.7 ms  ✓ FLOWPanel
+  3 dependencies successfully precompiled in 18 seconds. 238 already precompiled.
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = mecsrs-MacBook-Pro-188.local
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 21:42:51
+######################################################################
+TUNED[R1] = (17, 0.5, 21) (csv-first precedence; hardcoded R1-R3 are fallback)
+R1 Dirichlet case: 8016 panels, rms(b) = 0.011505099103103303 (direct source assembly 6.5 s)
+
+┌ Warning: champion TOML is R4; transplanting its knobs onto R1
+└ @ Main ~/Dropbox/research/projects/FLOWPanel.jl/benchmark/fgs_setup_ab.jl:48
+R1: trees + lists built (4316 direct-list entries)
+arm=old pass=0: nonself 8.03 s, self 0.63 s
+arm=old pass=1: nonself 7.34 s, self 0.49 s
+arm=old pass=2: nonself 7.37 s, self 0.48 s
+arm=old pass=3: nonself 7.41 s, self 0.49 s
+arm=new pass=0: nonself 2.24 s, self 0.23 s
+arm=new pass=1: nonself 2.1 s, self 0.14 s
+arm=new pass=2: nonself 2.09 s, self 0.19 s
+arm=new pass=3: nonself 2.08 s, self 0.16 s
+CERT sorted_list_equal = true
+CERT nonself_sizes_equal = true
+CERT nonself_data_bitwise = true
+CERT nonself_rhs_bitwise = true
+CERT self_sizes_equal = true
+CERT self_data_bitwise = true
+CERT self_rhs_bitwise = true
+CERT nonself max|Δ| = 0.0, self max|Δ| = 0.0
+full ctor (threaded_setup=false): 10.0 s
+full ctor (threaded_setup=true): 2.31 s
+CERT solver_matrices_bitwise = true
+CERT solve: niter old=15 new=15 solved old=true new=true x bitwise=true rel=0.0 (t 4.41 vs 0.28 s)
+CSV written to BRAINSTORM/033_br2_20260926/fgs_setup_ab_R1_j4.csv

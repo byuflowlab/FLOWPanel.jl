@@ -26,7 +26,7 @@ Schedules (infinite processors — pure L):
 
 Usage (local, ≤4 threads per house rules; SKIP_B=1 makes the fixture
 geometry-only — this script never solves):
-  RUNG=R4 SKIP_B=1 THREADING_MODE=multi EXPECT_JULIA_THREADS=4 \
+  RUNG=R4 SKIP_B=1 THREADING_MODE=multi EXPECT_JULIA_THREADS=4 BENCH_BLAS_THREADS=1 \
     julia --project=benchmark -t 4 benchmark/fgs_dag_L_profile.jl [outdir]
 =###############################################################################
 
@@ -195,6 +195,81 @@ println("| j | node | edge | predicted speedup |")
 println("|---|---|---|---|")
 for j in (16, 32, 64, 128)
     println("| $j | $(mb(Tn(j))) | $(mb(Te(j))) | $(round(Tn(j)/Te(j), digits=2)) |")
+end
+
+# ---- 033 A-T2: cooperative split-graph critical path (COOP_SPLIT=1) ----
+# Each leaf's lower-GEMV cost g_i is divided among w cooperative subtasks (LU
+# bytes NOT divided); with infinite processors the leaf's elapsed pull becomes
+# g_i/w plus elapsed overhead c (swept, expressed in µs-equivalent bytes).
+# Equal parallel subtasks each incur c: elapsed overhead is c, summed worker
+# overhead is w*c (charged separately in Ww below). Thus c maps to A-T3's
+# whole-team elapsed h_w, not to an assumed serialized per-worker cost.
+# Split policies:
+#   all       : every leaf with g_i > 0 splits
+#   selective : split only when it shortens elapsed pull (g_i/w + c < g_i,
+#               i.e. g_i > c/(1-1/w) — the measured-cost rule, A-T3)
+# Byte<->time conversion from gate-0's own calibration: L_node = 289.5 MB/sweep
+# against the measured ~2.0 s sweep floor over 81 sweeps at R4 j64
+# => ~11.7 GB/s critical-path streaming rate, so 1 µs ≈ 11.72 KB.
+if get(ENV, "COOP_SPLIT", "0") == "1"
+    BYTES_PER_US = 289.5e6 * 81 / 2.0 * 1e-6      # bytes per µs ≈ 11.72e3
+    dL = abs(L_node - 289.462e6) / 289.462e6
+    println("\n## 033 A-T2 cooperative split graph")
+    println("unsplit L_node regression vs gate-0 289.462 MB: " *
+            "$(mb(L_node)) MB (rel. diff $(round(100dL, digits=3))%)")
+    dL < 0.01 || error("gate-0 unsplit L_node not reproduced within 1% — stop per reset prompt")
+    println("byte<->time: 1 µs = $(round(BYTES_PER_US/1e3, digits=2)) KB " *
+            "(gate-0: 289.5 MB x 81 sweeps / 2.0 s)")
+    ovh_grid_us = [0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
+    coop_rows = NamedTuple[]
+    gel = zeros(Float64, n)
+    for w in (2, 4), policy in (:all, :selective), c_us in ovh_grid_us
+        c = c_us * BYTES_PER_US
+        nsplit = 0
+        for i in 1:n
+            split = g[i] > 0 && (policy == :all || g[i] / w + c < g[i])
+            split && (nsplit += 1)
+            gel[i] = split ? g[i] / w + c : Float64(g[i])
+        end
+        fin = zeros(Float64, n); pof = zeros(Int, n)
+        for i in 1:n
+            a, ai = 0.0, 0
+            for j in plan.preds[i]
+                fin[j] > a && (a = fin[j]; ai = j)
+            end
+            fin[i] = a + gel[i] + lu[i]; pof[i] = ai
+        end
+        Lw, iw = findmax(fin)
+        p_g, p_lu, npath = 0.0, 0.0, 0
+        let i = iw
+            while i != 0
+                p_g += gel[i]; p_lu += lu[i]; npath += 1; i = pof[i]
+            end
+        end
+        Ww = W_node + nsplit * w * c                  # work incl. coordination
+        Tw64 = max(Ww / 64, Lw)
+        push!(coop_rows, (; w, policy, c_us, Lw, sweep_bound=L_node/Lw, nsplit,
+            ntasks=n + nsplit*(w - 1), p_g, p_lu, npath, Ww, Tw64,
+            j64_bound=Tn(64)/Tw64))
+    end
+    println("\n| w | policy | ovh (µs) | L_w (MB) | L_node/L_w | n_split | tasks/sweep | path GEMV (MB) | path LU (MB) | LU share | T64 bound |")
+    println("|---|---|---|---|---|---|---|---|---|---|---|")
+    for r in coop_rows
+        println("| $(r.w) | $(r.policy) | $(r.c_us) | $(mb(r.Lw)) | " *
+            "$(round(r.sweep_bound, digits=2)) | $(r.nsplit) | $(r.ntasks) | " *
+            "$(mb(r.p_g)) | $(mb(r.p_lu)) | $(round(r.p_lu/r.Lw, digits=2)) | " *
+            "$(round(r.j64_bound, digits=2)) |")
+    end
+    open(joinpath(outdir, "fgs_dag_L_coopsplit_$(rung).csv"), "w") do io
+        println(io, "w,policy,ovh_us,L_bytes,sweep_speedup_bound,n_split," *
+            "tasks_per_sweep,path_gemv_bytes,path_lu_bytes,path_leaves," *
+            "W_bytes,T64_bytes,j64_speedup_bound")
+        for r in coop_rows
+            println(io, "$(r.w),$(r.policy),$(r.c_us),$(r.Lw),$(r.sweep_bound)," *
+                "$(r.nsplit),$(r.ntasks),$(r.p_g),$(r.p_lu),$(r.npath)," *
+                "$(r.Ww),$(r.Tw64),$(r.j64_bound)")
+        end
+    end
 end
 
 # ---- CSV ----

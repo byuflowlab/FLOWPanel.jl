@@ -1,0 +1,24 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 4
+#   blas_threads   = 1
+#   commit         = c866f6f7e96a0469653610a3218c2c1dcff38146-dirty
+#   fm_commit      = 745af76022ea782146901fd65fc301f8474cbc8c-dirty
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@fastmultipole fm=FastMultipole@flowpanel-20260817 vpm=FLOWVPM.jl@flowpanel
+#   julia_version  = 1.12.5
+#   hardware_tag   = tmplab-32-117-31.et.byu.edu
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-09-26 19:05:31
+######################################################################
+shapes: [("null", 0, 0), ("p25", 22, 5836), ("p50", 39, 5369), ("mean54", 54, 5889), ("p75", 59, 5885), ("p90", 83, 4819), ("p99", 410, 2920), ("max", 1450, 2878)]
+done: null (0 x 0)
+done: p25 (22 x 5836)
+done: p50 (39 x 5369)
+done: mean54 (54 x 5889)
+done: p75 (59 x 5885)
+done: p90 (83 x 4819)
+done: p99 (410 x 2920)
+done: max (1450 x 2878)
+wrote /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/benchmark/../BRAINSTORM/033_ar1_20260926/fgs_coop_kernel_microbench.csv  (59 rows)
