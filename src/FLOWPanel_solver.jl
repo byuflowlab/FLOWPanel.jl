@@ -2109,6 +2109,7 @@ function _ilu_direct_pattern(body::AbstractBody, leaf_size::Int,
     local target_tree, source_tree, direct_list, diagonal_seen, requested
     t_tree = 0.0
     t_lists = 0.0
+    t_pattern = 0.0
     try
         calc_normals!(body)
         calc_controlpoints!(body)
@@ -2131,6 +2132,7 @@ function _ilu_direct_pattern(body::AbstractBody, leaf_size::Int,
             target_tree.branches, source_tree.branches, leaf_sizes,
             multipole_acceptance, true, true, true, method)
         t_lists = (time_ns() - t0) / 1e9
+        t0 = time_ns()   # B-I3: sizing + diagonal-coverage pass (O(entries), serial)
 
     # A repeated branch pair would create repeated expanded panel pairs.  This
     # check is proportional to the branch list, not to N².
@@ -2172,13 +2174,14 @@ function _ilu_direct_pattern(body::AbstractBody, leaf_size::Int,
             "Barba direct-list pattern plus required diagonal requests $requested entries, " *
             "exceeding max_pattern_entries=$max_pattern_entries for N=$(body.ncells); " *
             "construction stopped before sparse allocation and kernel evaluation."))
+        t_pattern = (time_ns() - t0) / 1e9
     finally
         body.normals .= normals_save
         body.controlpoints .= controlpoints_save
     end
 
     return target_tree, source_tree, direct_list, diagonal_seen, requested,
-           t_tree, t_lists
+           t_tree, t_lists, t_pattern
 end
 
 "Assemble the direct-list operator in one common (source-tree) ordering."
@@ -2319,7 +2322,7 @@ function ILUPreconditioner(body::AbstractBody;
         # Argument validation, tree/list construction, duplicate-branch check,
         # and the linear pattern-size guard all live in the shared helper.
         target_tree, source_tree, direct_list, diagonal_seen, requested,
-            t_tree, t_lists = _ilu_direct_pattern(
+            t_tree, t_lists, t_pattern = _ilu_direct_pattern(
                 body, leaf_size, multipole_acceptance, max_entries)
 
         # The helper restores geometry on exit; refresh again so assembly
@@ -2362,6 +2365,7 @@ function ILUPreconditioner(body::AbstractBody;
             "factor_nnz" => SparseArrays.nnz(fact),
             "tree_time" => t_tree,
             "interaction_list_time" => t_lists,
+            "pattern_time" => t_pattern,
             "assembly_time" => t_assembly,
             "factorization_time" => t_factorization,
             "total_time" => (time_ns() - total_start) / 1e9,

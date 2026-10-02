@@ -327,6 +327,7 @@ function make_config_solver(config)
             nearfield_cache_max_bytes=round(Int, nfcache_gib * 1024^3))
         global setup_split = (; t_precond, t_ctor,
             ilu_tree=st["tree_time"], ilu_lists=st["interaction_list_time"],
+            ilu_pattern=get(st, "pattern_time", 0.0),
             ilu_assembly=st["assembly_time"],
             ilu_factorization=st["factorization_time"])
         return solver, "ilu leaf10/mac1.0;cache_nearfield;persistent_plan;" *
