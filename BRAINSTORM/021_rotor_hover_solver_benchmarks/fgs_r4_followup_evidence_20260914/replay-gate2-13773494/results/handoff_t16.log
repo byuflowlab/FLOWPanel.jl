@@ -1,0 +1,4 @@
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=handoff f32=false threads=16
+handoff(team=16)             sweeps=40  min 0.0021 s  med 0.0022 s  → useful BW (min): 1394.35 GB/s
+  projected 81-sweep coefficient-stream time: 0.166 s (min) / 0.175 s (med)
+  handoffs/sweep = 1068, avg handoff = 3.304 µs  (budget < 5.8 µs)

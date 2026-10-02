@@ -1,0 +1,9 @@
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=dag f32=false threads=1
+lower edges = 48167, lower bytes = 1513294744, upper bytes = 1349555288
+unit longest path = 279 of 1068 (expect 279)
+byte-weighted span = 531147048 bytes; work/span = 2.849 (expect 2.849)
+measured-cost recurrence (B=26.9 GB/s, h=2.04 µs): span 0.0217 s/sweep, work 0.0618 s, work/span 2.851
+  W= 4: forward makespan 0.0236 s/sweep, idle 0.0328 worker·s, backward drain +0.0044 s → sweep 0.0280 s, 81-sweep 2.27 s
+  W= 8: forward makespan 0.0217 s/sweep, idle 0.1116 worker·s, backward drain +0.0000 s → sweep 0.0217 s, 81-sweep 1.76 s
+  W=16: forward makespan 0.0217 s/sweep, idle 0.2850 worker·s, backward drain +0.0000 s → sweep 0.0217 s, 81-sweep 1.76 s
+  W=32: forward makespan 0.0217 s/sweep, idle 0.6318 worker·s, backward drain +0.0000 s → sweep 0.0217 s, 81-sweep 1.76 s

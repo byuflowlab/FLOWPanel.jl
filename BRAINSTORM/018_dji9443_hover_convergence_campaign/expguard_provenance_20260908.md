@@ -74,4 +74,13 @@ FLOWPanel/CUDA stack in the new environment.
 | 13610778 | `p018_csarc_l3p0_3r_cs0p002_exp_nt_g25` | RUNNING mgh-1-2; banner `guard=on`, `ConstantSFS(Cs=0.002)` |
 | 13610779 | `p018_csarc_l3p0_3r_cs0p34_exp_nt_g25` | PENDING (Resources) |
 
+## Outcomes (added 2026-09-15; scored 2026-09-11, recorded in
+`../026_sigma_growth_particle_splitting/split_launch_reset_prompt_20260911.md` PART 1)
+
+| job | outcome | windowed CT (revs 21–30) |
+|---|---|---|
+| 13610777 | COMPLETED 1079/1079 | 0.070808 (control; unguarded predecessor 0.070536 → guard is +0.39%, NOT a null) |
+| 13610778 | COMPLETED 1079/1079 (floor arrests the geometric-collapse channel) | 0.069317 |
+| 13610779 | DIED step ~354 (`dt·|L|` = 92786.7; floor does not touch the SFS-additive channel) | — |
+
 All three: 1079 steps, ~3-5 s/step, 24 h wall.

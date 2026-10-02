@@ -191,3 +191,64 @@ Rerun the A1-class case (`scr_p026s9_explg_fs`, campaign
   C (knob 0.15) / D (knob off) launched — verify results in
   `data/scratch_p032_smoke{C,D}` if this session ended before they reported.
   Rerun charter → `032_reset_prompt_20260918.md`.
+- 2026-09-18 (rerun session): predecessor's smokes C/D both died with the
+  session pre-post-march; rerun to completion. GOTCHA: `NREVS` alone does
+  not shorten a smoke (`required_revs = max(nrevs, schedule_revs)`, schedule
+  = 13 revs) — zero `FREESTREAM_{RAMP,HOLD,WITHDRAW}_REVS`/`SETTLE_REVS`
+  too. smokeC (knob 0.15) PASS: banner 2/36 stations per blade, totals
+  Σ|Γ|·Δl = 1.593e-3 m³/s / 12 filaments, `particle_omit_*` keys in
+  `*_case_metadata.toml` (NOT `*.metadata.toml`). smokeD (off) PASS: no
+  banner, knob 0.0 recorded, no station keys. Committed `af92740`; tag
+  `campaign/p032-rootomit-20260918` pushed to orc; worktree + env at
+  `orc:~/campaigns/p032-rootomit-20260918/` (FLOWVPM/FMM pins unchanged,
+  p026 worktrees reused). B15=13771353, B20=13771354 submitted m13h,
+  both RUNNING 22:32. Provenance: `032_rerun_provenance_20260918.md`.
+- 2026-09-18 (late): **BOTH ARMS RESCUE A1.** B15 and B20 completed
+  467/467 with zero guard trips (~71/75 min wall, np peaked ~370k vs A1's
+  500k-cap ride), CT converged 0.07162/0.07132 (Δ −0.42% for 48% more
+  deleted circulation: 0.486 vs 0.722 m³/s) — the fountain Γ-ignition is
+  gone and the result is insensitive to clip width. A2 extension B-floor
+  (`scr_p032om15_explg_floor`, knob 0.15, eng H200) = job 13772015,
+  PENDING behind the 026 slate arms. Banner + outcomes tables in the
+  provenance file.
+- 2026-09-19: **FINAL VERDICT — omission rescues every tested class.**
+  B-floor (A2-config) also COMPLETED 467/467 (CT 0.071654 ± 0.014%,
+  deleted 0.4865 m³/s, min σ never below 4.6× floor). Fountain
+  quantitative before/after: B15 max Γ/σ² flat ~46 through A1's death
+  window (A1: 826→9.1e4). ΔCT vs cap018 −3.15% (no clean twin — caveats
+  in provenance). ParaView side-by-side staged locally:
+  `~/scr_p026s9r2_explg_fs_last50steps/` vs
+  `~/scr_p032om15_explg_fs_steps278_327/`. All three run dirs moved to
+  consolidated root + symlinks. 026 slate simultaneously ALL TERMINAL,
+  redesign rescues nothing (see 026 provenance slate-verdict section) —
+  032 omission is the standing lever. Ryan-gated offers: ctrl+omission
+  discriminator, feature-A arm, baseline-for-ΔCT arm, notebook entry,
+  archiving.
+- 2026-09-19 (wrap): merge-burden analysis added to provenance (omission
+  collapses fs-family merges ~30×, 84–87k→~3k → merge-law choice likely
+  near-inert under omission; floor family never had a frenzy; np −30%
+  relieves the count-driven FMM adequacy gate → NT ladders candidate).
+  A/B CLOSED. Next session charter (026 next-runs recommendation +
+  Ryan-gated launches + notebook entry w/ side-by-side GIF) =
+  `032_reset_prompt_20260919b.md`.
+
+- 2026-09-19 (later session): Follow-up arms HARVESTED — C-ctrl 13773490
+  COMPLETED 467/467 CT 0.0714872 ± 0.067% (omission is a GENERAL rescue,
+  ctrl channel included); C-oldlaw 13773491 COMPLETED CT 0.0716405 ±
+  0.0014%, inside B15's noise band (§22 merge redesign unnecessary under
+  omission — prediction held). Details:
+  `032_followup_provenance_20260919.md` Outcomes. Notebook follow-up
+  written (Ryan-approved). Ryan directive: NEW MERGE LAW = PRODUCTION
+  DEFAULT henceforth (flowpanel→unified-052 merge in flight, commit
+  d896145 pending test verdict). Re-open preps approved (022 hr10 /
+  018 NT72 _3r / 020 Phase-2R discriminator; NT144 conditional on P2):
+  `032_omission_reopen_prep_20260919.md`.
+- 2026-09-19T16:52Z ARCHIVE (hpc-storage): 3 terminal root-omission arms
+  (om15_explg_fs 16005→12346MB, om20_explg_fs 15773→12154MB,
+  om15_explg_floor 12716→9704MB) tarred+verified to
+  /nobackup/archive/usr/rander39/FLOWPanel_runs/projects_FLOWPanel.jl/,
+  newest 5 restartable steps kept on /home; freed 43682MB. DEFERRED
+  (RECENT-HOT <2h quiet): scr_p032om15_ctrllg_fs + explg_fs_oldlaw
+  (~31G) — archive on a later pass. /home 476.9→396.4 GiB of 400 cap
+  (3.6 GiB headroom); 212GB of p018_csarc_*_3r_* identified reclaimable
+  but NOT authorized this cycle.

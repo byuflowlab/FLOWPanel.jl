@@ -1,0 +1,16 @@
+rung,n_panels,julia_threads,blas_threads,arm,setup_threads,pass,warmup,phase,t_s,gc_bytes
+R4,58192,64,1,old,0,0,1,nonself,276.656883939,5092607080
+R4,58192,64,1,old,0,0,1,self,10.50771176,214226088
+R4,58192,64,1,old,0,1,0,nonself,275.302215703,4883624184
+R4,58192,64,1,old,0,1,0,self,10.260371898,182897336
+R4,58192,64,1,old,0,2,0,nonself,275.08834717,4883624184
+R4,58192,64,1,old,0,2,0,self,10.253028514,182897336
+R4,58192,64,1,old,0,3,0,nonself,275.139115783,4883624152
+R4,58192,64,1,old,0,3,0,self,10.262350527,182897368
+R4,58192,64,1,old,0,1,0,full_ctor,306.981837787,0
+R4,58192,64,1,new,64,1,0,full_ctor,29.991155427,0
+R4,58192,64,1,cert,0,0,0,solver_matrices_bitwise,1,0
+R4,58192,64,1,cert,0,0,0,solve_niter_old,27,0
+R4,58192,64,1,cert,0,0,0,solve_niter_new,27,0
+R4,58192,64,1,cert,0,0,0,solve_x_bitwise,1,0
+R4,58192,64,1,cert,0,0,0,solve_x_reldiff,0.0,0

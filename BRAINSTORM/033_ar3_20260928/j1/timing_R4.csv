@@ -1,0 +1,7 @@
+phase,round,w,solve_seconds,iterations,solved,bc_rel_l2
+warmup,0,1,38.937651157,27,true,7.614086071439988e-7
+trial,1,1,33.449288303,27,true,NaN
+trial,2,1,33.317658889,27,true,NaN
+trial,3,1,33.278348791,27,true,NaN
+trial,4,1,33.182244451,27,true,NaN
+trial,5,1,33.282937685,27,true,NaN

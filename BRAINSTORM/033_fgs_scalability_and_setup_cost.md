@@ -211,13 +211,55 @@ design — resist over-deriving. Source: plan doc §"First recommendation".
 - **A-R3 — Paired j64 A/B vs dagteam+backoff** (1/2/4 workers per leaf,
   fixed total worker budget), measuring product speed, synchronization, LU
   time, and the time-weighted critical path before predicting solve-level gain.
-  - [ ] technical completion
-  - [ ] clear-context review
+  - [x] technical completion (2026-09-28 — HPC wave 1c jobs 13905269-73,
+    tag `campaign/p033-hpcwave1-20260926`, m12 zen3, harness
+    `benchmark/fgs_coop_executor_ar2.jl` MODE=time RUNG=R4 ROUNDS=5 WMAX=4,
+    cold paired same-process j∈{1,8,16,32,64}:
+    [`033_ar3_results_20260928.md`](033_ar3_results_20260928.md). Confirmed
+    trial-phase timings uninstrumented (in-situ h_w probe runs as a separate
+    earlier pass with its own team, torn down before the timing loop starts).
+    Paired per-round median gain at w=4: j8 −12.79%, j16 −7.42%, j32 −4.88%,
+    j64 −18.85% (worst at the largest, most HPC-realistic rung — gain does
+    NOT turn positive with more threads); w=2 flat (−0.99% to +1.43%). All
+    rounds solved, 27 iterations, bc_rel_l2 ≤7.6e-7 everywhere. In-situ h_w
+    on the live R4 plan: per-leaf speedups healthy (median 2.0–3.7× at
+    w=2/4) but h_w itself noisy (negative medians at some w=2 cells — timer
+    noise on near-zero overhead, not a negative-cost mechanism); j64 w=4
+    median h_w 4.68 µs / p90 17.7 µs, at/above local A-R1/A-R2 range
+    (0.4–3 µs median, ~24 µs tail). Conclusion: per-leaf gains are real but
+    eaten by overhead outside the leaf product (sync/scheduling/critical
+    path) — matches A-R2's local j=4 finding, now shown to persist and
+    worsen through j=64 on real HPC hardware.)
+  - [x] clear-context review (2026-09-28, fresh-context AI reviewer:
+    independently recomputed all paired per-round median gains from
+    `timing_R4.csv` trial rows for j∈{8,16,32,64} — exact match to claimed
+    j8 −12.79%, j16 −7.42%, j32 −4.88%, j64 −18.85%, w=2 range −17.35%
+    (j64) to +1.43% (j32); verified paired median solve table and the h_w
+    median/p90 summary (numpy-percentile-of-3-leaf-classes) against
+    `insitu_hw_R4.csv` — exact match. Read `fgs_coop_executor_ar2.jl` and
+    confirmed the in-situ probe (lines 193–231) starts/stops its own team
+    before the warmup+trial loop (245–276), arms are same-process
+    teamw-toggled, and trial solves are cold (`cold_solve!` with no x0).
+    Cross-checked jobs 13905269-73 / tag / julia 1.11.7 pin against
+    `033_hpcwave1_provenance_20260926.md` — consistent. `git diff` on this
+    file confirmed only the two checkbox blocks + status paragraph changed.
+    Negative-h_w-at-w=2 anomaly and warmup exclusion are disclosed
+    accurately. No fixes needed.)
 - **A-G — Stop gate.** Team-of-4 gain <~15% paired wall clock ⇒ Track A
   implementation does not proceed (C/D continue regardless — Ryan ruling).
   Reviewer verifies the gate was applied to uninstrumented paired data.
-  - [ ] technical completion
-  - [ ] clear-context review
+  - [x] technical completion (2026-09-28 — gate input is A-R3's j64
+    uninstrumented paired per-round median gain at w=4 = **−18.85%**, far
+    below the ~15% positive-gain bar and of the wrong sign; no j rung in the
+    ladder clears +15% either (best case j32 at −4.88%). **GATE FAILS
+    DECISIVELY ⇒ Track A implementation (A-I1, A-I2) STOPS.** Tracks C and D
+    are UNCONDITIONAL and continue unaffected per Ryan's standing ruling.
+    Full arithmetic and instrumentation confirmation:
+    [`033_ar3_results_20260928.md`](033_ar3_results_20260928.md).)
+  - [x] clear-context review (2026-09-28, fresh-context AI reviewer: gate
+    input j64 w=4 gain −18.85% independently verified against raw CSV
+    (see A-R3 review note); Ryan's standing ruling that C/D are
+    unconditional is stated correctly and unaltered. No fixes needed.)
 
 ### A Implementation
 
@@ -306,6 +348,67 @@ spending effort anywhere.
 
 - **B-I1 — Land the winning fix**; re-measure setup at R4 + larger mesh; feed
   the new setup number into the Tier-2 cumulative-crossover arithmetic.
+  - [x] technical completion (2026-09-28 — fix committed at tag
+    `campaign/p033-hpcwave1-20260926` (fm b4c35f67); HPC jobs 13905507–09:
+    R4 j64 full-ctor 308.2→30.5 s (10.1×), R5 j64 789.1→85.8 s (9.2×), j1
+    parity 1.002×, bitwise certs + identical solves; Tier-2 arithmetic fed —
+    see 033_bi1_results_20260928.md)
+  - [x] clear-context review (2026-09-28, fresh-context AI reviewer: all
+    CSV rows in `033_bi1_rerun_20260928/` recomputed by hand — medians,
+    phase totals, full_ctor values (308.17/30.49 R4, 789.08/85.76 R5),
+    speedups (10.11x/9.20x/1.0018x), cert rows (niter 27/27, 24/24,
+    reldiff 0.0), and banner SHAs (fp 99aa273, fm e46e91d7, vpm 5983c34,
+    julia 1.11.7) all match the writeup exactly; degraded-run cross-check
+    numbers (30.0/83.5/307.0/788.9 s) confirmed against
+    `033_bi1_20260928/SUMMARY.txt`; Tier-2 arithmetic's cited inputs and
+    derived ~78 s advantage / ≈434 vs 438 s reconstruction / re-pass
+    estimates verified against `021_.../fgs_warmstart_r4_results_20260925.md`;
+    item-file B-I1 block and "Current status" paragraph match the results
+    doc and honestly record the wave-1c `--export` comma-split degradation;
+    no errors found, no edits needed)
+- **B-I2 — Parallelize the remaining FGS ctor tail** (staged by Ryan
+  2026-09-29 after the ctor-tail conversation). The tail (~20 of 30.5 s at
+  R4 j64, ~53 of 85.8 s at R5) is the non-probe ctor work; code-trace
+  inventory (2026-09-29, fm `src/solve.jl:846–1039`): interaction-list build
+  (`interaction_list.jl:3`, serial recursion), `sort_by_source`
+  (`interaction_list.jl:640`, serial — `sort_by_target` already has a
+  threaded twin at `:543`), leaf LU cache (`solve.jl:72–86`, serial map over
+  independent blocks), and the fully serial dagteam plan build
+  (`solve_dagteam.jl:131–335`: edge derivation, L/U repack, F32 conversion,
+  sweep-precision LU refactorization). Only the critical-path priority pass
+  (`solve_dagteam.jl:274–281`) is inherently sequential, and it is
+  negligible. Protocol (binding):
+  1. **Profile FIRST**: the ctor has no per-stage timers (only
+     `build_leaf_lu_cache.build_time`); add `time_ns()` bracketing per stage,
+     attribute the tail at R4 j64 (plus a local j≤4 sanity profile) before
+     touching any threading.
+  2. Thread stages in measured-cost order (likely dagteam repack + leaf LU
+     first — independent-block work, same chunking pattern as B-I1's probes);
+     extend the existing `threaded_setup`/`setup_threads` opt-in, do not add
+     a new knob.
+  3. **Profile AFTER each stage change, paired before/after on the same
+     process/thread placement; ABANDON (revert) any stage whose threaded
+     version is slower** — record the abandonment and its numbers, don't
+     rationalize it.
+  4. Certification standard = B-I1's: bitwise (or documented-equivalent)
+     matrices/solves, j1 parity, identical solver iterates.
+  - [ ] technical completion
+  - [ ] clear-context review
+- **B-I3 — ILU-GMRES-nfcache setup attribution** (staged by Ryan
+  2026-09-29). Attribute the ILU arm's ~82 s setup + ~28 s prime at R4 j64
+  into threaded vs serial phases: the `ILUPreconditioner` stats dict already
+  records `tree_time`, `assembly_time`, `factorization_time`, `total_time`
+  (`FLOWPanel src/FLOWPanel_solver.jl:2295ff`), and the nfcache build is
+  threaded (`FastMultipole src/nearfield_cache.jl`). Harvest from existing
+  run outputs if the stats were persisted; otherwise one instrumented
+  profiling run (local or single HPC job). Deliverable: a table (phase,
+  seconds, threaded?) + a statement of ILU's remaining parallelization
+  headroom, feeding Z1's fairness note. **Explicitly OUT OF SCOPE (Ryan
+  2026-09-29): parallelizing the `ILUZero.ilu0` factorization** — not a
+  clear gain (level-scheduled elimination over the same ~45-preds/leaf
+  near-field graph that sank Track C) and invasive; if `factorization_time`
+  turns out large, record that as ILU's accepted residual rather than
+  attacking it.
   - [ ] technical completion
   - [ ] clear-context review
 
@@ -319,6 +422,17 @@ Build order: [`fgs_exact_triangular_solver_plan_20260926.md`](021_rotor_hover_so
 **RYAN GATE (2026-09-26): have a conversation with Ryan before proceeding on
 this track — he wants to be clear on the theory and implementation plan before
 any C sub-item begins.**
+
+**STATUS (Ryan 2026-09-28): DROPPED for now in favor of Track D.** The gate
+conversation happened 2026-09-28; prep measurement on the real R4 DAG
+(45.1 mean predecessors/leaf → interface holds 59–91% of unknowns at any
+contiguous K, serial-interface sweep ceiling 0.29–0.75× = guaranteed loss,
+parallel-interface rescue ≤~3× sweep-phase only by re-fighting the
+fine-grained scheduling battle dagedge and Track A lost, ~1.6 GB extra
+storage). Ryan concurred a useful speedup is unlikely and directed the effort
+to Track D. Not a formal C-G: sub-items below were never officially executed
+and stay unticked. Evidence + conversation record:
+[`033_trackc_prep_20260928.md`](033_trackc_prep_20260928.md).
 
 ### C Theory
 
@@ -369,6 +483,13 @@ formulation-specific validation. Guidance:
 this track — he wants to be clear on the theory and implementation plan before
 any D sub-item begins.**
 
+**STATUS (Ryan 2026-09-29): SHELVED for now — may be revisited.** After
+Track C was dropped (2026-09-28), Ryan directed the next effort to B-I2
+(parallelize the remaining FGS ctor tail) and B-I3 (ILU setup attribution)
+instead of the Track D gate conversation. The gate conversation has NOT
+happened; all D checkboxes stay unticked. Do not start any D sub-item
+without Ryan re-opening the track.
+
 ### D Theory
 
 - **D-T1 — Formulation.** Full derivation: overlapping local GS with halos,
@@ -409,6 +530,14 @@ any D sub-item begins.**
 
 ## Item close-out
 
+- **Note (Ryan 2026-09-28): before this item is complete, consider the
+  single-threaded constructor tail** exposed by B-I1 — after threading the
+  probe, the non-probed ctor stages (tree/DAG/LU etc.) dominate the new
+  setup (~20 s of 30.5 s at R4 j64, ~53 s of 85.8 s at R5). Decide whether
+  to attack it (possible B-I2) or record it as an accepted residual in Z1.
+  **DECIDED (Ryan 2026-09-29): attack it — B-I2 staged in Track B
+  Implementation, alongside B-I3 (ILU setup attribution). ilu0 factorization
+  parallelization explicitly declined (invasive, unclear gain).**
 - **Z1 — Tier-2 headline.** Best-FGS configuration (winning tracks combined,
   including B's setup savings) vs krylov_ilu_nfcache: cold solve and
   cumulative-with-setup crossover, stated plainly either way; INDEX outcome
@@ -737,8 +866,40 @@ niter 15=15, solution bitwise), nonself 135.7→37.8 s (3.59×) at R4 j4,
 projected R4 j64 FGS setup ≈10–20 s vs ILU ~110 s — the ~210 s setup gap
 inverts, pending B-I1's actual j64 measurement. Evidence: 033_br2_20260926/,
 harness benchmark/fgs_setup_ab.jl, doc 033_br12_machinery_and_fix_20260926.md.
+A-R3 TECHNICALLY COMPLETE 2026-09-28: HPC wave 1c (jobs 13905269-73, tag
+campaign/p033-hpcwave1-20260926) paired j∈{1,8,16,32,64} A/B vs
+dagteam+backoff, cold same-process arms, confirmed trial timings
+uninstrumented (in-situ h_w probe is a separate pass, torn down before the
+timing loop). Team-of-4 paired per-round median gain: j8 −12.79%, j16 −7.42%,
+j32 −4.88%, j64 −18.85% — no rung positive, worst at j64. In-situ h_w
+confirms healthy per-leaf speedups (2.0–3.7×) but noisy h_w itself (negative
+medians at some w=2 cells, timer noise) and j64 w=4 median 4.68 µs/p90
+17.7 µs, at/above local A-R1/A-R2 range. A-G APPLIED 2026-09-28: gate input
+(j64 w=4 gain −18.85%) is far below the +15% bar ⇒ GATE FAILS DECISIVELY,
+Track A implementation (A-I1/A-I2) STOPS; Tracks C/D unaffected (Ryan
+standing ruling). Full record: 033_ar3_results_20260928.md +
+033_ar3_20260928/. Both A-R3 and A-G await clear-context review.
 Session-2 total: A-R1, A-R2, B-T1, B-R1, B-R2, B-G all double-checked.
-Remaining work is HPC-bound (A-R3 j-ladder, B-I1 landing+re-measure — both
-need commits + pinned worktrees) or Ryan-gated (C/D conversations; scope and
-default decisions listed in RESET BRIEF Next actions). Entry point: RESET
+B-I1 TECHNICALLY COMPLETE 2026-09-28 (session 4): threaded setup (B-R2 fix,
+committed at tag campaign/p033-hpcwave1-20260926, fm b4c35f67) measured on
+HPC after a degraded wave-1c attempt (sbatch `--export` comma-split dropped
+ARMS=new; rerun 13905507–09 with `VAR=x sbatch` env inheritance supersedes
+it). R4 j64 full-constructor setup 308.2→30.5 s (10.11×), R5 j64 (108,240
+panels — B-T1's owed larger mesh) 789.1→85.8 s (9.20×); probed phases
+27.7×/22.3×; j1 serial parity 1.0018; all bitwise certs PASS with identical
+cold-solve niter (27/24) and bitwise-identical solutions. Remaining new-setup
+cost is the untouched single-threaded ctor tail (~20/53 s). Tier-2
+cumulative-crossover arithmetic (fed per contract): FGS setup is now ~78 s
+CHEAPER than krylov_ilu_nfcache (30.5 vs 108–110 s) — the 021 warm-start
+"ilu ~210 s cheaper, fgs never breaks even" statement is superseded;
+reconstructed cumulative-with-setup @36 steps ≈ 434 (fgs_proj2) vs 438 s
+(ilu_nfcache_proj2), a dead heat, with Window-B per-step a statistical tie
+either side of it; ILU keeps the cold-single-solve win (2.41 vs 3.24 s).
+Full record: 033_bi1_results_20260928.md + 033_bi1_rerun_20260928/ (evidence)
++ 033_bi1_20260928/ (degraded harvest, retained). `threaded_setup` production
+default remains Ryan-gated. B-I1 awaits clear-context review.
+Remaining work is Ryan-gated (C/D theory conversations; threaded_setup
+production default; B-T1 R4+R1 substitution acceptance; tag pushes to
+origin; notebook entry; 021 compete decision fed by the Tier-2 arithmetic).
+Track A implementation is STOPPED at A-G. Entry point: RESET
 BRIEF.

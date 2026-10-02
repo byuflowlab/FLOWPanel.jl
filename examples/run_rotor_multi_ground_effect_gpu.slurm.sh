@@ -14,7 +14,9 @@
 set -euo pipefail
 
 THREADS=16
-EXPECTED_REPO=/home/rander39/projects/FLOWPanel.jl
+# P022G_REPO_OVERRIDE: sanctioned override (HPC.md) so campaign worktrees can
+# host registered runs without editing the carrier.
+EXPECTED_REPO="${P022G_REPO_OVERRIDE:-/home/rander39/projects/FLOWPanel.jl}"
 PROJECT="${P022G_PROJECT_OVERRIDE:-/home/rander39/projects/envs/$(uname -m)}"
 CASE="${1:-}"
 MODE="${P022G_MODE:-smoke}"
@@ -59,6 +61,15 @@ case "$MODE" in
     export SPINUP_REVS=1.5 FREESTREAM_RAMP_REVS=1.0 FREESTREAM_HOLD_REVS=1.5
     export FREESTREAM_WITHDRAW_REVS=4.0 SETTLE_REVS=3.5 NREVS=10
     ;;
+  accept_ext)
+    # Extended-revs acceptance (Ryan 2026-09-15): same transient schedule as
+    # accept, hover extended to 25 total acceptance revs ("more revs" ruling;
+    # extend further later via RESTART_STEP warmstart if not settled).
+    [[ "${P022G_CONFIRM_ACCEPTANCE:-}" == "YES" ]] || {
+      echo "ERROR: full acceptance requires P022G_CONFIRM_ACCEPTANCE=YES" >&2; exit 2; }
+    export SPINUP_REVS=1.5 FREESTREAM_RAMP_REVS=1.0 FREESTREAM_HOLD_REVS=1.5
+    export FREESTREAM_WITHDRAW_REVS=4.0 SETTLE_REVS=18.5 NREVS=25
+    ;;
   production)
     # Full p022 fine schedule (1007 steps ~ 28 revs), matching CPU anchor
     # job 13207681 (examples/run_rotor_ground_effect_hpc.slurm.sh).
@@ -67,7 +78,7 @@ case "$MODE" in
     export SPINUP_REVS=1.5 FREESTREAM_RAMP_REVS=1.0 FREESTREAM_HOLD_REVS=1.5
     export FREESTREAM_WITHDRAW_REVS=4.0 SETTLE_REVS=20 NREVS=10
     ;;
-  *) echo "ERROR: P022G_MODE must be smoke, probe, accept, or production" >&2; exit 2 ;;
+  *) echo "ERROR: P022G_MODE must be smoke, probe, accept, accept_ext, or production" >&2; exit 2 ;;
 esac
 export CONVERGENCE_REVS=10 CONVERGENCE_MEAN_TOL=0.005 CONVERGENCE_PTP_TOL=0.02
 # GS knobs are default-guarded so sbatch --export=ALL,GS_...=... can override
@@ -116,6 +127,8 @@ echo "052b GPU mode=$MODE case=$CASE run=$RUN_NAME nrotors=$NROTORS ground=$GROU
 echo "filament_reg=$FLOWPANEL_FILAMENT_REG ground_h_r=${GROUND_H_R:-n/a} damp_band=${GROUND_DAMP_BAND_R:-n/a} particle_policy=${GROUND_PARTICLE_POLICY:-n/a} trunc_depth=$TRUNCATION_DEPTH_R"
 if [[ "$MODE" == accept ]]; then
   echo "mesh=$RHPC_MESH schedule=1.0+1.5+4.0+3.5 acceptance_steps=360 spinup_steps=54 total_steps=414"
+elif [[ "$MODE" == accept_ext ]]; then
+  echo "mesh=$RHPC_MESH schedule=1.0+1.5+4.0+18.5 acceptance_steps=900 spinup_steps=54 total_steps=954"
 elif [[ "$MODE" == production ]]; then
   echo "mesh=$RHPC_MESH schedule=1.0+1.5+4.0+20+10 spinup=1.5 total_steps=1007"
 fi
@@ -199,12 +212,15 @@ if [[ -f "$metadata" ]]; then
     echo "p022g_mode = \"$MODE\""
   } >>"$metadata"
 fi
-if [[ "$MODE" == accept ]]; then
-  (( case_elapsed_s <= 7200 )) || { echo "ERROR: case elapsed $case_elapsed_s s exceeds 7200 s" >&2; exit 1; }
+if [[ "$MODE" == accept || "$MODE" == accept_ext ]]; then
+  # Wall-clock gate is env-overridable (Ryan 2026-09-15, extended-revs runs);
+  # default preserves the original 7200 s accept contract.
+  case_time_gate_s="${P022G_CASE_TIME_GATE_S:-7200}"
+  (( case_elapsed_s <= case_time_gate_s )) || { echo "ERROR: case elapsed $case_elapsed_s s exceeds $case_time_gate_s s" >&2; exit 1; }
   awk -v r="$device_reserve_fraction" 'BEGIN{exit !(r >= 0.20)}' || {
     echo "ERROR: device memory reserve $device_reserve_fraction is below 20%" >&2; exit 1; }
 fi
-if [[ "$MODE" == accept || "$MODE" == production ]]; then
+if [[ "$MODE" == accept || "$MODE" == accept_ext || "$MODE" == production ]]; then
   "$JULIA_BIN" -e 'using TOML; m=TOML.parsefile(ARGS[1]); get(m,"all_finite",false) || error("nonfinite case"); get(m,"gs_nonconverged",1)==0 || error("nonconverged block solve"); get(m,"gs_iters_max",typemax(Int))<=50 || error("GS cap exceeded"); get(m,"block_gs_normalized_residual",Inf)<=1e-8 || error("final normalized residual failed"); get(m,"gpu_route_fallback_total",1)==0 || error("GPU fallback recorded"); get(m,"gpu_route_total_hits",0)>0 || error("no GPU route hits")' "$metadata"
 fi
 echo "Case $CASE finished; peak device ${peak_device_mib} MiB; peak host ${peak_host_kib:-unknown} KiB"

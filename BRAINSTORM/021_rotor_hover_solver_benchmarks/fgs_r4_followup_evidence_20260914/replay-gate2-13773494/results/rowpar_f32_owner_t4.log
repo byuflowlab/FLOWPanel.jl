@@ -1,0 +1,4 @@
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=true threads=4
+rowpar(:Float32, team=4, touch=owner) sweeps=12  min 0.0493 s  med 0.0496 s  → useful BW (min): 58.02 GB/s
+  projected 81-sweep coefficient-stream time: 3.997 s (min) / 4.014 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)

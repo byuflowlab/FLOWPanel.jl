@@ -71,3 +71,41 @@ Fine-rung numbers are cycle-means over the final 10 in-hover revs from
 per-rev criterion (`converged=false`) but the cycle-mean is the headline per
 `decision_rules.md`. Phase-2 exit still needs the clean-context verify pass +
 Ryan's read (and note the coarse rung contributes nothing harvestable).
+
+## Storage cycle 2026-09-21 (hpc-storage watchdog)
+
+Two passes on `/home/rander39` (400 G cap), both APPLY mode, byte-for-byte
+verified before any delete, newest 5 restartable steps left on `/home`.
+Protect list, CSVs, TOMLs, `monitors/`, and the job queue untouched.
+
+Pass 1 (routine sweep) — archived 2 finished 032 runs from the
+`projects_FLOWPanel.jl` checkout to
+`/nobackup/archive/usr/rander39/FLOWPanel_runs/projects_FLOWPanel.jl/`:
+
+| run | src MB | tar MB | steps kept | freed MB |
+|---|---|---|---|---|
+| `scr_p032om15_ctrllg_fs` | 15934 | 12019 | 463–467 | 15643 |
+| `scr_p032om15_explg_fs_oldlaw` | 15987 | 12341 | 463–467 | 15691 |
+
+`/home` 287.3 G → 256.9 G (freed 30.4 G). `VERIFY_FAIL=0`, `STALE=0`,
+`CHECKOUT_LOCKED=0`. No VTK sweep needed. 20 candidate directories deduped by
+`realpath(data/)` to 3 real checkouts (`projects/FLOWPanel.jl`,
+`flowpanel-021/FLOWPanel.jl`, `wt052/FLOWPanel.jl`); the `wt018/`, `wt021/`,
+`wt026/`, and GPU-clone paths share one `data/` tree and were ALIAS-SKIPped.
+
+Pass 2 (Ryan-approved RECENT run, `--include-recent --only`) — archived
+`p022lg_hr10_om15`: src 47544 MB → tar 37499 MB
+(`p022lg_hr10_om15.tar.zst`, 39,320,612,716 B), newest 5 steps [1003–1007]
+kept on `/home`, freed 47239 MB, `VERIFY_FAIL=0`, `ARCHIVED.txt` breadcrumb
+written. `scr_p020r_geom_s020v_om15` (live job 13829223) left untouched.
+`/home` 241469 → 216309 MB (235.8 G → 211.2 G). CAVEAT: the "before" `du` for
+this pass overlapped the apply, so 235.8 G is not a clean pre-action baseline —
+other live runs grew during the ~25 min window; the 47239 MB action figure is
+the reliable one.
+
+Archive quota after both passes: 4.549 T, 93,402 files. Two items flagged for
+Ryan, no action taken: (1) `lfs quota` on `/nobackup/archive` now reports no
+enforced block/file limit (`0k`), contradicting the 20 TiB / 1 M baseline noted
+in the 018 ledger; (2) restarting `p022lg_hr10_om15` from any step before 1003
+now requires unpacking the tarball — steps 1003–1007 restart directly off
+`/home` as usual.

@@ -1,0 +1,112 @@
+== topology ==
+Model name:                              AMD EPYC 7763 64-Core Processor
+Thread(s) per core:                      1
+Core(s) per socket:                      64
+Socket(s):                               2
+NUMA node(s):                            8
+NUMA node0 CPU(s):                       0-15
+NUMA node1 CPU(s):                       16-31
+NUMA node2 CPU(s):                       32-47
+NUMA node3 CPU(s):                       48-63
+NUMA node4 CPU(s):                       64-79
+NUMA node5 CPU(s):                       80-95
+NUMA node6 CPU(s):                       96-111
+NUMA node7 CPU(s):                       112-127
+available: 8 nodes (0-7)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+node 0 size: 63811 MB
+node 0 free: 2657 MB
+node 1 cpus: 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+node 1 size: 64506 MB
+node 1 free: 3720 MB
+node 2 cpus: 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+node 2 size: 64506 MB
+node 2 free: 26789 MB
+node 3 cpus: 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+node 3 size: 64449 MB
+node 3 free: 34792 MB
+node 4 cpus: 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79
+node 4 size: 64506 MB
+node 4 free: 2161 MB
+node 5 cpus: 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+node 5 size: 64506 MB
+node 5 free: 3990 MB
+node 6 cpus: 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111
+node 6 size: 64506 MB
+node 6 free: 1702 MB
+node 7 cpus: 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127
+node 7 size: 64502 MB
+node 7 free: 15620 MB
+node distances:
+node     0    1    2    3    4    5    6    7 
+   0:   10   12   12   12   32   32   32   32 
+   1:   12   10   12   12   32   32   32   32 
+   2:   12   12   10   12   32   32   32   32 
+   3:   12   12   12   10   32   32   32   32 
+   4:   32   32   32   32   10   12   12   12 
+   5:   32   32   32   32   12   10   12   12 
+   6:   32   32   32   32   12   12   10   12 
+   7:   32   32   32   32   12   12   12   10 
+--- benchmark/replay_gate2c_13773580/serial_f64.log: numactl --cpunodebind=0 --membind=0 julia -t1 benchmark/fgs_sequence_replay.jl --mode serial --sweeps 12 ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=serial f32=false f32full=false threads=1
+serial(F64)                  sweeps=12  min 0.1029 s  med 0.1030 s  → useful BW (min): 27.81 GB/s
+  projected 81-sweep coefficient-stream time: 8.337 s (min) / 8.346 s (med)
+--- benchmark/replay_gate2c_13773580/serial_f32conv.log: numactl --cpunodebind=0 --membind=0 julia -t1 benchmark/fgs_sequence_replay.jl --mode serial --sweeps 12 --f32 ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=serial f32=true f32full=false threads=1
+serial(F32conv)              sweeps=12  min 0.0843 s  med 0.0844 s  → useful BW (min): 33.98 GB/s
+  projected 81-sweep coefficient-stream time: 6.825 s (min) / 6.834 s (med)
+--- benchmark/replay_gate2c_13773580/serial_f32full.log: numactl --cpunodebind=0 --membind=0 julia -t1 benchmark/fgs_sequence_replay.jl --mode serial --sweeps 12 --f32-full ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=serial f32=false f32full=true threads=1
+serial(F32full)              sweeps=12  min 0.0548 s  med 0.0549 s  → useful BW (min): 52.22 GB/s
+  projected 81-sweep coefficient-stream time: 4.441 s (min) / 4.447 s (med)
+--- benchmark/replay_gate2c_13773580/handoff_t16.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t16 benchmark/fgs_sequence_replay.jl --mode handoff --sweeps 40 ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=handoff f32=false f32full=false threads=16
+handoff(team=16)             sweeps=40  min 0.0019 s  med 0.0020 s  → useful BW (min): 1480.07 GB/s
+  projected 81-sweep coefficient-stream time: 0.157 s (min) / 0.160 s (med)
+  handoffs/sweep = 1068, avg handoff = 3.132 µs  (budget < 5.8 µs)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_owner_t4.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t4 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full --first-touch owner ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=4
+rowpar(F32full, team=4, touch=owner) sweeps=12  min 0.0376 s  med 0.0377 s  → useful BW (min): 76.20 GB/s
+  projected 81-sweep coefficient-stream time: 3.043 s (min) / 3.054 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_owner_t8.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t8 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full --first-touch owner ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=8
+rowpar(F32full, team=8, touch=owner) sweeps=12  min 0.0440 s  med 0.0471 s  → useful BW (min): 65.11 GB/s
+  projected 81-sweep coefficient-stream time: 3.562 s (min) / 3.812 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_owner_t16.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t16 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full --first-touch owner ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=16
+rowpar(F32full, team=16, touch=owner) sweeps=12  min 0.0317 s  med 0.0354 s  → useful BW (min): 90.21 GB/s
+  projected 81-sweep coefficient-stream time: 2.571 s (min) / 2.866 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_owner_t32.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t32 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full --first-touch owner ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=32
+rowpar(F32full, team=32, touch=owner) sweeps=12  min 0.0343 s  med 0.0373 s  → useful BW (min): 83.49 GB/s
+  projected 81-sweep coefficient-stream time: 2.777 s (min) / 3.018 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_interleave_t16.log: numactl --interleave=0-3 --cpunodebind=0-3 julia -t16 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=16
+rowpar(F32full, team=16, touch=serial) sweeps=12  min 0.0324 s  med 0.0339 s  → useful BW (min): 88.37 GB/s
+  projected 81-sweep coefficient-stream time: 2.624 s (min) / 2.744 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32full_interleave_t32.log: numactl --interleave=0-3 --cpunodebind=0-3 julia -t32 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32-full ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=false f32full=true threads=32
+rowpar(F32full, team=32, touch=serial) sweeps=12  min 0.0339 s  med 0.0351 s  → useful BW (min): 84.37 GB/s
+  projected 81-sweep coefficient-stream time: 2.749 s (min) / 2.845 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32conv_owner_t16.log: numactl --cpunodebind=0-3 --membind=0-3 julia -t16 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32 --first-touch owner ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=true f32full=false threads=16
+rowpar(F32conv, team=16, touch=owner) sweeps=12  min 0.0424 s  med 0.0456 s  → useful BW (min): 67.54 GB/s
+  projected 81-sweep coefficient-stream time: 3.433 s (min) / 3.695 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32conv_interleave_t16.log: numactl --interleave=0-3 --cpunodebind=0-3 julia -t16 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32 ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=true f32full=false threads=16
+rowpar(F32conv, team=16, touch=serial) sweeps=12  min 0.0367 s  med 0.0390 s  → useful BW (min): 78.05 GB/s
+  projected 81-sweep coefficient-stream time: 2.971 s (min) / 3.162 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+--- benchmark/replay_gate2c_13773580/rowpar_f32conv_interleave_t32.log: numactl --interleave=0-3 --cpunodebind=0-3 julia -t32 benchmark/fgs_sequence_replay.jl --mode rowpar --sweeps 12 --f32 ---
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=rowpar f32=true f32full=false threads=32
+rowpar(F32conv, team=32, touch=serial) sweeps=12  min 0.0395 s  med 0.0418 s  → useful BW (min): 72.39 GB/s
+  projected 81-sweep coefficient-stream time: 3.203 s (min) / 3.382 s (med)
+  parallel leaves = 978/1068 (small-bytes threshold 262144)
+== done: results in benchmark/replay_gate2c_13773580 ==

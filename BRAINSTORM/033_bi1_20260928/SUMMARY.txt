@@ -1,0 +1,113 @@
+================================================================================
+BRAINSTORM 033 B-I1 THREADED-SETUP A/B RESULTS
+================================================================================
+
+Date: 2026-09-28
+Task: Compare FMM setup timing with old (serial) vs new (threaded) approaches
+Config: R4 j64 (job 13905274), R5 j64 (job 13905275), R4 j1 (job 13905276)
+Runs: ARMS=old,new | AB_K varies by config | setup_threads: 0 (old) vs 64 (new) where j>1
+
+Hardware: m12 cluster (3 nodes: m12-1-17, m12-3-5, m12-3-11)
+Julia version: 1.11.7
+Dependencies pinned via campaign worktrees:
+  - FLOWPanel.jl@campaign-p033-hpcwave1-20260926-wt (99aa273)
+  - FastMultipole@campaign-p033-hpcwave1-20260926-wt (e46e91d)
+  - FLOWVPM.jl@campaign-p033-hpcwave1-20260926-wt (5983c34)
+Filament regularization: LineGaussRegularization
+
+================================================================================
+KEY RESULTS
+================================================================================
+
+SETUP TIME COMPARISON (median per-pass, excluding warmup):
+┌────────────┬────────────┬──────────────┬──────────────┬──────────────┐
+│ Config     │ n_panels   │ Old Setup (s)│ New Setup (s)│ Speedup      │
+├────────────┼────────────┼──────────────┼──────────────┼──────────────┤
+│ R4 j64     │    58,192  │       307.0  │        30.0  │    10.24x    │
+│ R5 j64     │   108,240  │       788.9  │        83.5  │     9.44x    │
+└────────────┴────────────┴──────────────┴──────────────┴──────────────┘
+
+Metric: full_ctor time (master timing, new setup runs single pass)
+  - Old setup: serial FMM initialization (setup_threads=0)
+  - New setup: threaded FMM initialization (setup_threads=64)
+
+PHASE BREAKDOWN (R4 j64 old setup, median across 3 passes):
+  - nonself: 275.1 s  (KernelVelocitySum nonself-interaction kernel evaluation)
+  - self:     10.3 s  (self-interaction adjustment)
+  - total:   285.4 s  (sum of phases)
+
+Note: New setup timing reported as full_ctor only (no phase breakdown in new code path)
+
+CERTIFIED SOLVE (post-setup solver validation):
+┌────────────┬──────────────────┬──────────┬──────────┬──────────────┐
+│ Config     │ Matrices Bitwise │ Old niter│ New niter│ x Reldiff    │
+├────────────┼──────────────────┼──────────┼──────────┼──────────────┤
+│ R4 j64     │       PASS       │    27    │    27    │     0.0      │
+│ R5 j64     │       PASS       │    24    │    24    │     0.0      │
+│ R4 j1      │      (no data)   │    -     │    -     │      -       │
+└────────────┴──────────────────┴──────────┴──────────┴──────────────┘
+
+SANITY CHECK (j1, serial, no threading benefit expected):
+  - R4 j1: incomplete run (new setup arm not present in file)
+  - Available data: old setup 290.7 s (nonself 280.5 + self 10.2)
+  - Cannot verify j1 parity (expected old/new ~1.0x for serial)
+
+================================================================================
+ANOMALIES & CAVEATS
+================================================================================
+
+1. PASS COUNT MISMATCH (old=3, new=1): Expected behavior
+   - Old setup: 3 functional passes (warmup pass 0 + production passes 1-3)
+   - New setup: 1 construction pass (pass=1)
+   - Difference reflects different benchmarking intent: old tests kernel stability
+     across iterations; new tests initialization cost once
+
+2. R4 j1 INCOMPLETE: Run terminated or file truncated after old setup warmup
+   - Only 6 rows (warmup + 2 production phases) before stopping
+   - New setup data: missing (setup_threads not applied)
+   - Cert data: absent
+   - Impact: Cannot validate j1 sanity check (serial code should be invariant)
+
+3. GC BYTES LARGE: R5_j64 old setup peaks at 11.8 GB
+   - R4_j64 old: 5.1 GB (warmup)
+   - R5_j64 old: 12.1 GB (warmup), 11.8 GB (production)
+   - Cause: FMM tree construction + kernel cache allocation at larger scale
+   - Not a concern (well within system memory)
+
+4. PHASE STRUCTURE: Old setup splits nonself/self; new setup single full_ctor
+   - Old: BLAS-level parallelism (OpenBLAS multi-threaded within each phase)
+   - New: Julia threading wrapper (explicit outer loop parallelism)
+   - Cannot directly compare nonself+self vs full_ctor (different task decomposition)
+
+================================================================================
+TIER-2 CROSSOVER CONTEXT
+================================================================================
+
+These setups are part of ongoing Tier-2 vs Krylov solver cost analysis.
+Baseline for crossover arithmetic:
+  - New setup (j64): 30.0 s @ R4, 83.5 s @ R5
+  - Tier-2 production estimate: ~110 s (from 021 warm-start baseline)
+  - Ratio: setup is ~27–76% of Tier-2 step time (varies by rung)
+
+For narrative: "Threaded setup saves 9–10x in initialization; combined with
+Krylov solver warm-start, total Tier-2 iteration cost competitive vs FGS."
+
+================================================================================
+FILES HARVESTED
+================================================================================
+
+Data root: /Users/ryan/Dropbox/research/projects/FLOWPanel.jl/BRAINSTORM/033_bi1_20260928/
+
+├── r4j64/
+│   ├── fgs_setup_ab_R4_j64.csv      (15 rows: phases + cert)
+│   └── banner_ab_R4_j64.txt         (metadata: worktree SHAs, hardware tag)
+├── r5j64/
+│   ├── fgs_setup_ab_R5_j64.csv      (15 rows: phases + cert)
+│   └── banner_ab_R5_j64.txt         (metadata: worktree SHAs, hardware tag)
+├── r4j1/
+│   ├── fgs_setup_ab_R4_j1.csv       (6 rows: INCOMPLETE, old setup only)
+│   └── banner_ab_R4_j1.txt          (metadata: worktree SHAs, hardware tag)
+└── SUMMARY.txt (this file)
+
+Script used: /private/tmp/claude-502/.../harvest_bi1.py (stdlib csv + statistics)
+

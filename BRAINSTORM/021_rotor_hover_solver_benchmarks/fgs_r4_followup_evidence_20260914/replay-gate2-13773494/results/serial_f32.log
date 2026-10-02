@@ -1,0 +1,3 @@
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=serial f32=true threads=1
+serial(:Float32)             sweeps=12  min 0.0858 s  med 0.0859 s  → useful BW (min): 33.37 GB/s
+  projected 81-sweep coefficient-stream time: 6.949 s (min) / 6.961 s (med)

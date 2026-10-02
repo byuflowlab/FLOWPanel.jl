@@ -1,0 +1,77 @@
+================================================================================
+BRAINSTORM 033 B-I1 THREADED-SETUP A/B — RERUN (correct env passing)
+================================================================================
+
+Date harvested: 2026-09-28
+Jobs: fp033-bi1-r4j64b 13905507 (COMPLETED 27 min), fp033-bi1-r5j64b 13905508
+(COMPLETED 69 min), fp033-bi1-r4j1b 13905509 (COMPLETED 64 min).
+Rerun of degraded wave-1c setup jobs (13905274-76) whose `--export=ALL,ARMS=old,new`
+comma-split dropped the new arm from the pass loop. This rerun passed knobs via
+`VAR=x sbatch` env inheritance; BOTH arms have full multi-pass data everywhere.
+
+Provenance (banners, all three files): fp 99aa273, fm e46e91d7, vpm 5983c34
+(campaign/p033-hpcwave1-20260926 worktrees), julia 1.11.7, BLAS threads 1,
+LineGaussRegularization. Nodes: both j64 jobs on m12-2-8 (same start second,
+disjoint core allocations); j1 on m12-3-11.
+
+================================================================================
+SETUP TIME (median per-pass, warmup pass 0 excluded)
+================================================================================
+
+Phase-loop passes (old: 3 prod passes j64 / 2 at j1; new: same):
+
+| Config  | n_panels | arm | nonself (s) | self (s) | phase total (s) | full_ctor (s) |
+|---------|----------|-----|-------------|----------|-----------------|---------------|
+| R4 j64  |  58,192  | old |   274.61    |  10.15   |     284.76      |    308.17     |
+| R4 j64  |  58,192  | new |     8.555   |   1.715  |      10.27      |     30.49     |
+| R5 j64  | 108,240  | old |   704.25    |  27.79   |     732.04      |    789.08     |
+| R5 j64  | 108,240  | new |    28.06    |   4.821  |      32.88      |     85.76     |
+| R4 j1   |  58,192  | old |   275.80    |  10.37   |     286.17      |      —        |
+| R4 j1   |  58,192  | new |   275.38    |  10.28   |     285.66      |      —        |
+
+Speedups (old/new):
+  R4 j64: phase-loop 27.7x, full_ctor 10.11x  (308.17 / 30.49)
+  R5 j64: phase-loop 22.3x, full_ctor  9.20x  (789.08 / 85.76)
+  R4 j1 sanity: old/new = 286.17/285.66 = 1.0018  -> PASS (serial parity,
+    threading machinery adds no measurable serial overhead)
+
+Note: full_ctor > phase total for the new arm because the full constructor
+includes the tree build and other single-threaded ctor stages not covered by
+the threaded probe; full_ctor is the number that feeds Tier-2 arithmetic.
+
+================================================================================
+CROSS-CHECK vs DEGRADED WAVE-1C CERTIFIED NUMBERS
+================================================================================
+
+| quantity            | degraded (13905274/75) | rerun  | deviation |
+|---------------------|------------------------|--------|-----------|
+| R4 j64 new full_ctor |  30.0 s               | 30.49  |  +1.6%    |
+| R5 j64 new full_ctor |  83.5 s               | 85.76  |  +2.7%    |
+| R4 j64 old full_ctor | 307.0 s               | 308.17 |  +0.4%    |
+| R5 j64 old full_ctor | 788.9 s               | 789.08 |  +0.02%   |
+
+Consistent; the degraded-run cert-path numbers are confirmed.
+
+================================================================================
+CERTIFICATION
+================================================================================
+
+R4 j64: all matrix certs PASS (sorted_list, nonself/self sizes+data+rhs bitwise,
+  max_abs_diff 0.0); solver_matrices_bitwise PASS; niter old=new=27;
+  solve_x_bitwise PASS, reldiff 0.0.
+R5 j64: same, all PASS; niter old=new=24; reldiff 0.0.
+R4 j1: matrix certs all PASS (CERT_SOLVE=0 by design, so no solve cert).
+
+================================================================================
+ANOMALIES
+================================================================================
+
+1. New-arm gc_bytes higher than old (R4: 6.1 vs 4.9 GB; R5: 14.1 vs 11.8 GB
+   per pass) — threaded per-thread buffer allocation; within memory budget.
+2. Both j64 jobs co-resident on m12-2-8 — timings nonetheless match the
+   degraded run (different nodes) to <=2.7%, so no contention artifact.
+3. None otherwise: pass counts as designed (AB_K=3 j64, AB_K=2 j1), no missing
+   arms, warmup passes normal.
+
+Files: r4j64/, r5j64/, r4j1/ each with fgs_setup_ab_*.csv + banner_ab_*.txt,
+copied verbatim from orc data root p033_hpcwave1_20260926/.

@@ -1,0 +1,4 @@
+R4 replay: 1068 leaves, 58192 strengths, 2.863 GB coefficients/sweep, mode=dagteam f32=false f32full=false threads=32
+dagteam(F64, team=32)        sweeps=12  min 0.0475 s  med 0.0495 s  → useful BW (min): 60.27 GB/s
+  projected 81-sweep coefficient-stream time: 3.847 s (min) / 4.011 s (med)
+  lower tasks = 1068 (roots 3, edges 48167), backward tasks = 1065, lower/upper bytes = 1513294744 / 1349555288 (F64-equiv)

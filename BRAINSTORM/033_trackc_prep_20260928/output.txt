@@ -1,0 +1,14 @@
+leaves=1068 unknowns=58192 lower_edges=48167
+preds/leaf: mean=45.1 median=48 p90=67 max=121
+leaf size: mean=54.5 min=1 max=1450
+original lower-DAG depth (leaf levels): 279
+
+baseline work proxy W0=2.023e+08, weighted span S0=7.237e+07, infinite-thread ceiling W0/S0=2.80x
+
+K  crossE ifcL  ifc_unk ifc_frac Sblocks S_MB_f64 Sdepth locdepth ctorcols imbal  localspan  S_work    S_span   TC_serS   TC_parS  vsS0par
+2    20477  435    34303    0.589       0      0.0      1      194      435   1.18   4.85e+07  0.00e+00  0.00e+00  9.71e+07  9.71e+07    0.75x
+4    28633  583    41397    0.711   31296   1386.8      3      157     1031   1.46   3.21e+07  1.73e+08  4.50e+06  2.38e+08  6.95e+07    1.04x
+8    31223  617    42550    0.731   40918   1605.2      5      123     1418   1.47   2.45e+07  2.01e+08  9.05e+06  2.50e+08  5.81e+07    1.25x
+16   33193  720    46105    0.792   44697   1645.4      9      109     1956   1.86   1.15e+07  2.06e+08  1.05e+07  2.30e+08  3.50e+07    2.06x
+32   36001  774    48806    0.839   45935   1621.4     15       78     2778   2.02   4.32e+06  2.03e+08  1.27e+07  2.14e+08  2.43e+07    2.98x
+64   39459  894    52872    0.909   50643   1692.1     27       56     4249   2.67   2.10e+06  2.12e+08  2.05e+07  2.20e+08  2.88e+07    2.51x
