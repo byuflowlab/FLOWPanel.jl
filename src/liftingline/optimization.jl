@@ -167,6 +167,8 @@ function run_liftingline(;
 
         remorph = true,                                 # Whether to remorph the geometry (it will ignore the new distributions if false)
         reset_solution = true,                          # Whether to reset the solution after remorphing
+
+        output_effective_horseshoes = false,
         
 ) where {R1, R2, R3, R4, R5, R6, R7, R8, R9, R10}
 
@@ -461,7 +463,7 @@ function run_liftingline(;
     # ------------------ OUTPUT SOLUTION -------------------------------------------
     if !isnothing(save_path)
         
-        str = save(ll, run_name; path=save_path, debug=!true) # Use `debug=true` to output the effective horseshoes
+        str = save(ll, run_name; path=save_path, debug=output_effective_horseshoes) # Use `debug=true` to output the effective horseshoes
     
         if paraview
             run(`paraview --data=$(joinpath(save_path, str))`)
