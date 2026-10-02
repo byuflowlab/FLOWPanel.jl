@@ -392,8 +392,26 @@ spending effort anywhere.
      rationalize it.
   4. Certification standard = B-I1's: bitwise (or documented-equivalent)
      matrices/solves, j1 parity, identical solver iterates.
-  - [ ] technical completion
-  - [ ] clear-context review
+  - [x] technical completion (2026-10-01: deliverable =
+    `033_bi2_profile_20261001.md`, evidence `033_bi2prof_20261001/` +
+    `033_bi2_20261001/` + `033_bi2b_20261001/`. Profile at R4/R5 j64
+    (campaign `p033-bi2prof-20261001`): the tail is ONE stage — dagteam L/U
+    repack+F32 (17.7/52.4 s = 62%/60% of setup); everything else ≤1 s.
+    Threaded: repack (disjoint-write over source leaves, fm `29fcdcb2`,
+    rescheduled to dynamic per-leaf tasks `6456c221` after :static measured
+    only 1.5×) + both leaf-LU builders; sort_by_source/trees/alloc left
+    serial by measurement (noise-level, recorded). No new knob. FINAL:
+    full ctor R4 j64 334.0→**15.5 s** (B-I1: 30.5), R5 857.3→**47.8 s**
+    (B-I1: 85.8); certs ALL PASS at both rungs (bitwise matrices +
+    Lmat/Umat, identical niter 27/24, x bitwise), j1 parity clean.
+    Tier-2 fed: FGS setup now ≈64 s cheaper than ILU (15.5 vs 79.1+27.9);
+    cumulative@36 ≈419 (fgs) vs 438 s (ilu) — dead heat broken, FGS ahead.)
+  - [x] clear-context review (2026-10-01: PASS — reviewer verified
+    race-freedom/colofs disjointness directly in the diffs, default-path
+    neutrality, protocol order, and spot-checked all headline CSVs; the one
+    flagged evidence gap — baseline profile CSVs misplaced into
+    FLOWVPM.jl/BRAINSTORM by a cwd drift — was fixed by moving
+    `033_bi2prof_20261001/` into this repo and re-verifying in place.)
 - **B-I3 — ILU-GMRES-nfcache setup attribution** (staged by Ryan
   2026-09-29). Attribute the ILU arm's ~82 s setup + ~28 s prime at R4 j64
   into threaded vs serial phases: the `ILUPreconditioner` stats dict already
@@ -409,8 +427,19 @@ spending effort anywhere.
   near-field graph that sank Track C) and invasive; if `factorization_time`
   turns out large, record that as ILU's accepted residual rather than
   attacking it.
-  - [ ] technical completion
-  - [ ] clear-context review
+  - [x] technical completion (2026-10-01: deliverable =
+    `033_bi3_ilu_attribution_20261001.md`. Setup split harvested from the
+    021 warm-start campaign CSV (job 13890195, 8 windows) + one fresh
+    gap-closing run (fp033-bi3-iluattr-r4j64 13948848, campaign
+    `p033-bi2-20261001`, instrumentation-only commits: `pattern_time`
+    bracket + `prime_nfcache_build` persistence, FLOWPanel `6e15e6a`).
+    R4 j64: t_setup 79.1 s = tree 1.9 + lists 0.3 + pattern 8.4 + assembly
+    11.8 + **factorization 43.2 (accepted residual per ruling)** + ~9.5
+    stats/bookkeeping; t_prime 27.9 s = nfcache build 14.6 (threaded) +
+    13.3 plan+priming GMRES. ilu0 untouched.)
+  - [x] clear-context review (2026-10-01: PASS — reviewer independently
+    re-pulled both orc CSVs, every cited number matches <0.1%, arithmetic
+    reconciles, instrumentation confirmed behavior-neutral.)
 
 ## Track C — Exact triangular solver via subdomains/interface (UNCONDITIONAL)
 
@@ -898,8 +927,24 @@ either side of it; ILU keeps the cold-single-solve win (2.41 vs 3.24 s).
 Full record: 033_bi1_results_20260928.md + 033_bi1_rerun_20260928/ (evidence)
 + 033_bi1_20260928/ (degraded harvest, retained). `threaded_setup` production
 default remains Ryan-gated. B-I1 awaits clear-context review.
-Remaining work is Ryan-gated (C/D theory conversations; threaded_setup
-production default; B-T1 R4+R1 substitution acceptance; tag pushes to
-origin; notebook entry; 021 compete decision fed by the Tier-2 arithmetic).
-Track A implementation is STOPPED at A-G. Entry point: RESET
-BRIEF.
+SESSION 7 (2026-10-01): B-I2 and B-I3 BOTH COMPLETE + clear-context
+reviewed (see their checkboxes in Track B Implementation). Headline: FGS
+full-ctor setup R4 j64 30.5→15.5 s, R5 85.8→47.8 s (threaded dagteam
+repack + leaf-LU builders under the existing setup_threads opt-in; all
+bitwise certs + identical iterates at both rungs; j1 parity clean). ILU
+one-time cost attributed: 79.1 s setup (43.2 s = serial ilu0, accepted
+residual per ruling) + 27.9 s prime (14.6 s threaded nfcache build).
+Tier-2 arithmetic updated: FGS setup ≈64 s cheaper than ILU; B-I1's
+cumulative@36 dead heat (434 vs 438) becomes ≈419 vs 438 — FGS ahead ~19 s
+at NT=36 with per-step cost a statistical tie; ILU keeps the
+cold-single-solve win. Campaign tags (local + orc only):
+campaign/p033-bi2prof-20261001, -bi2-20261001, -bi2b-20261001; docs =
+033_bi2_profile_20261001.md, 033_bi3_ilu_attribution_20261001.md.
+Z1 (Tier-2 headline + close-out conversation) is now unblocked and
+Ryan-gated.
+Remaining work is Ryan-gated (Z1 close-out; C/D theory conversations;
+threaded_setup production default — note it now buys 318 s per cold ctor
+at R4 j64; B-T1 R4+R1 substitution acceptance; tag pushes to origin;
+notebook entries for sessions 2–7; 021 compete decision fed by the updated
+Tier-2 arithmetic). Track A implementation is STOPPED at A-G. Entry point:
+RESET BRIEF.

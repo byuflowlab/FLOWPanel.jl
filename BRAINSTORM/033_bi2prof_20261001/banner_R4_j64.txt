@@ -1,0 +1,14 @@
+######################################################################
+# 021 solver benchmark banner
+#   threading_mode = multi
+#   julia_threads  = 64
+#   blas_threads   = 1
+#   commit         = b9d80c77cc45c43e7cfc294c266e4f04b6b505d7
+#   fm_commit      = 33c3e20b042c33479988422a9a498862fea87779
+#   vpm_commit     = 8d4a3b4d3012c42fc7d078629234c105b1e570f7
+#   worktrees      = fp=FLOWPanel.jl@DETACHED fm=FastMultipole@DETACHED vpm=FLOWVPM.jl@DETACHED
+#   julia_version  = 1.11.7
+#   hardware_tag   = m12-1-21
+#   filament_reg   = LineGaussRegularization
+#   date           = 2026-10-01 21:19:50
+######################################################################
