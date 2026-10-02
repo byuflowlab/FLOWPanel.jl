@@ -453,6 +453,14 @@ if solver_config isa pnl.KrylovSolver && solver_config.persistent_plan
     if solver_config.cache_nearfield
         solver_config.kop.plan_slot[][1].nearfield_cache[] !== nothing ||
             error("cache_nearfield set but the priming solve built no cache")
+        # B-I3 (033, 2026-10-01): the cache records its own threaded build
+        # wall time — persist it so t_prime decomposes into (nfcache build,
+        # plan build + priming Krylov iterations)
+        _nfc_bt = solver_config.kop.plan_slot[][1].nearfield_cache[].build_time
+        setup_split === nothing ||
+            (global setup_split = (; setup_split..., prime_nfcache_build=_nfc_bt))
+        println("  near-field cache build (threaded): " *
+                "$(round(_nfc_bt; digits=2)) s of the priming solve")
     end
     println("persistent-plan priming solve: $(round(t_prime; digits=2)) s " *
             "(plan + near-field cache build; EXCLUDED from per-step costs)")

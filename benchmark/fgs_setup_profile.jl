@@ -28,8 +28,14 @@ Phases (constructor order):
 Usage (B-T1 protocol; run once per (rung, threads) process):
   OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 THREADING_MODE=multi \
   EXPECT_JULIA_THREADS=4 BENCH_BLAS_THREADS=1 RUNG=R4 SKIP_B=1 \
-  DECOMP_K=2 FULL_K=1 \
+  DECOMP_K=2 FULL_K=1 SETUP_THREADS=4 \
     julia --project=benchmark -t 4 benchmark/fgs_setup_profile.jl <outdir>
+
+SETUP_THREADS (B-I2, 2026-10-01): 0 (default) = original serial probe replay;
+n>0 = B-I1 threaded influence-matrix population (nonself/self) with n threads,
+and the full-ctor cross-check passes threaded_setup=true. The dagplan phase is
+additionally decomposed into dagplan_{edges,alloc,repack,prio,scratch,lu} rows
+(informational; excluded from phase_sum).
 
 Every pass of every phase is a CSV row (judge takes min per phase across
 passes); pass 0 is the compile warmup and is written but flagged warmup=1.
@@ -63,6 +69,11 @@ recenter_    = false
 
 decomp_k = parse(Int, get(ENV, "DECOMP_K", "2"))
 full_k   = parse(Int, get(ENV, "FULL_K", "1"))
+
+# B-I2 (2026-10-01): SETUP_THREADS=<n> replays the ctor with B-I1's threaded
+# influence-matrix population (nonself/self probes); 0 = original serial
+# replay. The full-ctor cross-check passes threaded_setup accordingly.
+setup_threads_env = parse(Int, get(ENV, "SETUP_THREADS", "0"))
 
 ################################################################################
 # Phase-decomposed replay of FastMultipole.FastGaussSeidel((rotor,); ...)
@@ -105,7 +116,8 @@ function decomposed_pass()
     t0 = time_ns(); a0 = Base.gc_bytes()
     nonself_matrices, sorted_list = FM.nonself_influence_matrices(
         target_tree.buffers, source_tree.buffers, source_systems,
-        target_tree, source_tree, direct_list, derivatives_switches)
+        target_tree, source_tree, direct_list, derivatives_switches;
+        setup_threads=setup_threads_env)
     old_influence_storage = similar(nonself_matrices.rhs)
     push!(rows, ("nonself", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
 
@@ -122,7 +134,7 @@ function decomposed_pass()
     t0 = time_ns(); a0 = Base.gc_bytes()
     self_matrices = FM.self_influence_matrices(target_tree.buffers,
         source_tree.buffers, source_systems, target_tree, source_tree,
-        derivatives_switches)
+        derivatives_switches; setup_threads=setup_threads_env)
     push!(rows, ("self", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
 
     # --- leaf LU cache (Float64) ---
@@ -131,16 +143,26 @@ function decomposed_pass()
     push!(rows, ("lu", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
 
     # --- dagteam plan (split repack + f32 LU + scratch) ---
+    # B-I2: setup_diagnostics decomposes the plan build into its internal
+    # stages (edges/alloc/repack/prio/scratch/lu); emitted as dagplan_* rows,
+    # informational only (NOT added to phase_sum — dagplan already covers them)
+    dag_diag = Dict{Symbol,UInt64}()
     t0 = time_ns(); a0 = Base.gc_bytes()
     dagteam = FM.build_dagteam_plan(precision, nonself_matrices,
         sorted_list, index_map, source_tree, target_tree,
         strengths_by_leaf, targets_by_branch, self_matrices, leaf_lu_cache;
-        nworkers=Threads.nthreads(), idle_policy=:backoff, coop=1)
+        nworkers=Threads.nthreads(), idle_policy=:backoff, coop=1,
+        setup_diagnostics=dag_diag)
     # NOTE: coop=1 (solo/production, bit-identical) mirrors what the A-R2-
     # modified constructor passes; the kwarg requires the A-R2 signature of
     # build_dagteam_plan (uncommitted on flowpanel-20260817) — drop it to run
     # against pre-A-R2 FastMultipole.
     push!(rows, ("dagplan", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
+    for key in (:dagplan_edges_ns, :dagplan_alloc_ns, :dagplan_repack_ns,
+                :dagplan_prio_ns, :dagplan_scratch_ns, :dagplan_lu_ns)
+        haskey(dag_diag, key) || continue
+        push!(rows, (string(key)[1:end-3], dag_diag[key]/1e9, 0))
+    end
 
     # --- inside view: the f32 LU component of dagplan (informational only) ---
     t0 = time_ns(); a0 = Base.gc_bytes()
@@ -156,22 +178,24 @@ end
 # Run
 ################################################################################
 
-csv_path = joinpath(outdir, "fgs_setup_profile_$(rung)_j$(banner.julia_threads).csv")
+csv_path = joinpath(outdir,
+    "fgs_setup_profile_$(rung)_j$(banner.julia_threads)_s$(setup_threads_env).csv")
 open(csv_path, "w") do io
-    println(io, "rung,n_panels,julia_threads,blas_threads,kind,pass,warmup,phase,t_s,gc_bytes")
+    println(io, "rung,n_panels,julia_threads,blas_threads,setup_threads,kind,pass,warmup,phase,t_s,gc_bytes")
 
     # decomposed passes (pass 0 = compile warmup, still recorded)
     for pass in 0:decomp_k
         GC.gc(); GC.gc()
         rows, _keep = decomposed_pass()
-        tot = sum(r[2] for r in rows if r[1] != "dag_lu_f32")
+        tot = sum(r[2] for r in rows
+                  if r[1] != "dag_lu_f32" && !startswith(r[1], "dagplan_"))
         for (phase, t, bytes) in rows
             println(io, "$rung,$(rotor.ncells),$(banner.julia_threads)," *
-                "$(banner.blas_threads),decomp,$pass,$(pass == 0 ? 1 : 0)," *
+                "$(banner.blas_threads),$setup_threads_env,decomp,$pass,$(pass == 0 ? 1 : 0)," *
                 "$phase,$t,$bytes")
         end
         println(io, "$rung,$(rotor.ncells),$(banner.julia_threads)," *
-            "$(banner.blas_threads),decomp,$pass,$(pass == 0 ? 1 : 0)," *
+            "$(banner.blas_threads),$setup_threads_env,decomp,$pass,$(pass == 0 ? 1 : 0)," *
             "phase_sum,$tot,0")
         println("decomp pass $pass: phase_sum = $(round(tot, digits=2)) s")
         flush(io)
@@ -188,10 +212,11 @@ open(csv_path, "w") do io
             tolerance=champ["tolerance"], rlx=champ["rlx"], shrink=shrink_,
             recenter=recenter_, reverse_pass=false, cache_leaf_lu=true,
             sweep_order=:dagteam, dagteam_precision=precision,
+            threaded_setup=setup_threads_env > 0,
             verbose=false, project_solution=false, solution_history_length=0)
         t = (time_ns()-t0)/1e9
         println(io, "$rung,$(rotor.ncells),$(banner.julia_threads)," *
-            "$(banner.blas_threads),full_ctor,$pass,0,full_ctor,$t," *
+            "$(banner.blas_threads),$setup_threads_env,full_ctor,$pass,0,full_ctor,$t," *
             "$(Int(Base.gc_bytes()-a0))")
         println("full ctor pass $pass: $(round(t, digits=2)) s")
         flush(io)
