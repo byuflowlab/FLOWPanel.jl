@@ -139,7 +139,8 @@ function decomposed_pass()
 
     # --- leaf LU cache (Float64) ---
     t0 = time_ns(); a0 = Base.gc_bytes()
-    leaf_lu_cache = FM.build_leaf_lu_cache(self_matrices)
+    leaf_lu_cache = FM.build_leaf_lu_cache(self_matrices;
+        setup_threads=setup_threads_env)
     push!(rows, ("lu", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
 
     # --- dagteam plan (split repack + f32 LU + scratch) ---
@@ -152,7 +153,7 @@ function decomposed_pass()
         sorted_list, index_map, source_tree, target_tree,
         strengths_by_leaf, targets_by_branch, self_matrices, leaf_lu_cache;
         nworkers=Threads.nthreads(), idle_policy=:backoff, coop=1,
-        setup_diagnostics=dag_diag)
+        setup_threads=setup_threads_env, setup_diagnostics=dag_diag)
     # NOTE: coop=1 (solo/production, bit-identical) mirrors what the A-R2-
     # modified constructor passes; the kwarg requires the A-R2 signature of
     # build_dagteam_plan (uncommitted on flowpanel-20260817) — drop it to run
@@ -166,7 +167,8 @@ function decomposed_pass()
 
     # --- inside view: the f32 LU component of dagplan (informational only) ---
     t0 = time_ns(); a0 = Base.gc_bytes()
-    lus32 = FM.build_leaf_lu_cache_as(Float32, self_matrices)
+    lus32 = FM.build_leaf_lu_cache_as(Float32, self_matrices;
+        setup_threads=setup_threads_env)
     push!(rows, ("dag_lu_f32", (time_ns()-t0)/1e9, Int(Base.gc_bytes()-a0)))
 
     # keep references alive through timing

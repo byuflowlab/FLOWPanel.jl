@@ -214,7 +214,13 @@ if cert_solve
     # solver-internal matrices must also match bitwise
     m_ok = solver_old.fgs.nonself_matrices.data == solver_new.fgs.nonself_matrices.data &&
            solver_old.fgs.self_matrices.data == solver_new.fgs.self_matrices.data
-    println("CERT solver_matrices_bitwise = $m_ok")
+    # B-I2: the dagteam plan's repacked split storage too (threaded repack
+    # under threaded_setup must be bitwise-identical to the serial pass)
+    d_o, d_n = solver_old.fgs.dagteam, solver_new.fgs.dagteam
+    plan_ok = d_o === nothing ? d_n === nothing :
+        (d_o.Lmat == d_n.Lmat && d_o.Umat == d_n.Umat)
+    m_ok &= plan_ok
+    println("CERT solver_matrices_bitwise = $m_ok (dagteam Lmat/Umat = $plan_ok)")
     println(io, "$rung,$(rotor.ncells),$(banner.julia_threads)," *
         "$(banner.blas_threads),cert,0,0,0,solver_matrices_bitwise,$(m_ok ? 1 : 0),0")
 
