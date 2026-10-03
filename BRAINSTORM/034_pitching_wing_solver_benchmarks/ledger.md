@@ -242,3 +242,22 @@ PRESENT); FLOWPanel worktree unchanged. Wave 2: precompile-gate job
 wave-2 logs under logs/slurm/ and must be recorded here at harvest).
 GitHub origin pushes of ALL b-tags (and the FM/VPM dev branches themselves,
 which exist nowhere on GitHub) still owed — gh auth.
+
+## 2026-10-02 — Phase 1 wave 2 submitted and verified RUNNING
+
+| job | rung | arm | walltime |
+| --- | --- | --- | --- |
+| 13961625 | R1 | backslash (precompile gate) | 12 h |
+| 13961629 | R1 | krylov_ilu_nfcache | 12 h |
+| 13961630 | R1 | fgs | 12 h |
+| 13961631 | R1 | krylov_gmres | 24 h |
+| 13961632 | R2 | backslash | 36 h |
+| 13961633 | R2 | krylov_ilu_nfcache | 36 h |
+| 13961634 | R2 | fgs | 36 h |
+| 13961635 | R2 | krylov_gmres | 70 h |
+
+FLOWPanel/FLOWVPM precompiled clean on the b pins (93 s, rest cached); all 8
+RUNNING on m9. Gate-job banner VERIFIED: commit d9e4432 (worktree HEAD =
+tag+data-symlink commit, parent = tagged 43f9763 — expected), fm 6456c221,
+vpm eebb9848, fm/vpm DETACHED, threading_mode=single, blas_threads=1 (strict
+pin holds on Linux).

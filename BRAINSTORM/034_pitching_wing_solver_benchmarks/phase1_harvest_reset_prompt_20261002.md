@@ -38,12 +38,14 @@ Do NOT read 021 item files inline; `brainstorm-scout` if needed.
   banner, never a clone's HEAD.
 - WAVE 2 jobs (m9, --qos=normal, non-exclusive, 1 CPU + 24 G, `-t 1` strict
   single mode, one (rung, arm) per job via `benchmark/slurm/p034_phase1.sh`):
-  precompile gate = **13961625** (R1 backslash); the other 7 were fanned out
-  automatically on "precompile stage done" (or, if the fan-out watcher died,
-  submit them per the launcher header — check `squeue`/logs first). Record
-  wave-2 job IDs in the ledger at harvest. Walltimes 12–70 h (R2 gmres is the
-  long pole). No VTK written (path=nothing). Verify every banner_<arm>.txt:
-  commit 43f9763, fm_commit 6456c22…, vpm_commit eebb984…, DETACHED worktrees.
+  R1 backslash/ilu/fgs/gmres = 13961625/13961629/13961630/13961631;
+  R2 backslash/ilu/fgs/gmres = 13961632/13961633/13961634/13961635. ALL 8
+  verified RUNNING 2026-10-02 with FLOWPanel precompiled clean; the gate job's
+  banner verified. Walltimes 12–70 h (R2 gmres is the long pole). No VTK
+  written (path=nothing). Verify every banner_<arm>.txt: commit **d9e4432**
+  (the worktree HEAD = tag + data-symlink commit, whose PARENT is the tagged
+  43f9763 — this is expected, not a mismatch), fm_commit 6456c22…, vpm_commit
+  eebb984…, fm/vpm DETACHED, threading_mode single, blas_threads 1.
 - Outputs: orc `~/projects/FLOWPanel.jl/data/p034_phase1/R{1,2}/` — per arm
   `summary_<arm>.csv`, `steps_<arm>.csv`, `banner_<arm>.txt`. JUDGE FROM THESE
   CSVs, never stdout/logs; verify knobs from each banner (commit must be
