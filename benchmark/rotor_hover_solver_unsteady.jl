@@ -376,8 +376,13 @@ function make_config_solver(config)
         end
         fgs_precision = Symbol(get(ENV, "FGS_PRECISION", "f64"))
         fgs_precision in (:f64, :f32conv, :f32full) || error("Invalid FGS_PRECISION")
+        # p033: threaded influence-matrix setup (033 B-I2, certified bitwise-
+        # identical to the serial path). Default ON for this vehicle; the
+        # package default stays off.
+        fgs_threaded_setup = get(ENV, "FGS_THREADED_SETUP", "1") == "1"
         knobs = "p=$(winner.p);mac=$(winner.mac);leaf=$(winner.leaf);" *
-                "inner=$(winner.inner);precision=$(fgs_precision)"
+                "inner=$(winner.inner);precision=$(fgs_precision);" *
+                "threaded_setup=$(fgs_threaded_setup)"
         # Phase 3: FGS owns the history/extrapolation machinery already; cold
         # keeps history off entirely so the buffer costs nothing (ruling 8).
         fgs_history = warmstart == "cold" ? 0 : ws_order + 1
@@ -386,6 +391,7 @@ function make_config_solver(config)
             leaf_size=winner.leaf, inner_iterations=winner.inner,
             max_iterations=300, tolerance=tol_abs, rlx=1.0, shrink=true,
             recenter=false, reverse_pass=false,
+            threaded_setup=fgs_threaded_setup,
             dagteam_precision=fgs_precision,
             # SOLVER_VERBOSE=1 turns on FGS's per-iteration residual log and its
             # projected-vs-actual strength dump (diagnostic only; off by default)

@@ -240,6 +240,33 @@ if cert_solve
         "$(banner.blas_threads),cert,0,0,0,solve_x_reldiff,$rel,0")
     (m_ok && x_bit && n_old == n_new && ok_old == ok_new) ||
         @error "SOLVE CERTIFICATION FAILED — see CSV"
+
+    # p033 thread-scaling (2026-10-02): persist cold-solve wall times as CSV
+    # rows (previously stdout-only), AB_SOLVE_K passes per arm so the judge can
+    # take a min over repeats. Pass 1 is the certification solve above (already
+    # warm: the cert ran after a build, and cold_solve! resets the guess, not
+    # the compiled code). Rows reuse the pass/phase/t_s schema with
+    # phase=cold_solve.
+    solve_k = parse(Int, get(ENV, "AB_SOLVE_K", "3"))
+    for (armname, solver, t1) in (("old", solver_old, t_old),
+                                  ("new", solver_new, t_new))
+        ts = [t1]
+        for _ in 2:solve_k
+            t, _, n, ok = cold_solve!(solver)
+            (n == (armname == "old" ? n_old : n_new) && ok) ||
+                @error "cold-solve repeat diverged from the certified solve " *
+                       "(arm=$armname niter=$n solved=$ok)"
+            push!(ts, t)
+        end
+        st = setup_threads_for(armname)
+        for (pass, t) in enumerate(ts)
+            println(io, "$rung,$(rotor.ncells),$(banner.julia_threads)," *
+                "$(banner.blas_threads),$armname,$st,$pass,0,cold_solve,$t,0")
+        end
+        println("cold solve (arm=$armname): min $(round(minimum(ts), digits=3)) s " *
+                "over $solve_k passes")
+    end
+    flush(io)
 end
 
 close(io)
