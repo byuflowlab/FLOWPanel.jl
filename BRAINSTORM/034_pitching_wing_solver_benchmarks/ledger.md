@@ -213,3 +213,32 @@ sized from local `-t 1` estimates x broadwell margin. Outputs →
 
 Slurm exit status is advisory (judge by outputs, not sacct). No VTK written
 (driver runs path=nothing) — no storage pressure expected from this wave.
+
+## 2026-10-02 — Phase 1 campaign wave 1 FAILED (wrong dep pins) + correction
+
+All 8 jobs (13961478, 13961567–573) died in 2–14 min:
+`UndefVarError: assemble_influence_block! not defined in FastMultipole` while
+precompiling FLOWPanel. ROOT CAUSE: the FM/VPM pins were taken from the orc
+`~/projects` clones' unified-052 HEADs (FM 3da58a1a, VPM d896145), but
+FLOWPanel 43f9763 requires BRAINSTORM 030's FastMultipole interface, which
+exists only in the LOCAL dev checkouts (030 memory: "not pushed"). The local
+Phase 0/1 smokes ran against FM `6456c221` (branch flowpanel-20260817) and
+VPM `eebb9848` (branch flowpanel) — those banners are the verified pins, and
+pins must come from the loaded-package banner, never from a clone's HEAD.
+
+Correction (b-series tags; the -20261002 FM/VPM tags were deleted on orc,
+never used by a successful run):
+
+| repo | tag | commit |
+| --- | --- | --- |
+| FLOWPanel.jl | campaign/p034-phase1-20261002b (same commit as -20261002) | 43f9763 |
+| FastMultipole | campaign/p034-phase1-20261002b | 6456c221 |
+| FLOWVPM.jl | campaign/p034-phase1-20261002b | eebb9848 |
+
+Worktrees rebuilt at the b pins (`assemble_influence_block!` verified
+PRESENT); FLOWPanel worktree unchanged. Wave 2: precompile-gate job
+**13961625** (R1 backslash) submitted; remaining 7 fan out automatically on
+"precompile stage done" (same walltimes as wave 1 — job IDs land in the
+wave-2 logs under logs/slurm/ and must be recorded here at harvest).
+GitHub origin pushes of ALL b-tags (and the FM/VPM dev branches themselves,
+which exist nowhere on GitHub) still owed — gh auth.
