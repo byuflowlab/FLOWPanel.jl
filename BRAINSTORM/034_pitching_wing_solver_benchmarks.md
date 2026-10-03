@@ -21,8 +21,11 @@
   `034_.../phase_00_harness.md`, ledger §2026-10-02, `data/phase0_*/`.
   Clear-context review PASS 2026-10-02 (0 blockers). Ryan APPROVED Phase 0 +
   Phase 1 go-ahead 2026-10-02 (committed; no notebook entries for 034 — Ryan
-  ruling). Next-agent entry prompt =
-  `034_pitching_wing_solver_benchmarks/phase1_reset_prompt_20261002.md`.
+  ruling). Phase 1 harness built, FGS retuned (R1 winner 6/0.3/150/5), and the
+  2-rung consistency campaign (8 jobs, tag campaign/p034-phase1-20261002)
+  SUBMITTED to orc m9 2026-10-02 — harvest + freeze owed. Next-agent entry
+  prompt =
+  `034_pitching_wing_solver_benchmarks/phase1_harvest_reset_prompt_20261002.md`.
 - **Headline scientific angle:** MEASURED (Phase 0): `simulate!` never
   rebuilds/refactors G under the pitching maneuver — Backslash G byte-identical
   across steps, operator exactly rigid-motion-invariant (2.9e-14 rel-Frobenius
@@ -54,9 +57,17 @@ Phase 1 (consistency/calibration on 2 rungs) IN PROGRESS: FGS retuned on R1
 (winner 6/0.3/150/5, 10.7x BC margin; Phase 0 seed control failed as flagged),
 consistency driver `benchmark/p034_phase1_consistency.jl` smoked 4/4 on R1 and
 holds on an R2 probe; campaign scope Ryan-ruled (R1+R2, 4 arms, 3 cycles,
-single mode, non-exclusive). NO notebook entries for 034 (Ryan ruling).
-Next-agent entry prompt =
-`034_pitching_wing_solver_benchmarks/phase1_reset_prompt_20261002.md`.
+single mode, non-exclusive). **Campaign wave 1 FAILED on wrong dep pins**
+(orc HEADs lack 030's FM interface; root cause in ledger); corrected to tag
+`campaign/p034-phase1-20261002b` (FLOWPanel 43f9763 / FM 6456c221 / VPM
+eebb9848 = the local smoke banner pins) and **wave 2 SUBMITTED 2026-10-02**
+(gate job 13961625 + auto fan-out of 7) on m9 --qos=normal, outputs to orc
+`data/p034_phase1/R{1,2}/`; pins + correction in ledger. OWED: harvest, gate
+verdict, Phase 1 FREEZE, phase_01_consistency.md, clear-context review;
+GitHub origin pushes (b-tags + FM/VPM dev branches) pending Ryan's
+`gh auth login`. NO notebook entries
+for 034 (Ryan ruling). Next-agent entry prompt =
+`034_pitching_wing_solver_benchmarks/phase1_harvest_reset_prompt_20261002.md`.
 Local-env caveat: macOS BLAS pin unsatisfiable — smokes use
 BENCH_BLAS_THREADS=8 (see ledger).
 
