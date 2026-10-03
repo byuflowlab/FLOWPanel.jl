@@ -190,3 +190,26 @@ worktrees above; tree verified clean after resolve. FLOWVPM pin d896145
 satisfies the new-merge-law floor (>= 8d4a3b4). Tag pushed to the orc clone;
 **origin (GitHub) tag push PENDING — local gh auth token invalid** (Ryan:
 `gh auth login -h github.com`, then `git push origin campaign/p034-phase1-20261002`).
+
+## 2026-10-02 — Phase 1 campaign submitted (8 jobs, m9 --qos=normal, non-exclusive)
+
+Submitted from the campaign worktree (pins above); 1 CPU + 24 G per job,
+`-t 1` strict single mode. First job gated the precompile (flock guard +
+serialized warm; "precompile stage done" confirmed before fan-out). Walltimes
+sized from local `-t 1` estimates x broadwell margin. Outputs →
+`~/projects/FLOWPanel.jl/data/p034_phase1/R{1,2}/` (judge from CSVs:
+`summary_<arm>.csv`, `steps_<arm>.csv`, `banner_<arm>.txt` per arm).
+
+| job | rung | arm | walltime |
+| --- | --- | --- | --- |
+| 13961478 | R1 | backslash | 12 h |
+| 13961567 | R1 | krylov_ilu_nfcache | 12 h |
+| 13961568 | R1 | fgs | 12 h |
+| 13961569 | R1 | krylov_gmres | 24 h |
+| 13961570 | R2 | backslash | 36 h |
+| 13961571 | R2 | krylov_ilu_nfcache | 36 h |
+| 13961572 | R2 | fgs | 36 h |
+| 13961573 | R2 | krylov_gmres | 70 h |
+
+Slurm exit status is advisory (judge by outputs, not sacct). No VTK written
+(driver runs path=nothing) — no storage pressure expected from this wave.
