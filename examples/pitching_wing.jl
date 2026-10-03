@@ -831,6 +831,7 @@ function run_pitching_wing_static_polar(;
         plot::Bool=false,
         plot_path=path,
         backend=pnl.FastMultipoleBackend(expansion_order=8, multipole_acceptance=0.4, leaf_size=40),
+        solver_factory=pnl.Backslash,
     )
     dims = _resolve_pitching_wing_dimensions(c_ft, aspect_ratio, span_ft, semispan_ft)
     c, b = dims.c, dims.b
@@ -864,7 +865,7 @@ function run_pitching_wing_static_polar(;
         )
 
         pnl.steady!(body, pnl.ReferenceFrame(body), Uinf;
-            body_solvers=pnl.Backslash(body),
+            body_solvers=solver_factory(body),
             backend,
             monitors=(pressure, force, spanwise),
             path=vtk_path,
@@ -927,6 +928,7 @@ function prepare_pitching_wing(;
         include_static_polar::Bool=true,
         plot_static_polar::Bool=false,
         backend=pnl.FastMultipoleBackend(expansion_order=8, multipole_acceptance=0.4, leaf_size=40),
+        solver_factory=pnl.Backslash,
     )
     wake_model in (:panel, :particle) || throw(ArgumentError(
         "wake_model must be :panel or :particle; got $(wake_model)"))
@@ -1005,7 +1007,7 @@ function prepare_pitching_wing(;
             particle_maintenance,
         )
     end
-    solver = pnl.Backslash(wing)
+    solver = solver_factory(wing)
     normalization = pnl.WingNormalization(rho, Sref, c)
 
     pressure_monitor = pnl.PressureBernoulli(rho; unsteady=true,
@@ -1035,6 +1037,7 @@ function prepare_pitching_wing(;
         Uinf,
         t_range,
         solver,
+        solver_factory,
         backend,
         monitors,
         pressure_monitor,
@@ -1153,6 +1156,7 @@ function _run_pitching_wing(;
         plot=setup.plot_static_polar,
         plot_path=setup.csv_path,
         backend,
+        solver_factory=sim.solver_factory,
     ) : nothing
 
     if restart
