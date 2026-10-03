@@ -169,3 +169,24 @@ gate metric is rel L2 per decision_rules). Sizing at `-t 1`: R2 ~27 s/step
 total (fgs solve 11.8 s) → full 3-cycle 495-step march ≈ 3.7 h/arm; gmres
 R1 is ~26 s/step → R2 est. 15–28 h. HPC campaign required for the 2-rung
 certified record.
+
+## 2026-10-02 — Phase 1 campaign pins (campaign/p034-phase1-20261002)
+
+Scope (Ryan 2026-10-02): rungs R1+R2, all four arms, 3-cycle marches,
+single-thread mode, non-exclusive allocations. One (rung, arm) per job via
+`benchmark/slurm/p034_phase1.sh`; outputs to the consolidated data root
+`~/projects/FLOWPanel.jl/data/p034_phase1/R{1,2}/` via the worktree data
+symlink. Judge from the CSVs there.
+
+| repo | tag | commit | worktree |
+| --- | --- | --- | --- |
+| FLOWPanel.jl | campaign/p034-phase1-20261002 | 43f9763 | ~/campaigns/p034-phase1-20261002/FLOWPanel.jl (HEAD d9e4432 = tag + data-symlink commit; clean) |
+| FastMultipole | campaign/p034-phase1-20261002 | 3da58a1a | ~/campaigns/p034-phase1-20261002/FastMultipole |
+| FLOWVPM.jl | campaign/p034-phase1-20261002 | d896145 | ~/campaigns/p034-phase1-20261002/FLOWVPM.jl |
+
+Campaign env = the FLOWPanel worktree's own `--project=.`; Manifest dev-paths
+are RELATIVE (`../FastMultipole`, `../FLOWVPM.jl`) and resolve to the pinned
+worktrees above; tree verified clean after resolve. FLOWVPM pin d896145
+satisfies the new-merge-law floor (>= 8d4a3b4). Tag pushed to the orc clone;
+**origin (GitHub) tag push PENDING — local gh auth token invalid** (Ryan:
+`gh auth login -h github.com`, then `git push origin campaign/p034-phase1-20261002`).
