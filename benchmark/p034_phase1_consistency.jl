@@ -73,8 +73,11 @@ const OUTDIR = joinpath(get(ENV, "P034_OUTDIR",
              "phase1_consistency")), "R$RUNG_I")
 mkpath(OUTDIR)
 
+# per-arm-set filenames: campaign jobs run ONE arm per job and share the rung
+# directory, so a shared summary.csv/banner.txt would be clobbered
+const ARMTAG = join(ARMS, "+")
 banner = assert_and_banner()
-open(joinpath(OUTDIR, "banner.txt"), "w") do io
+open(joinpath(OUTDIR, "banner_$ARMTAG.txt"), "w") do io
     println(io, banner.text)
 end
 
@@ -206,7 +209,7 @@ end
 # run the requested arms
 ################################################################################
 
-summary_csv = joinpath(OUTDIR, "summary.csv")
+summary_csv = joinpath(OUTDIR, "summary_$ARMTAG.csv")
 summary_io = open(summary_csv, "w")
 println(summary_io, "arm,rung,n_panels,n_steps,n_cycles,completed,t_setup_s," *
     "t_sim_s,mem_state_bytes,rms_b_t0,max_bcerr_rel,all_cert,meets_gate," *
