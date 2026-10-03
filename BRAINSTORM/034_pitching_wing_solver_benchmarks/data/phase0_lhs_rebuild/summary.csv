@@ -1,0 +1,15 @@
+key,value
+n_panels,1920
+n_steps,20
+steps_instrumented,20
+max_step_dev,0.0
+final_dev,0.0
+all_glu_stable,true
+rotation_invariance_maxabs,1.1966816426678406e-13
+rotation_invariance_relfro,2.941195704903363e-14
+t_assembly_min_s,1.259338084
+t_lu_min_s,0.039328375
+ctor_g_assembly_s,2.390242958
+ctor_lu_s,0.065165459
+t_simulate_total_s,107.751292833
+t_simulate_per_step_s,5.671120675421053

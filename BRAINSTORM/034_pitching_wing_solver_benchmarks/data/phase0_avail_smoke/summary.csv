@@ -1,0 +1,5 @@
+arm,n_panels,n_steps,completed,t_setup_s,t_sim_s,mem_state_bytes,rms_b_t0,max_bcerr_rel,all_cert,final_CL,notes
+backslash,1920,10,true,3.156997167,49.831403375,29583648,1.0682394640215411,2.4233407154946805e-9,true,0.2923275773947143,"dense LU; niter=-1 by convention"
+krylov_gmres,1920,10,true,0.038124875,258.927689208,983215,1.0682394640215411,8.52778706208696e-9,true,0.29232762559019654,"rtol=1e-8;atol=1e-14;memory=50 (021 seed)"
+krylov_ilu_nfcache,1920,10,true,1.572161291,33.424718625,24993106,1.0682394640215411,2.6305242066916656e-9,true,0.2923275778539106,"ilu leaf10/mac1.0;cache_nearfield;persistent_plan (021 production seed)"
+fgs,1920,10,true,2.877477084,34.457557625,42855762,1.0682394640215411,6.1884728962118184e-6,true,0.2923227835138881,"p=4;mac=0.5;leaf=50;inner=2;tol_abs=1.0682394640215411e-6;dagteam+backoff defaults;f64 (knobs are SEEDS; not 021 measurements)"
