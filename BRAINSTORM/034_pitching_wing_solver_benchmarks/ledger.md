@@ -110,3 +110,62 @@ Notes:
   certified; value reported, not thresholded).
 - krylov arms hit 1e-8-level BC as promised (rtol=1e-8); unpreconditioned gmres
   is ~8× slower per step than ilu_nfcache already at this rung.
+
+## 2026-10-02 — Phase 1: FGS knob retune on R1 (local smoke, NOT publishable)
+
+Ryan approved Phase 0 + gave the Phase 1 go-ahead 2026-10-02 (control doc
+decision log); Phase 0 committed as `1d235d7` (code/harness) + `911a82f`
+(records).
+
+Driver `benchmark/p034_phase1_fgs_tune.jl`; CSVs =
+`data/phase1_fgs_tune/{summary,steps}.csv` + `banner.txt`. Rung R1 (1920
+cells), 17-step unsteady march per config (enough to expose the wake-row
+growth trend), panel wake, `-t 1`, BENCH_BLAS_THREADS=8 (macOS caveat above).
+Grid: Phase 0 seed as control + 021 tau=1e-6 rotor-rung winners
+(fgstune_verify.csv: R1 6/0.3/150/5, R2 8/0.4/100/10) + FGSSolver constructor
+defaults, with a tol_factor dimension (tol_abs = tolf*1e-6*rms_b_t0).
+Gate: max-over-steps bcerr_rel <= 1e-6, every pass certified.
+
+| config (p/mac/leaf/inner/tolf) | max bcerr_rel | med t_solve s | med niter | meets |
+| --- | --- | --- | --- | --- |
+| 4/0.5/50/2/1.0 (Phase 0 seed, CONTROL) | 7.10e-6 | 1.290 | 40 | NO |
+| 7/0.4/10/2/1.0 (ctor defaults) | 1.88e-7 | 1.398 | 39 | yes |
+| **6/0.3/150/5/1.0 (021 R1 seed) — WINNER** | **9.34e-8** | **1.265** | **15** | **yes** |
+| 8/0.4/100/10/1.0 (021 R2 seed) | 1.49e-7 | 1.261 | 8 | yes |
+| 7/0.4/10/2/0.3 | 5.74e-8 | 1.427 | 44 | yes |
+| 6/0.3/150/5/0.3 | 3.03e-8 | 1.278 | 17 | yes |
+| 7/0.4/10/2/0.1 | 1.90e-8 | 1.461 | 48 | yes |
+
+Winner rationale: per-step time statistically tied with 8/0.4/100/10 (1.265 vs
+1.261 s); 6/0.3/150/5 has the larger BC margin (10.7x vs 6.7x) and finer sweep
+granularity (inner=5 vs 10 — less overshoot when warmstart shrinks the work in
+Phase 3). Per-step bcerr trend FLAT over 17 steps for both finalists (no
+wake-row growth; the control's growth phenomenon is absent once apply accuracy
+is adequate). R1 FGS setting (PROVISIONAL until the Phase 1 freeze):
+p=6, mac=0.3, leaf=150, inner=5, tol_abs=1e-6*rms_b_t0, rlx=1.0, shrink=true,
+dagteam+backoff defaults, f64. Per-rung confirmation on R2 pending.
+
+## 2026-10-02 — Phase 1: consistency-driver smoke R1 + sizing probe R2 (local, NOT publishable)
+
+Driver `benchmark/p034_phase1_consistency.jl` (per-step certified bc_error!
+gate metric vs fixed t=0 scale, 021 Phase 3 arm-promise absolute stats, CL/CM
+identity columns, env rung/arms/cycles/FGS knobs). Local smoke CSVs in session
+scratchpad (not retained — campaign CSVs are the record); headline numbers:
+
+R1, 17 steps, all four arms, `-t 1`/BENCH_BLAS_THREADS=8:
+
+| arm | max bcerr_rel | promise viol | final CL | t_sim s |
+| --- | --- | --- | --- | --- |
+| backslash | 3.37e-9 | 0 | 0.33359571 | 71.1 |
+| krylov_gmres | 9.89e-9 | 0 | 0.33359577 | 448.3 |
+| krylov_ilu_nfcache | 3.62e-9 | 0 | 0.33359571 | 54.0 |
+| fgs (6/0.3/150/5) | 9.34e-8 | 0 | 0.33359203 | 54.9 |
+
+4/4 meet the gate on this smoke; CL agrees to 7 digits across the <=1e-8 arms,
+fgs offset 1.1e-5 relative (consistent with its BC level). R2 probe
+(backslash+fgs, 5 steps): both meet gate; **R1-tuned FGS knobs HOLD at R2**
+(max bcerr_rel 9.09e-8); fgs rel_MAX approaches 1e-6 at R2 (9.8e-7, reported —
+gate metric is rel L2 per decision_rules). Sizing at `-t 1`: R2 ~27 s/step
+total (fgs solve 11.8 s) → full 3-cycle 495-step march ≈ 3.7 h/arm; gmres
+R1 is ~26 s/step → R2 est. 15–28 h. HPC campaign required for the 2-rung
+certified record.

@@ -1,5 +1,26 @@
 # 034 log — session narrative (newest first)
 
+## 2026-10-02 (later) — Phase 1 session start: approval, commits, FGS retune
+
+- Ryan APPROVED Phase 0 and gave the Phase 1 go-ahead (decision log); Phase 0
+  committed in the approved split: `1d235d7` (solver_factory + Phase 0
+  drivers), `911a82f` (BRAINSTORM records + INDEX row). Later same session
+  Ryan ruled: NO notebook entries for 034 (BRAINSTORM-only tracking), Phase 1
+  harness commit authorized, campaign scope = R1+R2 / 4 arms / 3 cycles /
+  single mode / non-exclusive allocations.
+- Fetched 021's tau=1e-6 FGS tuning via brainstorm-scout: per-rung winners
+  (rotor R1 6/0.3/150/5, R2 8/0.4/100/10, tol_abs tuned below raw target),
+  rlx=1.0/shrink=true frozen, coordinate-descent procedure. Seeds only.
+- FGS retune on R1 (`benchmark/p034_phase1_fgs_tune.jl`, 7-config grid,
+  17-step marches): Phase 0 seed control FAILS as flagged (7.1e-6); 6/6
+  tau=1e-6-family configs certify with >=5x margin; WINNER 6/0.3/150/5/tolf1.0
+  (bcerr 9.3e-8, tied-fastest, flat growth trend). Table in ledger.
+- Phase 1 consistency driver written (`benchmark/p034_phase1_consistency.jl`):
+  per rung x arm march, 021 Phase 3-style per-step guard (gate metric
+  bcerr_rel vs fixed t=0 scale + arm-promise absolute stats), CL/CM identity
+  columns, env-selectable rung/arms/cycles/FGS knobs. R1 smoke + R2 sizing
+  probe run this session.
+
 ## 2026-10-02 — Phase 0 session: harness adaptation + availability smoke
 
 - Deliverable 1: `solver_factory` kwarg threaded to both hardcoded Backslash

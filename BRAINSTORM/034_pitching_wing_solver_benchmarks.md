@@ -20,8 +20,8 @@
   CONFIRMED, 4-arm availability smoke on R1. Records:
   `034_.../phase_00_harness.md`, ledger §2026-10-02, `data/phase0_*/`.
   Clear-context review PASS 2026-10-02 (0 blockers). Ryan APPROVED Phase 0 +
-  Phase 1 go-ahead 2026-10-02 (committed; notebook entry still pending).
-  Next-agent entry prompt =
+  Phase 1 go-ahead 2026-10-02 (committed; no notebook entries for 034 — Ryan
+  ruling). Next-agent entry prompt =
   `034_pitching_wing_solver_benchmarks/phase1_reset_prompt_20261002.md`.
 - **Headline scientific angle:** MEASURED (Phase 0): `simulate!` never
   rebuilds/refactors G under the pitching maneuver — Backslash G byte-identical
@@ -50,8 +50,12 @@ Clear-context review PASS 2026-10-02 (0 blockers, 4 NOTEs — 2 fixed in place,
 2 carried to Phase 1: fgs seed knobs cannot certify 1e-6 without retuning;
 threaded repack unexercised at -t 1). Ryan APPROVED Phase 0 and gave the
 Phase 1 go-ahead 2026-10-02; Phase 0 committed (code/harness + records split).
-Phase 1 (consistency/calibration on 2 rungs) IN PROGRESS. Notebook entry still
-pending. Next-agent entry prompt =
+Phase 1 (consistency/calibration on 2 rungs) IN PROGRESS: FGS retuned on R1
+(winner 6/0.3/150/5, 10.7x BC margin; Phase 0 seed control failed as flagged),
+consistency driver `benchmark/p034_phase1_consistency.jl` smoked 4/4 on R1 and
+holds on an R2 probe; campaign scope Ryan-ruled (R1+R2, 4 arms, 3 cycles,
+single mode, non-exclusive). NO notebook entries for 034 (Ryan ruling).
+Next-agent entry prompt =
 `034_pitching_wing_solver_benchmarks/phase1_reset_prompt_20261002.md`.
 Local-env caveat: macOS BLAS pin unsatisfiable — smokes use
 BENCH_BLAS_THREADS=8 (see ledger).
@@ -190,8 +194,13 @@ Usage patterns to copy: `examples/sweptwing_solverbenchmark.jl:114`,
 - **2026-10-02:** item created; phases 0–3 defined; solver matrix fixed at
   backslash / krylov_gmres / krylov_ilu_nfcache / fgs-champion.
 - **2026-10-02 (Ryan):** Phase 0 APPROVED; commit authorized (code/harness +
-  BRAINSTORM records split); Phase 1 go-ahead GIVEN. Notebook entry still
-  pending (Ryan to specify depth).
+  BRAINSTORM records split); Phase 1 go-ahead GIVEN.
+- **2026-10-02 (Ryan, session Q&A):** (a) Phase 1 harness commit authorized;
+  (b) Phase 1 campaign scope = rungs R1+R2, all four arms, full 3-cycle
+  marches, SINGLE-thread mode with modest non-exclusive allocations (Phase 1
+  judges accuracy/identity; exclusive-node timing is Phase 2's); (c) **NO
+  notebook entries for 034** — solver-infrastructure item, tracked in
+  BRAINSTORM only.
 
 ## Logging provision
 
