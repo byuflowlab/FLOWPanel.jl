@@ -1390,6 +1390,7 @@ function calc_Geff!(Geff::AbstractMatrix,
                                 1:4,                          # Indices of nodes that make this horseshoe (closed ring)
                                 1.0,                          # Unitary strength
                                 # ground...,        # Mirrored bound vortex commented out since we assume 2D ground effects are already captured in stripwise element
+                                ground...,          # NOTE: Uncommented since I couldn't find a good way of omitting the bound vortex of the mirrored wake horseshoe
                                 targets,                      # Midpoint as the target
                                 view(Geff, mi:mi, ei:ei);     # Velocity of ei-th horseshoe on the mi-th midpoint
                                 dot_with=view(dot_with, :, mi:mi), # Dot the velocity by the orthonormal vector of this midpoint

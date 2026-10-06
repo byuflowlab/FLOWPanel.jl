@@ -253,7 +253,11 @@ function run_liftingline(;
     end
 
     # Set ground distance
-    set_ground!(ll, ground_distance; recalculate_Geff=!remorph)  # false since it will be calculated in remorph anyways
+    # set_ground!(ll, ground_distance; recalculate_Geff=!remorph)  # false since it will be calculated in remorph anyways
+    ground_normal = direction(; alpha=alpha+90)
+    ground_normal /= norm(ground_normal)
+    set_ground!(ll, ground_distance; normal=ground_normal, recalculate_Geff=!remorph)
+    
 
     # Morph Lifting Line into its shape
     if remorph

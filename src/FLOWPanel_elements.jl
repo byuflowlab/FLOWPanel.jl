@@ -716,6 +716,12 @@ function U_semiinfinite_vortex( p1::Number, p2::Number, p3::Number,
     dm2 = d2 - 2*dn*n2
     dm3 = d3 - 2*dn*n3
 
+    # Remove numerical noise
+    magdm = sqrt(dm1^2 + dm2^2 + dm3^2)
+    dm1 /= magdm
+    dm2 /= magdm
+    dm3 /= magdm
+
     # Evaluate influence of original geometry
     U_semiinfinite_vortex(p1, p2, p3, d1, d2, d3, strength, targets, out; optargs...)
 
