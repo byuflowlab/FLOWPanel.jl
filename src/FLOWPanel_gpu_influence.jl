@@ -384,6 +384,31 @@ function pack_filaments!(srcmat::AbstractMatrix, filaments::FilamentWrapper{<:Pa
     return srcmat
 end
 
+"""
+    pack_trailing_filaments!(srcmat, sheet)
+
+Fill the 17-row panel source matrix from a `TrailingFilamentSheet`'s active
+trailing filaments as OPEN bound-vortex segments (tag 3, nv=2): the same
+segment, strength (`_trailing_filament_strength`), and per-station core size
+its `FastMultipole.direct!`/`source_system_to_buffer!` use (the per-column
+`koff` slot carries σ_j natively). `srcmat` must have `>= 17` rows and
+`FastMultipole.get_n_bodies(sheet)` columns.
+"""
+function pack_trailing_filaments!(srcmat::AbstractMatrix, sheet::TrailingFilamentSheet)
+    SV = FastMultipole.StaticArrays.SVector{3,Float64}
+    n = FastMultipole.get_n_bodies(sheet)
+    @inbounds for i in 1:n
+        isurf, irow, j = global_to_matrix_index(sheet, i)
+        nod = sheet.nodes[isurf]
+        v1 = SV(nod[1, irow, j], nod[2, irow, j], nod[3, irow, j])
+        v2 = SV(nod[1, irow+1, j], nod[2, irow+1, j], nod[3, irow+1, j])
+        s1 = _trailing_filament_strength(sheet, isurf, irow, j)
+        koff = sheet.filament_core_size[isurf][j]
+        _gpu_pack_column!(srcmat, i, 3, 2, (v1, v2), s1, 0.0, koff)
+    end
+    return srcmat
+end
+
 "Fill the 17-row panel source matrix from a `PanelWake`'s quad vortex rings
 (same enumeration as its `FastMultipole.source_system_to_buffer!`,
 FLOWPanel_wake.jl:325-372; regularization radius = `core_size`)."
@@ -408,6 +433,7 @@ end
 _gpu_source_columns(s::FLOWVPM.ParticleField) = s.np
 _gpu_source_columns(s::PanelWake) = FastMultipole.get_n_bodies(s)
 _gpu_source_columns(s::FilamentWrapper) = FastMultipole.get_n_bodies(s)
+_gpu_source_columns(s::TrailingFilamentSheet) = FastMultipole.get_n_bodies(s)
 _gpu_source_columns(s::AbstractBody) = _gpu_n_panel_columns(s)
 
 # pack (with buffer reuse) and return (srcmat, functor)
@@ -438,6 +464,14 @@ function _gpu_pack_source!(s::FilamentWrapper{<:PanelWake}, ::Nothing)
     return m, FastMultipole.RectangularPanelInfluence(Int32(_gpu_filament_reg()))
 end
 
+function _gpu_pack_source!(s::TrailingFilamentSheet, ::Nothing)
+    # the sheet is its own source system (stable identity, unlike the
+    # per-call FilamentWrapper), so the work buffer keys on it directly
+    m = _gpu_workmat!(s, :src, 17, _gpu_source_columns(s))
+    pack_trailing_filaments!(m, s)
+    return m, FastMultipole.RectangularPanelInfluence(Int32(_gpu_filament_reg()))
+end
+
 function _gpu_pack_source!(s::AbstractBody, koff::Union{Nothing,Real})
     role = koff === nothing ? :src : :src_selfkoff
     m = _gpu_workmat!(s, role, 17, _gpu_source_columns(s))
@@ -454,7 +488,8 @@ _gpu_all_zero(x::Integer) = iszero(x)
 _gpu_all_zero(x::Union{Tuple,AbstractVector}) = all(iszero, x)
 
 _gpu_is_wake_source(s) =
-    s isa FLOWVPM.ParticleField || s isa PanelWake || s isa FilamentWrapper
+    s isa FLOWVPM.ParticleField || s isa PanelWake || s isa FilamentWrapper ||
+    s isa TrailingFilamentSheet
 
 _gpu_source_supported(s) = false
 _gpu_source_supported(s::FLOWVPM.ParticleField) =
@@ -464,6 +499,7 @@ _gpu_source_supported(s::PanelWake{TK}) where TK = TK === VortexRing
 # wrapper packs its active final-row filaments (051 seam extension)
 _gpu_source_supported(s::FilamentWrapper) = FastMultipole.get_n_bodies(s) == 0
 _gpu_source_supported(s::FilamentWrapper{<:PanelWake}) = true
+_gpu_source_supported(s::TrailingFilamentSheet) = true
 function _gpu_source_supported(s::AbstractBody{E}) where E
     _gpu_panel_tag(E) === nothing && return false
     if s isa RigidWakeBody && !s.suppress_attached_wake[]
@@ -476,7 +512,7 @@ end
 
 _gpu_target_supported(t) = false
 _gpu_target_supported(t::AbstractBody) = true
-_gpu_target_supported(t::ProbeWrapper{<:PanelWake}) = true
+_gpu_target_supported(t::ProbeWrapper{<:AbstractWakeSheet}) = true
 _gpu_target_supported(t::FLOWVPM.ParticleField) = true
 _gpu_target_supported(t::FastMultipole.ProbeSystem) = true
 
@@ -508,7 +544,7 @@ function _gpu_add_result!(body::AbstractBody, out, grad::Bool,
     return nothing
 end
 
-function _gpu_add_result!(pw::ProbeWrapper{<:PanelWake}, out, grad::Bool)
+function _gpu_add_result!(pw::ProbeWrapper{<:AbstractWakeSheet}, out, grad::Bool)
     wake = pw.system
     n = FastMultipole.get_n_bodies(pw)
     @inbounds for i in 1:n
@@ -516,7 +552,7 @@ function _gpu_add_result!(pw::ProbeWrapper{<:PanelWake}, out, grad::Bool)
         wake.velocity[isurf][1, irow, icol] += out[1, i]
         wake.velocity[isurf][2, irow, icol] += out[2, i]
         wake.velocity[isurf][3, irow, icol] += out[3, i]
-        # gradient not stored for PanelWake probes (matches
+        # gradient not stored for wake-sheet probes (matches
         # buffer_to_target_system!, FLOWPanel_wake.jl:436-459)
     end
     return nothing

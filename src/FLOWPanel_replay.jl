@@ -90,6 +90,12 @@ function _wake_shedding_manifest(method)
             "sigmas" => [collect(sig) for sig in method.sigmas],
             "overlap" => method.overlap,
         )
+    elseif method isa OmitStations
+        return Dict{String, Any}(
+            "type" => "OmitStations",
+            "method" => _wake_shedding_manifest(method.method),
+            "omit" => [collect(Int.(o)) for o in method.omit],
+        )
     else
         return _metadata_unsupported_dict(typeof(method))
     end
@@ -367,6 +373,18 @@ function _wake_manifest_dict(wake, i::Int)
         # relaxation scheme, formulation, kernel). Serialized generically so new
         # scalar optargs are captured without bespoke code.
         d["pfield_optargs"] = _vpm_optargs_manifest(wake.pfield_optargs)
+    elseif wake isa FilamentParticleWake
+        d["type"] = "FilamentParticleWake"
+        d["nwakerows"] = _logical_nwakerows(wake.sheet)
+        d["max_particles"] = size(wake.pfield.particles, 2)
+        d["core_size"] = wake.sheet.core_size
+        d["filament_core_size"] = [collect(v) for v in wake.sheet.filament_core_size]
+        d["shed_with_induced_velocity"] = wake.sheet.shed_with_induced_velocity
+        d["freestream_convection"] = wake.sheet.freestream_convection
+        d["particle_core_size"] = wake.particle_core_size
+        d["method_trailing"] = _wake_shedding_manifest(wake.method_trailing)
+        d["particle_maintenance"] = _particle_maintenance_manifest(wake.particle_maintenance)
+        d["pfield_optargs"] = _vpm_optargs_manifest(wake.pfield_optargs)
     elseif wake isa PanelWake
         d["type"] = "PanelWake"
         d["nwakerows"] = _logical_nwakerows(wake)
@@ -516,6 +534,10 @@ defaults; smooth conversion never guesses an absent or ambiguous handoff.
 function _restore_wake_continuation!(wakes::Tuple, metadata, idx::Int)
     step = _metadata_step_record(metadata, idx)
     for (i, wake) in enumerate(wakes)
+        if wake isa FilamentParticleWake
+            _restore_filament_wake_continuation!(wake, step, i, idx)
+            continue
+        end
         wake isa PanelParticleWake || continue
         record = _continuation_record(step, i)
         if record === nothing
@@ -590,6 +612,33 @@ function _restore_wake_continuation!(wakes::Tuple, metadata, idx::Int)
         wake.conversion_count[] = count
     end
     return wakes
+end
+
+# FilamentParticleWake continuation state is just the FIFO position (no
+# handoff/live-row/terminal-strength machinery exists on the sheet).
+function _restore_filament_wake_continuation!(wake::FilamentParticleWake, step,
+        i::Int, idx::Int)
+    record = _continuation_record(step, i)
+    record === nothing && return wake
+
+    phase = String(_required_continuation(record, "snapshot_phase", i, idx))
+    phase == "pre_end_of_step_shedding" || throw(WakeContinuationStateError(
+        "wake $(i) step $(idx) has unsupported snapshot phase \"$(phase)\""))
+    step_identity = Int(_required_continuation(record, "step_identity", i, idx))
+    step_identity == idx || throw(WakeContinuationStateError(
+        "wake $(i) continuation step identity $(step_identity) does not match loaded step $(idx)"))
+
+    sheet = wake.sheet
+    active = Int(_required_continuation(record, "active_row_count", i, idx))
+    active == sheet.nwakes[] || throw(WakeContinuationStateError(
+        "wake $(i) step $(idx) VTK has $(sheet.nwakes[]) active rows but metadata records $(active)"))
+    capacity = size(sheet.nodes[1], 2) - 1
+    0 <= active <= capacity || throw(WakeContinuationStateError(
+        "wake $(i) step $(idx) active row count $(active) is outside 0:$(capacity)"))
+
+    sheet.nwakes[] = active
+    sheet.overflowed[] = Bool(_required_continuation(record, "overflowed", i, idx))
+    return wake
 end
 
 function _read_body_metadata(path, run_name, idx, manifest)
@@ -685,6 +734,31 @@ function _construct_wakes_from_manifest(systems::Tuple, manifest)
             else
                 push!(wakes, PanelParticleWake(systems[i]; common...))
             end
+        elseif wtype == "FilamentParticleWake"
+            systems[i] isa AbstractLiftingBody ||
+                throw(ArgumentError("Cannot reconstruct FilamentParticleWake for non-lifting body $(i)."))
+            haskey(wmeta, "nwakerows") ||
+                throw(ArgumentError("Cannot reconstruct FilamentParticleWake $(i): manifest is missing nwakerows (required, no default)."))
+            particle_maintenance = _deserialize_particle_maintenance(get(wmeta, "particle_maintenance", Dict{String, Any}("type" => "ParticleMaintenance")))
+            pf_optargs = get(wmeta, "pfield_optargs", wmeta)
+            viscous = _deserialize_viscous(get(pf_optargs, "viscous", Dict{String, Any}("type" => "FLOWVPM.Inviscid")))
+            sfs = _deserialize_sfs(get(pf_optargs, "SFS", Dict{String, Any}("type" => "FLOWVPM.SFS_default")))
+            relaxation = _deserialize_relaxation(get(pf_optargs, "relaxation",
+                Dict{String, Any}("type" => "FLOWVPM.relax_correctedpedrizzetti", "nsteps_relax" => 1, "rlxf" => 0.3)))
+            method_trailing = _deserialize_wake_shedding(get(wmeta,
+                "method_trailing", Dict{String, Any}("type" => "OverlapPPS")))
+            filament_core_size = haskey(wmeta, "filament_core_size") ?
+                [Float64.(v) for v in wmeta["filament_core_size"]] : nothing
+            push!(wakes, FilamentParticleWake(systems[i];
+                nwakerows=Int(wmeta["nwakerows"]),
+                max_particles=Int(get(wmeta, "max_particles", 10000)),
+                core_size=Float64(get(wmeta, "core_size", 1e-3)),
+                filament_core_size,
+                shed_with_induced_velocity=Bool(get(wmeta, "shed_with_induced_velocity", true)),
+                freestream_convection=Bool(get(wmeta, "freestream_convection", false)),
+                particle_maintenance,
+                particle_core_size=Float64(get(wmeta, "particle_core_size", NaN)),
+                viscous, SFS=sfs, relaxation, method_trailing))
         else
             throw(ArgumentError("Cannot reconstruct replay wake type $(wtype). Provide reconstruct callback."))
         end
@@ -705,6 +779,11 @@ function _deserialize_wake_shedding(meta)
     elseif wtype == "StationSigmaOverlap"
         sigmas = [Float64.(sig) for sig in get(meta, "sigmas", Any[])]
         return StationSigmaOverlap(sigmas, Float64(get(meta, "overlap", 1.0)))
+    elseif wtype == "OmitStations"
+        inner = _deserialize_wake_shedding(get(meta, "method",
+            Dict{String, Any}("type" => "unsupported")))
+        omit = [BitVector(Bool.(o)) for o in get(meta, "omit", Any[])]
+        return OmitStations(inner, omit)
     elseif wtype == "nothing"
         return NoShed()
     else

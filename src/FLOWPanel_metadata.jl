@@ -89,6 +89,21 @@ function _wake_continuation_step_dict(wake::PanelParticleWake, i::Int,
     )
 end
 
+# FilamentParticleWake carries none of the panel-wake handoff machinery (no
+# live rows, no retained-filament bookkeeping, no conversion workspace), so its
+# continuation state is just the FIFO position.
+function _wake_continuation_step_dict(wake::FilamentParticleWake, i::Int,
+        i_step::Int)
+    sheet = wake.sheet
+    return Dict{String,Any}(
+        "i" => i,
+        "snapshot_phase" => "pre_end_of_step_shedding",
+        "active_row_count" => sheet.nwakes[],
+        "overflowed" => sheet.overflowed[],
+        "step_identity" => i_step,
+    )
+end
+
 function _step_dict(frames, i_step::Int, t::Real; uinf=nothing, wakes=nothing)
     d = Dict{String, Any}(
         "i_step" => i_step,

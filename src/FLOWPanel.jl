@@ -41,7 +41,8 @@ export  solve, save, influence!,
         AbstractKuttaClosure, JumpKutta, PressureContinuityKutta,
         AbstractKuttaPressureProvider, SteadyBernoulliProvider,
         kutta_diagnostics, KuttaDiagnostics, KuttaConvergenceError,
-        replay, ReplayResult, migrate_metadata_toml
+        replay, ReplayResult, migrate_metadata_toml,
+        FilamentParticleWake, TrailingFilamentSheet
 
 # ------------ GENERIC MODULES -------------------------------------------------
 import LinearAlgebra as LA
@@ -95,7 +96,7 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "gpu_influence", "gpu_wake", "particle_body_overlap",
+                    "wake", "wake_filament", "gpu_influence", "gpu_wake", "particle_body_overlap",
                     "formulation", "kutta", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
                     "replay",
                     ]

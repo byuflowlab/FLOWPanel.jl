@@ -96,6 +96,10 @@ end
 function _fieldprobe_entities(w::PanelWake, iw::Int)
     return (("wake$(iw)_panels", get_sources(w)),)
 end
+function _fieldprobe_entities(w::FilamentParticleWake, iw::Int)
+    return (("wake$(iw)_filaments", get_sources(w.sheet)),
+            ("wake$(iw)_particles", (w.pfield,)))
+end
 _fieldprobe_entities(w, iw::Int) = throw(ArgumentError(
     "CylindricalFieldProbeMonitor does not know how to split wake of type $(typeof(w))"))
 

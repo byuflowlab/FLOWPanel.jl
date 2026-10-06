@@ -283,6 +283,11 @@ other sheet type answers `false`."
 _convert_at_shed(wake::PanelWake) = wake.convert_at_shed
 _convert_at_shed(::AbstractWakeSheet) = false
 
+"Refresh any cached per-surface geometry flags after `update_TE!` re-pins the
+row-1 node line. No-op for sheets that cache nothing; `TrailingFilamentSheet`
+re-detects its closed-chain (`wraps`) flags here."
+_refresh_wraps!(::AbstractWakeSheet, system) = nothing
+
 function global_to_matrix_index(wake::PanelWake, i_wake)
 
     # determine which shedding surface we're on (old-wake source rows only;
@@ -637,6 +642,23 @@ struct FilamentWrapper{TS}
     system::TS
 end
 
+# Shared structured-grid (.vts) writer for the active rows of any wake sheet
+# (PanelWake and TrailingFilamentSheet use the SAME storage layout, so this
+# keeps the warmstart/replay .vts loaders reusable across sheet types).
+function _write_sheet_vts(vtm, wake::AbstractWakeSheet, block_name, idx; compress::Bool=true)
+    for i_surf in eachindex(wake.nodes)
+        pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
+        pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+        WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts_reshaped; compress) do vtk
+            vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
+            vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
+
+            str = view(wake.strength[i_surf], :, 1:wake.nwakes[], :)
+            vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
+        end
+    end
+end
+
 function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Bool=true,
         filament_name=nothing)
     # Route block files to a subdirectory named after the PVD
@@ -647,17 +669,7 @@ function write_vtk(name, wake::PanelWake, idx, t; overwrite=false, compress::Boo
 
     vtm = WriteVTK.vtk_multiblock(block_name * ".$idx.vtm")
     if wake.nwakes[] > 0
-        for i_surf in eachindex(wake.nodes)
-            pts = view(wake.nodes[i_surf], :, 1:wake.nwakes[]+1, :)
-            pts_reshaped = reshape(pts, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
-            WriteVTK.vtk_grid(vtm, block_name * ".$(i_surf).$(idx).vts", pts_reshaped; compress) do vtk
-                vel = view(wake.velocity[i_surf], :, 1:wake.nwakes[]+1, :)
-                vtk["velocity", WriteVTK.VTKPointData()] = reshape(vel, 3, wake.nwakes[]+1, size(wake.nodes[i_surf], 3), 1)
-
-                str = view(wake.strength[i_surf], :, 1:wake.nwakes[], :)
-                vtk["strength", WriteVTK.VTKCellData()] = reshape(str, size(str, 1), wake.nwakes[], size(wake.nodes[i_surf], 3)-1, 1)
-            end
-        end
+        _write_sheet_vts(vtm, wake, block_name, idx; compress)
     elseif wake.convert_at_shed
         # Convert-at-shed (BRAINSTORM 024): the solve-visible sheet is always
         # empty, but the row-1 node line (TE+Das) and its velocities are live
@@ -2172,6 +2184,37 @@ function PanelParticleWake(body::AbstractLiftingBody;
     TF = FastMultipole.numtype(panel_wake)
 
     # Create particle field with default settings (disable autotune_reg_error to avoid convergence issues)
+    pfield, pfield_optargs = _make_wake_pfield(pfield, max_particles, TF;
+        viscous, pfield_fmm, SFS, expint, rk3, relaxation, arraytype)
+
+    # Infer type params from the actual panel_wake
+    WTK = typeof(panel_wake).parameters[1]
+    WNK = typeof(panel_wake).parameters[2]
+    maintenance = ParticleMaintenance(particle_maintenance)
+    particle_core_size = _core_size_alias(particle_core_size, particle_kerneloffset,
+                                          NaN, :particle_core_size, :particle_kerneloffset)
+    if !isnan(particle_core_size)
+        body.core_size_targets = Float64(particle_core_size)
+    end
+    workspace = _make_conversion_workspace(conversion, panel_wake, TF)
+    diagnostics = _make_conversion_diagnostics(conversion, TF)
+    conversion_count = Array{Int,0}(undef)
+    conversion_count[] = 0
+
+    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(trailing),typeof(unsteady),typeof(maintenance),typeof(pfield_optargs),typeof(conversion),typeof(workspace),typeof(diagnostics)}(
+        panel_wake, pfield, trailing, unsteady, maintenance, Float64(particle_core_size), pfield_optargs,
+        conversion, workspace, diagnostics, conversion_count
+    )
+end
+
+"""
+Build (or validate, when shared) the FLOWVPM particle field backing a particle
+wake, and capture the resolved FLOWVPM construction options for reproduction
+metadata. Pure code motion from the `PanelParticleWake` constructor; shared
+with `FilamentParticleWake`. Returns `(pfield, pfield_optargs)`.
+"""
+function _make_wake_pfield(pfield, max_particles, ::Type{TF};
+        viscous, pfield_fmm, SFS, expint, rk3, relaxation, arraytype) where {TF}
     # `integration` must name the scheme this wake actually steps with
     # (`FLOWVPM._euler`, see `step!` below): `viscousdiffusion` branches on
     # `pfield.integration`, and under the FLOWVPM default (`rungekutta3`) a
@@ -2214,24 +2257,7 @@ function PanelParticleWake(body::AbstractLiftingBody;
         integration = pfield.integration,
     )
 
-    # Infer type params from the actual panel_wake
-    WTK = typeof(panel_wake).parameters[1]
-    WNK = typeof(panel_wake).parameters[2]
-    maintenance = ParticleMaintenance(particle_maintenance)
-    particle_core_size = _core_size_alias(particle_core_size, particle_kerneloffset,
-                                          NaN, :particle_core_size, :particle_kerneloffset)
-    if !isnan(particle_core_size)
-        body.core_size_targets = Float64(particle_core_size)
-    end
-    workspace = _make_conversion_workspace(conversion, panel_wake, TF)
-    diagnostics = _make_conversion_diagnostics(conversion, TF)
-    conversion_count = Array{Int,0}(undef)
-    conversion_count[] = 0
-
-    return PanelParticleWake{WTK,WNK,TF,typeof(pfield),typeof(trailing),typeof(unsteady),typeof(maintenance),typeof(pfield_optargs),typeof(conversion),typeof(workspace),typeof(diagnostics)}(
-        panel_wake, pfield, trailing, unsteady, maintenance, Float64(particle_core_size), pfield_optargs,
-        conversion, workspace, diagnostics, conversion_count
-    )
+    return pfield, pfield_optargs
 end
 
 # Legacy conversion allocates no workspace and no diagnostics.
@@ -3263,9 +3289,15 @@ function FastMultipole.get_n_bodies(filaments::FilamentWrapper{<:PanelWake})
 end
 
 function FastMultipole.body_to_multipole!(filaments::FilamentWrapper{<:PanelWake}, multipole_coefficients, buffer::Matrix, center, bodies_index, harmonics, expansion_order)
+    _filament_body_to_multipole!(filaments, multipole_coefficients, buffer, center, bodies_index, harmonics, expansion_order)
+end
+
+# Shared multipole expansion for any filament-segment source using the
+# FilamentWrapper buffer slot layout (see `_direct_filaments!`).
+function _filament_body_to_multipole!(filaments, multipole_coefficients, buffer::Matrix, center, bodies_index, harmonics, expansion_order)
     # loop over bodies
     for i_body in bodies_index
-       
+
         # extract vertices from buffer
         rtl = FastMultipole.get_vertex(buffer, filaments, i_body, 1)
         rtr = FastMultipole.get_vertex(buffer, filaments, i_body, 2)
@@ -3284,7 +3316,10 @@ function FastMultipole.direct!(target_system, target_index, switch::FastMultipol
         source_buffer, source_index, Val(FILAMENT_REGULARIZATION[]))
 end
 
-function _direct_filaments!(target_system, target_index, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, source_system::FilamentWrapper, source_buffer, source_index, fam::Val) where {PS,VS,GS,NO,NM}
+# `source_system` is duck-typed: any filament-segment source whose buffer uses
+# the FilamentWrapper slot layout (1:3 midpoint, 4 radius, 5 strength, 6:8 v1,
+# 9:11 v2, 12 per-segment core size) — FilamentWrapper and TrailingFilamentSheet.
+function _direct_filaments!(target_system, target_index, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, source_system, source_buffer, source_index, fam::Val) where {PS,VS,GS,NO,NM}
     TF = FastMultipole.numtype(source_system)
     @inbounds for j_target in target_index
         target = FastMultipole.get_position(target_system, j_target)

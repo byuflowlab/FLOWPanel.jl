@@ -620,7 +620,9 @@ function initialize_formulation(f::DirectWakePotential, systems_tuple,
         w isa PanelWake ||
             error("DirectWakePotential requires a finite PanelWake with "*
                   "include_final_filament=false; got $(typeof(w)). Particle "*
-                  "and mixed wakes cannot supply a complete scalar potential.")
+                  "and mixed wakes (PanelParticleWake, FilamentParticleWake) "*
+                  "and pure-filament sheets (TrailingFilamentSheet) cannot "*
+                  "supply a complete scalar potential.")
         w.include_final_filament &&
             error("DirectWakePotential requires PanelWake "*
                   "include_final_filament=false: the trailing semi-infinite "*

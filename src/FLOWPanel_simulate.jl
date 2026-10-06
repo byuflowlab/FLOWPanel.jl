@@ -546,6 +546,10 @@ end
 # particle fields (which carry only a vector potential).
 _scalar_potential_sources(w::PanelWake) = get_sources(w)
 _scalar_potential_sources(w::PanelParticleWake) = get_sources(_wake_sheet(w))
+# TrailingFilamentSheet carries only a vector potential (pure vortex filaments):
+# a FilamentParticleWake contributes nothing to scalar-potential evaluations
+# (PressureLaplace/potential monitors are out of scope in this wake mode).
+_scalar_potential_sources(::FilamentParticleWake) = ()
 _scalar_potential_sources(::Nothing) = ()
 
 function _collect_wake_scalar_sources(wakes::Tuple)
@@ -1565,6 +1569,10 @@ function update_TE!(wake::AbstractWakeSheet, system::AbstractBody)
         )
         nodes[:, 1, end] .= v2 .+ view(Das, :, size(Das, 2)) # nia of last edge = last vertex
     end
+
+    # row 1 just moved: let sheets with cached per-surface geometry flags
+    # (TrailingFilamentSheet `wraps`) re-detect them (no-op for PanelWake)
+    _refresh_wraps!(wake, system)
 end
 
 update_TE!(wake::AbstractParticleWake, system::AbstractBody) = update_TE!(_wake_sheet(wake), system)

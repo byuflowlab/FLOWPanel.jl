@@ -518,7 +518,9 @@ function _validate_kutta_configuration(entry::Symbol, systems_tuple::Tuple,
         wake = active[1]
         wake isa PanelWake || throw(ArgumentError(
             "unsupported wake $(typeof(wake)): $(_KUTTA_DOMAIN_MSG) "*
-            "(PanelParticleWake remains legacy-only)."))
+            "(PanelParticleWake remains legacy-only; FilamentParticleWake/"*
+            "TrailingFilamentSheet do not support Kutta Route B at all — "*
+            "the trailing-only sheet has no live-row attachment)."))
     end
 
     # Route A assembles the attachment operator W and the Backslash

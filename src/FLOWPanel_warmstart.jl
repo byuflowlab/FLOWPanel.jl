@@ -225,6 +225,9 @@ function _load_panel_wake_vtk!(wake::AbstractWakeSheet, path::String, wake_name:
     # remains authoritative where present).
     wake.overflowed[] = _convert_at_shed(wake) ? (idx >= 1) :
         (wake.nwakes[] >= n_rows_max - 1)
+    # cached per-surface geometry flags (TrailingFilamentSheet wraps) must be
+    # re-detected from the loaded row-1 node line (no-op for PanelWake)
+    _refresh_wraps!(wake, nothing)
     return wake
 end
 
