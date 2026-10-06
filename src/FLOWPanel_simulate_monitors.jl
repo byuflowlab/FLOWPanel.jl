@@ -3622,10 +3622,10 @@ _shed_sigma_reference(m::SigmaOverlap) = float(m.sigma)
 _shed_sigma_reference(m::SigmaPPS) = float(m.sigma)
 _shed_sigma_reference(::Any) = NaN
 
-_wake_health_pfield(wake::PanelParticleWake) = wake.pfield
+_wake_health_pfield(wake::AbstractParticleWake) = wake.pfield
 _wake_health_pfield(::Any) = nothing
 
-_wake_health_sigma_ref(m::WakeHealthMonitor, wake::PanelParticleWake) =
+_wake_health_sigma_ref(m::WakeHealthMonitor, wake::AbstractParticleWake) =
     isnan(m.sigma_ref) ? _shed_sigma_reference(wake.method_trailing) : m.sigma_ref
 _wake_health_sigma_ref(m::WakeHealthMonitor, ::Any) = m.sigma_ref
 

@@ -1078,8 +1078,8 @@ function _wake_panel_velocity!(out::AbstractMatrix, body::AbstractBody,
     sources = ()
     for w in wakes_tuple
         isnothing(w) && continue
-        pw = w isa PanelParticleWake ? w.panel_wake : w
-        pw isa PanelWake || continue
+        pw = w isa AbstractParticleWake ? _wake_sheet(w) : w
+        pw isa AbstractWakeSheet || continue
         sources = (sources..., get_sources(pw)...)
     end
     old_velocity = copy(body.velocity)
@@ -1113,7 +1113,7 @@ function _green_diagnostics!(state::HybridBodyState, body::RigidWakeBody)
 end
 
 _has_active_particles(wakes_tuple::Tuple) = any(w ->
-    w isa PanelParticleWake && w.pfield.np > 0, wakes_tuple)
+    w isa AbstractParticleWake && w.pfield.np > 0, wakes_tuple)
 
 """
     surface_hodge_trace!(q, body, velocity)

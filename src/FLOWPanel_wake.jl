@@ -7,6 +7,36 @@ Abstract supertype for wake models that exchange influence with
 abstract type AbstractFreeWake end
 
 """
+    AbstractParticleWake
+
+Abstract supertype for outer wake models that pair an inner wake sheet with a
+`FLOWVPM.ParticleField`. Concrete subtypes ([`PanelParticleWake`](@ref),
+[`FilamentParticleWake`](@ref)) must carry a `pfield` field and implement
+[`_wake_sheet`](@ref) returning their inner sheet.
+"""
+abstract type AbstractParticleWake <: AbstractFreeWake end
+
+"""
+    AbstractWakeSheet
+
+Abstract supertype for inner wake-sheet storage ([`PanelWake`](@ref),
+[`TrailingFilamentSheet`](@ref)). Concrete subtypes share the storage layout
+`nwakes::Array{Int,0}`, `nodes/strength/velocity::Vector{Array{TF,3}}`,
+`freestream::Vector{TF}`, `overflowed::Array{Bool,0}` plus the convection
+flags `shed_with_induced_velocity`/`freestream_convection`, so FIFO row
+mechanics, probes, propagation, and VTK/warmstart sheet I/O are shared by
+dispatch on this type.
+"""
+abstract type AbstractWakeSheet <: AbstractFreeWake end
+
+"""
+    _wake_sheet(w::AbstractParticleWake)
+
+Return the inner wake sheet of an outer particle wake.
+"""
+_wake_sheet(w::AbstractParticleWake) = w.panel_wake
+
+"""
     ProbeWrapper(system)
 
 Wrapper that exposes wake probe points to the influence backends without
@@ -100,7 +130,7 @@ which `nwakes[]` is reset to zero so no free sheet ever enters a solve. It is
 an internal flag — construct it through `PanelParticleWake(...; nwakerows=0)`,
 not directly. A standalone `PanelWake` requires `nwakerows >= 1`.
 """
-struct PanelWake{TK,NK,TF} <: AbstractFreeWake
+struct PanelWake{TK,NK,TF} <: AbstractWakeSheet
     nwakes::Array{Int, 0}
     nodes::Vector{Array{TF, 3}}
     strength::Vector{Array{TF, 3}}
@@ -214,13 +244,13 @@ end
 PanelWake(body::AbstractLiftingBody{TK,NK,TF}, kernel=get_wake_kernel(body); nwakerows=100, kwargs...) where {TK,NK,TF} =
     PanelWake(body.shedding, kernel, TF; nwakerows, kwargs...)
 
-function reset!(wake::PanelWake)
+function reset!(wake::AbstractWakeSheet)
     for vel in wake.velocity
         vel .= zero(eltype(vel))
     end
 end
 
-function apply_freestream!(wake::PanelWake, uinf)
+function apply_freestream!(wake::AbstractWakeSheet, uinf)
     wake.freestream .= uinf
     for vel in wake.velocity
         for ns in axes(vel, 3)
@@ -246,6 +276,12 @@ detail, else the storage row count. This is what metadata/manifests record so
 reconstruction reproduces the mode."
 _logical_nwakerows(wake::PanelWake) =
     wake.convert_at_shed ? 0 : size(wake.nodes[1], 2) - 1
+
+"Whether an inner wake sheet is the N=1 storage of a convert-at-shed
+(`nwakerows = 0`) PanelParticleWake. Only `PanelWake` carries the mode; every
+other sheet type answers `false`."
+_convert_at_shed(wake::PanelWake) = wake.convert_at_shed
+_convert_at_shed(::AbstractWakeSheet) = false
 
 function global_to_matrix_index(wake::PanelWake, i_wake)
 
@@ -273,7 +309,7 @@ function global_to_matrix_index(wake::PanelWake, i_wake)
     return isurf, irow, icol
 end
 
-function global_to_matrix_index(wake::ProbeWrapper{<:PanelWake}, i_wake)
+function global_to_matrix_index(wake::ProbeWrapper{<:AbstractWakeSheet}, i_wake)
 
     # determine which shedding surface we're on
     nrows = wake.system.nwakes[] + 1
@@ -311,7 +347,7 @@ function matrix_to_global_index(wake::PanelWake, isurf, irow, icol)
     return i_wake
 end
 
-function matrix_to_global_index(wake::ProbeWrapper{<:PanelWake}, isurf, irow, icol)
+function matrix_to_global_index(wake::ProbeWrapper{<:AbstractWakeSheet}, isurf, irow, icol)
     # convert matrix indices to local index
     i_wake = (icol - 1) * (wake.system.nwakes[] + 1) + irow
 
@@ -402,7 +438,7 @@ function FastMultipole.get_position(system::PanelWake, i)
     return FastMultipole.StaticArrays.SVector{3}(cx, cy, cz)
 end
 
-function FastMultipole.get_position(system::ProbeWrapper{<:PanelWake}, i)
+function FastMultipole.get_position(system::ProbeWrapper{<:AbstractWakeSheet}, i)
 
     # get surface index of global `i` index
     isurf, irow, icol = global_to_matrix_index(system, i)
@@ -417,13 +453,13 @@ FastMultipole.strength_dims(system::PanelWake) = size(system.strength[1], 1)
 
 FastMultipole.get_n_bodies(system::PanelWake) = _n_wake_source_rows(system) * sum(size(s, 3) for s in system.strength)
 
-FastMultipole.get_n_bodies(system::ProbeWrapper{<:PanelWake}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
+FastMultipole.get_n_bodies(system::ProbeWrapper{<:AbstractWakeSheet}) = (system.system.nwakes[]+1) * sum(size(s, 3) for s in system.system.nodes)
 
-FastMultipole.metadata_per_body(system::ProbeWrapper{<:PanelWake}) = 2
-FastMultipole.previous_potential_metadata_index(system::ProbeWrapper{<:PanelWake}) = 1
-FastMultipole.previous_gradient_metadata_index(system::ProbeWrapper{<:PanelWake}) = 2
+FastMultipole.metadata_per_body(system::ProbeWrapper{<:AbstractWakeSheet}) = 2
+FastMultipole.previous_potential_metadata_index(system::ProbeWrapper{<:AbstractWakeSheet}) = 1
+FastMultipole.previous_gradient_metadata_index(system::ProbeWrapper{<:AbstractWakeSheet}) = 2
 
-function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::ProbeWrapper{<:PanelWake}, i_body)
+function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::ProbeWrapper{<:AbstractWakeSheet}, i_body)
     isurf, irow, icol = global_to_matrix_index(system, i_body)
     vx = system.system.velocity[isurf][1, irow, icol]
     vy = system.system.velocity[isurf][2, irow, icol]
@@ -433,7 +469,7 @@ function FastMultipole.metadata_to_buffer!(buffer, switch, i_buffer, system::Pro
     return nothing
 end
 
-function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:PanelWake}, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
+function FastMultipole.buffer_to_target_system!(target_system::ProbeWrapper{<:AbstractWakeSheet}, i_target, switch::FastMultipole.DerivativesSwitch{PS,VS,GS,NO,NM}, target_buffer, i_buffer) where {PS,VS,GS,NO,NM}
     # get surface index of global `i_target` index
     isurf, irow, icol = global_to_matrix_index(target_system, i_target)
 
@@ -572,7 +608,7 @@ FastMultipole.body_to_multipole!(system::PanelWake{ConstantDoublet, 1, <:Any}, a
 FastMultipole.body_to_multipole!(system::PanelWake{VortexRing, 1, <:Any}, args...) =
     FastMultipole.body_to_multipole_quad!(FastMultipole.Panel{FastMultipole.Dipole}, system, args...)
 
-function propagate!(wake::PanelWake, dt; step=0, frames=nothing)
+function propagate!(wake::AbstractWakeSheet, dt; step=0, frames=nothing)
     for i_surf in eachindex(wake.nodes)
         if wake.freestream_convection
             # every row convects with the freestream only: the sheet stays
@@ -2030,7 +2066,7 @@ plane_filtered_relaxation(base::FLOWVPM.Relaxation, point, normal; i_frame::Int=
     FLOWVPM.Relaxation(base.relax, base.nsteps_relax, base.rlxf,
                        RelaxationPlaneFilter(point, normal; i_frame))
 
-struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT,TC,TW,TD} <: AbstractFreeWake
+struct PanelParticleWake{TK,NK,TF,TPF,MT,MU,TPM,TNT,TC,TW,TD} <: AbstractParticleWake
     panel_wake::PanelWake{TK,NK,TF}
     pfield::TPF                           # FLOWVPM.ParticleField object
     method_trailing::MT                             # particle shedding method
@@ -2298,9 +2334,9 @@ end
 get_probes(w::PanelParticleWake) = (get_probes(w.panel_wake)..., w.pfield)
 get_sources(w::PanelParticleWake) = (get_sources(w.panel_wake)..., w.pfield)
 
-function reset!(w::PanelParticleWake)
-    # reset panel wake
-    reset!(w.panel_wake)
+function reset!(w::AbstractParticleWake)
+    # reset the inner wake sheet
+    reset!(_wake_sheet(w))
 
     # reset particle velocity and Jacobian fields (preserve position and strength)
     FLOWVPM._reset_particles(w.pfield)
@@ -2309,9 +2345,9 @@ function reset!(w::PanelParticleWake)
     FLOWVPM._reset_particles_sfs(w.pfield)
 end
 
-function apply_freestream!(w::PanelParticleWake, uinf; include_pfield::Bool=true)
-    # apply to panel wake
-    apply_freestream!(w.panel_wake, uinf)
+function apply_freestream!(w::AbstractParticleWake, uinf; include_pfield::Bool=true)
+    # apply to the inner wake sheet
+    apply_freestream!(_wake_sheet(w), uinf)
 
     # Ruling 7: when several wakes share one particle field, the caller passes
     # include_pfield=false for every wake after the first so the freestream is
@@ -2331,7 +2367,7 @@ function apply_freestream!(w::PanelParticleWake, uinf; include_pfield::Bool=true
     end
 end
 
-update_TE!(w::PanelParticleWake, sys) = update_TE!(w.panel_wake, sys)
+update_TE!(w::AbstractParticleWake, sys) = update_TE!(_wake_sheet(w), sys)
 
 function _particle_gamma_direction_stats(pfield::FLOWVPM.ParticleField;
         vertical=(0.0, 0.0, 1.0), before_gamma=nothing)
@@ -2370,7 +2406,7 @@ function _particle_gamma_direction_stats(pfield::FLOWVPM.ParticleField;
     return "np=$(np) mean_abs_gammahat=($(mean_abs[1]), $(mean_abs[2]), $(mean_abs[3])) mean_gammahat_dot_vertical=$(mean_dot_vertical) mean_angle_change=$(angle)"
 end
 
-function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing,
+function propagate!(w::AbstractParticleWake, dt; relax=true, step=0, frames=nothing,
         diagnose_particle_gamma::Bool=false, diagnostic_vertical=(0.0, 0.0, 1.0),
         # Ruling 7: when several wakes share one particle field, the caller
         # passes propagate_pfield=false for every wake after the first so the
@@ -2388,8 +2424,8 @@ function propagate!(w::PanelParticleWake, dt; relax=true, step=0, frames=nothing
         # was constructed with rk3=true.
         rk3_stage_UJ=nothing)
 
-    # panel wake
-    propagate!(w.panel_wake, dt)
+    # inner wake sheet
+    propagate!(_wake_sheet(w), dt)
 
     propagate_pfield || return nothing
 
@@ -2513,13 +2549,13 @@ function _apply_freestream_pfield!(pfield::FLOWVPM.ParticleField, uinf)
     return nothing
 end
 
-function write_vtk(name, w::PanelParticleWake, idx, t; overwrite=false, compress::Bool=true,
+function write_vtk(name, w::AbstractParticleWake, idx, t; overwrite=false, compress::Bool=true,
         # Ruling 7: with a shared pfield the caller passes include_pfield=false
         # for every wake after the first so the particle cloud is written once
         # per step instead of once per referencing wake.
         include_pfield::Bool=true)
-    # panel wake (includes filaments)
-    write_vtk(name, w.panel_wake, idx, t; overwrite, compress)
+    # inner wake sheet (includes filaments where the sheet type carries them)
+    write_vtk(name, _wake_sheet(w), idx, t; overwrite, compress)
 
     include_pfield || return nothing
 

@@ -101,7 +101,7 @@ function _step_dict(frames, i_step::Int, t::Real; uinf=nothing, wakes=nothing)
     if wakes !== nothing
         d["wake_continuation"] = [
             _wake_continuation_step_dict(w, i, i_step)
-            for (i, w) in enumerate(wakes) if w isa PanelParticleWake
+            for (i, w) in enumerate(wakes) if w isa AbstractParticleWake
         ]
     end
     return d

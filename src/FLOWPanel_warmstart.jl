@@ -167,7 +167,7 @@ files (one per surface). Restores `wake.nodes`, `wake.strength`, `wake.velocity`
 and `wake.nwakes[]`. `wake.overflowed[]` is set when the loaded panel buffer is
 at the maximum row count.
 """
-function _load_panel_wake_vtk!(wake::PanelWake, path::String, wake_name::String, idx::Int)
+function _load_panel_wake_vtk!(wake::AbstractWakeSheet, path::String, wake_name::String, idx::Int)
     nwakes_loaded = -1
     for i_surf in eachindex(wake.nodes)
         vts_path = joinpath(path, wake_name, "$(wake_name).$(i_surf).$(idx).vts")
@@ -223,7 +223,7 @@ function _load_panel_wake_vtk!(wake::PanelWake, path::String, wake_name::String,
     # Convert-at-shed: overflowed[] means "at least one shed has happened",
     # which is true for any saved step >= 1 (the continuation metadata restore
     # remains authoritative where present).
-    wake.overflowed[] = wake.convert_at_shed ? (idx >= 1) :
+    wake.overflowed[] = _convert_at_shed(wake) ? (idx >= 1) :
         (wake.nwakes[] >= n_rows_max - 1)
     return wake
 end
@@ -239,9 +239,9 @@ component, then loads the particle field from
 sharing one particle field write/load it once, under the first referencing
 wake's name; a repeat load would clear and reload the already-restored field).
 """
-function _load_panel_particle_wake_vtk!(wake::PanelParticleWake, path::String, wake_name::String, idx::Int;
+function _load_panel_particle_wake_vtk!(wake::AbstractParticleWake, path::String, wake_name::String, idx::Int;
         include_pfield::Bool=true)
-    _load_panel_wake_vtk!(wake.panel_wake, path, wake_name, idx)
+    _load_panel_wake_vtk!(_wake_sheet(wake), path, wake_name, idx)
 
     include_pfield || return wake
 
@@ -592,7 +592,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     for (i, w) in enumerate(wakes_tuple)
         isnothing(w) && continue
         wake_name = rname * "_wake$(i)"
-        if w isa PanelParticleWake
+        if w isa AbstractParticleWake
             repeat = any(p -> p === w.pfield, seen_load_pfields)
             _load_panel_particle_wake_vtk!(w, rpath, wake_name, restart_step;
                 include_pfield=!repeat)
@@ -651,7 +651,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
     kinematic_velocity!(systems_tuple, frames)
     for w in wakes_tuple
         isnothing(w) && continue
-        pw = w isa PanelParticleWake ? w.panel_wake : w
+        pw = w isa AbstractParticleWake ? _wake_sheet(w) : w
         pw.freestream .= uinf_replay
     end
 
@@ -676,7 +676,7 @@ function simulate_warmstart!(systems, wakes, frames, maneuver!::Function, Uinf::
 
     seen_prop_pfields = ()  # Ruling 7: convect a shared pfield exactly once
     for w in wakes_tuple
-        if w isa PanelParticleWake
+        if w isa AbstractParticleWake
             repeat = any(p -> p === w.pfield, seen_prop_pfields)
             propagate!(w, dt_end; relax=particle_relax,
                 step=restart_step, frames, diagnose_particle_gamma,

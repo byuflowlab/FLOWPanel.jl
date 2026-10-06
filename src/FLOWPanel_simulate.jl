@@ -522,7 +522,7 @@ function _diagnose_particle_influence!(wakes_tuple::Tuple, systems_tuple::Tuple,
         backend_wake, backend_system; needs_induced_vorticity::Bool=false,
         particle_hessian_self::Bool=true, diagnostic_vertical=(0.0, 0.0, 1.0))
     for (iw, w) in enumerate(wakes_tuple)
-        w isa PanelParticleWake || continue
+        w isa AbstractParticleWake || continue
         pfield = w.pfield
         pfield.np == 0 && continue
 
@@ -545,7 +545,7 @@ end
 # Wake sources that have a well-defined scalar potential. Excludes vortex
 # particle fields (which carry only a vector potential).
 _scalar_potential_sources(w::PanelWake) = get_sources(w)
-_scalar_potential_sources(w::PanelParticleWake) = get_sources(w.panel_wake)
+_scalar_potential_sources(w::PanelParticleWake) = get_sources(_wake_sheet(w))
 _scalar_potential_sources(::Nothing) = ()
 
 function _collect_wake_scalar_sources(wakes::Tuple)
@@ -657,7 +657,7 @@ function _sa_reset_freestream_kinematic!(systems_tuple::Tuple,
     seen_pfields = ()   # Ruling 7: freestream is additive on particle U —
     for w in wakes_tuple                    # apply once per shared pfield
         isnothing(w) && continue
-        if w isa PanelParticleWake
+        if w isa AbstractParticleWake
             repeat = any(p -> p === w.pfield, seen_pfields)
             apply_freestream!(w, uinf; include_pfield=!repeat)
             repeat || (seen_pfields = (seen_pfields..., w.pfield))
@@ -936,7 +936,7 @@ function _make_rk3_stage_UJ(wakes_tuple::Tuple, systems_tuple::Tuple,
         body_on_wake::Bool=true,
         body_hessian_to_particles::Bool=false,
         body_gradient_core_size::Float64=NaN)
-    any(w -> w isa PanelParticleWake &&
+    any(w -> w isa AbstractParticleWake &&
         w.pfield.integration === FLOWVPM.rungekutta3, wakes_tuple) ||
         return nothing
     wake_sources = _collect_wake_sources(wakes_tuple)
@@ -1435,7 +1435,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
             for (i, w) in enumerate(wakes_tuple)
                 if !isnothing(w)
                     wake_name = name * "_wake$(i)"
-                    if w isa PanelParticleWake
+                    if w isa AbstractParticleWake
                         repeat = any(p -> p === w.pfield, seen_vtk_pfields)
                         write_vtk(joinpath(path, wake_name), w, i_step, t;
                                   overwrite=i_step==0, compress=compress_vtk,
@@ -1474,7 +1474,7 @@ function simulate!(systems, wakes, frames, maneuver!::Function, Uinf::Function, 
 
                 seen_prop_pfields = ()  # Ruling 7: convect a shared pfield once
                 for w in wakes_tuple
-                    if w isa PanelParticleWake
+                    if w isa AbstractParticleWake
                         repeat = any(p -> p === w.pfield, seen_prop_pfields)
                         propagate!(w, dt; relax=particle_relax,
                             step=i_step, frames, diagnose_particle_gamma,
@@ -1535,7 +1535,7 @@ has_grad_mu(::AbstractBody{TK,NK,TF}) where {TK, NK, TF} = TK == ConstantDoublet
 
 #------- wake shedding -------#
 
-function update_TE!(wake::PanelWake, system::AbstractBody)
+function update_TE!(wake::AbstractWakeSheet, system::AbstractBody)
 
     # update first row based on system
     for i_surf in eachindex(wake.nodes)
@@ -1567,11 +1567,11 @@ function update_TE!(wake::PanelWake, system::AbstractBody)
     end
 end
 
-update_TE!(wake::PanelParticleWake, system::AbstractBody) = update_TE!(wake.panel_wake, system)
+update_TE!(wake::AbstractParticleWake, system::AbstractBody) = update_TE!(_wake_sheet(wake), system)
 
 # update_TE!(w::ParticleWake, sys) = update_TE!(w.panel_wake, sys)
 
-function shed_wake!(wake::PanelWake, system::AbstractBody)
+function shed_wake!(wake::AbstractWakeSheet, system::AbstractBody)
 
     # check storage dimensions
     @assert length(system.Das) == length(system.shedding) == length(wake.nodes) "Length of system.Das ($(length(system.Das))) must match number of surfaces in wake ($(length(wake.nodes)))"

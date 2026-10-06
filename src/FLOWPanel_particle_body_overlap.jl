@@ -219,7 +219,7 @@ function particle_body_overlap(systems, wakes; core_ratio::Real=1)
     best_position = SVector(Inf, Inf, Inf)
     best_sigma = NaN
     for (iwake, wake) in enumerate(wakes_tuple)
-        wake isa PanelParticleWake || continue
+        wake isa AbstractParticleWake || continue
         pfield = wake.pfield
         haskey(seen, pfield) && continue
         seen[pfield] = iwake

@@ -473,15 +473,15 @@ function _load_replay_wake_step!(w::PanelWake, path, wake_name, idx)
     return _load_panel_wake_vtk!(w, path, wake_name, idx)
 end
 
-function _load_replay_wake_step!(w::PanelParticleWake, path, wake_name, idx)
+function _load_replay_wake_step!(w::AbstractParticleWake, path, wake_name, idx)
     vts_path = joinpath(path, wake_name, "$(wake_name).1.$(idx).vts")
     if !isfile(vts_path)
-        w.panel_wake.nwakes[] = 0
-        w.panel_wake.overflowed[] = false
+        _wake_sheet(w).nwakes[] = 0
+        _wake_sheet(w).overflowed[] = false
         return w
     end
     vtp_path = joinpath(path, wake_name * "_particles", "$(wake_name)_particles.$(idx).vtp")
-    isfile(vtp_path) || return _load_replay_wake_step!(w.panel_wake, path, wake_name, idx)
+    isfile(vtp_path) || return _load_replay_wake_step!(_wake_sheet(w), path, wake_name, idx)
     return _load_panel_particle_wake_vtk!(w, path, wake_name, idx)
 end
 
@@ -1171,7 +1171,7 @@ function replay(path::AbstractString, run_name::AbstractString;
         for (i, w) in enumerate(wakes)
             isnothing(w) && continue
             wake_name = run_name * "_wake$(i)"
-            if w isa PanelParticleWake
+            if w isa AbstractParticleWake
                 _load_replay_wake_step!(w, path, wake_name, first_step)
             elseif w isa PanelWake
                 _load_replay_wake_step!(w, path, wake_name, first_step)
@@ -1204,7 +1204,7 @@ function replay(path::AbstractString, run_name::AbstractString;
         for (i, w) in enumerate(wakes)
             isnothing(w) && continue
             wake_name = run_name * "_wake$(i)"
-            if w isa PanelParticleWake
+            if w isa AbstractParticleWake
                 _load_replay_wake_step!(w, path, wake_name, idx)
             elseif w isa PanelWake
                 _load_replay_wake_step!(w, path, wake_name, idx)
