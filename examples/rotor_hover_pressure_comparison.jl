@@ -164,6 +164,54 @@ das_uniform_dsigma = parse(Float64, get(ENV, "DAS_UNIFORM_DSIGMA", "NaN"))
 sigma_chord_fraction = parse(Float64, get(ENV, "SIGMA_CHORD_FRACTION", "NaN"))
 sigma_floor_r = parse(Float64, get(ENV, "SIGMA_FLOOR_R", "0.0"))
 das_sigma_lambda = parse(Float64, get(ENV, "DAS_SIGMA_LAMBDA", "NaN"))
+# --- BRAINSTORM 018 r4 (Ryan rulings 2026-10-02) -----------------------------
+# WAKE_MODEL=filament selects FilamentParticleWake: the near wake is a
+# TrailingFilamentSheet (trailing-only vortex filaments, no spanwise vorticity
+# during the hold) held for a fixed angular extent theta* and then converted to
+# particles by the exact trailing-jump decomposition. Default panel keeps the
+# historical PanelParticleWake bit-identical.
+wake_model = lowercase(get(ENV, "WAKE_MODEL", "panel"))
+wake_model in ("panel", "filament") || error(
+    "Unknown WAKE_MODEL=$(repr(wake_model)); use panel or filament")
+# Hold extent theta* (deg): filament-mode default nwakerows =
+# ceil(theta* * NT / 360) + 1 (N = 2/3/5/9 at NT 18/36/72/144 with theta*=20).
+wake_theta_deg = parse(Float64, get(ENV, "WAKE_THETA_DEG", "20.0"))
+# Turbulent-BL shed-sigma law: sigma_j = SIGMA_BL_SCALE * 0.37 * c_j *
+# Re_j^(-1/5) with Re_j = Omega * r_j * c_j / nu (flat-plate turbulent BL
+# thickness at the TE, scaled). Replaces the span-uniform and chord-matched
+# sigma laws; per-station via StationSigmaOverlap. NaN = off. Mutually
+# exclusive with SIGMA_CHORD_FRACTION. No sigma floor in this mode (floor-OFF
+# ruling 2026-10-02).
+sigma_bl_scale = parse(Float64, get(ENV, "SIGMA_BL_SCALE", "NaN"))
+sigma_bl_nu = parse(Float64, get(ENV, "NU", "1.461e-5"))
+!isnan(sigma_bl_scale) && !isnan(sigma_chord_fraction) && error(
+    "SIGMA_BL_SCALE and SIGMA_CHORD_FRACTION are mutually exclusive " *
+    "per-station sigma laws")
+# DAS_MODE=chord075: span-uniform |Das| = DAS_C075_FRACTION * c(0.75R), laid
+# along the straight kinematic TE tangent (das_arc_placed stays false).
+# Mutually exclusive with the other Das laws. "" = off (legacy eta or the
+# laws above).
+das_mode = lowercase(get(ENV, "DAS_MODE", ""))
+das_mode in ("", "chord075") || error(
+    "Unknown DAS_MODE=$(repr(das_mode)); use chord075 or unset")
+das_c075_fraction = parse(Float64, get(ENV, "DAS_C075_FRACTION", "0.1"))
+if wake_model == "filament"
+    # r4 cleanup: split/merge OFF in filament mode so particle counts match
+    # across arms. Split is explicit opt-in (error); merge defaults on, so
+    # the default is overridden with disclosure and an explicit on is an error.
+    haskey(ENV, "MERGE_PARTICLES") && merge_particles && error(
+        "WAKE_MODEL=filament drops merge maintenance (r4 cleanup: split/merge " *
+        "OFF); unset MERGE_PARTICLES")
+    if merge_particles
+        merge_particles = false
+        println("WAKE_MODEL=filament: merge maintenance dropped " *
+            "(MERGE_PARTICLES default overridden to false; r4 cleanup)")
+    end
+    conversion_mode == "legacy" || error(
+        "WAKE_MODEL=filament owns its conversion (exact trailing-jump " *
+        "decomposition); CONVERSION=$(conversion_mode) is PanelParticleWake-only")
+end
+
 # Phase 16 F1: curvature cap |Das|_j = min(lambda*sigma_j, beta*r_j/N) so the
 # rigid extent never subtends more than beta radians of the local helix
 # circle (theta_j = N*|Das|_j/r_j <= beta). NaN = off (pure co-scaling).
@@ -190,7 +238,18 @@ set_Das_refresh = parse(Bool, get(ENV, "DAS_REFRESH", "false"))
 # Panel-wake rows between the Das row and the particle handoff (BRAINSTORM 014
 # Proposal 1): row 1 is rigid (re-placed at TE+Das each step), rows 2..N convect
 # freely, particles shed from rows N -> N+1. Handoff distance ~ Das+(N-1)*travel.
-nwakerows = parse(Int, get(ENV, "NWAKEROWS", "1"))
+# Filament mode (018 r4): default N from the theta* hold-extent ruling,
+# N = ceil(theta* * NT / 360) + 1; an explicit NWAKEROWS still overrides.
+nwakerows = if haskey(ENV, "NWAKEROWS")
+    parse(Int, ENV["NWAKEROWS"])
+elseif wake_model == "filament"
+    ceil(Int, wake_theta_deg * nt / 360) + 1
+else
+    1
+end
+wake_model == "filament" && nwakerows == 0 && error(
+    "WAKE_MODEL=filament has no convert-at-shed mode: NWAKEROWS must be >= 1 " *
+    "(got 0)")
 # BRAINSTORM 024: NWAKEROWS=0 selects convert-at-shed — no free wake-panel row
 # survives a solve; the just-shed row becomes particles in the same step, so
 # particles appear at the Das line. The driver's legacy conversion mode
@@ -666,6 +725,42 @@ if !isnan(sigma_chord_fraction)
     end
 end
 
+# BRAINSTORM 018 r4: turbulent-BL shed-sigma law (Ryan ruling 2026-10-02).
+# sigma_j = SIGMA_BL_SCALE * 0.37 * c_j * Re_j^(-1/5), Re_j = Omega r_j c_j / nu
+# (flat-plate turbulent BL thickness at the TE). Per-station, NO floor (the
+# floor-OFF ruling: the old 0.00119 m floor would clamp the whole field).
+# Omega is computed inline — ω_full is defined later in this file.
+if !isnan(sigma_bl_scale)
+    particle_shedding == "sigma_overlap" || error(
+        "SIGMA_BL_SCALE replaces the shed-sigma law and expects " *
+        "PARTICLE_SHEDDING=sigma_overlap (got $(repr(particle_shedding)))")
+    conversion_mode == "legacy" || error(
+        "SIGMA_BL_SCALE drives the station shedding law and requires " *
+        "CONVERSION=legacy (got $(repr(conversion_mode)))")
+    omega_bl = 2 * pi * RPM / 60
+    band_bl = 0.02 * R  # ~ one spanwise ring spacing on the 45-ring blade
+    station_sigmas = [
+        begin
+            c = station_chords(rotor.nodes, shed, rotor.cells, radial_dimension;
+                               band=band_bl)
+            r = station_radii(rotor.nodes, shed, rotor.cells, radial_dimension)
+            re = omega_bl .* r .* c ./ sigma_bl_nu
+            sigma_bl_scale .* 0.37 .* c .* re .^ (-1 / 5)
+        end
+        for shed in rotor.shedding]
+    method_trailing = pnl.StationSigmaOverlap(station_sigmas, overlap)
+    for (k, sig) in enumerate(station_sigmas)
+        println("Sigma BL mode: shedding$(k) sigma/R range " *
+            "$(round(minimum(sig)/R, digits=4))-$(round(maximum(sig)/R, digits=4)) " *
+            "(scale = $(sigma_bl_scale), nu = $(sigma_bl_nu), no floor)")
+    end
+end
+
+wake_model == "filament" && station_sigmas === nothing && error(
+    "WAKE_MODEL=filament requires a per-station sigma law " *
+    "(SIGMA_BL_SCALE or SIGMA_CHORD_FRACTION): the held-filament cores are " *
+    "coupled to the shedding sigma by construction")
+
 # BRAINSTORM 032: root-station particle-shed omission. Wraps the resolved
 # trailing method so masked stations route to an accounting sink instead of
 # shedding particles; the wake solve is untouched. method_unsteady is NoShed
@@ -732,8 +827,9 @@ viscous_scheme = core_spreading_active ?
 # scalar sgm0, which would destroy a per-station sigma distribution in one
 # event. Production runs spreading-only (beta=1e9, resets unreachable); any
 # finite-beta viscous config is incompatible with chord–sigma co-scaling.
-!isnan(sigma_chord_fraction) && core_spreading_active && wake_core_beta < 1e6 &&
-    error("SIGMA_CHORD_FRACTION requires spreading-only viscosity " *
+(!isnan(sigma_chord_fraction) || !isnan(sigma_bl_scale)) &&
+    core_spreading_active && wake_core_beta < 1e6 &&
+    error("SIGMA_CHORD_FRACTION/SIGMA_BL_SCALE require spreading-only viscosity " *
           "(WAKE_CORE_BETA >= 1e6): a beta-reset would stamp the uniform " *
           "sgm0 = $(core_spreading_sgm0) over the per-station sigmas")
 
@@ -919,28 +1015,55 @@ else
 end
 println("Sigma telemetry: MERGE_EVENT_LOG=$(merge_event_io !== nothing), wake-health mean/max sigma + floor_clamp_cum columns active")
 
-wake_rotor = pnl.PanelParticleWake(rotor;
-    nwakerows, max_particles=parse(Int, get(ENV, "MAX_PARTICLES", "500000")), core_size=wake_core_size,
-    wake_pfield_kwargs...,
-    particle_core_size=core_size_targets,
-    viscous=viscous_scheme,
-    SFS=sfs_choice,
-    relaxation=relaxation_scheme,
-    expint=wake_expint,
-    rk3=wake_rk3,
-    conversion_kwargs...,
-    shed_with_induced_velocity,
-    particle_maintenance=pnl.ParticleMaintenance((
-            pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], cylinder_radius),
-            pnl.MergeParticles(;
-                every=merge_particles ? 1 : 0,
-                r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
-                r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
-                sigma_relative=merge_sigma_relative,
-                event_io=merge_event_io),
-            maybe_split...,
-        ))
-    )
+wake_rotor = if wake_model == "filament"
+    # 018 r4: trailing-only held-filament near wake. Merge/split maintenance
+    # and conversion kwargs are DROPPED in this mode (r4 cleanup: split/merge
+    # OFF; the trailing-jump decomposition IS the conversion).
+    # filament_core_size is OMITTED: the ctor's sigma-coupling rule pulls the
+    # StationSigmaOverlap vectors so hold-sigma == shed-sigma by construction.
+    wake_split_active && error(
+        "WAKE_MODEL=filament drops split maintenance (r4 cleanup: split/merge " *
+        "OFF); unset WAKE_SPLIT_*")
+    pnl.FilamentParticleWake(rotor;
+        nwakerows, max_particles=parse(Int, get(ENV, "MAX_PARTICLES", "500000")),
+        core_size=wake_core_size,
+        wake_pfield_kwargs...,
+        particle_core_size=core_size_targets,
+        viscous=viscous_scheme,
+        SFS=sfs_choice,
+        relaxation=relaxation_scheme,
+        expint=wake_expint,
+        rk3=wake_rk3,
+        method_trailing,
+        shed_with_induced_velocity,
+        particle_maintenance=pnl.ParticleMaintenance((
+                pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], cylinder_radius),
+            ))
+        )
+else
+    pnl.PanelParticleWake(rotor;
+        nwakerows, max_particles=parse(Int, get(ENV, "MAX_PARTICLES", "500000")), core_size=wake_core_size,
+        wake_pfield_kwargs...,
+        particle_core_size=core_size_targets,
+        viscous=viscous_scheme,
+        SFS=sfs_choice,
+        relaxation=relaxation_scheme,
+        expint=wake_expint,
+        rk3=wake_rk3,
+        conversion_kwargs...,
+        shed_with_induced_velocity,
+        particle_maintenance=pnl.ParticleMaintenance((
+                pnl.GlobalCylinder([-0.5R, 0.0, 0.0], [cylinder_depth, 0.0, 0.0], cylinder_radius),
+                pnl.MergeParticles(;
+                    every=merge_particles ? 1 : 0,
+                    r=merge_sigma_relative ? merge_r_factor : merge_r_factor * R,
+                    r_hash=merge_sigma_relative ? merge_r_hash_factor : merge_r_hash_factor * R,
+                    sigma_relative=merge_sigma_relative,
+                    event_io=merge_event_io),
+                maybe_split...,
+            ))
+        )
+end
 
 smoothstep(x) = x <= 0 ? zero(x) : x >= 1 ? one(x) : x * x * (3 - 2 * x)
 
@@ -1022,9 +1145,53 @@ das_arc_placed && das_arc_source == "steady" && !isfile(das_arc_table) && error(
     "DAS_ARC_HELIX_SOURCE=steady requires DAS_ARC_TABLE=<csv> (per-station " *
     "induced-drift table from the TE downwash probe); got " *
     "$(repr(das_arc_table))")
+das_mode == "chord075" && set_Das_refresh && error(
+    "DAS_MODE=chord075 is incompatible with DAS_REFRESH (the uniform " *
+    "c(0.75R)-proportional Das is frozen by construction)")
+das_mode == "chord075" &&
+    (!isnan(das_chord_fraction) || !isnan(das_uniform_dsigma) ||
+     !isnan(das_sigma_lambda)) && error(
+    "DAS_MODE=chord075 is mutually exclusive with DAS_CHORD_FRACTION, " *
+    "DAS_UNIFORM_DSIGMA, and DAS_SIGMA_LAMBDA")
+das_mode == "chord075" && das_arc_placed && error(
+    "DAS_MODE=chord075 lays Das along the straight TE tangent; " *
+    "DAS_ARC_PLACED is incompatible")
 theta_max_cs = NaN   # curvature diagnostic; finite only under the lambda law
+das_c075_length = NaN  # |Das| under DAS_MODE=chord075 (banner)
 if !set_Das_refresh
-    if !isnan(das_sigma_lambda)
+    if das_mode == "chord075"
+        # 018 r4 (Ryan ruling 2026-10-02): span-uniform |Das| =
+        # DAS_C075_FRACTION * c(0.75R), straight kinematic TE tangent.
+        band = 0.02 * R
+        chords1 = station_chords(rotor.nodes, rotor.shedding[1], rotor.cells,
+                                 radial_dimension; band)
+        radii1 = station_radii(rotor.nodes, rotor.shedding[1], rotor.cells,
+                               radial_dimension)
+        c075 = let perm = sortperm(radii1), rs = radii1[perm], cs = chords1[perm],
+                   rq = 0.75 * R
+            if rq <= rs[1]
+                cs[1]
+            elseif rq >= rs[end]
+                cs[end]
+            else
+                i = searchsortedlast(rs, rq)
+                t = (rq - rs[i]) / (rs[i+1] - rs[i])
+                (1 - t) * cs[i] + t * cs[i+1]
+            end
+        end
+        das_c075_length = das_c075_fraction * c075
+        das_station_lengths = (Tuple(
+            fill(das_c075_length, size(shed, 2) + 1)
+            for shed in rotor.shedding),)
+        println("Das chord075 mode: |Das| = $(das_c075_fraction) * c(0.75R) = " *
+            "$(round(das_c075_length, sigdigits=5)) m " *
+            "(|Das|/R = $(round(das_c075_length / R, digits=5)), " *
+            "c(0.75R)/R = $(round(c075 / R, digits=5)); span-uniform, " *
+            "straight TE tangent; DAS_ETA_KINEMATIC ignored)")
+        pnl.initialize_Das!((rotor,), frames, Uinf, t_range[1], t_range[2] - t_range[1];
+            set_Das_station_lengths=das_station_lengths,
+            set_Das_min_kinematic_displacement)
+    elseif !isnan(das_sigma_lambda)
         # Phase 16: |Das|_j = lambda * sigma_j = lambda * s* * c_local_j, so
         # Das/c AND Das/sigma are span-uniform at once. Curvature diagnostic:
         # theta_j = N * |Das|_j / r_j is the arc the rigid extent subtends on
@@ -1483,6 +1650,12 @@ end
 # simulate! as the sigma_guard kwarg (FLOWVPM._sigma_guard_params).
 sigma_dtz_cap = parse(Float64, get(ENV, "SIGMA_DTZ_CAP", "Inf"))
 sigma_floor_frac = parse(Float64, get(ENV, "SIGMA_FLOOR_FRAC", "0.0"))
+# 018 r4 floor-OFF ruling (2026-10-02): the sigma-guard floor would clamp the
+# BL-law per-station field (old floor 0.00119 m > inboard sigma), so filament
+# mode refuses it rather than silently confounding the ladder.
+wake_model == "filament" && sigma_floor_frac > 0 && error(
+    "WAKE_MODEL=filament runs with the sigma-guard floor OFF (Ryan ruling " *
+    "2026-10-02); unset SIGMA_FLOOR_FRAC (got $(sigma_floor_frac))")
 sigma_floor_abs = sigma_floor_frac > 0 ? sigma_floor_frac * tip_sigma_default : -Inf
 # SIGMA_CEIL (meters): absolute upper clamp on sigma in the rVPM update.
 # Band-aid for compression-driven sigma growth driving the radix-FMM geometry
@@ -1509,6 +1682,24 @@ end
 println("\nBegin rotor hover pressure comparison ($(length(t_range)) steps)...")
 println("Mesh=$(rhpc_mesh) file=$(basename(msh_file)) formulation=$(formulation_name) " *
         "RPM=$(RPM) NT=$(nt) truncation_depth=$(round(cylinder_depth/R,digits=3))R nwakerows=$(nwakerows)$(nwakerows == 0 ? " (convert-at-shed)" : "") das_refresh=$(set_Das_refresh)")
+# 018 r4 wake-model banner: every shedding-prescription knob auditable from the
+# run's own log (WAKE_MODEL, theta*/N, sigma law, Das law, floor state).
+println("Wake model: WAKE_MODEL=$(wake_model)" *
+    (wake_model == "filament" ?
+        ", theta*=$(wake_theta_deg) deg, N=$(nwakerows) (hold rows)" : "") *
+    ", sigma law=" * (!isnan(sigma_bl_scale) ?
+        "BL(scale=$(sigma_bl_scale), nu=$(sigma_bl_nu))" :
+        !isnan(sigma_chord_fraction) ?
+        "chord(s*=$(sigma_chord_fraction), floor=$(sigma_floor_r)R)" :
+        "uniform($(particle_shedding))") *
+    ", Das=" * (das_mode == "chord075" ?
+        "chord075($(das_c075_fraction)*c(0.75R)=$(round(das_c075_length, sigdigits=5)) m)" :
+        !isnan(das_sigma_lambda) ? "sigma_lambda($(das_sigma_lambda))" :
+        !isnan(das_uniform_dsigma) ? "uniform_dsigma($(das_uniform_dsigma))" :
+        !isnan(das_chord_fraction) ? "chord($(das_chord_fraction))" :
+        "eta($(init_Das_eta_kinematic))") *
+    ", sigma_floor_frac=$(sigma_floor_frac)" *
+    (wake_model == "filament" ? " (floor OFF ruling)" : ""))
 println("Particle diagnostics: PARTICLE_SHEDDING=$(particle_shedding), CONVERSION=$(conversion_mode)$(conversion_mode == "smooth" ? ", CONVERSION_SIGMA=$(conversion_sigma), CONVERSION_OVERLAP=$(conversion_overlap), ATTRIBUTION=$(conversion_attribution)" : ""), RUN_MONITORS=$(run_monitors), BODY_HESSIAN_TO_PARTICLES=$(body_hessian_to_particles), PANEL_WAKE_HESSIAN_TO_PARTICLES=$(panel_wake_hessian_to_particles), PANEL_WAKE_VELOCITY_TO_PARTICLES=$(panel_wake_on_particles), PARTICLE_HESSIAN_SELF=$(particle_hessian_self), PARTICLE_RELAX=$(particle_relax), DIAGNOSE_PARTICLE_GAMMA=$(diagnose_particle_gamma), DIAGNOSE_PARTICLE_INFLUENCE=$(diagnose_particle_influence), diagnostic_vertical=$(particle_diagnostic_vertical), WAKE_HEALTH=$(wake_health_active), WAKE_HEALTH_DTZ=$(wake_health_dtz), WAKE_HEALTH_ATTRIBUTION=$(wake_health_attribution), WAKE_INVENTORY=$(wake_inventory_active), WAKE_EXPINT=$(wake_expint), WAKE_INTEGRATOR=$(wake_rk3 ? "rk3" : "euler-family"), SIGMA_DTZ_CAP=$(sigma_dtz_cap), SIGMA_FLOOR_FRAC=$(sigma_floor_frac) (floor=$(round(sigma_floor_abs, sigdigits=4)) m), SIGMA_CEIL=$(sigma_ceil) m (guard=$(isempty(sigma_guard) ? "off" : "on")), SFS=$(sfs_label)")
 name = run_name
 
@@ -1900,9 +2091,9 @@ if save_path !== nothing
             println(io, "radix_expansion_order = $(radix.expansion_order)")
             println(io, "radix_rho_t = $(radix_kernel.rho_t)")
         end
-        println(io, "backend_body_order = $(backend.expansion_order)")
-        println(io, "backend_wake_order = $(backend_wake.expansion_order)")
         if rhpc_backend == "fmm"
+            println(io, "backend_body_order = $(backend.expansion_order)")
+            println(io, "backend_wake_order = $(backend_wake.expansion_order)")
             println(io, "backend_body_acceptance = $(backend.multipole_acceptance)")
             println(io, "backend_body_leaf_size = $(backend.leaf_size)")
             println(io, "backend_wake_acceptance = $(backend_wake.multipole_acceptance)")
