@@ -47,6 +47,7 @@ struct LiftingLine{ R<:Number,
     deltajoint::Float64                         # Joint distance, deltajoint = dx/c
     sigmafactor::Float64                        # Dragging line amplification factor
     sigmaexponent::Float64                      # Dragging line amplification exponent
+    filterwidth::Float64                        # (m) Width of the Gaussian filter for spanwise regularization (0 = no regularization)
 
     # Ground plane
     ground_position::VectorType                 # Ground plane origin
@@ -96,6 +97,8 @@ struct LiftingLine{ R<:Number,
     Geff::TensorType                            # Precomputed geometric matrix for evaluating the self-induced velocity by the effective horseshoes on each midpoint. 
                                                 # Geff[mi, ei, i] is the i-th coordinate of the unitary-strength velocity induced by the ei-th effective horseshoe on the mi-th midpoint.
     Geffnowake::TensorType                      # Same than Geff, but without the semi-infinite wake vortices
+    Ffilter::MatrixType                         # Spanwise regularization filter, where Ffilter[ei, ej] is the weight of
+                                                # the ej-th circulation in the filtered circulation of the ei-th horseshoe
 
     # Solver settings
     kerneloffset::Float64                       # Kernel offset to avoid singularities
@@ -116,6 +119,7 @@ struct LiftingLine{ R<:Number,
                             deltajoint=0.15,
                             sigmafactor=1.0,
                             sigmaexponent=1.0,
+                            filterwidth=0.0,     # (m) Gaussian filter width for spanwise regularization (we recommend 0.25*chord; 0 to deactivate)
                             initial_Uinf=[1, 0, 0],
                             kerneloffset=1e-8,
                             kernelcutoff=1e-9,   # <- Finite difference would get tripped by anything smaller than this
@@ -197,6 +201,7 @@ struct LiftingLine{ R<:Number,
         residuals = VectorType(undef, nelements)
         Geff = TensorType(undef, nelements, nelements, 3)
         Geffnowake = TensorType(undef, nelements, nelements, 3)
+        Ffilter = MatrixType(undef, nelements, nelements)
         elements_settings = MatrixType(undef, nelements, S.parameters[1]-1)
 
         ground_position = VectorType(undef, 3)
@@ -271,6 +276,11 @@ struct LiftingLine{ R<:Number,
                     offset=kerneloffset, cutoff=kernelcutoff,
                     add_surface=false, add_wake=true)
 
+        calc_Ffilter!(Ffilter, midpoints, horseshoes, nelements, filterwidth)
+        if filterwidth > 0
+            apply_Ffilter!(Geff, Ffilter)
+        end
+
         new{R,
             S, _count(S),
             VectorType, MatrixType, TensorType, TensorType2,
@@ -279,6 +289,7 @@ struct LiftingLine{ R<:Number,
                                 ypositions, 
                                 nelements, elements, root_i,
                                 deltasb, deltajoint, sigmafactor, sigmaexponent,
+                                filterwidth,
                                 ground_position, ground_normal,
                                 aerocenters, strippositions,
                                 horseshoes, effective_horseshoes, Dinfs, 
@@ -288,7 +299,7 @@ struct LiftingLine{ R<:Number,
                                 auxtangents,
                                 aoas, claeros, Gammas, sigmas, Us, chords,
                                 G, RHS, 
-                                residuals, Geff, Geffnowake,
+                                residuals, Geff, Geffnowake, Ffilter,
                                 kerneloffset, kernelcutoff,
                                 elements_settings
                                 )
@@ -307,7 +318,8 @@ function Base.show(io::IO, self::LiftingLine{R, S, N}) where {R, S, N}
     println(io, "├─ blending Δs_b:\t$(self.deltasb)")
     println(io, "├─ joint Δx:\t\t$(self.deltajoint)")
     println(io, "├─ Dragging line amplification factor:\t\t$(self.sigmafactor)")
-    print(io, "└─ Dragging line amplification exponent:\t$(self.sigmaexponent)")
+    println(io, "├─ Dragging line amplification exponent:\t$(self.sigmaexponent)")
+    print(io, "└─ Spanwise regularization filter width:\t$(self.filterwidth) m")
 
 end
 
@@ -1282,6 +1294,9 @@ function calc_Geff!(self::LiftingLine; add_surface=true, add_wake=true, optargs.
     # Geffnowake to avoid unnecessary computation if the surface do not changes
     if add_surface
 
+        # Update the regularization filter since the geometry might have changed
+        calc_Ffilter!(self)
+
         # Erase previous computation
         self.Geffnowake .= 0                            
         
@@ -1317,6 +1332,82 @@ function calc_Geff!(self::LiftingLine; add_surface=true, add_wake=true, optargs.
                     add_surface=false, add_wake=true,
                     optargs...)
     end
+
+    # Spanwise regularization: induced velocity from the filtered circulation
+    if self.filterwidth > 0
+        apply_Ffilter!(self.Geff, self.Ffilter)
+    end
+end
+
+"""
+    calc_Ffilter!(self::LiftingLine)
+
+Compute the matrix of the Gaussian filter used for spanwise regularization,
+\$\\tilde{\\Gamma}_i = \\sum_j F_{ij} \\Gamma_j\$, with
+```math
+F_{ij} = \\frac{ e^{-(y_i - y_j)^2/\\varepsilon^2} \\, \\Delta y_j }
+              { \\sum_k e^{-(y_i - y_k)^2/\\varepsilon^2} \\, \\Delta y_k }
+```
+where \$y\$ is the spanwise position of each midpoint, \$\\Delta y\$ is the
+spanwise width of each horseshoe, and \$\\varepsilon\$ is `self.filterwidth`.
+The rows are normalized so that a uniform circulation is left unchanged. The
+filter suppresses the grid-scale (spanwise-alternating) modes through which the
+lifting line first loses uniqueness post stall, while retaining modes longer
+than \$\\varepsilon\$. With `filterwidth == 0` the filter is the identity.
+"""
+function calc_Ffilter!(self::LiftingLine)
+    calc_Ffilter!(self.Ffilter, self.midpoints, self.horseshoes, self.nelements,
+                                                            self.filterwidth)
+end
+
+function calc_Ffilter!(Ffilter::AbstractMatrix, midpoints::AbstractMatrix,
+                        horseshoes::AbstractArray{<:Number, 3}, nelements::Int,
+                        filterwidth::Number)
+
+    if filterwidth <= 0
+        Ffilter .= 0
+        for ei in 1:nelements
+            Ffilter[ei, ei] = 1
+        end
+        return Ffilter
+    end
+
+    for ei in 1:nelements
+
+        rowsum = zero(eltype(Ffilter))
+
+        for ej in 1:nelements
+
+            # Spanwise width of the j-th horseshoe
+            dy = abs(horseshoes[2, 3, ej] - horseshoes[2, 2, ej])
+
+            Ffilter[ei, ej] = exp(-(midpoints[2, ei] - midpoints[2, ej])^2 / filterwidth^2) * dy
+            rowsum += Ffilter[ei, ej]
+
+        end
+
+        # Normalize the row
+        for ej in 1:nelements
+            Ffilter[ei, ej] /= rowsum
+        end
+
+    end
+
+    return Ffilter
+end
+
+"""
+    apply_Ffilter!(Geff, Ffilter)
+
+Absorb the spanwise regularization filter into the geometric matrix,
+`Geff[:, :, i] = Geff[:, :, i] * Ffilter`, so that the induced velocity is
+computed from the filtered circulation.
+"""
+function apply_Ffilter!(Geff::AbstractArray{<:Number, 3}, Ffilter::AbstractMatrix)
+    for i in 1:size(Geff, 3)
+        Geff[:, :, i] .= view(Geff, :, :, i) * Ffilter
+    end
+    return Geff
 end
 
 function calc_Geff!(Geff::AbstractArray{<:Number, 3}, 

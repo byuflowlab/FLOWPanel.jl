@@ -110,6 +110,7 @@ deltajoint      = 1.0                           # Joint distance, deltajoint = d
 
 sigmafactor     = 0.0                           # Dragging line amplification factor (set to -1.0 for rebust post-stall method)
 sigmaexponent   = 4.0                           # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
+filterwidth     = 0.0                           # (m) Spanwise regularization filter width (set to ~0.25*chord for robust post-stall solutions)
 
                                                 # Nonlinear solver
 solver          = pnl.analysis_solver           # Very robust and physically accurate, but it can take a long time post-stall (not AD compatible)
@@ -139,6 +140,7 @@ ll = pnl.LiftingLine(
                         discretization,
                         symmetric,
                         deltasb, deltajoint, sigmafactor, sigmaexponent,
+                        filterwidth,
                         element_optargs,
                         plot_discretization = true,
                         )

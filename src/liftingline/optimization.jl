@@ -133,6 +133,7 @@ function run_liftingline(;
         
         sigmafactor     = 0.0,                          # Dragging line amplification factor (set to -1.0 for rebust post-stall method)
         sigmaexponent   = 4.0,                          # Dragging line amplification exponent (no effects if `sigmafactor==0.0`)
+        filterwidth     = 0.0,                          # (m) Gaussian filter width for spanwise regularization (we recommend 0.25*chord; 0 to deactivate)
         
                                                         # Nonlinear solver
         # solver        = SimpleNonlinearSolve.SimpleDFSane(),             # Indifferent to initial guess, but somewhat not robust post stall   <---- NOT COMPATIBLE WITH FORWARDDIFF (but compatible with CSDA and optimization converges well)
@@ -245,6 +246,7 @@ function run_liftingline(;
         ll = LiftingLine{NumType}(  airfoil_distribution; 
                                         geom_optargs...,
                                         deltasb, deltajoint, sigmafactor, sigmaexponent,
+                                        filterwidth,
                                         element_optargs,
                                         )
         # verbose && display(ll)   # NOTE: For some reason, this display throws off Python when called through juliacall
