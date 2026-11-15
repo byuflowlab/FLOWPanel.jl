@@ -296,6 +296,8 @@ struct KrylovSolver{TB<:AbstractBody,B<:AbstractBackend,TF<:Number,TP} <: Abstra
     atol::Float64          # absolute tolerance
     rtol::Float64          # relative tolerance
     preconditioner::TP     # nothing or JacobiPreconditioner
+    warmstart::Bool        # Use the stored strengths as initial guess (Dirichlet solves)
+    verbose::Bool          # Print the statistics of the Krylov solver (Dirichlet solves)
 end
 
 function KrylovSolver(body::AbstractBody;
@@ -305,6 +307,8 @@ function KrylovSolver(body::AbstractBody;
         rtol::Real=1e-6,            # Relative convergence tolerance
         backend::AbstractBackend=FastMultipoleBackend(),   # Backend to use
         preconditioner_cell_size::Real=0.0,  # cell size for block Jacobi preconditioner; ≤0 disables
+        warmstart::Bool=false,      # Start Dirichlet solves from the strengths stored in the solver
+        verbose::Bool=true,         # Print the statistics of Dirichlet solves
     )
     TF = numtype(body)
     Uext = zeros(TF, 3, body.ncells)
@@ -320,7 +324,7 @@ function KrylovSolver(body::AbstractBody;
         preconditioner = nothing
     end
 
-    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, copy(body.normals), source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner)
+    return KrylovSolver{typeof(body), typeof(backend), TF, typeof(preconditioner)}(body, backend, Uext, copy(body.normals), source_strengths, unabbreviated_strengths, method, itmax, Float64(atol), Float64(rtol), preconditioner, warmstart, verbose)
 end
 
 function _set_strength(body::AbstractBody{<:Any, 1, <:Any}, strengths)
@@ -456,13 +460,17 @@ function _solve!(self::AbstractBody{<:Any,2,<:Any,true}, solver::KrylovSolver{<:
     RHS = zeros(TF2, nrows)
     RHS .= -self.potential
 
+    # NOTE: With `warmstart`, the strengths stored in the solver (the solution
+    #       of its previous solve, e.g., the previous time step) are the
+    #       initial guess. They are copied since the operator overwrites them.
     workspace = Krylov.krylov_workspace(Val(solver.method), A, RHS)
+    args = solver.warmstart ? (workspace, A, RHS, copy(solver.unabbreviated_strengths)) : (workspace, A, RHS)
     if solver.preconditioner !== nothing
-        Krylov.krylov_solve!(workspace, A, RHS; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        Krylov.krylov_solve!(args...; M=solver.preconditioner, ldiv=true, atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     else
-        Krylov.krylov_solve!(workspace, A, RHS; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
+        Krylov.krylov_solve!(args...; atol=solver.atol, rtol=solver.rtol, itmax=solver.itmax)
     end
-    @show workspace.stats
+    solver.verbose && @show workspace.stats
 
     solver.unabbreviated_strengths .= workspace.x
     self.strength[:, 1] .= solver.source_strengths

@@ -81,10 +81,25 @@ for header_name in ["elements", "fmm",
                     "elements_fmm", "frames",
                     "liftingline",
                     "utils", "postprocess",
-                    "wake", "simulate_monitors", "simulate_monitors_fieldprobe", "metadata", "simulate", "warmstart",
-                    "replay",
                     ]
   include("FLOWPanel_"*header_name*".jl")
+end
+
+# The unsteady layer (free wake, time marching, warm start, replay) is written
+# against a FLOWVPM development version that is not publicly available. Load it
+# only when the installed FLOWVPM provides that API, so that the steady panel
+# solvers remain usable with the public FLOWVPM (branch `plasmaedge`).
+const UNSTEADY_AVAILABLE = all(isdefined(FLOWVPM, name) for name in
+                                (:_passes_relaxation_filter, :relax_filter_all,
+                                 :split_particles!, :merge_particles!))
+
+if UNSTEADY_AVAILABLE
+    for header_name in ["wake", "simulate_monitors",
+                        "simulate_monitors_fieldprobe", "metadata", "simulate",
+                        "warmstart", "replay",
+                        ]
+      include("FLOWPanel_"*header_name*".jl")
+    end
 end
 
 const DEBUG = Array{Bool,0}(undef)
